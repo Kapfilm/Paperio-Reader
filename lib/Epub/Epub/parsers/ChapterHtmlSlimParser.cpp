@@ -7,6 +7,8 @@
 #include <Utf8.h>
 #include <expat.h>
 
+#include <algorithm>
+
 #include "../../Epub.h"
 #include "../Page.h"
 #include "../converters/ImageDecoderFactory.h"
@@ -146,15 +148,35 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       currentTextBlock->setBlockStyle(currentTextBlock->getBlockStyle().getCombinedBlockStyle(incoming));
 
       if (!pendingAnchorId.empty()) {
+        if (std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
+          if (currentPage && !currentPage->elements.empty()) {
+            completePageFn(std::move(currentPage));
+            completedPageCount++;
+            currentPage.reset(new Page());
+            currentPageNextY = 0;
+          }
+        }
         anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
         pendingAnchorId.clear();
       }
+      wordsExtractedInBlock = 0;
       return;
     }
 
     makePages();
   }
-  // Record deferred anchor after previous block is flushed
+  // If the pending anchor is a TOC chapter boundary, force a page break after the previous
+  // block is flushed so the chapter starts on a fresh page.
+  if (!pendingAnchorId.empty() &&
+      std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
+    if (currentPage && !currentPage->elements.empty()) {
+      completePageFn(std::move(currentPage));
+      completedPageCount++;
+      currentPage.reset(new Page());
+      currentPageNextY = 0;
+    }
+  }
+  // Record deferred anchor after previous block is flushed (and any TOC page break)
   if (!pendingAnchorId.empty()) {
     anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
     pendingAnchorId.clear();
@@ -182,7 +204,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       } else if (strcmp(atts[i], "style") == 0) {
         styleAttr = atts[i + 1];
       } else if (strcmp(atts[i], "id") == 0) {
-        // Defer recording until startNewTextBlock, after previous block is flushed to pages
+        // Defer both anchor recording and TOC page breaks until startNewTextBlock,
+        // after the previous block is flushed to pages via makePages().
         self->pendingAnchorId = atts[i + 1];
       }
     }
