@@ -629,7 +629,12 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->startNewTextBlock(brStyle);
     } else {
       self->currentCssStyle = cssStyle;
-      self->startNewTextBlock(userAlignmentBlockStyle);
+      auto blockStyle = userAlignmentBlockStyle;
+      if (self->embeddedStyle && cssStyle.hasTextAlign()) {
+        blockStyle.alignment = cssStyle.textAlign;
+        blockStyle.textAlignDefined = true;
+      }
+      self->startNewTextBlock(blockStyle);
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "li") == 0) {
