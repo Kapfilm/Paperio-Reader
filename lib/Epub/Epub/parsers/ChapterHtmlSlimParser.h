@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "../FootnoteEntry.h"
@@ -93,6 +94,11 @@ class ChapterHtmlSlimParser {
   char currentFootnoteLinkHref[64] = {};
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
   int wordsExtractedInBlock = 0;
+
+  // Per-chapter caches: resolveStyle and parseInlineStyle are called for every HTML element;
+  // caching by (tag|classAttr) and styleAttr avoids repeated string operations and hash lookups.
+  std::unordered_map<std::string, CssStyle> cssStyleCache_;
+  std::unordered_map<std::string, CssStyle> inlineStyleCache_;
 
   void updateEffectiveInlineStyle();
   void startNewTextBlock(const BlockStyle& blockStyle);

@@ -219,10 +219,20 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // before tag-specific branches emit any content or metadata.
   CssStyle cssStyle;
   if (self->cssParser) {
-    cssStyle = self->cssParser->resolveStyle(name, classAttr);
+    {
+      std::string cacheKey(name);
+      cacheKey += '|';
+      cacheKey += classAttr;
+      auto it = self->cssStyleCache_.find(cacheKey);
+      if (it == self->cssStyleCache_.end())
+        it = self->cssStyleCache_.emplace(cacheKey, self->cssParser->resolveStyle(name, classAttr)).first;
+      cssStyle = it->second;
+    }
     if (!styleAttr.empty()) {
-      CssStyle inlineStyle = CssParser::parseInlineStyle(styleAttr);
-      cssStyle.applyOver(inlineStyle);
+      auto it = self->inlineStyleCache_.find(styleAttr);
+      if (it == self->inlineStyleCache_.end())
+        it = self->inlineStyleCache_.emplace(styleAttr, CssParser::parseInlineStyle(styleAttr)).first;
+      cssStyle.applyOver(it->second);
     }
   }
 
@@ -317,9 +327,17 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 
       // Skip image if CSS display:none
       if (self->cssParser) {
-        CssStyle imgDisplayStyle = self->cssParser->resolveStyle("img", classAttr);
+        std::string imgCacheKey("img|");
+        imgCacheKey += classAttr;
+        auto imgIt = self->cssStyleCache_.find(imgCacheKey);
+        if (imgIt == self->cssStyleCache_.end())
+          imgIt = self->cssStyleCache_.emplace(imgCacheKey, self->cssParser->resolveStyle("img", classAttr)).first;
+        CssStyle imgDisplayStyle = imgIt->second;
         if (!styleAttr.empty()) {
-          imgDisplayStyle.applyOver(CssParser::parseInlineStyle(styleAttr));
+          auto it = self->inlineStyleCache_.find(styleAttr);
+          if (it == self->inlineStyleCache_.end())
+            it = self->inlineStyleCache_.emplace(styleAttr, CssParser::parseInlineStyle(styleAttr)).first;
+          imgDisplayStyle.applyOver(it->second);
         }
         if (imgDisplayStyle.hasDisplay() && imgDisplayStyle.display == CssDisplay::None) {
           self->skipUntilDepth = self->depth;
@@ -364,10 +382,19 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 int displayWidth = 0;
                 int displayHeight = 0;
                 const float emSize = static_cast<float>(self->renderer.getFontAscenderSize(self->fontId));
-                CssStyle imgStyle = self->cssParser ? self->cssParser->resolveStyle("img", classAttr) : CssStyle{};
+                std::string imgCacheKey("img|");
+                imgCacheKey += classAttr;
+                auto imgStyleIt = self->cssParser ? self->cssStyleCache_.find(imgCacheKey) : self->cssStyleCache_.end();
+                if (self->cssParser && imgStyleIt == self->cssStyleCache_.end())
+                  imgStyleIt =
+                      self->cssStyleCache_.emplace(imgCacheKey, self->cssParser->resolveStyle("img", classAttr)).first;
+                CssStyle imgStyle = self->cssParser ? imgStyleIt->second : CssStyle{};
                 // Merge inline style (e.g. style="height: 2em") so it overrides stylesheet rules
                 if (!styleAttr.empty()) {
-                  imgStyle.applyOver(CssParser::parseInlineStyle(styleAttr));
+                  auto it = self->inlineStyleCache_.find(styleAttr);
+                  if (it == self->inlineStyleCache_.end())
+                    it = self->inlineStyleCache_.emplace(styleAttr, CssParser::parseInlineStyle(styleAttr)).first;
+                  imgStyle.applyOver(it->second);
                 }
                 const bool hasCssHeight = imgStyle.hasImageHeight();
                 const bool hasCssWidth = imgStyle.hasImageWidth();
@@ -769,6 +796,22 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   }
 
   for (int i = 0; i < len; i++) {
+    const unsigned char c = static_cast<unsigned char>(s[i]);
+
+    // Fast path for plain ASCII word characters (> 0x20 and < 0x80).
+    // This covers the vast majority of characters in Latin-script text.
+    // All multi-byte UTF-8 sequences start with a byte >= 0x80, so this
+    // path is safe to take without any further multi-byte checks.
+    if (c > 0x20 && c < 0x80) {
+      if (self->partWordBufferIndex >= MAX_WORD_SIZE) {
+        // Buffer is full — flush before appending. Pure ASCII means no
+        // partial multi-byte sequence can be at the boundary.
+        self->flushPartWordBuffer();
+      }
+      self->partWordBuffer[self->partWordBufferIndex++] = s[i];
+      continue;
+    }
+
     if (isWhitespace(s[i])) {
       // Inside <pre>: treat \n as a hard line break.
       if (s[i] == '\n' && self->preUntilDepth < self->depth) {
@@ -1142,7 +1185,8 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
       return false;
     }
   } while (!done);
-  LOG_DBG("EHP", "Time to parse and build pages: %lu ms", millis() - chapterStartTime);
+  const uint32_t totalTimeMs = millis() - chapterStartTime;
+  LOG_DBG("EHP", "Time to parse and build pages: %lu ms", totalTimeMs);
 
   XML_StopParser(parser, XML_FALSE);                // Stop any pending processing
   XML_SetElementHandler(parser, nullptr, nullptr);  // Clear callbacks
