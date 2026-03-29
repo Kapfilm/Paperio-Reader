@@ -235,6 +235,18 @@ void KOReaderSyncActivity::onExit() {
   wifiOff();
 }
 
+void KOReaderSyncActivity::closeCancelled() {
+  if (closeRequested) {
+    return;
+  }
+
+  closeRequested = true;
+  ActivityResult result;
+  result.isCancelled = true;
+  setResult(std::move(result));
+  finish();
+}
+
 void KOReaderSyncActivity::render(RenderLock&&) {
   const Rect contentRect = UITheme::getContentRect(renderer, true, false);
 
@@ -352,18 +364,13 @@ void KOReaderSyncActivity::render(RenderLock&&) {
 
 void KOReaderSyncActivity::loop() {
   if (state == NO_CREDENTIALS || state == SYNC_FAILED || state == UPLOAD_COMPLETE) {
-    if (state == UPLOAD_COMPLETE && millis() - uploadCompleteTime >= 3000) {
-      ActivityResult result;
-      result.isCancelled = true;
-      setResult(std::move(result));
-      finish();
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      closeCancelled();
       return;
     }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      ActivityResult result;
-      result.isCancelled = true;
-      setResult(std::move(result));
-      finish();
+
+    if (state == UPLOAD_COMPLETE && millis() - uploadCompleteTime >= 3000) {
+      closeCancelled();
     }
     return;
   }
@@ -393,10 +400,7 @@ void KOReaderSyncActivity::loop() {
     }
 
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      ActivityResult result;
-      result.isCancelled = true;
-      setResult(std::move(result));
-      finish();
+      closeCancelled();
     }
     return;
   }
@@ -415,10 +419,7 @@ void KOReaderSyncActivity::loop() {
     }
 
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      ActivityResult result;
-      result.isCancelled = true;
-      setResult(std::move(result));
-      finish();
+      closeCancelled();
     }
     return;
   }
