@@ -8,6 +8,7 @@
 #include <expat.h>
 
 #include <algorithm>
+#include <cctype>
 
 #include "../../Epub.h"
 #include "../Page.h"
@@ -76,6 +77,28 @@ bool isHeaderOrBlock(const char* name) {
 
 bool isTableStructuralTag(const char* name) {
   return strcmp(name, "table") == 0 || strcmp(name, "tr") == 0 || strcmp(name, "td") == 0 || strcmp(name, "th") == 0;
+}
+
+// Calibre sometimes injects empty <p style="margin:0; border:0; height:0">...</p>
+// spacers inside running prose. Keep them as paragraph boundaries, but ignore
+// their inner text payload (usually NBSP) to avoid no-break-space glue artifacts.
+bool isZeroHeightSpacerParagraph(const char* name, const std::string& styleAttr) {
+  if (strcmp(name, "p") != 0 || styleAttr.empty()) {
+    return false;
+  }
+
+  std::string normalized;
+  normalized.reserve(styleAttr.size());
+  for (const char ch : styleAttr) {
+    if (!isWhitespace(ch)) {
+      normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+    }
+  }
+
+  const bool hasZeroHeight = normalized.find("height:0") != std::string::npos;
+  const bool hasZeroMargin = normalized.find("margin:0") != std::string::npos;
+  const bool hasZeroBorder = normalized.find("border:0") != std::string::npos;
+  return hasZeroHeight && hasZeroMargin && hasZeroBorder;
 }
 
 // Update effective bold/italic/underline based on block style and inline style stack
@@ -653,6 +676,22 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS)) {
+    if (isZeroHeightSpacerParagraph(name, styleAttr)) {
+      // Preserve paragraph break semantics for this <p>, but skip its inner text payload.
+      self->currentCssStyle = cssStyle;
+      auto blockStyle = userAlignmentBlockStyle;
+      if (self->embeddedStyle && cssStyle.hasTextAlign()) {
+        blockStyle.alignment = cssStyle.textAlign;
+        blockStyle.textAlignDefined = true;
+      }
+      self->startNewTextBlock(blockStyle);
+      self->updateEffectiveInlineStyle();
+
+      self->skipTextUntilDepth = self->depth;
+      self->depth += 1;
+      return;
+    }
+
     if (strcmp(name, "br") == 0) {
       if (self->partWordBufferIndex > 0) {
         // flush word preceding <br/> to currentTextBlock before calling startNewTextBlock
@@ -797,6 +836,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
+    return;
+  }
+
+  // Ignore character data inside synthetic zero-height spacer <p> tags.
+  if (self->skipTextUntilDepth < self->depth) {
     return;
   }
 
@@ -1050,6 +1094,11 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     self->skipUntilDepth = INT_MAX;
   }
 
+  // Leaving zero-height spacer paragraph text-skip scope
+  if (self->skipTextUntilDepth == self->depth) {
+    self->skipTextUntilDepth = INT_MAX;
+  }
+
   if (self->tableDepth == 1 && (strcmp(name, "td") == 0 || strcmp(name, "th") == 0)) {
     self->nextWordContinues = false;
   }
@@ -1104,9 +1153,11 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     // Margins/padding are preserved so parent element spacing still accumulates correctly.
     if (self->currentTextBlock && self->currentTextBlock->isEmpty()) {
       auto style = self->currentTextBlock->getBlockStyle();
-      // Keep alignment for synthetic empty <br> separator blocks so following inline
-      // text after <br/> inside centered/right-aligned containers preserves alignment.
-      if (!style.fromBrElement) {
+      // Keep alignment only when closing the <br> separator itself so subsequent text
+      // within the same block container stays aligned. Reset alignment when closing
+      // other block tags (e.g. div/p) to avoid leaking centered/right alignment globally.
+      const bool preserveForBrClose = style.fromBrElement && strcmp(name, "br") == 0;
+      if (!preserveForBrClose) {
         style.textAlignDefined = false;
         style.alignment = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
                               ? CssTextAlign::Justify
