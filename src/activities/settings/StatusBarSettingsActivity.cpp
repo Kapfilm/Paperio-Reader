@@ -136,8 +136,9 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
+  const int menuCount = SETTINGS.useClock ? MENU_ITEMS : MENU_ITEMS - 1;
   GUI.drawList(
-      renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(MENU_ITEMS),
+      renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(menuCount),
       static_cast<int>(selectedIndex), [](int index) { return std::string(I18N.get(menuNames[index])); }, nullptr,
       nullptr,
       [this](int index) {
