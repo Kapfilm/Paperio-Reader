@@ -25,6 +25,7 @@ enum class SettingAction {
   SystemInfo,
   DetectTimezone,
   SyncTime,
+  Weather,
 };
 
 struct SettingInfo {
