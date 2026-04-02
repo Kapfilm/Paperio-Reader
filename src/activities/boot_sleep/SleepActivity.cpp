@@ -381,7 +381,7 @@ BookOverlayInfo SleepActivity::getBookOverlayInfo(const std::string& bookPath) c
               snprintf(suffix, sizeof(suffix), tr(STR_OVERLAY_CHAPTER_PAGE_SUFFIX), currentPage + 1, pageCount,
                        bookProgress);
               info.progressSuffix = suffix;
-              info.progressText = std::string(tr(STR_CHAPTER_PREFIX)) + info.chapterName + info.progressSuffix;
+              info.progressText = info.chapterName + info.progressSuffix;
             } else {
               char buf[80];
               snprintf(buf, sizeof(buf), tr(STR_OVERLAY_READING_PROGRESS), (unsigned long)currentPage + 1,
