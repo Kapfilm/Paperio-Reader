@@ -532,7 +532,8 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
             maxChapterWidth > 0
                 ? renderer.truncatedText(UI_10_FONT_ID, overlayInfo.chapterName.c_str(), maxChapterWidth)
                 : "";
-        progressStr = prefix + truncatedChapter + overlayInfo.progressSuffix;
+        // progressStr = prefix + truncatedChapter + overlayInfo.progressSuffix;
+        progressStr = truncatedChapter + overlayInfo.progressSuffix;
       } else {
         progressStr = renderer.truncatedText(UI_10_FONT_ID, overlayInfo.progressText.c_str(), availableWidth);
       }
