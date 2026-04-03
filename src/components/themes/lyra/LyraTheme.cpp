@@ -26,6 +26,8 @@
 #include "components/icons/settings2.h"
 #include "components/icons/text24.h"
 #include "components/icons/transfer.h"
+#include "components/icons/weather24.h"
+#include "components/icons/weather32.h"
 #include "components/icons/wifi.h"
 #include "fontIds.h"
 
@@ -80,6 +82,8 @@ const uint8_t* iconForName(UIIcon icon, int size) {
         return Book24Icon;
       case UIIcon::File:
         return File24Icon;
+      case UIIcon::Weather:
+        return Weather24Icon;
       default:
         return nullptr;
     }
@@ -101,6 +105,8 @@ const uint8_t* iconForName(UIIcon icon, int size) {
         return WifiIcon;
       case UIIcon::Hotspot:
         return HotspotIcon;
+      case UIIcon::Weather:
+        return Weather32Icon;
       default:
         return nullptr;
     }
@@ -535,10 +541,16 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
 
     if (rowIcon != nullptr) {
       UIIcon icon = rowIcon(i);
-      const uint8_t* iconBitmap = iconForName(icon, mainMenuIconSize);
+      int iconSize = mainMenuIconSize;
+      const uint8_t* iconBitmap = iconForName(icon, iconSize);
+      if (iconBitmap == nullptr) {
+        // Some icons only have 24px variants; fall back so they still render.
+        iconSize = listIconSize;
+        iconBitmap = iconForName(icon, iconSize);
+      }
       if (iconBitmap != nullptr) {
-        renderer.drawIcon(iconBitmap, textX, textY + 3, mainMenuIconSize, mainMenuIconSize);
-        textX += mainMenuIconSize + hPaddingInSelection + 2;
+        renderer.drawIcon(iconBitmap, textX, textY + 3, iconSize, iconSize);
+        textX += iconSize + hPaddingInSelection + 2;
       }
     }
 
