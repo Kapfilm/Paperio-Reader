@@ -466,15 +466,6 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       if (KOREADER_STORE.hasCredentials()) {
         const int currentPage = section ? section->currentPage : 0;
         const int totalPages = section ? section->pageCount : 0;
-        // Look up paragraph index from section cache for accurate XPath generation on upload
-        uint16_t paragraphIdx = 0;
-        bool hasParagraphIdx = false;
-        if (section) {
-          if (const auto pIdx = section->getParagraphIndexForPage(currentPage)) {
-            paragraphIdx = *pIdx;
-            hasParagraphIdx = true;
-          }
-        }
         startActivityForResult(std::make_unique<KOReaderSyncActivity>(renderer, mappedInput, epub, epub->getPath(),
                                                                       currentSpineIndex, currentPage, totalPages),
                                [this](const ActivityResult& result) { handleSyncResult(result); });
