@@ -276,7 +276,7 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       std::string subtitleText = rowSubtitle(i);
       const auto nl = subtitleText.find('\n');
       if (nl != std::string::npos) {
-        subtitleText = subtitleText.substr(0, nl) + " \u2022 " + subtitleText.substr(nl + 1);
+        subtitleText.replace(nl, 1, " \u2022 ");
       }
       auto subtitle = renderer.truncatedText(UI_10_FONT_ID, subtitleText.c_str(), textWidth);
       renderer.drawText(UI_10_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding, itemY + 30, subtitle.c_str(),

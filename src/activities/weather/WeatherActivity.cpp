@@ -41,7 +41,6 @@ void drawWeatherIconWithOrientation(const GfxRenderer& renderer, const uint8_t* 
   }
 }
 
-
 StrId getWeatherDescriptionStrId(const int wmoCode) {
   switch (wmoCode) {
     case 0:
@@ -597,8 +596,6 @@ void WeatherActivity::renderDailyForecast(int x, int y, int w, int h) {
   const int extraPx = w % numDays;
 
   int cardX = x;
-  int debugMoonX = x + w - 18;
-  int debugMoonYBase = y + 10;
 
   for (int i = 0; i < numDays; i++) {
     const auto& day = weatherData.daily[i];
