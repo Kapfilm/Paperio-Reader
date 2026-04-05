@@ -79,6 +79,27 @@ bool isTableStructuralTag(const char* name) {
   return strcmp(name, "table") == 0 || strcmp(name, "tr") == 0 || strcmp(name, "td") == 0 || strcmp(name, "th") == 0;
 }
 
+std::string buildTextBlockPreview(const std::shared_ptr<TextBlock>& line, const size_t maxLen = 120) {
+  if (!line) {
+    return {};
+  }
+
+  std::string preview;
+  const auto& words = line->getWords();
+  for (size_t i = 0; i < words.size(); ++i) {
+    if (i > 0) {
+      preview.push_back(' ');
+    }
+    preview += words[i];
+    if (preview.size() >= maxLen) {
+      preview.resize(maxLen);
+      preview += "...";
+      break;
+    }
+  }
+  return preview;
+}
+
 // Calibre sometimes injects empty <p style="margin:0; border:0; height:0">...</p>
 // spacers inside running prose. Keep them as paragraph boundaries, but ignore
 // their inner text payload (usually NBSP) to avoid no-break-space glue artifacts.
@@ -1091,7 +1112,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
                                         : self->viewportWidth;
     self->currentTextBlock->layoutAndExtractLines(
         self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock) { self->addLineToPage(textBlock); }, false);
+        [self](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
+               const bool suppressHyphenationRetry) {
+          return self->addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry);
+        },
+        false);
   }
 }
 
@@ -1371,7 +1396,9 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   return true;
 }
 
-void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
+ParsedText::LineProcessResult ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line,
+                                                                   const bool lineEndsWithHyphenatedWord,
+                                                                   const bool suppressHyphenationRetry) {
   const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
 
   if (!currentPage) {
@@ -1387,6 +1414,15 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
     currentPageNextY = 0;
   }
 
+  const bool noRoomForAnotherLine =
+      currentPageNextY + lineHeight <= viewportHeight && currentPageNextY + (lineHeight * 2) > viewportHeight;
+  if (lineEndsWithHyphenatedWord && !suppressHyphenationRetry && noRoomForAnotherLine) {
+    const std::string linePreview = buildTextBlockPreview(line);
+    LOG_DBG("EHP", "Requesting line rerender without hyphenation to avoid page-break split word: %s",
+            linePreview.c_str());
+    return ParsedText::LineProcessResult::RetryWithoutHyphenation;
+  }
+
   // Track cumulative words to assign footnotes to the page containing their anchor
   wordsExtractedInBlock += line->wordCount();
   auto footnoteIt = pendingFootnotes.begin();
@@ -1400,6 +1436,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   const int16_t xOffset = line->getBlockStyle().leftInset();
   currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
   currentPageNextY += lineHeight;
+  return ParsedText::LineProcessResult::Accepted;
 }
 
 void ChapterHtmlSlimParser::makePages() {
@@ -1431,7 +1468,10 @@ void ChapterHtmlSlimParser::makePages() {
 
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
-      [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); });
+      [this](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
+             const bool suppressHyphenationRetry) {
+        return addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry);
+      });
 
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches
