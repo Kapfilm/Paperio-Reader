@@ -151,7 +151,8 @@ class ChapterHtmlSlimParser {
 
   ~ChapterHtmlSlimParser() = default;
   bool parseAndBuildPages();
-  void addLineToPage(std::shared_ptr<TextBlock> line);
+  ParsedText::LineProcessResult addLineToPage(std::shared_ptr<TextBlock> line, bool lineEndsWithHyphenatedWord,
+                                              bool suppressHyphenationRetry);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
   const std::vector<uint16_t>& getParagraphIndexPerPage() const { return paragraphIndexPerPage; }
 };

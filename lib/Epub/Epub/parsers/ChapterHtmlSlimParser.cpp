@@ -1091,7 +1091,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
                                         : self->viewportWidth;
     self->currentTextBlock->layoutAndExtractLines(
         self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock) { self->addLineToPage(textBlock); }, false);
+        [self](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
+               const bool suppressHyphenationRetry) {
+          return self->addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry);
+        },
+        false);
   }
 }
 
@@ -1371,7 +1375,9 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   return true;
 }
 
-void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
+ParsedText::LineProcessResult ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line,
+                                                                   const bool lineEndsWithHyphenatedWord,
+                                                                   const bool suppressHyphenationRetry) {
   const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
 
   if (!currentPage) {
@@ -1387,6 +1393,13 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
     currentPageNextY = 0;
   }
 
+  const bool noRoomForAnotherLine =
+      currentPageNextY + lineHeight <= viewportHeight && currentPageNextY + (lineHeight * 2) > viewportHeight;
+  if (lineEndsWithHyphenatedWord && !suppressHyphenationRetry && noRoomForAnotherLine) {
+    LOG_DBG("EHP", "Requesting line rerender without hyphenation to avoid page-break split word");
+    return ParsedText::LineProcessResult::RetryWithoutHyphenation;
+  }
+
   // Track cumulative words to assign footnotes to the page containing their anchor
   wordsExtractedInBlock += line->wordCount();
   auto footnoteIt = pendingFootnotes.begin();
@@ -1400,6 +1413,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   const int16_t xOffset = line->getBlockStyle().leftInset();
   currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
   currentPageNextY += lineHeight;
+  return ParsedText::LineProcessResult::Accepted;
 }
 
 void ChapterHtmlSlimParser::makePages() {
@@ -1431,7 +1445,10 @@ void ChapterHtmlSlimParser::makePages() {
 
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
-      [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); });
+      [this](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
+             const bool suppressHyphenationRetry) {
+        return addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry);
+      });
 
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches
