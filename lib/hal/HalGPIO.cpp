@@ -240,9 +240,6 @@ void HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
     // Fast path - no duration check needed
     return;
   }
-  // TODO: Intermittent edge case remains: a single tap followed by another single tap
-  // can still power on the device. Tighten wake debounce/state handling here.
-
   // Calibrate: subtract boot time already elapsed, assuming button held since boot
   const uint16_t calibration = millis();
   const uint16_t calibratedDuration = (calibration < requiredDurationMs) ? (requiredDurationMs - calibration) : 1;
@@ -255,13 +252,23 @@ void HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPre
     inputMgr.update();
   }
   if (inputMgr.isPressed(BTN_POWER)) {
-    do {
+    // Use wall-clock elapsed time instead of getHeldTime() which resets on bounce.
+    // Tolerate brief release gaps (bouncing switch) up to BOUNCE_TOLERANCE_MS.
+    constexpr unsigned long BOUNCE_TOLERANCE_MS = 100;
+    unsigned long lastSeenPressed = millis();
+    const auto holdStart = millis();
+
+    while (millis() - holdStart < calibratedDuration) {
       delay(10);
       inputMgr.update();
-    } while (inputMgr.isPressed(BTN_POWER) && inputMgr.getHeldTime() < calibratedDuration);
-    if (inputMgr.getHeldTime() < calibratedDuration) {
-      startDeepSleep();
+      if (inputMgr.isPressed(BTN_POWER)) {
+        lastSeenPressed = millis();
+      } else if (millis() - lastSeenPressed >= BOUNCE_TOLERANCE_MS) {
+        // Button released for longer than bounce tolerance — truly released
+        startDeepSleep();
+      }
     }
+    // Held long enough (tolerating brief bounces) — proceed with boot
   } else {
     startDeepSleep();
   }
