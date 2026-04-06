@@ -18,6 +18,8 @@
 namespace {
 constexpr const char* SLEEP_BMP_PATH = "/sleep.bmp";
 
+uint8_t normalizeImageDitherModeValue(uint8_t mode) { return static_cast<uint8_t>(imageDitherModeFromSetting(mode)); }
+
 bool isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }
 
 bool isSupportedImageFile(const std::string& path) {
@@ -53,7 +55,13 @@ void computeCenteredImagePlacement(const int imageWidth, const int imageHeight, 
 }  // namespace
 
 BmpViewerActivity::BmpViewerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string path)
-    : Activity("BmpViewer", renderer, mappedInput), filePath(std::move(path)) {}
+    : Activity("BmpViewer", renderer, mappedInput),
+      filePath(std::move(path)),
+      imageDitherMode(normalizeImageDitherModeValue(SETTINGS.imageDithering)) {}
+
+bool BmpViewerActivity::renderCurrentImage(const bool showControls) {
+  return isBmpFile(filePath) ? renderBmpImage(showControls) : renderDecodedImage(showControls);
+}
 
 void BmpViewerActivity::onEnter() {
   Activity::onEnter();
@@ -62,7 +70,7 @@ void BmpViewerActivity::onEnter() {
     return;
   }
 
-  const bool rendered = isBmpFile(filePath) ? renderBmpImage() : renderDecodedImage();
+  const bool rendered = renderCurrentImage();
   if (!rendered) {
     renderError("Could not render image");
   }
@@ -100,7 +108,8 @@ bool BmpViewerActivity::renderBmpImage(const bool showControls) {
   renderer.clearScreen();
   renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0);
   if (showControls) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", tr(STR_SET_SLEEP_SCREEN));
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), "", I18N.get(getCurrentDitherModeLabel()), tr(STR_SET_SLEEP_SCREEN));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -139,17 +148,42 @@ bool BmpViewerActivity::renderDecodedImage(const bool showControls) {
   config.useExactDimensions = true;
   config.useGrayscale = true;
   config.useDithering = true;
+  config.ditherMode = imageDitherModeFromSetting(imageDitherMode);
 
   if (!decoder->decodeToFramebuffer(filePath, renderer, config)) {
     return false;
   }
 
   if (showControls) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", tr(STR_SET_SLEEP_SCREEN));
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), "", I18N.get(getCurrentDitherModeLabel()), tr(STR_SET_SLEEP_SCREEN));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
   return true;
+}
+
+StrId BmpViewerActivity::getCurrentDitherModeLabel() const {
+  switch (imageDitherModeFromSetting(imageDitherMode)) {
+    case ImageDitherMode::Atkinson:
+      return StrId::STR_IMAGE_DITHER_ATKINSON;
+    case ImageDitherMode::DiffusedBayer:
+      return StrId::STR_IMAGE_DITHER_DIFFUSED_BAYER;
+    case ImageDitherMode::Bayer:
+    case ImageDitherMode::COUNT:
+    default:
+      return StrId::STR_IMAGE_DITHER_BAYER;
+  }
+}
+
+void BmpViewerActivity::cycleDitherMode() {
+  imageDitherMode = (imageDitherMode + 1) % CrossPointSettings::IMAGE_DITHERING_COUNT;
+  SETTINGS.imageDithering = imageDitherMode;
+  SETTINGS.saveToFile();
+
+  if (!renderCurrentImage()) {
+    renderError("Could not render image");
+  }
 }
 
 void BmpViewerActivity::renderError(const char* message) {
@@ -207,6 +241,11 @@ void BmpViewerActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     finish();
+    return;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    cycleDitherMode();
     return;
   }
 

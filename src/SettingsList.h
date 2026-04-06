@@ -69,6 +69,10 @@ inline const std::vector<SettingInfo>& getSettingsList() {
       SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                         {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                         "imageRendering", StrId::STR_CAT_READER),
+      SettingInfo::Enum(
+          StrId::STR_IMAGE_DITHERING, &CrossPointSettings::imageDithering,
+          {StrId::STR_IMAGE_DITHER_BAYER, StrId::STR_IMAGE_DITHER_ATKINSON, StrId::STR_IMAGE_DITHER_DIFFUSED_BAYER},
+          "imageDithering", StrId::STR_CAT_READER),
       SettingInfo::Toggle(StrId::STR_CREATE_FALLBACK_FOR_INVALID_TOC, &CrossPointSettings::syntheticTocFallback,
                           "syntheticTocFallback", StrId::STR_CAT_READER),
       // --- Controls ---

@@ -4,6 +4,7 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include "../../../../src/CrossPointSettings.h"
 #include "../converters/DirectPixelWriter.h"
 #include "../converters/ImageDecoderFactory.h"
 
@@ -19,13 +20,13 @@ bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str());
 
 namespace {
 
-std::string getCachePath(const std::string& imagePath) {
+std::string getCachePath(const std::string& imagePath, ImageDitherMode ditherMode) {
   // Replace extension with .pxc (pixel cache)
   size_t dotPos = imagePath.rfind('.');
   if (dotPos != std::string::npos) {
-    return imagePath.substr(0, dotPos) + ".pxc";
+    return imagePath.substr(0, dotPos) + getImageDitherCacheSuffix(ditherMode) + ".pxc";
   }
-  return imagePath + ".pxc";
+  return imagePath + getImageDitherCacheSuffix(ditherMode) + ".pxc";
 }
 
 bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x, int y, int expectedWidth,
@@ -110,7 +111,8 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   }
 
   // Try to render from cache first
-  std::string cachePath = getCachePath(imagePath);
+  const ImageDitherMode ditherMode = imageDitherModeFromSetting(SETTINGS.imageDithering);
+  std::string cachePath = getCachePath(imagePath, ditherMode);
   if (renderFromCache(renderer, cachePath, x, y, width, height)) {
     return;  // Successfully rendered from cache
   }
@@ -139,6 +141,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   config.maxHeight = height;
   config.useGrayscale = true;
   config.useDithering = true;
+  config.ditherMode = ditherMode;
   config.performanceMode = false;
   config.useExactDimensions = true;  // Use pre-calculated dimensions to avoid rounding mismatches
   config.cachePath = cachePath;      // Enable caching during decode
