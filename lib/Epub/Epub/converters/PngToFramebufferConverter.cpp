@@ -1,5 +1,8 @@
 #include "PngToFramebufferConverter.h"
 
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+#include <BitmapHelpers.h>
+#endif
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -36,6 +39,11 @@ struct PngContext {
   bool caching;
 
   uint8_t* grayLineBuffer;
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+  int currentDitherRow;
+  AtkinsonDitherer* atkinsonDitherer;
+  DiffusedBayerDitherer* diffusedBayerDitherer;
+#endif
 
   PngContext()
       : renderer(nullptr),
@@ -49,8 +57,73 @@ struct PngContext {
         dstHeight(0),
         lastDstY(-1),
         caching(false),
-        grayLineBuffer(nullptr) {}
+        grayLineBuffer(nullptr)
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+        ,
+        currentDitherRow(-1),
+        atkinsonDitherer(nullptr),
+        diffusedBayerDitherer(nullptr)
+#endif
+  {
+  }
+
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+  ~PngContext() {
+    delete atkinsonDitherer;
+    delete diffusedBayerDitherer;
+  }
+#endif
 };
+
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+void prepareDitherRow(PngContext& ctx, int dstY) {
+  if (!ctx.config || !ctx.config->useDithering) return;
+
+  if (ctx.currentDitherRow == -1 || dstY < ctx.currentDitherRow) {
+    if (ctx.atkinsonDitherer) ctx.atkinsonDitherer->reset();
+    if (ctx.diffusedBayerDitherer) ctx.diffusedBayerDitherer->reset();
+    ctx.currentDitherRow = dstY;
+    return;
+  }
+
+  while (ctx.currentDitherRow < dstY) {
+    if (ctx.atkinsonDitherer) ctx.atkinsonDitherer->nextRow();
+    if (ctx.diffusedBayerDitherer) ctx.diffusedBayerDitherer->nextRow();
+    ctx.currentDitherRow++;
+  }
+}
+
+uint8_t ditherGray(PngContext& ctx, uint8_t gray, int localX, int outX, int outY) {
+  if (!ctx.config || !ctx.config->useDithering) {
+    return quantizeGray4Level(gray);
+  }
+
+  switch (ctx.config->ditherMode) {
+    case ImageDitherMode::Atkinson:
+      if (ctx.atkinsonDitherer) {
+        return ctx.atkinsonDitherer->processPixel(gray, localX);
+      }
+      break;
+    case ImageDitherMode::DiffusedBayer:
+      if (ctx.diffusedBayerDitherer) {
+        return ctx.diffusedBayerDitherer->processPixel(gray, localX, outX, outY);
+      }
+      break;
+    case ImageDitherMode::Bayer:
+    case ImageDitherMode::COUNT:
+    default:
+      break;
+  }
+
+  return applyBayerDither4Level(gray, outX, outY);
+}
+#else
+uint8_t ditherGray(PngContext& ctx, uint8_t gray, int localX, int outX, int outY) {
+  (void)ctx;
+  (void)localX;
+  return applyBayerDither4Level(gray, outX, outY);
+}
+#endif
 
 // File I/O callbacks use pFile->fHandle to access the FsFile*,
 // avoiding the need for global file state.
@@ -205,7 +278,6 @@ int pngDrawCallback(PNGDRAW* pDraw) {
   int dstWidth = ctx->dstWidth;
   int outXBase = ctx->config->x;
   int screenWidth = ctx->screenWidth;
-  bool useDithering = ctx->config->useDithering;
   bool caching = ctx->caching;
 
   // Pre-compute orientation and render-mode state once per row
@@ -219,6 +291,10 @@ int pngDrawCallback(PNGDRAW* pDraw) {
     cw.beginRow(outY, ctx->config->y);
   }
 
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+  prepareDitherRow(*ctx, dstY);
+#endif
+
   int srcX = 0;
   int error = 0;
 
@@ -227,13 +303,7 @@ int pngDrawCallback(PNGDRAW* pDraw) {
     if (outX < screenWidth) {
       uint8_t gray = ctx->grayLineBuffer[srcX];
 
-      uint8_t ditheredGray;
-      if (useDithering) {
-        ditheredGray = applyBayerDither4Level(gray, outX, outY);
-      } else {
-        ditheredGray = gray / 85;
-        if (ditheredGray > 3) ditheredGray = 3;
-      }
+      uint8_t ditheredGray = ditherGray(*ctx, gray, dstX, outX, outY);
       pw.writePixel(outX, ditheredGray);
       if (caching) cw.writePixel(outX, ditheredGray);
     }
@@ -383,6 +453,29 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
       LOG_ERR("PNG", "Failed to allocate cache buffer, continuing without caching");
       ctx.caching = false;
     }
+  }
+
+  if (config.useDithering) {
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+    switch (config.ditherMode) {
+      case ImageDitherMode::Atkinson:
+        ctx.atkinsonDitherer = new (std::nothrow) AtkinsonDitherer(ctx.dstWidth);
+        if (!ctx.atkinsonDitherer) {
+          LOG_ERR("PNG", "Failed to allocate Atkinson ditherer, falling back to Bayer");
+        }
+        break;
+      case ImageDitherMode::DiffusedBayer:
+        ctx.diffusedBayerDitherer = new (std::nothrow) DiffusedBayerDitherer(ctx.dstWidth);
+        if (!ctx.diffusedBayerDitherer) {
+          LOG_ERR("PNG", "Failed to allocate diffused Bayer ditherer, falling back to Bayer");
+        }
+        break;
+      case ImageDitherMode::Bayer:
+      case ImageDitherMode::COUNT:
+      default:
+        break;
+    }
+#endif
   }
 
   unsigned long decodeStart = millis();

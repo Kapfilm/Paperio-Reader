@@ -137,6 +137,16 @@ class CrossPointSettings {
 
   // Image rendering in EPUB reader
   enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+  enum IMAGE_DITHERING {
+    IMAGE_DITHER_BAYER = 0,
+    IMAGE_DITHER_ATKINSON = 1,
+    IMAGE_DITHER_DIFFUSED_BAYER = 2,
+    IMAGE_DITHERING_COUNT
+  };
+#else
+  enum IMAGE_DITHERING { IMAGE_DITHER_BAYER = 0, IMAGE_DITHERING_COUNT };
+#endif
 
   // Timezone options (POSIX TZ rules for DST support)
   enum TIMEZONE {
@@ -223,6 +233,8 @@ class CrossPointSettings {
   uint8_t showHiddenFiles = 0;
   // Image rendering mode in EPUB reader
   uint8_t imageRendering = IMAGES_DISPLAY;
+  // Dithering mode for decoded images (EPUB/JPG/PNG)
+  uint8_t imageDithering = IMAGE_DITHER_BAYER;
   // Enable synthetic TOC fallback for malformed/sparse TOC books (1 = enabled, 0 = disabled)
   uint8_t syntheticTocFallback = 1;
   // Show clock in the reader status bar

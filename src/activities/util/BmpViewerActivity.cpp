@@ -1,110 +1,292 @@
 #include "BmpViewerActivity.h"
 
 #include <Bitmap.h>
+#include <Epub/converters/ImageDecoderFactory.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+
+#include <cmath>
 
 #include "../reader/ReaderUtils.h"
 #include "CrossPointSettings.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ScreenshotUtil.h"
 
 namespace {
 constexpr const char* SLEEP_BMP_PATH = "/sleep.bmp";
+constexpr const char* SLEEP_BMP_TMP_PATH = "/sleep.bmp.tmp";
+constexpr const char* SLEEP_BMP_BACKUP_PATH = "/sleep.bmp.bak";
+
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+uint8_t normalizeImageDitherModeValue(uint8_t mode) { return static_cast<uint8_t>(imageDitherModeFromSetting(mode)); }
+#endif
+
+bool isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }
+
+bool isSupportedImageFile(const std::string& path) {
+  return FsHelpers::hasBmpExtension(path) || FsHelpers::hasJpgExtension(path) || FsHelpers::hasPngExtension(path);
+}
+
+void computeCenteredImagePlacement(const int imageWidth, const int imageHeight, const int pageWidth,
+                                   const int pageHeight, int& x, int& y, int& renderWidth, int& renderHeight) {
+  renderWidth = imageWidth;
+  renderHeight = imageHeight;
+
+  if (imageWidth > pageWidth || imageHeight > pageHeight) {
+    const float ratio = static_cast<float>(imageWidth) / static_cast<float>(imageHeight);
+    const float screenRatio = static_cast<float>(pageWidth) / static_cast<float>(pageHeight);
+
+    if (ratio > screenRatio) {
+      renderWidth = pageWidth;
+      renderHeight = std::max(1, static_cast<int>(std::round(static_cast<float>(pageWidth) / ratio)));
+    } else {
+      renderHeight = pageHeight;
+      renderWidth = std::max(1, static_cast<int>(std::round(static_cast<float>(pageHeight) * ratio)));
+    }
+
+    x = std::max(0, (pageWidth - renderWidth) / 2);
+    y = std::max(0, (pageHeight - renderHeight) / 2);
+    return;
+  }
+
+  renderWidth = std::max(1, renderWidth);
+  renderHeight = std::max(1, renderHeight);
+  x = std::max(0, (pageWidth - renderWidth) / 2);
+  y = std::max(0, (pageHeight - renderHeight) / 2);
+}
+
+bool replaceSleepBmpFromTemp() {
+  const bool hadExistingTarget = Storage.exists(SLEEP_BMP_PATH);
+  bool movedExistingToBackup = false;
+
+  if (Storage.exists(SLEEP_BMP_BACKUP_PATH)) {
+    Storage.remove(SLEEP_BMP_BACKUP_PATH);
+  }
+
+  if (hadExistingTarget) {
+    movedExistingToBackup = Storage.rename(SLEEP_BMP_PATH, SLEEP_BMP_BACKUP_PATH);
+    if (!movedExistingToBackup) {
+      return false;
+    }
+  }
+
+  if (Storage.rename(SLEEP_BMP_TMP_PATH, SLEEP_BMP_PATH)) {
+    if (movedExistingToBackup) {
+      Storage.remove(SLEEP_BMP_BACKUP_PATH);
+    }
+    return true;
+  }
+
+  if (movedExistingToBackup) {
+    Storage.rename(SLEEP_BMP_BACKUP_PATH, SLEEP_BMP_PATH);
+  }
+  return false;
+}
 }  // namespace
 
 BmpViewerActivity::BmpViewerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string path)
-    : Activity("BmpViewer", renderer, mappedInput), filePath(std::move(path)) {}
+    : Activity("BmpViewer", renderer, mappedInput),
+      filePath(std::move(path))
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+      ,
+      imageDitherMode(normalizeImageDitherModeValue(SETTINGS.imageDithering)),
+      initialImageDitherMode(imageDitherMode),
+      imageDitherSettingsDirty(false) {
+}
+#else
+{
+}
+#endif
+
+bool BmpViewerActivity::renderCurrentImage(const bool showControls) {
+  return isBmpFile(filePath) ? renderBmpImage(showControls) : renderDecodedImage(showControls);
+}
 
 void BmpViewerActivity::onEnter() {
   Activity::onEnter();
-  // Removed the redundant initial renderer.clearScreen()
+  if (!isSupportedImageFile(filePath)) {
+    renderError(tr(STR_UNSUPPORTED_IMAGE_FORMAT));
+    return;
+  }
 
-  FsFile file;
-
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
-  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
-  // 1. Open the file
-  if (Storage.openFileForRead("BMP", filePath, file)) {
-    Bitmap bitmap(file, true);
-
-    // 2. Parse headers to get dimensions
-    if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-      int x, y;
-
-      if (bitmap.getWidth() > pageWidth || bitmap.getHeight() > pageHeight) {
-        float ratio = static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
-        const float screenRatio = static_cast<float>(pageWidth) / static_cast<float>(pageHeight);
-
-        if (ratio > screenRatio) {
-          // Wider than screen
-          x = 0;
-          y = std::round((static_cast<float>(pageHeight) - static_cast<float>(pageWidth) / ratio) / 2);
-        } else {
-          // Taller than screen
-          x = std::round((static_cast<float>(pageWidth) - static_cast<float>(pageHeight) * ratio) / 2);
-          y = 0;
-        }
-      } else {
-        // Center small images
-        x = (pageWidth - bitmap.getWidth()) / 2;
-        y = (pageHeight - bitmap.getHeight()) / 2;
-      }
-
-      // 4. Prepare Rendering
-      const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", tr(STR_SET_SLEEP_SCREEN));
-      GUI.fillPopupProgress(renderer, popupRect, 50);
-
-      renderer.clearScreen();
-      // Assuming drawBitmap defaults to 0,0 crop if omitted, or pass explicitly: drawBitmap(bitmap, x, y, pageWidth,
-      // pageHeight, 0, 0)
-      renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0);
-
-      // Draw UI hints on the base layer
-      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      // Single pass for non-grayscale images
-
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-
-    } else {
-      // Handle file parsing error
-      renderer.clearScreen();
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, "Invalid BMP File");
-      const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-    }
-
-    file.close();
-  } else {
-    // Handle file open error
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, "Could not open file");
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  const bool rendered = renderCurrentImage();
+  if (!rendered) {
+    renderError(tr(STR_COULD_NOT_RENDER_IMAGE));
   }
 }
 
 void BmpViewerActivity::onExit() {
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+  saveDitherSettingsIfNeeded();
+#endif
   Activity::onExit();
   renderer.clearScreen();
   renderer.displayBuffer(HalDisplay::FULL_REFRESH);
 }
 
+bool BmpViewerActivity::renderBmpImage(const bool showControls) {
+  FsFile file;
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  GUI.fillPopupProgress(renderer, popupRect, 20);
+
+  if (!Storage.openFileForRead("BMP", filePath, file)) {
+    return false;
+  }
+
+  Bitmap bitmap(file, true);
+  if (bitmap.parseHeaders() != BmpReaderError::Ok) {
+    file.close();
+    return false;
+  }
+
+  int x, y, renderWidth, renderHeight;
+  computeCenteredImagePlacement(bitmap.getWidth(), bitmap.getHeight(), pageWidth, pageHeight, x, y, renderWidth,
+                                renderHeight);
+
+  GUI.fillPopupProgress(renderer, popupRect, 50);
+
+  renderer.clearScreen();
+  renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0);
+  if (showControls) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", tr(STR_SET_SLEEP_SCREEN));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+
+  file.close();
+  return true;
+}
+
+bool BmpViewerActivity::renderDecodedImage(const bool showControls) {
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+  GUI.fillPopupProgress(renderer, popupRect, 20);
+
+  ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(filePath);
+  if (!decoder) {
+    return false;
+  }
+
+  ImageDimensions dims{};
+  if (!decoder->getDimensions(filePath, dims) || dims.width <= 0 || dims.height <= 0) {
+    return false;
+  }
+
+  int x, y, renderWidth, renderHeight;
+  computeCenteredImagePlacement(dims.width, dims.height, pageWidth, pageHeight, x, y, renderWidth, renderHeight);
+
+  GUI.fillPopupProgress(renderer, popupRect, 50);
+  renderer.clearScreen();
+
+  RenderConfig config{};
+  config.x = x;
+  config.y = y;
+  config.maxWidth = renderWidth;
+  config.maxHeight = renderHeight;
+  config.useExactDimensions = true;
+  config.useGrayscale = true;
+  config.useDithering = true;
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+  config.ditherMode = imageDitherModeFromSetting(imageDitherMode);
+#else
+  config.ditherMode = ImageDitherMode::Bayer;
+#endif
+
+  if (!decoder->decodeToFramebuffer(filePath, renderer, config)) {
+    return false;
+  }
+
+  if (showControls) {
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_BACK), "", I18N.get(getCurrentDitherModeLabel()), tr(STR_SET_SLEEP_SCREEN));
+#else
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", tr(STR_SET_SLEEP_SCREEN));
+#endif
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  return true;
+}
+
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+StrId BmpViewerActivity::getCurrentDitherModeLabel() const {
+  switch (imageDitherModeFromSetting(imageDitherMode)) {
+    case ImageDitherMode::Atkinson:
+      return StrId::STR_IMAGE_DITHER_ATKINSON;
+    case ImageDitherMode::DiffusedBayer:
+      return StrId::STR_IMAGE_DITHER_DIFFUSED_BAYER;
+    case ImageDitherMode::Bayer:
+    case ImageDitherMode::COUNT:
+    default:
+      return StrId::STR_IMAGE_DITHER_BAYER;
+  }
+}
+
+void BmpViewerActivity::cycleDitherMode() {
+  imageDitherMode = (imageDitherMode + 1) % CrossPointSettings::IMAGE_DITHERING_COUNT;
+  SETTINGS.imageDithering = imageDitherMode;
+  imageDitherSettingsDirty = (imageDitherMode != initialImageDitherMode);
+
+  if (!renderCurrentImage()) {
+    renderError(tr(STR_COULD_NOT_RENDER_IMAGE));
+  }
+}
+
+void BmpViewerActivity::saveDitherSettingsIfNeeded() {
+  if (!imageDitherSettingsDirty) {
+    return;
+  }
+
+  SETTINGS.imageDithering = imageDitherMode;
+  SETTINGS.saveToFile();
+  initialImageDitherMode = imageDitherMode;
+  imageDitherSettingsDirty = false;
+}
+#endif
+
+void BmpViewerActivity::renderError(const char* message) {
+  const auto pageHeight = renderer.getScreenHeight();
+  renderer.clearScreen();
+  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, message);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+}
+
 void BmpViewerActivity::setAsSleepScreen() {
-  // Only copy if the source isn't already /sleep.bmp
-  if (filePath != SLEEP_BMP_PATH) {
-    if (!Storage.copyFile("BMP", filePath, SLEEP_BMP_PATH)) {
-      LOG_ERR("BMP", "Failed to copy %s to %s", filePath.c_str(), SLEEP_BMP_PATH);
-      return;
+  bool success = false;
+
+  if (FsHelpers::hasBmpExtension(filePath)) {
+    success = (filePath == SLEEP_BMP_PATH) ? true : Storage.copyFile("BMP", filePath, SLEEP_BMP_PATH);
+  } else {
+    const bool renderedForCapture = renderDecodedImage(false);
+    if (renderedForCapture) {
+      Storage.remove(SLEEP_BMP_TMP_PATH);
+      if (ScreenshotUtil::saveFramebufferAsBmp(SLEEP_BMP_TMP_PATH, renderer.getFrameBuffer(), display.getDisplayWidth(),
+                                               display.getDisplayHeight())) {
+        success = replaceSleepBmpFromTemp();
+      }
+    }
+
+    if (!success && Storage.exists(SLEEP_BMP_TMP_PATH)) {
+      Storage.remove(SLEEP_BMP_TMP_PATH);
     }
   }
 
-  // Switch sleep screen mode to CUSTOM so the copied image is used
+  if (!success) {
+    LOG_ERR("BMP", "Failed to set %s as sleep screen", filePath.c_str());
+    GUI.drawPopup(renderer, tr(STR_FAILED_TO_SET_SLEEP_SCREEN));
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    return;
+  }
+
   SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM;
   SETTINGS.saveToFile();
   LOG_INF("BMP", "Set %s as sleep screen", filePath.c_str());
@@ -129,6 +311,13 @@ void BmpViewerActivity::loop() {
     finish();
     return;
   }
+
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+  if (!isBmpFile(filePath) && mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    cycleDitherMode();
+    return;
+  }
+#endif
 
   // Next/Right button: set this image as the sleep screen
   if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
