@@ -2109,8 +2109,9 @@
     }
 
     async function hydrate() {
-      // Fetch CrossPoint version
+      // Fetch CrossPoint version and file extension setting
       fetchVersion();
+      await fetchShowFileExtensions();
 
       // Close modals when clicking overlay - call proper cleanup functions
       document.querySelectorAll('.modal-overlay').forEach(function (overlay) {
@@ -2207,7 +2208,7 @@
             fileTableContent += `<tr class="${file.isEpub ? 'epub-file' : ''}">`;
             fileTableContent += `<td><input type="checkbox" class="select-item" data-path="${encodeURIComponent(filePath)}" data-name="${escapeHtml(file.name)}" data-type="file"></td>`;
             fileTableContent += `<td><span class="file-icon">${file.isEpub ? '📗' : '📄'}</span>`;
-            fileTableContent += `<a rel="noopener noreferrer" target="_blank" href="/download?path=${encodeURIComponent(filePath)}" class="file-link">${escapeHtml(file.name)}</a>`;
+            fileTableContent += `<a rel="noopener noreferrer" target="_blank" href="/download?path=${encodeURIComponent(filePath)}" class="file-link">${escapeHtml(displayFileName(file.name))}</a>`;
             if (file.isEpub) fileTableContent += '<span class="epub-badge">EPUB</span>';
             fileTableContent += '</td>';
             fileTableContent += `<td>${file.name.split('.').pop().toUpperCase()}</td>`;
@@ -3291,6 +3292,28 @@
     const logSection = document.getElementById('log-section');
     const logContainer = document.getElementById('log-container');
     const exportLogCheckbox = document.getElementById('export-log-checkbox');
+
+    // Show file extensions setting (fetched from API)
+    let showFileExtensions = false;
+
+    async function fetchShowFileExtensions() {
+      try {
+        const response = await fetch('/api/settings');
+        if (response.ok) {
+          const settings = await response.json();
+          const entry = settings.find(s => s.key === 'showFileExtensions');
+          if (entry) showFileExtensions = !!entry.value;
+        }
+      } catch (e) {
+        console.error('Failed to fetch settings:', e);
+      }
+    }
+
+    function displayFileName(name) {
+      if (showFileExtensions) return name;
+      const dot = name.lastIndexOf('.');
+      return dot > 0 ? name.substring(0, dot) : name;
+    }
 
     // CrossPoint version (fetched from API)
     let crosspointVersion = 'Unknown';

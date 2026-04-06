@@ -263,6 +263,9 @@ std::string getFileName(std::string filename) {
     }
     return filename;
   }
+  if (SETTINGS.showFileExtensions) {
+    return filename;
+  }
   const auto pos = filename.rfind('.');
   return filename.substr(0, pos);
 }
