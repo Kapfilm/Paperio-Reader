@@ -124,11 +124,6 @@ EpdFont ui12RegularFont(&ubuntu_12_regular);
 EpdFont ui12BoldFont(&ubuntu_12_bold);
 EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
 
-void waitForPowerRelease() {
-  LOG_DBG("MAIN", "waitForPowerRelease: rawPin=%d", digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
-  gpio.waitForStablePowerRelease();
-}
-
 // Enter deep sleep mode
 void enterDeepSleep() {
   LOG_DBG("MAIN", "enterDeepSleep called at millis=%lu, powerBtn isPressed=%d, rawPin=%d", millis(),
@@ -265,9 +260,6 @@ void setup() {
     APP_STATE.saveToFile();
     activityManager.goToReader(path);
   }
-
-  // Ensure we're not still holding the power button before leaving setup
-  waitForPowerRelease();
 }
 
 void loop() {
