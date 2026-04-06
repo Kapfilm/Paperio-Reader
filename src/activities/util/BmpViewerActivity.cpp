@@ -108,13 +108,13 @@ bool BmpViewerActivity::renderCurrentImage(const bool showControls) {
 void BmpViewerActivity::onEnter() {
   Activity::onEnter();
   if (!isSupportedImageFile(filePath)) {
-    renderError("Unsupported image format");
+    renderError(tr(STR_UNSUPPORTED_IMAGE_FORMAT));
     return;
   }
 
   const bool rendered = renderCurrentImage();
   if (!rendered) {
-    renderError("Could not render image");
+    renderError(tr(STR_COULD_NOT_RENDER_IMAGE));
   }
 }
 
@@ -235,7 +235,7 @@ void BmpViewerActivity::cycleDitherMode() {
   imageDitherSettingsDirty = (imageDitherMode != initialImageDitherMode);
 
   if (!renderCurrentImage()) {
-    renderError("Could not render image");
+    renderError(tr(STR_COULD_NOT_RENDER_IMAGE));
   }
 }
 
@@ -266,7 +266,7 @@ void BmpViewerActivity::setAsSleepScreen() {
   if (FsHelpers::hasBmpExtension(filePath)) {
     success = (filePath == SLEEP_BMP_PATH) ? true : Storage.copyFile("BMP", filePath, SLEEP_BMP_PATH);
   } else {
-    const bool renderedForCapture = isBmpFile(filePath) ? renderBmpImage(false) : renderDecodedImage(false);
+    const bool renderedForCapture = renderDecodedImage(false);
     if (renderedForCapture) {
       Storage.remove(SLEEP_BMP_TMP_PATH);
       if (ScreenshotUtil::saveFramebufferAsBmp(SLEEP_BMP_TMP_PATH, renderer.getFrameBuffer(), display.getDisplayWidth(),
@@ -282,7 +282,7 @@ void BmpViewerActivity::setAsSleepScreen() {
 
   if (!success) {
     LOG_ERR("BMP", "Failed to set %s as sleep screen", filePath.c_str());
-    GUI.drawPopup(renderer, "Failed to set sleep screen");
+    GUI.drawPopup(renderer, tr(STR_FAILED_TO_SET_SLEEP_SCREEN));
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     return;
   }
