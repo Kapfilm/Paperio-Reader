@@ -122,6 +122,28 @@ bool isZeroHeightSpacerParagraph(const char* name, const std::string& styleAttr)
   return hasZeroHeight && hasZeroMargin && hasZeroBorder;
 }
 
+BlockStyle getInheritedBlockStyle(const BlockStyle& parent, const BlockStyle& child) {
+  BlockStyle inherited = child;
+
+  inherited.marginLeft = static_cast<int16_t>(parent.marginLeft + child.marginLeft);
+  inherited.marginRight = static_cast<int16_t>(parent.marginRight + child.marginRight);
+  inherited.paddingLeft = static_cast<int16_t>(parent.paddingLeft + child.paddingLeft);
+  inherited.paddingRight = static_cast<int16_t>(parent.paddingRight + child.paddingRight);
+
+  if (!child.textIndentDefined) {
+    inherited.textIndent = parent.textIndent;
+    inherited.textIndentDefined = parent.textIndentDefined;
+  }
+
+  if (!child.textAlignDefined) {
+    inherited.alignment = parent.alignment;
+    inherited.textAlignDefined = parent.textAlignDefined;
+  }
+
+  inherited.fromBrElement = false;
+  return inherited;
+}
+
 // Update effective bold/italic/underline based on block style and inline style stack
 void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   // Start with block-level styles
@@ -184,8 +206,9 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
         // blank space before the following paragraph so the scene/section break is visible.
         // This only fires when the <br> block stayed empty (i.e. no inline text was added).
         const int16_t lineHeight = static_cast<int16_t>(renderer.getLineHeight(fontId) * lineCompression + 0.5f);
-        incoming.marginTop = static_cast<int16_t>(currentStyle.marginTop + incoming.marginTop + lineHeight);
+        incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lineHeight);
       }
+      incoming.fromBrElement = blockStyle.fromBrElement;
       currentTextBlock->setBlockStyle(incoming);
 
       if (!pendingAnchorId.empty()) {
@@ -474,11 +497,6 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   if (inset > 0 && inset < self->viewportWidth) {
                     containerWidth = self->viewportWidth - inset;
                   }
-                } else if (!self->blockStyleStack.empty()) {
-                  const int inset = self->blockStyleStack.back().totalHorizontalInset();
-                  if (inset > 0 && inset < self->viewportWidth) {
-                    containerWidth = self->viewportWidth - inset;
-                  }
                 }
 
                 if (hasCssHeight && hasCssWidth && dims.width > 0 && dims.height > 0) {
@@ -660,7 +678,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         alt = "[Image: " + alt + "]";
         const BlockStyle altBlockStyle = self->blockStyleStack.empty()
                                              ? centeredBlockStyle
-                                             : self->blockStyleStack.back().getCombinedBlockStyle(centeredBlockStyle);
+                                             : getInheritedBlockStyle(self->blockStyleStack.back(), centeredBlockStyle);
         self->startNewTextBlock(altBlockStyle);
         self->italicUntilDepth = std::min(self->italicUntilDepth, self->depth);
         self->depth += 1;
@@ -775,9 +793,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (self->embeddedStyle && cssStyle.hasTextAlign()) {
       headerBlockStyle.alignment = cssStyle.textAlign;
     }
-    const BlockStyle accumulatedHeaderBlockStyle = self->blockStyleStack.back().getCombinedBlockStyle(headerBlockStyle);
-    self->blockStyleStack.push_back(accumulatedHeaderBlockStyle);
-    self->startNewTextBlock(accumulatedHeaderBlockStyle);
+    const BlockStyle inheritedHeaderBlockStyle = getInheritedBlockStyle(self->blockStyleStack.back(), headerBlockStyle);
+    self->blockStyleStack.push_back(inheritedHeaderBlockStyle);
+    self->startNewTextBlock(inheritedHeaderBlockStyle);
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS)) {
@@ -789,9 +807,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         blockStyle.alignment = cssStyle.textAlign;
         blockStyle.textAlignDefined = true;
       }
-      const BlockStyle accumulatedBlockStyle = self->blockStyleStack.back().getCombinedBlockStyle(blockStyle);
-      self->blockStyleStack.push_back(accumulatedBlockStyle);
-      self->startNewTextBlock(accumulatedBlockStyle);
+      const BlockStyle inheritedBlockStyle = getInheritedBlockStyle(self->blockStyleStack.back(), blockStyle);
+      self->blockStyleStack.push_back(inheritedBlockStyle);
+      self->startNewTextBlock(inheritedBlockStyle);
       self->updateEffectiveInlineStyle();
 
       self->skipTextUntilDepth = self->depth;
@@ -825,9 +843,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         blockStyle.alignment = cssStyle.textAlign;
         blockStyle.textAlignDefined = true;
       }
-      const BlockStyle accumulatedBlockStyle = self->blockStyleStack.back().getCombinedBlockStyle(blockStyle);
-      self->blockStyleStack.push_back(accumulatedBlockStyle);
-      self->startNewTextBlock(accumulatedBlockStyle);
+      const BlockStyle inheritedBlockStyle = getInheritedBlockStyle(self->blockStyleStack.back(), blockStyle);
+      self->blockStyleStack.push_back(inheritedBlockStyle);
+      self->startNewTextBlock(inheritedBlockStyle);
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "li") == 0) {
@@ -1291,8 +1309,10 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 
   auto paragraphAlignmentBlockStyle = BlockStyle();
   paragraphAlignmentBlockStyle.textAlignDefined = true;
-  // Resolve None sentinel to Justify for the initial block using the root block style.
-  const auto align = rootBlockStyle.alignment;
+  // Resolve None sentinel to Justify for initial block (no CSS context yet)
+  const auto align = (this->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
+                         ? CssTextAlign::Justify
+                         : static_cast<CssTextAlign>(this->paragraphAlignment);
   paragraphAlignmentBlockStyle.alignment = align;
   startNewTextBlock(paragraphAlignmentBlockStyle);
 
