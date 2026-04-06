@@ -2,9 +2,13 @@
 
 This firmware is based on the [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) for the XTEINK X4, a great piece of software by Dave Allie and others
 
+# Why this fork
+
 Unfortunately the official repository suffers from too many good ideas floating around and a lack of clear governance how to deal 
 with these contributions, so it's lacking fundamental fixes for a proper reading experience (rendering issues, sub-par sync 
-capabilities with KOReader, a popular multi-platform open-source epub reader)
+capabilities with KOReader, a popular multi-platform open-source epub reader). 
+
+Trying to contribute enhancements / fixes became increasingly difficult as the lack of progress effectively prevented further development.
 
 Therefore this branch focuses on real fixes and real improvements while trying to keep up to pace with developments in the main branch.
 
