@@ -183,6 +183,10 @@ void SleepActivity::onEnter() {
 }
 
 void SleepActivity::renderCustomSleepScreen() const {
+  const BookOverlayInfo overlayInfo = (SETTINGS.sleepCoverOverlay != 0 && !APP_STATE.openEpubPath.empty())
+                                          ? getBookOverlayInfo(APP_STATE.openEpubPath)
+                                          : BookOverlayInfo{};
+
   // Check if we have a /.sleep (preferred) or /sleep directory
   const char* sleepDir = nullptr;
   auto dir = Storage.open("/.sleep");
@@ -243,7 +247,7 @@ void SleepActivity::renderCustomSleepScreen() const {
         delay(100);
         Bitmap bitmap(file, true);
         if (bitmap.parseHeaders() == BmpReaderError::Ok) {
-          renderBitmapSleepScreen(bitmap, BookOverlayInfo{});
+          renderBitmapSleepScreen(bitmap, overlayInfo);
           file.close();
           dir.close();
           return;
@@ -261,7 +265,7 @@ void SleepActivity::renderCustomSleepScreen() const {
     Bitmap bitmap(file, true);
     if (bitmap.parseHeaders() == BmpReaderError::Ok) {
       LOG_DBG("SLP", "Loading: /sleep.bmp");
-      renderBitmapSleepScreen(bitmap, BookOverlayInfo{});
+      renderBitmapSleepScreen(bitmap, overlayInfo);
       file.close();
       return;
     }
