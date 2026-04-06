@@ -334,14 +334,16 @@ void loop() {
     return;
   }
 
-  static bool powerHoldLogged = false;
-  if (gpio.isPressed(HalGPIO::BTN_POWER)) {
-    const unsigned long heldTime = gpio.getHeldTime();
-    if (!powerHoldLogged) {
-      LOG_DBG("MAIN", "loop: power button pressed, heldTime=%lu ms, required=%u ms, rawPin=%d", heldTime,
-              SETTINGS.getPowerButtonDuration(), digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
-      powerHoldLogged = true;
-    }
+  // Track power button hold for sleep.  We require a fresh press edge (wasPressed)
+  // before starting to measure hold time, so that a hold carried over from boot
+  // (wake-up press) is never misinterpreted as a "go to sleep" press.
+  static unsigned long powerHoldStart = 0;
+  if (gpio.wasPressed(HalGPIO::BTN_POWER)) {
+    powerHoldStart = millis();
+    LOG_DBG("MAIN", "loop: power button press detected (fresh edge)");
+  }
+  if (gpio.isPressed(HalGPIO::BTN_POWER) && powerHoldStart > 0) {
+    const unsigned long heldTime = millis() - powerHoldStart;
     if (heldTime > SETTINGS.getPowerButtonDuration()) {
       // If the screenshot combination is potentially being pressed, don't sleep
       if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
@@ -349,13 +351,13 @@ void loop() {
       }
       LOG_DBG("MAIN", "loop: power button held for %lu ms (> %u ms), entering deep sleep", heldTime,
               SETTINGS.getPowerButtonDuration());
-      powerHoldLogged = false;
       enterDeepSleep();
       // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
       return;
     }
-  } else {
-    powerHoldLogged = false;
+  }
+  if (!gpio.isPressed(HalGPIO::BTN_POWER)) {
+    powerHoldStart = 0;
   }
 
   // Refresh the battery icon when USB is plugged or unplugged.

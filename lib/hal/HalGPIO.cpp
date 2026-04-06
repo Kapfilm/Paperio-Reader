@@ -240,7 +240,13 @@ void HalGPIO::waitForStablePowerRelease() {
     delay(10);
   }
   LOG_DBG("GPIO", "Power button stable-released after %lu ms", millis() - waitStart);
-  // Re-sync the InputManager so its debounced state matches reality
+  // Flush the InputManager debounced state to match reality.
+  // A single update() is insufficient: if lastState was stale ("pressed"), the first
+  // call resets the debounce timer but cannot update currentState until a second call
+  // arrives after DEBOUNCE_DELAY (5 ms).  Without this, isPressed() / getHeldTime()
+  // would carry stale values into the next loop() iteration.
+  inputMgr.update();
+  delay(10);  // > InputManager DEBOUNCE_DELAY (5 ms)
   inputMgr.update();
 }
 
