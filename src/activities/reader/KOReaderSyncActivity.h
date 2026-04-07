@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 
+#include "ChapterXPathIndexer.h"
 #include "KOReaderSyncClient.h"
 #include "ProgressMapper.h"
 #include "activities/Activity.h"
@@ -69,11 +70,14 @@ class KOReaderSyncActivity final : public Activity {
 
   // Remote progress data
   bool hasRemoteProgress = false;
+  bool remotePositionMapped = false;
   KOReaderProgress remoteProgress;
   CrossPointPosition remotePosition;
 
   // Local progress as KOReader format (for display)
   KOReaderPosition localProgress;
+  std::string remoteChapterLabel;
+  std::string localChapterLabel;
 
   // Selection in result screen (0=Apply, 1=Upload)
   int selectedOption = 0;
@@ -86,4 +90,9 @@ class KOReaderSyncActivity final : public Activity {
   void performSync();
   void performUpload();
   void closeCancelled();
+  bool ensureEpubLoadedForMapping();
+  void releaseEpubForMapping();
+  void computeLocalProgressAndChapter();
+  void computeRemoteChapter();
+  bool ensureRemotePositionMapped();
 };

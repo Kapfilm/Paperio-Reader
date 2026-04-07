@@ -35,6 +35,7 @@ class EpubReaderActivity final : public Activity {
   bool pendingScreenshot = false;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
+  std::string deferredSyncEpubPath;
   // -1 means use global SETTINGS value.
   int8_t bookEmbeddedStyleOverride = -1;
   int8_t bookImageRenderingOverride = -1;
@@ -57,6 +58,7 @@ class EpubReaderActivity final : public Activity {
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  void launchKOReaderSync();
   void handleSyncResult(const ActivityResult& result);
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);

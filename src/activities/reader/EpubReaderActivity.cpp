@@ -148,11 +148,7 @@ void EpubReaderActivity::loop() {
   // Without credentials, fall through to the regular menu on release.
   if (mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
       mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS && KOREADER_STORE.hasCredentials()) {
-    const int currentPage = section ? section->currentPage : 0;
-    const int totalPages = section ? section->pageCount : 0;
-    startActivityForResult(std::make_unique<KOReaderSyncActivity>(renderer, mappedInput, epub, epub->getPath(),
-                                                                  currentSpineIndex, currentPage, totalPages),
-                           [this](const ActivityResult& result) { handleSyncResult(result); });
+    launchKOReaderSync();
     return;
   }
 
@@ -464,18 +460,64 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::SYNC: {
       if (KOREADER_STORE.hasCredentials()) {
-        const int currentPage = section ? section->currentPage : 0;
-        const int totalPages = section ? section->pageCount : 0;
-        startActivityForResult(std::make_unique<KOReaderSyncActivity>(renderer, mappedInput, epub, epub->getPath(),
-                                                                      currentSpineIndex, currentPage, totalPages),
-                               [this](const ActivityResult& result) { handleSyncResult(result); });
+        launchKOReaderSync();
       }
       break;
     }
   }
 }
 
+void EpubReaderActivity::launchKOReaderSync() {
+  if (!epub) {
+    return;
+  }
+
+  const std::string syncEpubPath = epub->getPath();
+  const int currentPage = section ? section->currentPage : 0;
+  const int totalPages = section ? section->pageCount : 0;
+
+  {
+    // Drop large reader state before TLS-heavy sync to improve contiguous heap
+    // and reduce long-run fragmentation across repeated sync attempts.
+    RenderLock lock(*this);
+    nextPageNumber = currentPage;
+    cachedSpineIndex = currentSpineIndex;
+    cachedChapterTotalPageCount = totalPages;
+    section.reset();
+    epub.reset();
+    currentPageFootnotes.clear();
+    currentPageFootnotes.shrink_to_fit();
+  }
+  deferredSyncEpubPath = syncEpubPath;
+
+  renderer.cleanupGrayscaleWithFrameBuffer();
+  if (auto* cacheManager = renderer.getFontCacheManager()) {
+    cacheManager->clearCache();
+    cacheManager->resetStats();
+  }
+
+  LOG_DBG("ERS", "Pre-sync trim: spine=%d page=%d/%d heap=%lu", currentSpineIndex, currentPage, totalPages,
+          static_cast<unsigned long>(esp_get_free_heap_size()));
+
+  startActivityForResult(std::make_unique<KOReaderSyncActivity>(renderer, mappedInput, std::shared_ptr<Epub>{},
+                                                                syncEpubPath,
+                                                                currentSpineIndex, currentPage, totalPages),
+                         [this](const ActivityResult& result) { handleSyncResult(result); });
+}
+
 void EpubReaderActivity::handleSyncResult(const ActivityResult& result) {
+  if (!epub && !deferredSyncEpubPath.empty()) {
+    epub = std::make_shared<Epub>(deferredSyncEpubPath, "/.crosspoint");
+    if (!epub->load(true, true)) {
+      LOG_ERR("ERS", "Failed to reload EPUB after sync: %s", deferredSyncEpubPath.c_str());
+      finish();
+      return;
+    }
+    epub->setupCacheDir();
+    LOG_DBG("ERS", "Reloaded EPUB after sync: %s", deferredSyncEpubPath.c_str());
+    deferredSyncEpubPath.clear();
+  }
+
   if (!result.isCancelled) {
     const auto& sync = std::get<SyncResult>(result.data);
     if (currentSpineIndex != sync.spineIndex || (section && section->currentPage != sync.page)) {
