@@ -15,10 +15,12 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
+#include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
 
 namespace {
 constexpr unsigned long skipPageMs = 700;
