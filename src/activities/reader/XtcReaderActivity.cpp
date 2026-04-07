@@ -73,12 +73,14 @@ void XtcReaderActivity::loop() {
 
   // Long press BACK (1s+) goes to home screen
   if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= goHomeMs) {
+    ReaderUtils::enforceExitFullRefresh(renderer);
     onGoHome();
     return;
   }
 
   // Short press BACK returns to the calling activity
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < goHomeMs) {
+    ReaderUtils::enforceExitFullRefresh(renderer);
     finish();
     return;
   }
