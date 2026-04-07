@@ -10,6 +10,7 @@
 #include <Serialization.h>
 #include <Txt.h>
 #include <Xtc.h>
+#include <Epub/converters/PngToFramebufferConverter.h>
 #include <esp_system.h>
 
 #include <algorithm>
@@ -72,7 +73,8 @@ int32_t pngSleepSeek(PNGFILE* pFile, int32_t pos) {
   return f->seek(pos);
 }
 
-bool renderPngSleepScreen(const std::string& filename, GfxRenderer& renderer, const BookOverlayInfo& overlayInfo) {
+bool renderPngSleepScreen(const std::string& filename, GfxRenderer& renderer,
+                          const BookOverlayInfo& overlayInfo) {
   constexpr size_t MIN_FREE_HEAP = 60 * 1024;  // PNG decoder ~42 KB + overhead
   if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
     LOG_ERR("SLP", "Not enough heap for PNG sleep image: %s", filename.c_str());
@@ -351,8 +353,7 @@ void SleepActivity::renderCustomSleepScreen() const {
   }
   if (Storage.openFileForRead("SLP", "/sleep.png", explicitSleepFile)) {
     explicitSleepFile.close();
-    const BookOverlayInfo resolvedOverlayInfo =
-        shouldLoadOverlayInfo ? getBookOverlayInfo(APP_STATE.openEpubPath) : overlayInfo;
+    const BookOverlayInfo resolvedOverlayInfo = shouldLoadOverlayInfo ? getBookOverlayInfo(APP_STATE.openEpubPath) : overlayInfo;
     if (renderPngSleepScreen("/sleep.png", renderer, resolvedOverlayInfo)) {
       LOG_DBG("SLP", "Loading explicit custom sleep image: /sleep.png");
       return;
