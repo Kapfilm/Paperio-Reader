@@ -11,8 +11,8 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cstring>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 #include "KOReaderCredentialStore.h"
@@ -50,7 +50,9 @@ constexpr char DEVICE_ID[] = "crosspoint-reader";
 // Payloads are tiny JSON, so throughput impact is minimal while avoiding
 // large transient allocations from default client buffer sizes.
 constexpr int HTTP_BUF_SIZE = 1024;
-constexpr unsigned TLS_CONTIG_HEAP_TOLERANCE = 512;
+// Keep strict thresholding here. A small tolerance caused repeated handshake
+// attempts in borderline-fragmented states that still failed in mbedTLS.
+constexpr unsigned TLS_CONTIG_HEAP_TOLERANCE = 0;
 
 // Captures radio/link state around failed connects.
 // Why: many field failures look like TLS errors but are actually weak WiFi.
@@ -135,10 +137,9 @@ std::string base64Encode(const std::string& input) {
 // lastFailureDetail() will report the heap shortage instead of attempting a doomed handshake.
 bool checkHeapForTls() {
   const bool hasReusableSession = g_keepSessionOpen && g_sessionClient != nullptr;
-  const bool isUpload = (KOReaderSyncClient::lastOperation &&
-                         strcmp(KOReaderSyncClient::lastOperation, "update progress") == 0);
-  const unsigned requiredContig =
-      isUpload ? KOReaderSyncClient::MIN_CONTIG_HEAP_FOR_TLS_UPLOAD : KOReaderSyncClient::MIN_CONTIG_HEAP_FOR_TLS;
+  const bool isUpload =
+      (KOReaderSyncClient::lastOperation && strcmp(KOReaderSyncClient::lastOperation, "update progress") == 0);
+  const unsigned requiredContig = KOReaderSyncClient::MIN_CONTIG_HEAP_FOR_TLS;
 
   // Upload can often reuse the already-established GET connection. In that case
   // a full handshake allocation is typically unnecessary, so avoid failing fast
@@ -156,6 +157,30 @@ bool checkHeapForTls() {
     return false;
   }
   return true;
+}
+
+void refreshHeapSnapshot() {
+  KOReaderSyncClient::lastHeapAtFailure = ESP.getFreeHeap();
+  KOReaderSyncClient::lastContigHeapAtFailure = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+}
+
+void logTlsAttemptPlan(const char* operation, int attempt) {
+  const bool isUpload = (operation && strcmp(operation, "update progress") == 0);
+  const bool hasReusableSession = g_keepSessionOpen && g_sessionClient != nullptr;
+  const unsigned requiredContig = (isUpload && hasReusableSession) ? KOReaderSyncClient::MIN_CONTIG_HEAP_FOR_TLS_UPLOAD
+                                                                   : KOReaderSyncClient::MIN_CONTIG_HEAP_FOR_TLS;
+
+  LOG_DBG("KOSync", "%s attempt %d: keep_session=%s reusable_session=%s tls_mode=%s heap=%u contig=%u need=%u",
+          operation ? operation : "request", attempt, g_keepSessionOpen ? "yes" : "no",
+          hasReusableSession ? "yes" : "no", (isUpload && hasReusableSession) ? "reuse" : "handshake",
+          KOReaderSyncClient::lastHeapAtFailure, KOReaderSyncClient::lastContigHeapAtFailure, requiredContig);
+}
+
+void resetSessionClientForRetry() {
+  if (g_sessionClient) {
+    esp_http_client_cleanup(g_sessionClient);
+    g_sessionClient = nullptr;
+  }
 }
 
 // Create configured esp_http_client with small TLS buffers
@@ -352,6 +377,14 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
   int httpCode = 0;
 
   for (int attempt = 1; attempt <= 2; attempt++) {
+    // Retry attempts can happen after memory churn from a failed handshake.
+    // Refresh heap snapshot each pass so preflight and diagnostics use current values.
+    refreshHeapSnapshot();
+    logTlsAttemptPlan("get progress", attempt);
+    if (!checkHeapForTls()) {
+      return NETWORK_ERROR;
+    }
+
     clearResponseBuffer(activeBuf);
 
     esp_http_client_handle_t client = createClient(url.c_str(), &buf);
@@ -377,6 +410,10 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
     if (err == ESP_OK || err != ESP_ERR_HTTP_CONNECT || attempt == 2) {
       break;
     }
+
+    // Failed connect can leave a persistent client handle in a bad state.
+    // Recreate it before retry so we don't repeat work on a stale transport.
+    resetSessionClientForRetry();
 
     LOG_ERR("KOSync", "getProgress connect failed on attempt %d, retrying once", attempt);
     logWifiSnapshot("WiFi before getProgress retry");
@@ -442,6 +479,14 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   int httpCode = 0;
 
   for (int attempt = 1; attempt <= 2; attempt++) {
+    // Retry attempts can happen after memory churn from a failed handshake.
+    // Refresh heap snapshot each pass so preflight and diagnostics use current values.
+    refreshHeapSnapshot();
+    logTlsAttemptPlan("update progress", attempt);
+    if (!checkHeapForTls()) {
+      return NETWORK_ERROR;
+    }
+
     clearResponseBuffer(activeBuf);
 
     esp_http_client_handle_t client = createClient(url.c_str(), &buf, HTTP_METHOD_PUT);
@@ -462,14 +507,17 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
       esp_http_client_cleanup(client);
     }
 
-    LOG_DBG("KOSync", "Update progress response: %d (err: %s) [attempt %d]", httpCode, esp_err_to_name(err),
-            attempt);
+    LOG_DBG("KOSync", "Update progress response: %d (err: %s) [attempt %d]", httpCode, esp_err_to_name(err), attempt);
 
     // Retry exactly once for connect-level failures only.
     // Why: same policy as GET keeps behavior predictable across both endpoints.
     if (err == ESP_OK || err != ESP_ERR_HTTP_CONNECT || attempt == 2) {
       break;
     }
+
+    // Failed connect can leave a persistent client handle in a bad state.
+    // Recreate it before retry so we don't repeat work on a stale transport.
+    resetSessionClientForRetry();
 
     LOG_ERR("KOSync", "updateProgress connect failed on attempt %d, retrying once", attempt);
     logWifiSnapshot("WiFi before updateProgress retry");
@@ -484,7 +532,9 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
 
 const char* KOReaderSyncClient::lastFailureDetail() {
   const bool isUpload = (lastOperation && strcmp(lastOperation, "update progress") == 0);
-  const unsigned requiredContig = isUpload ? MIN_CONTIG_HEAP_FOR_TLS_UPLOAD : MIN_CONTIG_HEAP_FOR_TLS;
+  const bool hasReusableSession = g_keepSessionOpen && g_sessionClient != nullptr;
+  const unsigned requiredContig =
+      (isUpload && hasReusableSession) ? MIN_CONTIG_HEAP_FOR_TLS_UPLOAD : MIN_CONTIG_HEAP_FOR_TLS;
 
   // Heap-pressure case: surfaced when checkHeapForTls() refused before any TCP/TLS work happened.
   if (lastEspError == ESP_ERR_NO_MEM && lastHttpCode == 0) {

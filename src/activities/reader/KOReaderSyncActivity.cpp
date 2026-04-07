@@ -1,10 +1,10 @@
 #include "KOReaderSyncActivity.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
-#include <FontCacheManager.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
@@ -116,18 +116,51 @@ void KOReaderSyncActivity::performSync() {
 
   LOG_DBG("KOSync", "Document hash: %s", documentHash.c_str());
 
-  // Precompute local mapping before first network request so the expensive
-  // inflate/index work happens before TLS. This avoids a second local mapping
-  // pass later and keeps the upload path lightweight.
-  {
-    RenderLock lock(*this);
-    statusMessage = tr(STR_MAPPING_LOCAL);
+  // Local mapping is only needed for compare/upload paths.
+  // Pull-only mode can skip this expensive step and go straight to remote fetch.
+  if (syncIntent != SyncIntent::PULL_REMOTE) {
+    // Precompute local mapping before first network request so the expensive
+    // inflate/index work happens before TLS. This avoids a second local mapping
+    // pass later and keeps the upload path lightweight.
+    {
+      RenderLock lock(*this);
+      statusMessage = tr(STR_MAPPING_LOCAL);
+    }
+    requestUpdateAndWait();
+    computeLocalProgressAndChapter();
   }
-  requestUpdateAndWait();
-  computeLocalProgressAndChapter();
 
   // Drop EPUB state before HTTPS to maximize contiguous heap for TLS.
   releaseEpubForMapping();
+
+  // Push intent skips comparison UI but still warms an HTTP/TLS session first
+  // so PUT can reuse the connection instead of forcing a fresh handshake.
+  if (syncIntent == SyncIntent::PUSH_LOCAL) {
+    // Direct push previously started with no reusable HTTP/TLS session, forcing
+    // a fresh handshake in updateProgress. Compare flow often succeeds because
+    // upload reuses the GET session. Warm the session here so push can take the
+    // same reuse path without showing comparison UI.
+    KOReaderSyncClient::beginPersistentSession();
+    KOReaderProgress warmupProgress;
+    const auto warmupResult = KOReaderSyncClient::getProgress(documentHash, warmupProgress);
+    if (warmupResult != KOReaderSyncClient::OK && warmupResult != KOReaderSyncClient::NOT_FOUND) {
+      KOReaderSyncClient::endPersistentSession();
+      {
+        RenderLock lock(*this);
+        state = SYNC_FAILED;
+        statusMessage = KOReaderSyncClient::errorString(warmupResult);
+        const char* detail = KOReaderSyncClient::lastFailureDetail();
+        if (detail && detail[0]) {
+          statusMessage += " — ";
+          statusMessage += detail;
+        }
+      }
+      requestUpdate(true);
+      return;
+    }
+    performUpload();
+    return;
+  }
 
   {
     RenderLock lock(*this);
@@ -143,6 +176,19 @@ void KOReaderSyncActivity::performSync() {
   const auto result = KOReaderSyncClient::getProgress(documentHash, remoteProgress);
 
   if (result == KOReaderSyncClient::NOT_FOUND) {
+    if (syncIntent == SyncIntent::PULL_REMOTE) {
+      // Pull intent must not silently fall back to upload when server has no
+      // remote progress. Failing explicitly keeps action semantics predictable.
+      KOReaderSyncClient::endPersistentSession();
+      {
+        RenderLock lock(*this);
+        state = SYNC_FAILED;
+        statusMessage = tr(STR_NO_REMOTE_MSG);
+      }
+      requestUpdate(true);
+      return;
+    }
+
     // Keep session open so an immediate upload can reuse the same connection.
     // No remote progress - offer to upload
     {
@@ -189,6 +235,34 @@ void KOReaderSyncActivity::performSync() {
   }
   remoteChapterLabel = tr(STR_UNNAMED);
 
+  if (syncIntent == SyncIntent::PULL_REMOTE) {
+    // Pull intent applies immediately and exits. We bypass chooser UI to keep
+    // reader menu actions deterministic ("pull" always means apply remote).
+    if (!ensureRemotePositionMapped()) {
+      {
+        RenderLock lock(*this);
+        state = SYNC_FAILED;
+        statusMessage = tr(STR_SYNC_FAILED_MSG);
+      }
+      requestUpdate(true);
+      return;
+    }
+
+    // Preserve the apply result and show explicit confirmation before returning
+    // to the reader so users can tell pull succeeded.
+    setResult(SyncResult{remotePosition.spineIndex, remotePosition.pageNumber, remotePosition.paragraphIndex,
+                         remotePosition.hasParagraphIndex});
+    {
+      RenderLock lock(*this);
+      state = APPLY_COMPLETE;
+      uploadCompleteTime = millis();
+    }
+    requestUpdate(true);
+    return;
+  }
+
+  // Compare intent keeps the legacy chooser flow (apply vs upload), which is
+  // still useful for manual conflict decisions.
   // Local progress was precomputed before network; keep using the cached value.
   releaseEpubForMapping();
 
@@ -242,8 +316,9 @@ void KOReaderSyncActivity::performUpload() {
   // that only appear on PUT due to allocator state changes.
   logSyncMemSnapshot("before_updateProgress");
 
-  // Ensure a session exists for upload. When GET succeeded, this should reuse
-  // the existing connection and typically skip a second handshake.
+  // Ensure a session exists for upload. In compare flow this comes from the
+  // earlier GET; in direct-push flow it comes from the warmup GET above.
+  // In both cases, reuse avoids a second full TLS handshake.
   KOReaderSyncClient::beginPersistentSession();
 
   KOReaderProgress progress;
@@ -341,7 +416,7 @@ void KOReaderSyncActivity::render(RenderLock&&) {
   }
 
   if (state == SYNCING || state == UPLOADING) {
-    renderer.drawCenteredText(UI_10_FONT_ID, 300, statusMessage.c_str(), true, EpdFontFamily::BOLD);
+    GUI.drawPopup(renderer, statusMessage.c_str());
     renderer.displayBuffer();
     return;
   }
@@ -422,6 +497,15 @@ void KOReaderSyncActivity::render(RenderLock&&) {
     return;
   }
 
+  if (state == APPLY_COMPLETE) {
+    renderer.drawCenteredText(UI_10_FONT_ID, 300, tr(STR_PULL_SUCCESS), true, EpdFontFamily::BOLD);
+
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    renderer.displayBuffer();
+    return;
+  }
+
   if (state == SYNC_FAILED) {
     renderer.drawCenteredText(UI_10_FONT_ID, 280, tr(STR_SYNC_FAILED_MSG), true, EpdFontFamily::BOLD);
     renderer.drawCenteredText(UI_10_FONT_ID, 320, statusMessage.c_str());
@@ -488,9 +572,9 @@ void KOReaderSyncActivity::computeLocalProgressAndChapter() {
   localProgress = ProgressMapper::toKOReader(epub, localPos);
 
   const int localTocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
-  localChapterLabel =
-      (localTocIndex >= 0) ? epub->getTocItem(localTocIndex).title
-                           : (std::string(tr(STR_SECTION_PREFIX)) + std::to_string(currentSpineIndex + 1));
+  localChapterLabel = (localTocIndex >= 0)
+                          ? epub->getTocItem(localTocIndex).title
+                          : (std::string(tr(STR_SECTION_PREFIX)) + std::to_string(currentSpineIndex + 1));
 }
 
 void KOReaderSyncActivity::computeRemoteChapter() {
@@ -498,20 +582,31 @@ void KOReaderSyncActivity::computeRemoteChapter() {
     return;
   }
   const int remoteTocIndex = epub->getTocIndexForSpineIndex(remotePosition.spineIndex);
-  remoteChapterLabel =
-      (remoteTocIndex >= 0) ? epub->getTocItem(remoteTocIndex).title
-                            : (std::string(tr(STR_SECTION_PREFIX)) + std::to_string(remotePosition.spineIndex + 1));
+  remoteChapterLabel = (remoteTocIndex >= 0)
+                           ? epub->getTocItem(remoteTocIndex).title
+                           : (std::string(tr(STR_SECTION_PREFIX)) + std::to_string(remotePosition.spineIndex + 1));
 }
 
 void KOReaderSyncActivity::loop() {
-  if (state == NO_CREDENTIALS || state == SYNC_FAILED || state == UPLOAD_COMPLETE) {
+  if (state == NO_CREDENTIALS || state == SYNC_FAILED || state == UPLOAD_COMPLETE || state == APPLY_COMPLETE) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      closeCancelled();
+      // APPLY_COMPLETE already has a valid SyncResult, so exit normally.
+      // Other terminal states are treated as cancelled when backing out.
+      if (state == APPLY_COMPLETE) {
+        finish();
+      } else {
+        closeCancelled();
+      }
       return;
     }
 
-    if (state == UPLOAD_COMPLETE && millis() - uploadCompleteTime >= 3000) {
-      closeCancelled();
+    if ((state == UPLOAD_COMPLETE || state == APPLY_COMPLETE) && millis() - uploadCompleteTime >= 3000) {
+      // Keep pull/apply result on auto-close; upload-complete remains cancel-style.
+      if (state == APPLY_COMPLETE) {
+        finish();
+      } else {
+        closeCancelled();
+      }
     }
     return;
   }

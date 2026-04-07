@@ -145,10 +145,12 @@ void EpubReaderActivity::loop() {
   }
 
   // Long press CONFIRM (1s+) goes directly to KOReader sync when credentials are configured.
+  // We intentionally keep long-press on the richer compare flow so advanced
+  // conflict-resolution behavior stays available even after simplifying menu UX.
   // Without credentials, fall through to the regular menu on release.
   if (mappedInput.isPressed(MappedInputManager::Button::Confirm) &&
       mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS && KOREADER_STORE.hasCredentials()) {
-    launchKOReaderSync();
+    launchKOReaderSync(SyncLaunchMode::COMPARE);
     return;
   }
 
@@ -458,16 +460,26 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       requestUpdate();
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::SYNC: {
+    case EpubReaderMenuActivity::MenuAction::PULL_REMOTE: {
+      // One-tap pull path: run network preconditions and apply remote progress
+      // directly instead of showing an intermediate chooser screen.
       if (KOREADER_STORE.hasCredentials()) {
-        launchKOReaderSync();
+        launchKOReaderSync(SyncLaunchMode::PULL_REMOTE);
+      }
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::PUSH_LOCAL: {
+      // One-tap push path: run network preconditions and upload local progress
+      // directly for KOReader-like "sync now" behavior.
+      if (KOREADER_STORE.hasCredentials()) {
+        launchKOReaderSync(SyncLaunchMode::PUSH_LOCAL);
       }
       break;
     }
   }
 }
 
-void EpubReaderActivity::launchKOReaderSync() {
+void EpubReaderActivity::launchKOReaderSync(const SyncLaunchMode mode) {
   if (!epub) {
     return;
   }
@@ -499,10 +511,19 @@ void EpubReaderActivity::launchKOReaderSync() {
   LOG_DBG("ERS", "Pre-sync trim: spine=%d page=%d/%d heap=%lu", currentSpineIndex, currentPage, totalPages,
           static_cast<unsigned long>(esp_get_free_heap_size()));
 
-  startActivityForResult(std::make_unique<KOReaderSyncActivity>(renderer, mappedInput, std::shared_ptr<Epub>{},
-                                                                syncEpubPath,
-                                                                currentSpineIndex, currentPage, totalPages),
-                         [this](const ActivityResult& result) { handleSyncResult(result); });
+  // Map reader-level launch mode to activity-level intent once, then pass a
+  // stable intent into KOReaderSyncActivity so it can own the sync state machine.
+  KOReaderSyncActivity::SyncIntent syncIntent = KOReaderSyncActivity::SyncIntent::COMPARE;
+  if (mode == SyncLaunchMode::PULL_REMOTE) {
+    syncIntent = KOReaderSyncActivity::SyncIntent::PULL_REMOTE;
+  } else if (mode == SyncLaunchMode::PUSH_LOCAL) {
+    syncIntent = KOReaderSyncActivity::SyncIntent::PUSH_LOCAL;
+  }
+
+  startActivityForResult(
+      std::make_unique<KOReaderSyncActivity>(renderer, mappedInput, std::shared_ptr<Epub>{}, syncEpubPath,
+                                             currentSpineIndex, currentPage, totalPages, 0, false, syncIntent),
+      [this](const ActivityResult& result) { handleSyncResult(result); });
 }
 
 void EpubReaderActivity::handleSyncResult(const ActivityResult& result) {
