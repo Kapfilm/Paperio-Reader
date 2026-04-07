@@ -72,5 +72,5 @@ class LyraTheme : public BaseTheme {
 
  protected:
   static int getRecentBookProgressPercent(const RecentBook& book);
-  static void drawProgressBadge(GfxRenderer& renderer, Rect anchorRect, int progressPercent);
+  static void drawProgressBadge(const GfxRenderer& renderer, Rect anchorRect, int progressPercent);
 };

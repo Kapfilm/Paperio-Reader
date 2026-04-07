@@ -241,7 +241,7 @@ int LyraTheme::getRecentBookProgressPercent(const RecentBook& book) {
   return -1;
 }
 
-void LyraTheme::drawProgressBadge(GfxRenderer& renderer, Rect anchorRect, int progressPercent) {
+void LyraTheme::drawProgressBadge(const GfxRenderer& renderer, Rect anchorRect, int progressPercent) {
   if (progressPercent < 0) {
     return;
   }
@@ -640,7 +640,7 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     }
 
     drawProgressBadge(
-        renderer,
+        static_cast<const GfxRenderer&>(renderer),
         Rect{tileX + hPaddingInSelection + coverWidth + LyraMetrics::values.verticalSpacing, tileY,
              tileWidth - 2 * hPaddingInSelection - coverWidth - LyraMetrics::values.verticalSpacing, tileHeight},
         progressPercent);
