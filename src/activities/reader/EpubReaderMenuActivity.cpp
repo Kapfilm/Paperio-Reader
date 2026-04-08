@@ -12,26 +12,29 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
                                                const std::string& title, const int currentPage, const int totalPages,
                                                const int bookProgressPercent, const uint8_t currentOrientation,
                                                const bool hasFootnotes, const int8_t initialEmbeddedStyleOverride,
-                                               const int8_t initialImageRenderingOverride)
+                                               const int8_t initialImageRenderingOverride,
+                                               const uint8_t initialTextDarkness)
     : Activity("EpubReaderMenu", renderer, mappedInput),
       menuItems(buildMenuItems(hasFootnotes)),
       title(title),
       pendingOrientation(currentOrientation),
       pendingEmbeddedStyleOverride(initialEmbeddedStyleOverride),
       pendingImageRenderingOverride(initialImageRenderingOverride),
+      pendingTextDarkness(initialTextDarkness),
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {}
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes) {
   std::vector<MenuItem> items;
-  items.reserve(12);
+  items.reserve(13);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
   }
   items.push_back({MenuAction::EMBEDDED_STYLE, StrId::STR_EMBEDDED_STYLE});
   items.push_back({MenuAction::IMAGE_RENDERING, StrId::STR_IMAGES});
+  items.push_back({MenuAction::TEXT_DARKNESS, StrId::STR_TEXT_DARKNESS});
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
   items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
@@ -106,15 +109,25 @@ void EpubReaderMenuActivity::loop() {
       return;
     }
 
+    if (selectedAction == MenuAction::TEXT_DARKNESS) {
+      pendingTextDarkness = (pendingTextDarkness + 1) % textDarknessLabels.size();
+      requestUpdate();
+      return;
+    }
+
     setResult(MenuResult{static_cast<int>(selectedAction), pendingOrientation, selectedPageTurnOption,
-                         pendingEmbeddedStyleOverride, pendingImageRenderingOverride});
+                         pendingEmbeddedStyleOverride, pendingImageRenderingOverride, pendingTextDarkness});
     finish();
     return;
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
-    result.data = MenuResult{-1, pendingOrientation, selectedPageTurnOption, pendingEmbeddedStyleOverride,
-                             pendingImageRenderingOverride};
+    result.data = MenuResult{-1,
+                             pendingOrientation,
+                             selectedPageTurnOption,
+                             pendingEmbeddedStyleOverride,
+                             pendingImageRenderingOverride,
+                             pendingTextDarkness};
     setResult(std::move(result));
     finish();
     return;
@@ -188,6 +201,13 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
       if (pendingImageRenderingOverride >= 0 && pendingImageRenderingOverride < imageRenderingLabels.size()) {
         value = I18N.get(imageRenderingLabels[pendingImageRenderingOverride]);
       }
+      const auto width = renderer.getTextWidth(UI_10_FONT_ID, value);
+      renderer.drawText(UI_10_FONT_ID, contentRect.x + contentRect.width - 20 - width, displayY, value, !isSelected);
+    }
+
+    if (menuItems[i].action == MenuAction::TEXT_DARKNESS) {
+      const uint8_t idx = (pendingTextDarkness < textDarknessLabels.size()) ? pendingTextDarkness : 0;
+      const char* value = I18N.get(textDarknessLabels[idx]);
       const auto width = renderer.getTextWidth(UI_10_FONT_ID, value);
       renderer.drawText(UI_10_FONT_ID, contentRect.x + contentRect.width - 20 - width, displayY, value, !isSelected);
     }
