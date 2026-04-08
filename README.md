@@ -23,3 +23,18 @@ Therefore this branch focuses on real fixes and real improvements while trying t
 - Book information screen
 - Reading ruler
 - ...
+
+# Choosing the _right_ reader...
+
+Your usecase might be completely different from mine, so I try to give an overview of the different reader flavors to my best knowledge. If you know of more variants / have more information, then let me know
+
+Last update: April, 8th, 2026
+
+| Reader                               | Visual appeal | Functionality | Formats | Pros | Cons | Custom fonts | CJK | Bluetooth |
+| ------------------------------------ | ------------- | ------------- | ------- | ---- | ---- | ------------ | --- | --- |
+| [Stock](https://www.xteink.com)       | Okay          | Reader        | XTC, EPUB, TXT | Frequent official updates | Lot of rendering issues | Yes | Yes | Yes |
+| [THIS FORK: CrossPoint ++](https://github.com/jpirnay/crosspoint-reader) | Okay | Calibre Wireless support; Proper KOReader progress sync; Wi-Fi transfer; Book Info; Clock, Weather Info | EPUB, XTC, TXT | Faster integration of functionality | Small team | No | No | No |
+| [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) | Okay | Calibre Wireless support; Limited KOReader progress sync; Wi-Fi transfer | EPUB, XTC, TXT | Biggest community | Least common denominator approach | No | No | No |
+| [CrossPet](https://github.com/trilwu/crosspet) | Excellent, Playful | Virtual pet motivator; mini-games | EPUB, TXT |  | Higher battery drain, Small team, bloaty | Yes | Yes | Yes |
+| [Papyrix](https://github.com/pliashkou/papyrix) | Minimalist | Calibre Wireless support; exFAT support | EPUB, FB2, MD, TXT | A lot of good ideas | Small team | Yes | Yes | Yes |
+| [PlusPoint](https://github.com/ngxson/pluspoint-reader) | Okay | Experimental | EPUB, TXT, JS Apps | Support for custom JS apps; better RTC | Based on older code, small team | Yes | Yes | No |
