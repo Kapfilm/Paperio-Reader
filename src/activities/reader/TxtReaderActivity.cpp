@@ -92,7 +92,10 @@ void TxtReaderActivity::onEnter() {
     return;
   }
 
-  ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+  {
+    RenderLock lock(*this);
+    ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+  }
 
   txt->setupCacheDir();
 

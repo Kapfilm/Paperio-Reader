@@ -98,7 +98,10 @@ void BookInfoActivity::loadData() {
 
 void BookInfoActivity::onEnter() {
   Activity::onEnter();
-  renderLoading();
+  {
+    RenderLock lock(*this);
+    renderLoading();
+  }
   loadData();
   requestUpdate(true);
 }

@@ -8,6 +8,7 @@
 
 void BootActivity::onEnter() {
   Activity::onEnter();
+  RenderLock lock(*this);
 
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
