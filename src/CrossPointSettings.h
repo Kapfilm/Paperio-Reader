@@ -138,6 +138,15 @@ class CrossPointSettings {
 
   // Image rendering in EPUB reader
   enum IMAGE_RENDERING { IMAGES_DISPLAY = 0, IMAGES_PLACEHOLDER = 1, IMAGES_SUPPRESS = 2, IMAGE_RENDERING_COUNT };
+
+  // Text darkness for AA glyph rendering (forwarded to GfxRenderer::setTextDarkness)
+  enum TEXT_DARKNESS {
+    DARKNESS_NORMAL = 0,      // true 4-level AA
+    DARKNESS_DARK = 1,        // historical default — bolder dark-gray AA
+    DARKNESS_EXTRA_DARK = 2,  // both AA shades pushed to darkest gray state
+    DARKNESS_MAXIMUM = 3,     // skip grayscale passes — AA pixels stay solid black from BW pass
+    TEXT_DARKNESS_COUNT
+  };
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
   enum IMAGE_DITHERING {
     IMAGE_DITHER_BAYER = 0,
@@ -191,6 +200,9 @@ class CrossPointSettings {
   // Text rendering settings
   uint8_t extraParagraphSpacing = 1;
   uint8_t textAntiAliasing = 1;
+  // Text darkness (0 = normal, 1 = dark, 2 = extra dark). Default 1 preserves
+  // historical AA rendering (both grayscale shades drawn in the MSB pass).
+  uint8_t textDarkness = DARKNESS_DARK;
   // Short power button click behaviour
   uint8_t shortPwrBtn = IGNORE;
   // EPUB reading orientation settings

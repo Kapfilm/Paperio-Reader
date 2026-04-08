@@ -173,20 +173,21 @@ void EpubReaderActivity::loop() {
       bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
     }
     const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
-    startActivityForResult(
-        std::make_unique<EpubReaderMenuActivity>(
-            renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
-            !currentPageFootnotes.empty(), bookEmbeddedStyleOverride, bookImageRenderingOverride),
-        [this](const ActivityResult& result) {
-          // Always apply orientation change even if the menu was cancelled
-          const auto& menu = std::get<MenuResult>(result.data);
-          applyOrientation(menu.orientation);
-          toggleAutoPageTurn(menu.pageTurnOption);
-          applyBookReaderOverrides(menu.embeddedStyleOverride, menu.imageRenderingOverride);
-          if (!result.isCancelled) {
-            onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
-          }
-        });
+    startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
+                               renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
+                               SETTINGS.orientation, !currentPageFootnotes.empty(), bookEmbeddedStyleOverride,
+                               bookImageRenderingOverride, SETTINGS.textDarkness),
+                           [this](const ActivityResult& result) {
+                             // Always apply orientation/darkness change even if the menu was cancelled
+                             const auto& menu = std::get<MenuResult>(result.data);
+                             applyOrientation(menu.orientation);
+                             applyTextDarkness(menu.textDarkness);
+                             toggleAutoPageTurn(menu.pageTurnOption);
+                             applyBookReaderOverrides(menu.embeddedStyleOverride, menu.imageRenderingOverride);
+                             if (!result.isCancelled) {
+                               onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
+                             }
+                           });
   }
 
   // Long press BACK (1s+) goes to home screen
@@ -585,6 +586,17 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
     // Reset section to force re-layout in the new orientation.
     section.reset();
   }
+}
+
+void EpubReaderActivity::applyTextDarkness(const uint8_t textDarkness) {
+  if (SETTINGS.textDarkness == textDarkness) {
+    return;
+  }
+  SETTINGS.textDarkness = textDarkness;
+  SETTINGS.saveToFile();
+  renderer.setTextDarkness(textDarkness);
+  // Force a re-render so the new darkness is visible immediately.
+  requestUpdate();
 }
 
 void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
