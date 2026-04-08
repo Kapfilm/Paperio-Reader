@@ -38,12 +38,11 @@ struct PngContext {
 
   uint8_t* grayLineBuffer;
 
-  // When the renderer is in BW mode the framebuffer is 1 bpp and the
-  // DirectPixelWriter collapses any value < 3 to black. The 4-level dither
-  // path therefore turns mid-grays into solid black. In that case we run a
-  // proper 1-bit Atkinson dither (matching PngToBmpConverter's BW path) and
-  // emit only values 0 or 3, which round-trip cleanly through the BW writer.
-  bool renderModeIsBW;
+  // When the caller requests monochrome output (RenderConfig::monochromeOutput),
+  // we run a proper 1-bit Atkinson dither (matching PngToBmpConverter's BW path)
+  // and emit only values 0 or 3, which round-trip cleanly through the BW writer's
+  // `pixelValue < 3` rule. The 4-level dither path collapses mid-grays to solid
+  // black under that rule.
   int oneBitDitherRow;
   Atkinson1BitDitherer* atkinson1BitDitherer;
 
@@ -66,7 +65,6 @@ struct PngContext {
         lastDstY(-1),
         caching(false),
         grayLineBuffer(nullptr),
-        renderModeIsBW(false),
         oneBitDitherRow(-1),
         atkinson1BitDitherer(nullptr)
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
@@ -494,17 +492,13 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     }
   }
 
-  // When the renderer is in BW mode, use a 1-bit Atkinson ditherer instead of
-  // the 4-level paths below. The 4-level dither produces values 1-2 for mid
-  // grays, which DirectPixelWriter then collapses to black under its `< 3`
-  // BW rule, making images render very dark. The 1-bit ditherer emits only
-  // 0 or 3 so the BW writer maps cleanly to black/white. Caching still uses
-  // the 2-bit cache file format, but caching is disabled in this path
-  // (BmpViewerActivity passes an empty cachePath).
-  ctx.renderModeIsBW = (renderer.getRenderMode() == GfxRenderer::BW);
-  LOG_DBG("PNG", "Render mode at decode: %d (BW=%d) -> 1bit dither=%d", (int)renderer.getRenderMode(),
-          (int)GfxRenderer::BW, ctx.renderModeIsBW ? 1 : 0);
-  if (ctx.renderModeIsBW) {
+  // When the caller explicitly requests monochrome output, use a 1-bit Atkinson
+  // ditherer instead of the 4-level paths below. The 4-level dither produces
+  // values 1-2 for mid grays, which DirectPixelWriter then collapses to black
+  // under its `< 3` BW rule, making images render very dark in BW-only mode.
+  // The 1-bit ditherer emits only 0 or 3 so the BW writer maps cleanly to
+  // black/white.
+  if (config.monochromeOutput) {
     ctx.atkinson1BitDitherer = new (std::nothrow) Atkinson1BitDitherer(ctx.dstWidth);
     if (!ctx.atkinson1BitDitherer) {
       LOG_ERR("PNG", "Failed to allocate 1-bit Atkinson ditherer, falling back to 4-level dither");

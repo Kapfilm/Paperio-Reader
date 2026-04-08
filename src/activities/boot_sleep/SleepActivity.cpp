@@ -601,23 +601,13 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
     constexpr int sectionSpacing = 10;
     const int availableWidth = pageWidth - 20;
 
-    int textBlockHeight = 0;
+    int textBlockHeight = lineHeight10;  // progress line (always present here)
     if (hasTitle) {
       textBlockHeight += lineHeight12;
-      if (hasAuthor) {
-        textBlockHeight += lineSpacing;
-      } else if (hasProgress) {
-        textBlockHeight += sectionSpacing;
-      }
+      textBlockHeight += hasAuthor ? lineSpacing : sectionSpacing;
     }
     if (hasAuthor) {
-      textBlockHeight += lineHeight10;
-      if (hasProgress) {
-        textBlockHeight += sectionSpacing;
-      }
-    }
-    if (hasProgress) {
-      textBlockHeight += lineHeight10;
+      textBlockHeight += lineHeight10 + sectionSpacing;
     }
 
     const bool textBlack = (overlayMode != 3);
@@ -638,8 +628,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
       const std::string titleStr =
           renderer.truncatedText(BOOKERLY_12_FONT_ID, overlayInfo.title.c_str(), availableWidth, EpdFontFamily::BOLD);
       renderer.drawCenteredText(BOOKERLY_12_FONT_ID, currentY, titleStr.c_str(), textBlack, EpdFontFamily::BOLD);
-      const int spacingAfterTitle = hasAuthor ? lineSpacing : (hasProgress ? sectionSpacing : lineSpacing);
-      currentY += lineHeight12 + spacingAfterTitle;
+      currentY += lineHeight12 + (hasAuthor ? lineSpacing : sectionSpacing);
     }
 
     if (hasAuthor) {
@@ -648,23 +637,20 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
       currentY += lineHeight10 + sectionSpacing;
     }
 
-    if (hasProgress) {
-      std::string progressStr;
-      if (!overlayInfo.chapterName.empty()) {
-        const std::string prefix = "";
-        const int prefixWidth = renderer.getTextWidth(UI_10_FONT_ID, prefix.c_str());
-        const int suffixWidth = renderer.getTextWidth(UI_10_FONT_ID, overlayInfo.progressSuffix.c_str());
-        const int maxChapterWidth = availableWidth - prefixWidth - suffixWidth;
-        const std::string truncatedChapter =
-            maxChapterWidth > 0
-                ? renderer.truncatedText(UI_10_FONT_ID, overlayInfo.chapterName.c_str(), maxChapterWidth)
-                : "";
-        progressStr = prefix + truncatedChapter + overlayInfo.progressSuffix;
-      } else {
-        progressStr = renderer.truncatedText(UI_10_FONT_ID, overlayInfo.progressText.c_str(), availableWidth);
-      }
-      renderer.drawCenteredText(UI_10_FONT_ID, currentY, progressStr.c_str(), textBlack);
+    std::string progressStr;
+    if (!overlayInfo.chapterName.empty()) {
+      const std::string prefix = "";
+      const int prefixWidth = renderer.getTextWidth(UI_10_FONT_ID, prefix.c_str());
+      const int suffixWidth = renderer.getTextWidth(UI_10_FONT_ID, overlayInfo.progressSuffix.c_str());
+      const int maxChapterWidth = availableWidth - prefixWidth - suffixWidth;
+      const std::string truncatedChapter =
+          maxChapterWidth > 0 ? renderer.truncatedText(UI_10_FONT_ID, overlayInfo.chapterName.c_str(), maxChapterWidth)
+                              : "";
+      progressStr = prefix + truncatedChapter + overlayInfo.progressSuffix;
+    } else {
+      progressStr = renderer.truncatedText(UI_10_FONT_ID, overlayInfo.progressText.c_str(), availableWidth);
     }
+    renderer.drawCenteredText(UI_10_FONT_ID, currentY, progressStr.c_str(), textBlack);
   };
 
   drawOverlay();
