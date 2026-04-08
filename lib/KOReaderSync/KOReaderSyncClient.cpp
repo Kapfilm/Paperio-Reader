@@ -441,6 +441,14 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
       return JSON_ERROR;
     }
 
+    // kosync convention: no stored progress for the document is signalled by
+    // HTTP 200 with an empty body ("{}"), not by 404. Detect that here so the
+    // caller doesn't apply a zeroed-out position as if it were real progress.
+    if (doc["document"].isNull() || doc["progress"].isNull()) {
+      LOG_DBG("KOSync", "Empty progress payload — treating as not found");
+      return NOT_FOUND;
+    }
+
     outProgress.document = documentHash;
     outProgress.progress = doc["progress"].as<std::string>();
     outProgress.percentage = doc["percentage"].as<float>();
