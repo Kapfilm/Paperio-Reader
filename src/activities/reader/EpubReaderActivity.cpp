@@ -58,7 +58,10 @@ void EpubReaderActivity::onEnter() {
 
   // Configure screen orientation based on settings
   // NOTE: This affects layout math and must be applied before any render calls.
-  ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+  {
+    RenderLock lock(*this);
+    ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+  }
 
   epub->setupCacheDir();
 
@@ -107,7 +110,10 @@ void EpubReaderActivity::onExit() {
   Activity::onExit();
 
   // Reset orientation back to portrait for the rest of the UI
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  {
+    RenderLock lock(*this);
+    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  }
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();

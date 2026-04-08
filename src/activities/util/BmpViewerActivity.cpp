@@ -127,6 +127,7 @@ void BmpViewerActivity::onExit() {
 }
 
 bool BmpViewerActivity::renderBmpImage(const bool showControls) {
+  RenderLock lock(*this);
   FsFile file;
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -192,6 +193,7 @@ bool BmpViewerActivity::renderBmpImage(const bool showControls) {
 }
 
 bool BmpViewerActivity::renderDecodedImage(const bool showControls) {
+  RenderLock lock(*this);
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
@@ -291,8 +293,11 @@ void BmpViewerActivity::toggleDisplayMode() {
   grayscaleDisplay = !grayscaleDisplay;
   // Switching between 1-bit BW and 4-level grayscale requires a full refresh to clear
   // ghosting from the previous mode — a half refresh leaves visible residue.
-  renderer.clearScreen();
-  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+  {
+    RenderLock lock(*this);
+    renderer.clearScreen();
+    renderer.displayBuffer(HalDisplay::FULL_REFRESH);
+  }
   if (!renderCurrentImage()) {
     renderError(tr(STR_COULD_NOT_RENDER_IMAGE));
   }
@@ -335,6 +340,7 @@ void BmpViewerActivity::saveDitherSettingsIfNeeded() {
 #endif
 
 void BmpViewerActivity::renderError(const char* message) {
+  RenderLock lock(*this);
   const auto pageHeight = renderer.getScreenHeight();
   renderer.clearScreen();
   renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, message);
@@ -365,8 +371,11 @@ void BmpViewerActivity::setAsSleepScreen() {
 
   if (!success) {
     LOG_ERR("BMP", "Failed to set %s as sleep screen", filePath.c_str());
-    GUI.drawPopup(renderer, tr(STR_FAILED_TO_SET_SLEEP_SCREEN));
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    {
+      RenderLock lock(*this);
+      GUI.drawPopup(renderer, tr(STR_FAILED_TO_SET_SLEEP_SCREEN));
+      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    }
     return;
   }
 
@@ -374,8 +383,11 @@ void BmpViewerActivity::setAsSleepScreen() {
   SETTINGS.saveToFile();
   LOG_INF("BMP", "Set %s as sleep screen", filePath.c_str());
 
-  GUI.drawPopup(renderer, tr(STR_SLEEP_SCREEN_SET));
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  {
+    RenderLock lock(*this);
+    GUI.drawPopup(renderer, tr(STR_SLEEP_SCREEN_SET));
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  }
 }
 
 void BmpViewerActivity::loop() {

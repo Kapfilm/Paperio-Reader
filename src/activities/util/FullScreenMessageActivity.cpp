@@ -6,6 +6,7 @@
 
 void FullScreenMessageActivity::onEnter() {
   Activity::onEnter();
+  RenderLock lock(*this);
 
   const auto height = renderer.getLineHeight(UI_10_FONT_ID);
   const auto top = (renderer.getScreenHeight() - height) / 2;

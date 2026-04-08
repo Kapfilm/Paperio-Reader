@@ -202,7 +202,10 @@ void WeatherActivity::onEnter() {
   Activity::onEnter();
 
   // Force landscape orientation for weather display
-  renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+  {
+    RenderLock lock(*this);
+    renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+  }
 
   state = State::LOADING_CACHE;
   errorMessage.clear();
@@ -217,7 +220,10 @@ void WeatherActivity::onExit() {
   Activity::onExit();
 
   // Weather screen is always landscape; restore app UI to portrait on exit.
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  {
+    RenderLock lock(*this);
+    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  }
 
   WiFi.mode(WIFI_OFF);
 }
@@ -283,7 +289,10 @@ void WeatherActivity::launchWifiSelection() {
 
 void WeatherActivity::onWifiSelectionComplete(bool connected) {
   // Re-apply landscape after returning from WiFi selection (which uses portrait)
-  renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+  {
+    RenderLock lock(*this);
+    renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+  }
   LOG_DBG("WEA", "onWifiSelectionComplete connected=%d wifiStatus=%d", connected ? 1 : 0, (int)WiFi.status());
 
   if (connected) {
@@ -325,10 +334,16 @@ void WeatherActivity::fetchWeather() {
 }
 
 void WeatherActivity::openSettingsActivity() {
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  {
+    RenderLock lock(*this);
+    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  }
   startActivityForResult(std::make_unique<WeatherSettingsActivity>(renderer, mappedInput),
                          [this](const ActivityResult&) {
-                           renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+                           {
+                             RenderLock lock(*this);
+                             renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+                           }
                            forceRefresh = true;
                            loadAndDisplay();
                          });

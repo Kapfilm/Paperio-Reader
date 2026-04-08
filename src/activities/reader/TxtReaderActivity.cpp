@@ -92,7 +92,10 @@ void TxtReaderActivity::onEnter() {
     return;
   }
 
-  ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+  {
+    RenderLock lock(*this);
+    ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+  }
 
   txt->setupCacheDir();
 
@@ -111,7 +114,10 @@ void TxtReaderActivity::onExit() {
   Activity::onExit();
 
   // Reset orientation back to portrait for the rest of the UI
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  {
+    RenderLock lock(*this);
+    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  }
 
   pageOffsets.clear();
   currentPageLines.clear();

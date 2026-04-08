@@ -125,9 +125,12 @@ void ReaderActivity::onEnter() {
   if (isImageFile(initialBookPath)) {
     onGoToBmpViewer(initialBookPath);
   } else if (isXtcFile(initialBookPath)) {
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_LOADING), true, EpdFontFamily::BOLD);
-    renderer.displayBuffer();
+    {
+      RenderLock lock(*this);
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_LOADING), true, EpdFontFamily::BOLD);
+      renderer.displayBuffer();
+    }
 
     auto xtc = loadXtc(initialBookPath);
     if (!xtc) {
