@@ -110,10 +110,7 @@ void EpubReaderActivity::onExit() {
   Activity::onExit();
 
   // Reset orientation back to portrait for the rest of the UI
-  {
-    RenderLock lock(*this);
-    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-  }
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();

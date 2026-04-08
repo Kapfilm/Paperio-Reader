@@ -220,10 +220,7 @@ void WeatherActivity::onExit() {
   Activity::onExit();
 
   // Weather screen is always landscape; restore app UI to portrait on exit.
-  {
-    RenderLock lock(*this);
-    renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-  }
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   WiFi.mode(WIFI_OFF);
 }
