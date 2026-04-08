@@ -290,6 +290,10 @@ bool BmpViewerActivity::renderDecodedImage(const bool showControls) {
 
 void BmpViewerActivity::toggleDisplayMode() {
   grayscaleDisplay = !grayscaleDisplay;
+  // Switching between 1-bit BW and 4-level grayscale requires a full refresh to clear
+  // ghosting from the previous mode — a half refresh leaves visible residue.
+  renderer.clearScreen();
+  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
   if (!renderCurrentImage()) {
     renderError(tr(STR_COULD_NOT_RENDER_IMAGE));
   }

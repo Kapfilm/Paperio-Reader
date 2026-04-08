@@ -95,13 +95,12 @@ bool renderPngSleepScreen(const std::string& filename, GfxRenderer& renderer, co
   config.performanceMode = false;
   config.useExactDimensions = false;
 
-  PngToFramebufferConverter decoder;
-  if (!decoder.decodeToFramebuffer(filename, renderer, config)) {
-    LOG_DBG("SLP", "PNG sleep image decode failed: %s", filename.c_str());
-    return false;
-  }
-
-  if (!overlayInfo.progressText.empty()) {
+  // Overlay drawing is shared across all three rendering passes (BW + LSB + MSB) so the
+  // text appears on every plane. Captured by reference so the lambda sees the renderer.
+  const auto drawOverlay = [&]() {
+    if (overlayInfo.progressText.empty()) {
+      return;
+    }
     const int lineHeight12 = renderer.getLineHeight(BOOKERLY_12_FONT_ID);
     const int lineHeight10 = renderer.getLineHeight(UI_10_FONT_ID);
     constexpr int lineSpacing = 3;
@@ -152,9 +151,45 @@ bool renderPngSleepScreen(const std::string& filename, GfxRenderer& renderer, co
           renderer.truncatedText(UI_10_FONT_ID, overlayInfo.progressText.c_str(), maxTextWidth);
       renderer.drawText(UI_10_FONT_ID, 10, y, progress.c_str(), true);
     }
-  }
+  };
 
+  PngToFramebufferConverter decoder;
+
+  // Pass 1: BW plane — mirrors SleepActivity::renderBitmapSleepScreen so the BW carrier
+  // matches the 4-level quantization layered on top via the LSB/MSB planes.
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.clearScreen();
+  if (!decoder.decodeToFramebuffer(filename, renderer, config)) {
+    LOG_DBG("SLP", "PNG sleep image decode failed: %s", filename.c_str());
+    return false;
+  }
+  drawOverlay();
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+
+  // Pass 2: GRAYSCALE_LSB plane.
+  renderer.clearScreen(0x00);
+  renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
+  if (!decoder.decodeToFramebuffer(filename, renderer, config)) {
+    LOG_DBG("SLP", "PNG sleep image LSB decode failed: %s", filename.c_str());
+    renderer.setRenderMode(GfxRenderer::BW);
+    return false;
+  }
+  drawOverlay();
+  renderer.copyGrayscaleLsbBuffers();
+
+  // Pass 3: GRAYSCALE_MSB plane.
+  renderer.clearScreen(0x00);
+  renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
+  if (!decoder.decodeToFramebuffer(filename, renderer, config)) {
+    LOG_DBG("SLP", "PNG sleep image MSB decode failed: %s", filename.c_str());
+    renderer.setRenderMode(GfxRenderer::BW);
+    return false;
+  }
+  drawOverlay();
+  renderer.copyGrayscaleMsbBuffers();
+
+  renderer.displayGrayBuffer();
+  renderer.setRenderMode(GfxRenderer::BW);
   return true;
 }
 
