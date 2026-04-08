@@ -756,7 +756,6 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   int lastBaseWidth = 0;
   int lastBaseTop = 0;
   int lastBaseAdvanceFP = 0;  // 12.4 fixed-point
-  int lastBaseAdvanceFP = 0;  // 12.4 fixed-point
   int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap
 
   // cannot draw a NULL / empty string
