@@ -27,30 +27,52 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes) {
   std::vector<MenuItem> items;
-  items.reserve(13);
+  items.reserve(18);
+  // Navigation
+  items.push_back({MenuAction::NONE, StrId::STR_READER_NAVIGATION, true});
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
+  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
   }
+  items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
+
+  // Appearance
+  items.push_back({MenuAction::NONE, StrId::STR_READER_APPEARANCE, true});
   items.push_back({MenuAction::EMBEDDED_STYLE, StrId::STR_EMBEDDED_STYLE});
   items.push_back({MenuAction::IMAGE_RENDERING, StrId::STR_IMAGES});
   items.push_back({MenuAction::TEXT_DARKNESS, StrId::STR_TEXT_DARKNESS});
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
-  items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
-  items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
-  items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
-  items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
-  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
+
+  // Synchronisation (only if credentials are set, to avoid confusion)
   if (KOREADER_STORE.hasCredentials()) {
+    items.push_back({MenuAction::NONE, StrId::STR_KOREADER_SYNC, true});
     items.push_back({MenuAction::PULL_REMOTE, StrId::STR_PULL_PROGRESS_FROM_OTHER_DEVICES});
     items.push_back({MenuAction::PUSH_LOCAL, StrId::STR_PUSH_PROGRESS_FROM_THIS_DEVICE});
   }
+
+  // Tools
+  items.push_back({MenuAction::NONE, StrId::STR_READER_TOOLS, true});
+  items.push_back({MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON});
+  items.push_back({MenuAction::DISPLAY_QR, StrId::STR_DISPLAY_QR});
   items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+  items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
   return items;
+}
+
+std::function<bool(int)> EpubReaderMenuActivity::buildSelectablePredicate() const {
+  return [this](int index) {
+    return index >= 0 && index < static_cast<int>(menuItems.size()) && !menuItems[index].isSeparator;
+  };
 }
 
 void EpubReaderMenuActivity::onEnter() {
   Activity::onEnter();
+  buttonNavigator.setSelectablePredicate(buildSelectablePredicate(), static_cast<int>(menuItems.size()));
+  const int next = buttonNavigator.nextIndex(selectedIndex);
+  if (next != selectedIndex) {
+    selectedIndex = next;
+  }
   requestUpdate();
 }
 
@@ -59,17 +81,20 @@ void EpubReaderMenuActivity::onExit() { Activity::onExit(); }
 void EpubReaderMenuActivity::loop() {
   // Handle navigation
   buttonNavigator.onNext([this] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    selectedIndex = buttonNavigator.nextIndex(selectedIndex);
     requestUpdate();
   });
 
   buttonNavigator.onPrevious([this] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
+    selectedIndex = buttonNavigator.previousIndex(selectedIndex);
     requestUpdate();
   });
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const auto selectedAction = menuItems[selectedIndex].action;
+    if (selectedAction == MenuAction::NONE) {
+      return;
+    }
     if (selectedAction == MenuAction::ROTATE_SCREEN) {
       // Cycle orientation preview locally; actual rotation happens on menu exit.
       pendingOrientation = (pendingOrientation + 1) % orientationLabels.size();
@@ -162,7 +187,13 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
 
   GUI.drawList(
       renderer, Rect{contentRect.x, startY, contentRect.width, listHeight}, static_cast<int>(menuItems.size()),
-      selectedIndex, [this](int index) { return I18N.get(menuItems[index].labelId); }, nullptr, nullptr,
+      selectedIndex,
+      [this](int index) {
+        const auto& item = menuItems[index];
+        const auto title = I18N.get(item.labelId);
+        return item.isSeparator ? UITheme::makeSeparatorTitle(title) : title;
+      },
+      nullptr, nullptr,
       [this](int index) {
         const auto& item = menuItems[index];
         switch (item.action) {
