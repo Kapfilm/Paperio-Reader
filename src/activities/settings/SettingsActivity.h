@@ -30,6 +30,7 @@ enum class SettingAction {
 
 struct SettingInfo {
   StrId nameId;
+  bool isSeparator = false;
   SettingType type;
   uint8_t CrossPointSettings::* valuePtr = nullptr;
   std::vector<StrId> enumValues;
@@ -84,11 +85,21 @@ struct SettingInfo {
     return s;
   }
 
-  static SettingInfo Action(StrId nameId, SettingAction action) {
+  static SettingInfo Action(StrId nameId, SettingAction action, bool isSeparator = false) {
     SettingInfo s;
     s.nameId = nameId;
     s.type = SettingType::ACTION;
     s.action = action;
+    s.isSeparator = isSeparator;
+    return s;
+  }
+
+  static SettingInfo Separator(StrId nameId) {
+    SettingInfo s;
+    s.nameId = nameId;
+    s.type = SettingType::ACTION;
+    s.action = SettingAction::None;
+    s.isSeparator = true;
     return s;
   }
 
@@ -155,14 +166,16 @@ class SettingsActivity final : public Activity {
   std::vector<SettingInfo> displaySettings;
   std::vector<SettingInfo> readerSettings;
   std::vector<SettingInfo> controlsSettings;
+  std::vector<SettingInfo> networkSettings;
   std::vector<SettingInfo> systemSettings;
   const std::vector<SettingInfo>* currentSettings = nullptr;
 
-  static constexpr int categoryCount = 4;
+  static constexpr int categoryCount = 5;
   static const StrId categoryNames[categoryCount];
 
   void enterCategory(int categoryIndex);
   void toggleCurrentSetting();
+  std::function<bool(int)> buildSelectablePredicate() const;
 
  public:
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

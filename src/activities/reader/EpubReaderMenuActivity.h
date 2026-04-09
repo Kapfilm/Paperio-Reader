@@ -2,6 +2,7 @@
 #include <Epub.h>
 #include <I18n.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,12 @@ class EpubReaderMenuActivity final : public Activity {
     DELETE_CACHE
   };
 
+  struct MenuItem {
+    MenuAction action;
+    StrId labelId;
+    bool isSeparator = false;
+  };
+
   explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                   const int currentPage, const int totalPages, const int bookProgressPercent,
                                   const uint8_t currentOrientation, const bool hasFootnotes,
@@ -40,17 +47,10 @@ class EpubReaderMenuActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
 
- private:
-  struct MenuItem {
-    MenuAction action;
-    StrId labelId;
-    bool isSeparator = false;
-  };
-
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes);
-
   std::function<bool(int)> buildSelectablePredicate() const;
 
+ private:
   // Fixed menu layout
   const std::vector<MenuItem> menuItems;
 
