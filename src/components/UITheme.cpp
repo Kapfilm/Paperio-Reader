@@ -98,11 +98,17 @@ Rect UITheme::getContentRect(const GfxRenderer& renderer, bool hasBottomHints, b
   return Rect{left, top, w - left - right, h - top - bottom};
 }
 
-std::string UITheme::makeSeparatorTitle(const std::string& title) { return std::string("__") + title; }
+std::string UITheme::makeSeparatorTitle(const std::string& title) {
+  return std::string("__") + title;
+}
 
-std::string UITheme::makeSeparatorTitle(StrId labelId) { return std::string("__") + I18N.get(labelId); }
+std::string UITheme::makeSeparatorTitle(StrId labelId) {
+  return std::string("__") + I18N.get(labelId);
+}
 
-bool UITheme::isSeparatorTitle(const std::string& title) { return title.rfind("__", 0) == 0; }
+bool UITheme::isSeparatorTitle(const std::string& title) {
+  return title.rfind("__", 0) == 0;
+}
 
 std::string UITheme::stripSeparatorTitle(const std::string& title) {
   return isSeparatorTitle(title) ? title.substr(2) : title;

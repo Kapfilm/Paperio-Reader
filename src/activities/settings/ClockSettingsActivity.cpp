@@ -10,7 +10,6 @@
 #include "SyncTimeActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/MenuItemHelpers.h"
 
 namespace {
 const StrId timeZoneNames[CrossPointSettings::TIMEZONE_COUNT] = {
@@ -24,20 +23,22 @@ std::vector<ClockSettingsActivity::MenuItem> ClockSettingsActivity::buildMenuIte
   std::vector<MenuItem> items;
   items.reserve(7);
   // Settings
-  items.push_back(makeSeparatorMenuItem<MenuItem>(StrId::STR_SETTINGS_TITLE));
+  items.push_back({Action::NONE, StrId::STR_SETTINGS_TITLE, true});
   items.push_back({Action::USE_CLOCK, StrId::STR_USE_CLOCK});
-  items.push_back({Action::CLOCK_FORMAT, StrId::STR_CLOCK_FORMAT});
+  items.push_back({Action::CLOCK_FORMAT, StrId::STR_CLOCK_FORMAT}); 
   items.push_back({Action::TIMEZONE, StrId::STR_TIMEZONE});
 
   // Tools
-  items.push_back(makeSeparatorMenuItem<MenuItem>(StrId::STR_READER_TOOLS));
+  items.push_back({Action::NONE, StrId::STR_READER_TOOLS, true});
   items.push_back({Action::DETECT_TIMEZONE, StrId::STR_DETECT_TIMEZONE});
-  items.push_back({Action::SYNC_TIME, StrId::STR_SYNC_TIME});
+  items.push_back({Action::SYNC_TIME, StrId::STR_SYNC_TIME}); 
   return items;
 }
 
 std::function<bool(int)> ClockSettingsActivity::buildSelectablePredicate() const {
-  return makeSelectablePredicate(menuItems);
+  return [this](int index) {
+    return index >= 0 && index < static_cast<int>(menuItems.size()) && !menuItems[index].isSeparator;
+  };
 }
 
 void ClockSettingsActivity::onEnter() {
@@ -123,7 +124,8 @@ void ClockSettingsActivity::render(RenderLock&&) {
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
 
   GUI.drawList(
-      renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(menuItems.size()), selectedIndex,
+      renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(menuItems.size()),
+      selectedIndex,
       [this](int index) {
         const auto title = I18N.get(menuItems[index].labelId);
         return menuItems[index].isSeparator ? UITheme::makeSeparatorTitle(title) : title;

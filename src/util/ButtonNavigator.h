@@ -45,9 +45,9 @@ class ButtonNavigator final {
   [[nodiscard]] static int nextIndex(int currentIndex, const std::vector<bool>& selectable);
   [[nodiscard]] static int previousIndex(int currentIndex, const std::vector<bool>& selectable);
   [[nodiscard]] static int nextIndex(int currentIndex, int totalItems,
-                                     const std::function<bool(int index)>& isSelectable);
+                                    const std::function<bool(int index)>& isSelectable);
   [[nodiscard]] static int previousIndex(int currentIndex, int totalItems,
-                                         const std::function<bool(int index)>& isSelectable);
+                                        const std::function<bool(int index)>& isSelectable);
 
   [[nodiscard]] int nextIndex(int currentIndex) const;
   [[nodiscard]] int previousIndex(int currentIndex) const;

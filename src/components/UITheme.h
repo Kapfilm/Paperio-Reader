@@ -1,9 +1,9 @@
 #pragma once
 
-#include <I18n.h>
-
 #include <functional>
 #include <memory>
+
+#include <I18n.h>
 
 #include "CrossPointSettings.h"
 #include "components/themes/BaseTheme.h"

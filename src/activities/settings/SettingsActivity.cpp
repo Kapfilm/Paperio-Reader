@@ -22,11 +22,9 @@
 #include "activities/weather/WeatherSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/MenuItemHelpers.h"
 
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
-                                                              StrId::STR_CAT_CONTROLS, StrId::STR_CAT_NETWORK,
-                                                              StrId::STR_CAT_SYSTEM};
+                                                              StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
 
 void SettingsActivity::onEnter() {
   Activity::onEnter();
@@ -35,9 +33,7 @@ void SettingsActivity::onEnter() {
   displaySettings.clear();
   readerSettings.clear();
   controlsSettings.clear();
-  networkSettings.clear();
   systemSettings.clear();
-  systemSettings.push_back(SettingInfo::Separator(StrId::STR_SETTINGS_MENU_SETTINGS));
 
   for (const auto& setting : getSettingsList()) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
@@ -54,8 +50,6 @@ void SettingsActivity::onEnter() {
       controlsSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
       systemSettings.push_back(setting);
-    } else if (setting.category == StrId::STR_CAT_NETWORK) {
-      networkSettings.push_back(setting);
     }
     // Web-only categories (KOReader Sync, OPDS Browser) are skipped for device UI
   }
@@ -63,26 +57,15 @@ void SettingsActivity::onEnter() {
   // Append device-only ACTION items
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
-
-  networkSettings.push_back(SettingInfo::Separator(StrId::STR_SETTINGS_MENU_NETWORK));
-  networkSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  networkSettings.push_back(SettingInfo::Separator(StrId::STR_SETTINGS_MENU_SOURCES));
-  networkSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_BROWSER, SettingAction::OPDSBrowser));
-  networkSettings.push_back(SettingInfo::Separator(StrId::STR_SETTINGS_MENU_SYNC));
-  networkSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-
-  // System settings with actions
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-
-  systemSettings.push_back(SettingInfo::Separator(StrId::STR_SETTINGS_MENU_TOOLS));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLOCK_SETTINGS, SettingAction::ClockSettings));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_WEATHER_SETTINGS, SettingAction::Weather));
-
-  systemSettings.push_back(SettingInfo::Separator(StrId::STR_SETTINGS_MENU_SYSTEM));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_BROWSER, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SYSTEM_INFO, SettingAction::SystemInfo));
-
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_WEATHER_SETTINGS, SettingAction::Weather));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
 
   // Reset selection to first category
@@ -92,14 +75,9 @@ void SettingsActivity::onEnter() {
   // Initialize with first category (Display)
   currentSettings = &displaySettings;
   settingsCount = static_cast<int>(displaySettings.size());
-  buttonNavigator.setSelectablePredicate(makeSelectablePredicate(*currentSettings, 1, true), settingsCount + 1);
 
   // Trigger first update
   requestUpdate();
-}
-
-std::function<bool(int)> SettingsActivity::buildSelectablePredicate() const {
-  return makeSelectablePredicate(*currentSettings, 1, true);
 }
 
 void SettingsActivity::onExit() {
@@ -137,12 +115,12 @@ void SettingsActivity::loop() {
 
   // Handle navigation
   buttonNavigator.onNextRelease([this] {
-    selectedSettingIndex = buttonNavigator.nextIndex(selectedSettingIndex);
+    selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
     requestUpdate();
   });
 
   buttonNavigator.onPreviousRelease([this] {
-    selectedSettingIndex = buttonNavigator.previousIndex(selectedSettingIndex);
+    selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
     requestUpdate();
   });
 
@@ -171,14 +149,10 @@ void SettingsActivity::loop() {
         currentSettings = &controlsSettings;
         break;
       case 3:
-        currentSettings = &networkSettings;
-        break;
-      case 4:
         currentSettings = &systemSettings;
         break;
     }
     settingsCount = static_cast<int>(currentSettings->size());
-    buttonNavigator.setSelectablePredicate(makeSelectablePredicate(*currentSettings, 1, true), settingsCount + 1);
   }
 }
 
@@ -189,9 +163,6 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   const auto& setting = (*currentSettings)[selectedSetting];
-  if (setting.isSeparator) {
-    return;
-  }
 
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     // Toggle the boolean value using the member pointer
@@ -288,11 +259,7 @@ void SettingsActivity::render(RenderLock&&) {
            contentRect.height -
                (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing * 2)},
       settingsCount, selectedSettingIndex - 1,
-      [&settings](int index) {
-        const auto title = I18N.get(settings[index].nameId);
-        return settings[index].isSeparator ? UITheme::makeSeparatorTitle(title) : title;
-      },
-      nullptr, nullptr,
+      [&settings](int index) { return std::string(I18N.get(settings[index].nameId)); }, nullptr, nullptr,
       [&settings](int i) {
         const auto& setting = settings[i];
         std::string valueText = "";
