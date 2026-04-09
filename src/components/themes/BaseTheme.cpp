@@ -291,9 +291,6 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     const bool isSeparator = UITheme::isSeparatorTitle(itemName);
     if (isSeparator) {
       itemName = UITheme::stripSeparatorTitle(itemName);
-    }
-
-    if (isSeparator) {
       drawListSeparator(renderer,
                         Rect{rect.x + BaseMetrics::values.contentSidePadding, itemY,
                              contentWidth - BaseMetrics::values.contentSidePadding * 2, rowHeight},
@@ -303,7 +300,6 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
     auto font = (rowSubtitle != nullptr) ? UI_12_FONT_ID : UI_10_FONT_ID;
     auto item = renderer.truncatedText(font, itemName.c_str(), textWidth);
-    renderer.drawText(font, rect.x + BaseMetrics::values.contentSidePadding, itemY, item.c_str(), true);
     renderer.drawText(font, rect.x + BaseMetrics::values.contentSidePadding, itemY, item.c_str(), true);
 
     if (rowSubtitle != nullptr) {

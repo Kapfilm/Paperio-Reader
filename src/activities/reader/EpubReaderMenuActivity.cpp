@@ -68,10 +68,10 @@ std::function<bool(int)> EpubReaderMenuActivity::buildSelectablePredicate() cons
 
 void EpubReaderMenuActivity::onEnter() {
   Activity::onEnter();
-  buttonNavigator.setSelectablePredicate(buildSelectablePredicate(), static_cast<int>(menuItems.size()));
-  const int next = buttonNavigator.nextIndex(selectedIndex);
-  if (next != selectedIndex) {
-    selectedIndex = next;
+  const auto selectablePredicate = buildSelectablePredicate();
+  buttonNavigator.setSelectablePredicate(selectablePredicate, static_cast<int>(menuItems.size()));
+  if (!selectablePredicate(selectedIndex)) {
+    selectedIndex = buttonNavigator.nextIndex(selectedIndex);
   }
   requestUpdate();
 }

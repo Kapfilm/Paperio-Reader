@@ -446,9 +446,6 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     const bool isSeparator = UITheme::isSeparatorTitle(itemName);
     if (isSeparator) {
       itemName = UITheme::stripSeparatorTitle(itemName);
-    }
-
-    if (isSeparator) {
       drawListSeparator(renderer,
                         Rect{rect.x + LyraMetrics::values.contentSidePadding, itemY,
                              contentWidth - LyraMetrics::values.contentSidePadding * 2, rowHeight},
