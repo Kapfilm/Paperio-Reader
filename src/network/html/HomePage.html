@@ -222,6 +222,8 @@
       ERROR: 'Error loading'
     };
 
+    let sdLoading = false;
+
     function formatUptime(seconds) {
       if (seconds == null) return 'N/A';
       const h = Math.floor(seconds / 3600);
@@ -261,7 +263,7 @@
         document.getElementById('sd-space').textContent = data.sdTotal
           ? formatBytes(data.sdUsed) + ' / ' + formatBytes(data.sdTotal)
           : 'N/A';
-      } else {
+      } else if (!sdLoading) {
         document.getElementById('sd-space').textContent = SD_LABELS.NOT_LOADED;
       }
     }
@@ -274,15 +276,23 @@
         }
         const fastData = await fastResponse.json();
         applyStatus(fastData, false);
-        setSdButtonState(true);
       } catch (error) {
         console.error('Error fetching status:', error);
         document.getElementById('sd-space').textContent = SD_LABELS.ERROR;
+      } finally {
+        if (!sdLoading) {
+          setSdButtonState(true);
+        }
       }
     }
 
     async function fetchSdStatus() {
+      if (sdLoading) {
+        return;
+      }
+
       const button = document.getElementById('load-sd-button');
+      sdLoading = true;
       button.disabled = true;
       button.textContent = SD_LABELS.LOADING;
       document.getElementById('sd-space').textContent = SD_LABELS.LOADING;
@@ -300,6 +310,8 @@
         button.disabled = false;
         button.textContent = SD_LABELS.LOAD_BUTTON;
         document.getElementById('sd-space').textContent = SD_LABELS.ERROR;
+      } finally {
+        sdLoading = false;
       }
     }
 
@@ -310,7 +322,13 @@
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('load-sd-button').addEventListener('click', fetchSdStatus);
+      setSdButtonState(false);
+      document.getElementById('load-sd-button').addEventListener('click', () => {
+        if (sdLoading) {
+          return;
+        }
+        fetchSdStatus();
+      });
       fetchStatus();
     });
   </script>
