@@ -31,6 +31,7 @@ class GfxRenderer {
 
  private:
   static constexpr size_t BW_BUFFER_CHUNK_SIZE = 8000;  // 8KB chunks to allow for non-contiguous memory
+  static constexpr unsigned int REFRESH_OVERRIDE_NONE = 0;
 
   HalDisplay& display;
   std::atomic<int> renderMode;
@@ -60,8 +61,7 @@ class GfxRenderer {
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
   // as before, concentrated in a single pointer instead of four fields.
   mutable FontCacheManager* fontCacheManager_ = nullptr;
-  mutable std::atomic<bool> useNextRefreshOverride = false;
-  mutable std::atomic<int> nextRefreshOverride = static_cast<int>(HalDisplay::FAST_REFRESH);
+  mutable std::atomic<unsigned int> refreshOverride = REFRESH_OVERRIDE_NONE;
 
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                   EpdFontFamily::Style style) const;

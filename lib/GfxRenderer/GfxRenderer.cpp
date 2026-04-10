@@ -1399,11 +1399,12 @@ void GfxRenderer::fillRoundedRect(const int x, const int y, const int width, con
 }
 
 void GfxRenderer::drawImage(const uint8_t bitmap[], const int x, const int y, const int width, const int height) const {
+  const auto currentOrientation = getOrientation();
   int rotatedX = 0;
   int rotatedY = 0;
-  rotateCoordinates(getOrientation(), x, y, &rotatedX, &rotatedY, panelWidth, panelHeight);
+  rotateCoordinates(currentOrientation, x, y, &rotatedX, &rotatedY, panelWidth, panelHeight);
   // Rotate origin corner
-  switch (getOrientation()) {
+  switch (currentOrientation) {
     case Portrait:
       rotatedY = rotatedY - height;
       break;
@@ -1476,6 +1477,7 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     return;
   }
 
+  const auto renderModeSnapshot = getRenderMode();
   for (int bmpY = 0; bmpY < (bitmap.getHeight() - cropPixY); bmpY++) {
     // The BMP's (0, 0) is the bottom-left corner (if the height is positive, top-left if negative).
     // Screen's (0, 0) is the top-left corner.
@@ -1519,12 +1521,11 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 
       const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
 
-      const auto currentRenderMode = getRenderMode();
-      if (currentRenderMode == BW && val < 3) {
+      if (renderModeSnapshot == BW && val < 3) {
         drawPixel(screenX, screenY);
-      } else if (currentRenderMode == GRAYSCALE_MSB && (val == 1 || val == 2)) {
+      } else if (renderModeSnapshot == GRAYSCALE_MSB && (val == 1 || val == 2)) {
         drawPixel(screenX, screenY, false);
-      } else if (currentRenderMode == GRAYSCALE_LSB && val == 1) {
+      } else if (renderModeSnapshot == GRAYSCALE_LSB && val == 1) {
         drawPixel(screenX, screenY, false);
       }
     }
@@ -1685,17 +1686,32 @@ void GfxRenderer::invertScreen() const {
   }
 }
 
+static constexpr unsigned int encodeRefreshMode(const HalDisplay::RefreshMode mode) {
+  return static_cast<unsigned int>(mode) + 1u;
+}
+
+static constexpr HalDisplay::RefreshMode decodeRefreshMode(const unsigned int value) {
+  return static_cast<HalDisplay::RefreshMode>(value - 1u);
+}
+
 void GfxRenderer::setNextDisplayRefreshMode(const HalDisplay::RefreshMode refreshMode) const {
-  useNextRefreshOverride.store(true, std::memory_order_relaxed);
-  nextRefreshOverride.store(static_cast<int>(refreshMode), std::memory_order_relaxed);
+  refreshOverride.store(encodeRefreshMode(refreshMode), std::memory_order_release);
 }
 
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
-  const auto effectiveMode =
-      useNextRefreshOverride.load(std::memory_order_relaxed)
-          ? static_cast<HalDisplay::RefreshMode>(nextRefreshOverride.load(std::memory_order_relaxed))
-          : refreshMode;
-  useNextRefreshOverride.store(false, std::memory_order_relaxed);
+  auto effectiveMode = refreshMode;
+  unsigned int overrideValue = refreshOverride.load(std::memory_order_acquire);
+  if (overrideValue != REFRESH_OVERRIDE_NONE) {
+    unsigned int expected = overrideValue;
+    if (refreshOverride.compare_exchange_strong(expected, REFRESH_OVERRIDE_NONE, std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
+      effectiveMode = decodeRefreshMode(overrideValue);
+    } else if (expected != REFRESH_OVERRIDE_NONE) {
+      effectiveMode = decodeRefreshMode(expected);
+      refreshOverride.store(REFRESH_OVERRIDE_NONE, std::memory_order_release);
+    }
+  }
+
   auto elapsed = millis() - start_ms;
   LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
   display.displayBuffer(effectiveMode, fadingFix.load(std::memory_order_relaxed));
