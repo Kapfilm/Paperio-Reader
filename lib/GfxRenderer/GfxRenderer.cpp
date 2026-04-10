@@ -860,6 +860,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     return;
   }
   const auto& font = fontIt->second;
+  const auto renderModeSnapshot = getRenderMode();
 
   uint32_t cp;
   uint32_t prevCp = 0;
@@ -870,7 +871,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
       const int raiseBy = combiningMark::raiseAboveBase(combiningGlyph->top, combiningGlyph->height, lastBaseTop);
       const int combiningX = combiningMark::centerOver(lastBaseX, lastBaseLeft, lastBaseWidth, combiningGlyph->left,
                                                        combiningGlyph->width);
-      renderCharImpl<TextRotation::None>(*this, getRenderMode(), font, cp, combiningX, yPos - raiseBy, black, style);
+      renderCharImpl<TextRotation::None>(*this, renderModeSnapshot, font, cp, combiningX, yPos - raiseBy, black, style);
       continue;
     }
 
@@ -902,7 +903,7 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     lastBaseAdvanceFP = glyph->advanceX;
     prevAdvanceFP = lastBaseAdvanceFP;
 
-    renderCharImpl<TextRotation::None>(*this, getRenderMode(), font, cp, lastBaseX, yPos, black, style);
+    renderCharImpl<TextRotation::None>(*this, renderModeSnapshot, font, cp, lastBaseX, yPos, black, style);
     prevCp = cp;
   }
 }
