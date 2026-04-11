@@ -89,9 +89,12 @@ class CrossPointWebServer {
 
   // Request handlers
   void handleRoot() const;
+  void handleWelcomePage() const;
+  void handleSystemInfoPage() const;
   void handleJszip() const;
   void handleNotFound() const;
   void handleStatus() const;
+  void handleStatusFast() const;
   void handleFileList() const;
   void handleFileListData() const;
   void handleDownload() const;

@@ -40,6 +40,8 @@ class CrossPointWebServerActivity final : public Activity {
   // Server status
   std::string connectedIP;
   std::string connectedSSID;  // For STA mode: network name, For AP mode: AP name
+  int currentRssi = 0;
+  unsigned long lastRssiUpdateTime = 0;
 
   // Performance monitoring
   unsigned long lastHandleClientTime = 0;

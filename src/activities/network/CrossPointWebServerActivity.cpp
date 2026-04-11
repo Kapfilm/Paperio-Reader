@@ -244,6 +244,10 @@ void CrossPointWebServerActivity::startWebServer() {
 
   if (webServer->isRunning()) {
     state = WebServerActivityState::SERVER_RUNNING;
+    if (!isApMode) {
+      currentRssi = WiFi.RSSI();
+      lastRssiUpdateTime = millis();
+    }
     LOG_DBG("WEBACT", "Web server started successfully");
 
     // Force an immediate render since we're transitioning from a subactivity
@@ -292,6 +296,12 @@ void CrossPointWebServerActivity::loop() {
         if (rssi < -75) {
           LOG_DBG("WEBACT", "Warning: Weak WiFi signal: %d dBm", rssi);
         }
+      }
+
+      if (millis() - lastRssiUpdateTime > 5000) {  // Refresh signal indicator every 5 seconds
+        lastRssiUpdateTime = millis();
+        currentRssi = WiFi.RSSI();
+        requestUpdate();
       }
     }
 
@@ -366,6 +376,69 @@ void CrossPointWebServerActivity::render(RenderLock&&) {
   }
 }
 
+namespace {
+
+StrId getRssiQualityStrId(int rssi) {
+  if (rssi <= -90) {
+    return StrId::STR_SIGNAL_QUALITY_POOR;
+  }
+  if (rssi <= -75) {
+    return StrId::STR_SIGNAL_QUALITY_WEAK;
+  }
+  if (rssi <= -60) {
+    return StrId::STR_SIGNAL_QUALITY_GOOD;
+  }
+  return StrId::STR_SIGNAL_QUALITY_EXCELLENT;
+}
+
+int rssiToSignalBars(int rssi) {
+  if (rssi <= -90) {
+    return 1;
+  }
+  if (rssi <= -75) {
+    return 2;
+  }
+  if (rssi <= -60) {
+    return 3;
+  }
+  return 4;
+}
+
+void drawSignalStrength(const GfxRenderer& renderer, const Rect& bounds, int rssi) {
+  const int x = bounds.x;
+  const int y = bounds.y;
+  const int width = bounds.width;
+  const int height = bounds.height;
+  const int barCount = 4;
+  const int gap = 6;
+  const int barWidth = std::min(10, (width - (barCount - 1) * gap) / barCount);
+  const int totalWidth = barCount * barWidth + (barCount - 1) * gap;
+  const int startX = x + (width - totalWidth) / 2;
+  const int maxBarHeight = height - 8;
+  const int bars = rssi == 0 ? 0 : rssiToSignalBars(rssi);
+  const int baseY = y + height - 2;
+  for (int i = 0; i < barCount; ++i) {
+    const int barHeight = ((i + 1) * maxBarHeight) / barCount;
+    const int barX = startX + i * (barWidth + gap);
+    const int barY = baseY - barHeight;
+    renderer.drawRect(barX, barY, barWidth, barHeight, true);
+    if (i < bars) {
+      renderer.fillRect(barX + 1, barY + 1, barWidth - 2, barHeight - 2);
+    }
+  }
+}
+
+std::string rssiLabel(int rssi) {
+  if (rssi == 0) {
+    return std::string(tr(STR_NO_SIGNAL));
+  }
+  const char* quality = I18N.get(getRssiQualityStrId(rssi));
+  std::string label = std::string(tr(STR_RSSI)) + ": " + std::to_string(rssi) + " dBm (" + quality + ")";
+  return label;
+}
+
+}  // namespace
+
 void CrossPointWebServerActivity::renderServerRunning() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect contentRect = UITheme::getContentRect(renderer, true, false);
@@ -412,6 +485,13 @@ void CrossPointWebServerActivity::renderServerRunning() const {
                       hostnameUrl.c_str());
     renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding + QR_CODE_WIDTH + metrics.verticalSpacing, startY + 100,
                       ipUrl.c_str());
+
+    const int signalHeight = 22;
+    const int signalWidth = contentRect.width - metrics.contentSidePadding * 2;
+    const int signalY = startY + 120;
+    const Rect signalBounds(contentRect.x + metrics.contentSidePadding, signalY, signalWidth, signalHeight);
+    drawSignalStrength(renderer, signalBounds, 0);
+    renderer.drawCenteredText(SMALL_FONT_ID, signalY + signalHeight + 2, tr(STR_HOTSPOT_MODE));
   } else {
     startY += metrics.verticalSpacing * 2;
 
@@ -435,8 +515,19 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     // Also show hostname URL
     std::string hostnameUrl = std::string(tr(STR_OR_HTTP_PREFIX)) + AP_HOSTNAME + ".local/";
     renderer.drawCenteredText(SMALL_FONT_ID, startY, hostnameUrl.c_str(), true);
+
+    // AP mode: no external RSSI metric available, but keep UI spacing consistent.
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
+  if (!isApMode) {
+    const int signalHeight = 22;
+    const int signalWidth = contentRect.width - metrics.contentSidePadding * 2;
+    const int signalY = startY + height10 + metrics.verticalSpacing * 2;
+    const Rect signalBounds(contentRect.x + metrics.contentSidePadding, signalY, signalWidth, signalHeight);
+    drawSignalStrength(renderer, signalBounds, currentRssi);
+    renderer.drawCenteredText(SMALL_FONT_ID, signalY + signalHeight + 2, rssiLabel(currentRssi).c_str(), true);
+  }
+
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

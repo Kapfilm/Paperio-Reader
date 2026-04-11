@@ -17,6 +17,7 @@
 #include "html/FilesPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
+#include "html/WelcomePageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 
 namespace {
@@ -162,11 +163,13 @@ void CrossPointWebServer::begin() {
 
   // Setup routes
   LOG_DBG("WEB", "Setting up routes...");
-  server->on("/", HTTP_GET, [this] { handleRoot(); });
-  server->on("/files", HTTP_GET, [this] { handleFileList(); });
+  server->on("/", HTTP_GET, [this] { handleWelcomePage(); });
+  server->on("/systeminfo", HTTP_GET, [this] { handleSystemInfoPage(); });
+  server->on("/files", HTTP_GET, [this] { handleRoot(); });
   server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
 
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
+  server->on("/api/status/fast", HTTP_GET, [this] { handleStatusFast(); });
   server->on("/api/files", HTTP_GET, [this] { handleFileListData(); });
   server->on("/download", HTTP_GET, [this] { handleDownload(); });
 
@@ -353,8 +356,24 @@ static void sendHtmlContent(WebServer* server, const char* data, size_t len) {
 }
 
 void CrossPointWebServer::handleRoot() const {
+  int32_t t0 = millis();
+  sendHtmlContent(server.get(), FilesPageHtml, sizeof(FilesPageHtml));
+  int32_t t1 = millis();
+  LOG_DBG("WEB", "Served file manager page in %d ms", t1 - t0);
+}
+
+void CrossPointWebServer::handleWelcomePage() const {
+  int32_t t0 = millis();
+  sendHtmlContent(server.get(), WelcomePageHtml, sizeof(WelcomePageHtml));
+  int32_t t1 = millis();
+  LOG_DBG("WEB", "Served welcome page in %d ms", t1 - t0);
+}
+
+void CrossPointWebServer::handleSystemInfoPage() const {
+  int32_t t0 = millis();
   sendHtmlContent(server.get(), HomePageHtml, sizeof(HomePageHtml));
-  LOG_DBG("WEB", "Served root page");
+  int32_t t1 = millis();
+  LOG_DBG("WEB", "Served system info page in %d ms", t1 - t0);
 }
 
 void CrossPointWebServer::handleJszip() const {
@@ -370,10 +389,14 @@ void CrossPointWebServer::handleNotFound() const {
 }
 
 void CrossPointWebServer::handleStatus() const {
-  const bool fastOnly = server->hasArg("phase") && server->arg("phase") == "fast";
-
+  const bool fastOnly = server->hasArg("phase") && server->arg("phase").equalsIgnoreCase("fast");
+  LOG_DBG("SYSINFO", "handleStatus request received (fastOnly=%d)", fastOnly);
+  int32_t t0 = millis();
   SystemStatus status = SystemStatus::collectFast();
+  int32_t t1 = millis();
+  LOG_DBG("SYSINFO", "Collected fast status in %d ms (fastOnly=%d)", t1 - t0, fastOnly);
   if (!fastOnly) {
+    LOG_DBG("SYSINFO", "handleStatus will collect SD stats");
     SystemStatus::fillSdStatus(status);
   }
 
@@ -395,6 +418,41 @@ void CrossPointWebServer::handleStatus() const {
   doc["charging"] = status.charging;
   doc["uptime"] = status.uptimeSeconds;
   doc["sdReady"] = !fastOnly;
+  doc["sdTotal"] = status.sdTotalBytes;
+  doc["sdUsed"] = status.sdUsedBytes;
+  doc["sdFree"] = status.sdFreeBytes;
+
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handleStatusFast() const {
+  LOG_DBG("SYSINFO", "handleStatusFast request received");
+  int32_t t0 = millis();
+  SystemStatus status = SystemStatus::collectFast();
+  int32_t t1 = millis();
+  LOG_DBG("SYSINFO", "Collected fast-only status in %d ms", t1 - t0);
+
+  JsonDocument doc;
+  doc["version"] = status.version;
+  doc["chipVersion"] = status.chipVersion;
+  doc["cpuMHz"] = status.cpuFreqMHz;
+  doc["ip"] = status.ip;
+  doc["mode"] = status.wifiMode;
+  doc["rssi"] = status.rssi;
+  doc["macAddress"] = status.macAddress;
+  doc["freeHeap"] = status.freeHeapBytes;
+  doc["minFreeHeap"] = status.minFreeHeapBytes;
+  doc["maxAllocHeap"] = status.maxAllocHeapBytes;
+  doc["flashTotal"] = status.flashBytes;
+  doc["flashAppUsed"] = status.flashAppUsedBytes;
+  doc["flashAppFree"] = status.flashAppFreeBytes;
+  doc["batteryPercent"] = status.batteryPercent;
+  doc["charging"] = status.charging;
+  doc["uptime"] = status.uptimeSeconds;
+  doc["sdReady"] = false;
+  // Still include SD stats in response, but client should ignore them when sdReady=false
   doc["sdTotal"] = status.sdTotalBytes;
   doc["sdUsed"] = status.sdUsedBytes;
   doc["sdFree"] = status.sdFreeBytes;
