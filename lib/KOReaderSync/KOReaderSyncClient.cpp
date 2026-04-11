@@ -380,7 +380,16 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
     // The kosync auth response is always a JSON object. Guard against a reverse
     // proxy returning HTTP 200 + HTML (e.g. a login wall that followed all
     // redirects and landed on an auth page instead of the API endpoint).
-    if (!activeBuf->data || activeBuf->data[0] != '{') {
+    // Skip leading whitespace before checking for '{' so servers that emit
+    // a BOM or indent their JSON don't get incorrectly rejected.
+    if (!activeBuf->data) {
+      return SERVER_ERROR;
+    }
+    const char* p = activeBuf->data;
+    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') {
+      p++;
+    }
+    if (*p != '{') {
       return SERVER_ERROR;
     }
     return OK;
