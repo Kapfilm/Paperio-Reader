@@ -204,7 +204,7 @@ void ParsedText::layoutAndExtractLines(
       splitInsertedHyphen[i] = false;
       lineCount = includeLastLine ? lineBreakIndices.size() : lineBreakIndices.size() - 1;
 
-      if (i < lineCount) {
+      if (i < lineBreakIndices.size()) {
         const size_t retryLineStart = i > 0 ? lineBreakIndices[i - 1] : 0;
         const size_t retryLineEnd = i < lineBreakIndices.size() ? lineBreakIndices[i] : retryLineStart;
         const std::string retryPreview = buildLinePreview(words, wordContinues, retryLineStart, retryLineEnd);
