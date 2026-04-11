@@ -1,8 +1,83 @@
+import configparser
 import os
 import re
 import gzip
+import subprocess
+import sys
 
 SRC_DIR = "src"
+
+
+CROSSPOINT_NAME = "CrossPoint Reader"
+PLACEHOLDERS = {
+    "%%CROSSPOINT%%": CROSSPOINT_NAME,
+}
+
+
+def warn(msg: str) -> None:
+    print(f"WARNING [build_html.py]: {msg}", file=sys.stderr)
+
+
+def get_base_version(project_dir: str) -> str:
+    ini_path = os.path.join(project_dir, "platformio.ini")
+    if not os.path.isfile(ini_path):
+        warn(f"platformio.ini not found at {ini_path}; using 0.0.0")
+        return "0.0.0"
+    config = configparser.ConfigParser()
+    config.read(ini_path)
+    if not config.has_option("crosspoint", "version"):
+        warn("No [crosspoint] section or version in platformio.ini; using 0.0.0")
+        return "0.0.0"
+    return config.get("crosspoint", "version")
+
+
+def get_git_branch(project_dir: str) -> str:
+    try:
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            text=True,
+            stderr=subprocess.PIPE,
+            cwd=project_dir,
+        ).strip()
+        if branch == "HEAD":
+            branch = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                text=True,
+                stderr=subprocess.PIPE,
+                cwd=project_dir,
+            ).strip()
+        return "".join(c for c in branch if c not in '"\\')
+    except FileNotFoundError:
+        warn('git not found on PATH; branch suffix will be "unknown"')
+        return "unknown"
+    except subprocess.CalledProcessError as e:
+        warn(
+            f'git command failed (exit {e.returncode}): {e.stderr.strip()}; branch suffix will be "unknown"'
+        )
+        return "unknown"
+    except Exception as e:
+        warn(
+            f'Unexpected error reading git branch: {e}; branch suffix will be "unknown"'
+        )
+        return "unknown"
+
+
+def get_version_string(project_dir: str) -> str:
+    env_version = os.environ.get("CROSSPOINT_VERSION")
+    if env_version:
+        return env_version.strip('"')
+    base_version = get_base_version(project_dir)
+    pioenv = os.environ.get("PIOENV", "default")
+    if pioenv == "default":
+        branch = get_git_branch(project_dir)
+        return f"{base_version}-dev+{branch}"
+    return base_version
+
+
+def replace_placeholders(html: str, replacements: dict) -> str:
+    for placeholder, replacement in replacements.items():
+        html = html.replace(placeholder, replacement)
+    return html
 
 
 def strip_js_comments(js: str) -> str:
@@ -159,6 +234,10 @@ def sanitize_identifier(name: str) -> str:
     return sanitized
 
 
+project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+version_string = get_version_string(project_dir)
+PLACEHOLDERS["%%VERSION%%"] = version_string
+
 for root, _, files in os.walk(SRC_DIR):
     for file in files:
         if file.endswith(".html") or file.endswith(".js"):
@@ -166,8 +245,9 @@ for root, _, files in os.walk(SRC_DIR):
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            # Only minify HTML files; JS files are typically pre-minified (e.g., jszip.min.js)
+            # Replace build-time placeholders only in HTML files
             if file.endswith(".html"):
+                content = replace_placeholders(content, PLACEHOLDERS)
                 processed = minify_html(content)
             else:
                 processed = content

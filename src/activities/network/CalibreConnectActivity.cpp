@@ -6,10 +6,9 @@
 #include <WiFi.h>
 #include <esp_task_wdt.h>
 
-#include "activities/network/SignalStrengthWidget.h"
-
 #include "MappedInputManager.h"
 #include "WifiSelectionActivity.h"
+#include "activities/network/SignalStrengthWidget.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 

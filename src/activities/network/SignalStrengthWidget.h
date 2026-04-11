@@ -1,8 +1,9 @@
 #pragma once
 
-#include <algorithm>
 #include <GfxRenderer.h>
 #include <I18n.h>
+
+#include <algorithm>
 #include <string>
 
 inline StrId getRssiQualityStrId(int rssi) {
@@ -21,18 +22,21 @@ inline StrId getRssiQualityStrId(int rssi) {
 inline void drawWifiSignalStrength(const GfxRenderer& renderer, int x, int y, int width, int height, int rssi) {
   const int barCount = 4;
   const int gap = 6;
-  const int barWidth = std::min(10, (width - (barCount - 1) * gap) / barCount);
+  const int barWidth = std::max(1, std::min(10, (width - (barCount - 1) * gap) / barCount));
   const int totalWidth = barCount * barWidth + (barCount - 1) * gap;
   const int startX = x + (width - totalWidth) / 2;
-  const int maxBarHeight = height - 8;
+  const int maxBarHeight = std::max(1, height - 8);
   const int bars = rssi == 0 ? 0 : (rssi <= -90 ? 1 : (rssi <= -75 ? 2 : (rssi <= -60 ? 3 : 4)));
   const int baseY = y + height - 2;
   for (int i = 0; i < barCount; ++i) {
-    const int barHeight = ((i + 1) * maxBarHeight) / barCount;
+    const int barHeight = std::max(0, ((i + 1) * maxBarHeight) / barCount);
+    if (barHeight <= 0 || barWidth <= 0) {
+      continue;
+    }
     const int barX = startX + i * (barWidth + gap);
     const int barY = baseY - barHeight;
     renderer.drawRect(barX, barY, barWidth, barHeight, true);
-    if (i < bars) {
+    if (i < bars && barWidth > 2 && barHeight > 2) {
       renderer.fillRect(barX + 1, barY + 1, barWidth - 2, barHeight - 2);
     }
   }

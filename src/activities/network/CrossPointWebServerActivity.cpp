@@ -377,8 +377,7 @@ void CrossPointWebServerActivity::render(RenderLock&&) {
   }
 }
 
-namespace {
-}  // namespace
+namespace {}  // namespace
 
 void CrossPointWebServerActivity::renderServerRunning() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -463,7 +462,8 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     const int signalHeight = 22;
     const int signalWidth = contentRect.width - metrics.contentSidePadding * 2;
     const int signalY = startY + height10 + metrics.verticalSpacing * 2;
-    drawWifiSignalStrength(renderer, contentRect.x + metrics.contentSidePadding, signalY, signalWidth, signalHeight, currentRssi);
+    drawWifiSignalStrength(renderer, contentRect.x + metrics.contentSidePadding, signalY, signalWidth, signalHeight,
+                           currentRssi);
     renderer.drawCenteredText(SMALL_FONT_ID, signalY + signalHeight + 2, rssiLabel(currentRssi).c_str(), true);
   }
 
