@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <HalStorage.h>
+#include <Logging.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 
@@ -72,9 +73,11 @@ struct SystemStatus {
   }
 
   static void fillSdStatus(SystemStatus& s) {
+    uint32_t t0 = millis();
     s.sdTotalBytes = Storage.sdTotalBytes();
     s.sdUsedBytes = Storage.sdUsedBytes();
     s.sdFreeBytes = Storage.sdFreeBytes();
+    LOG_DBG("SYSINFO", "Filled SD status in %u ms", millis() - t0);
   }
 
   static SystemStatus collect() {

@@ -137,9 +137,9 @@
   <h1>📚 CrossPoint Reader</h1>
 
   <div class="nav-links">
-    <a href="/" class="active">Home</a>
     <a href="/files">File Manager</a>
     <a href="/settings">Settings</a>
+    <a href="/systeminfo" class="active">System Info</a>
   </div>
 
   <div class="card">
@@ -193,6 +193,14 @@
       <span class="value" id="uptime">Loading...</span>
     </div>
     <div class="info-row">
+      <span class="label">Fast status fetch</span>
+      <span class="value" id="fast-status-duration">Loading...</span>
+    </div>
+    <div class="info-row">
+      <span class="label">Full status fetch</span>
+      <span class="value" id="full-status-duration">Not loaded</span>
+    </div>
+    <div class="info-row">
       <span class="label">SD Card</span>
       <span class="value" id="sd-space">Not loaded</span>
     </div>
@@ -232,6 +240,10 @@
       return h + 'h ' + String(m).padStart(2, '0') + 'm ' + String(s).padStart(2, '0') + 's';
     }
 
+    function formatDuration(ms) {
+      return ms == null ? 'N/A' : ms + ' ms';
+    }
+
     function applyStatus(data, includeSd) {
       document.getElementById('version').textContent = data.version || 'N/A';
       document.getElementById('chip-version').textContent = data.chipVersion || 'N/A';
@@ -269,16 +281,19 @@
     }
 
     async function fetchStatus() {
+      const start = performance.now();
       try {
-        const fastResponse = await fetch('/api/status?phase=fast');
+        const fastResponse = await fetch('/api/status/fast');
         if (!fastResponse.ok) {
           throw new Error('Failed to fetch fast status: ' + fastResponse.status + ' ' + fastResponse.statusText);
         }
         const fastData = await fastResponse.json();
         applyStatus(fastData, false);
+        document.getElementById('fast-status-duration').textContent = formatDuration(Math.round(performance.now() - start));
       } catch (error) {
         console.error('Error fetching status:', error);
         document.getElementById('sd-space').textContent = SD_LABELS.ERROR;
+        document.getElementById('fast-status-duration').textContent = 'Error';
       } finally {
         if (!sdLoading) {
           setSdButtonState(true);
@@ -296,6 +311,9 @@
       button.disabled = true;
       button.textContent = SD_LABELS.LOADING;
       document.getElementById('sd-space').textContent = SD_LABELS.LOADING;
+      document.getElementById('full-status-duration').textContent = 'Loading...';
+
+      const start = performance.now();
 
       try {
         const response = await fetch('/api/status');
@@ -305,11 +323,13 @@
         const data = await response.json();
         applyStatus(data, true);
         button.style.display = 'none';
+        document.getElementById('full-status-duration').textContent = formatDuration(Math.round(performance.now() - start));
       } catch (error) {
         console.error('Error fetching SD status:', error);
         button.disabled = false;
         button.textContent = SD_LABELS.LOAD_BUTTON;
         document.getElementById('sd-space').textContent = SD_LABELS.ERROR;
+        document.getElementById('full-status-duration').textContent = 'Error';
       } finally {
         sdLoading = false;
       }

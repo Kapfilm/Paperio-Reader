@@ -14,6 +14,7 @@
 #include "NetworkModeSelectionActivity.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/CalibreConnectActivity.h"
+#include "activities/network/SignalStrengthWidget.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/QrUtils.h"
@@ -244,6 +245,10 @@ void CrossPointWebServerActivity::startWebServer() {
 
   if (webServer->isRunning()) {
     state = WebServerActivityState::SERVER_RUNNING;
+    if (!isApMode) {
+      currentRssi = WiFi.RSSI();
+      lastRssiUpdateTime = millis();
+    }
     LOG_DBG("WEBACT", "Web server started successfully");
 
     // Force an immediate render since we're transitioning from a subactivity
@@ -292,6 +297,12 @@ void CrossPointWebServerActivity::loop() {
         if (rssi < -75) {
           LOG_DBG("WEBACT", "Warning: Weak WiFi signal: %d dBm", rssi);
         }
+      }
+
+      if (millis() - lastRssiUpdateTime > 5000) {  // Refresh signal indicator every 5 seconds
+        lastRssiUpdateTime = millis();
+        currentRssi = WiFi.RSSI();
+        requestUpdate();
       }
     }
 
@@ -366,6 +377,8 @@ void CrossPointWebServerActivity::render(RenderLock&&) {
   }
 }
 
+namespace {}  // namespace
+
 void CrossPointWebServerActivity::renderServerRunning() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect contentRect = UITheme::getContentRect(renderer, true, false);
@@ -412,6 +425,12 @@ void CrossPointWebServerActivity::renderServerRunning() const {
                       hostnameUrl.c_str());
     renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding + QR_CODE_WIDTH + metrics.verticalSpacing, startY + 100,
                       ipUrl.c_str());
+
+    const int signalHeight = 22;
+    const int signalWidth = contentRect.width - metrics.contentSidePadding * 2;
+    const int signalY = startY + 120;
+    drawWifiSignalStrength(renderer, contentRect.x + metrics.contentSidePadding, signalY, signalWidth, signalHeight, 0);
+    renderer.drawCenteredText(SMALL_FONT_ID, signalY + signalHeight + 2, tr(STR_HOTSPOT_MODE));
   } else {
     startY += metrics.verticalSpacing * 2;
 
@@ -435,8 +454,19 @@ void CrossPointWebServerActivity::renderServerRunning() const {
     // Also show hostname URL
     std::string hostnameUrl = std::string(tr(STR_OR_HTTP_PREFIX)) + AP_HOSTNAME + ".local/";
     renderer.drawCenteredText(SMALL_FONT_ID, startY, hostnameUrl.c_str(), true);
+
+    // AP mode: no external RSSI metric available, but keep UI spacing consistent.
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
+  if (!isApMode) {
+    const int signalHeight = 22;
+    const int signalWidth = contentRect.width - metrics.contentSidePadding * 2;
+    const int signalY = startY + height10 + metrics.verticalSpacing * 2;
+    drawWifiSignalStrength(renderer, contentRect.x + metrics.contentSidePadding, signalY, signalWidth, signalHeight,
+                           currentRssi);
+    renderer.drawCenteredText(SMALL_FONT_ID, signalY + signalHeight + 2, rssiLabel(currentRssi).c_str(), true);
+  }
+
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
