@@ -800,7 +800,8 @@ void LyraTheme::drawKeyboardKey(const GfxRenderer& renderer, Rect rect, const ch
                                 const char* secondaryLabel, const KeyboardKeyType keyType) const {
   if (isSelected) {
     renderer.fillRoundedRect(rect.x, rect.y, rect.width, rect.height, cornerRadius, Color::Black);
-  } else if (keyType == KeyboardKeyType::Shift || keyType == KeyboardKeyType::Mode || keyType == KeyboardKeyType::Del ||
+  } else if (keyType == KeyboardKeyType::Shift || keyType == KeyboardKeyType::Mode ||
+             keyType == KeyboardKeyType::Reveal || keyType == KeyboardKeyType::Del ||
              keyType == KeyboardKeyType::Space || keyType == KeyboardKeyType::Ok) {
     renderer.drawRoundedRect(rect.x, rect.y, rect.width, rect.height, 1, cornerRadius, true);
   }

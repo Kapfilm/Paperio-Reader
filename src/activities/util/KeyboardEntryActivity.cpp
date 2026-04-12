@@ -35,7 +35,8 @@ char KeyboardEntryActivity::getSelectedChar() const {
   if (selectedCol < 0 || selectedCol >= COLS) return '\0';
 
   const KeyDef& key = layout[selectedRow][selectedCol];
-  return (shiftState > 0 && key.secondary != '\0') ? key.secondary : key.primary;
+  const bool useSecondary = !symMode && shiftState > 0 && key.secondary != '\0';
+  return useSecondary ? key.secondary : key.primary;
 }
 
 char KeyboardEntryActivity::getAlternativeChar() const {

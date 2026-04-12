@@ -56,7 +56,6 @@ class KeyboardEntryActivity : public Activity {
   static constexpr int COLS = 10;
   static constexpr int ABC_ROWS = 4;
   static constexpr int SYM_ROWS = 4;
-  static constexpr int BOTTOM_KEY_COUNT = 5;
 
   static constexpr KeyDef abcLayout[ABC_ROWS][COLS] = {
       {{'0', ')'},
