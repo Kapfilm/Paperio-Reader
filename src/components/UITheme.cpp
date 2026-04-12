@@ -108,11 +108,9 @@ std::string UITheme::stripSeparatorTitle(const std::string& title) {
   return isSeparatorTitle(title) ? title.substr(2) : title;
 }
 
-std::function<bool(int)> UITheme::makeSelectablePredicate(int total,
-                                                          std::function<std::string(int)> titleGetter) {
-  return [total, titleGetter](int index) {
-    return index >= 0 && index < total && !isSeparatorTitle(titleGetter(index));
-  };
+std::function<bool(int)> UITheme::makeSelectablePredicate(int total, std::function<std::string(int)> titleGetter) {
+  return
+      [total, titleGetter](int index) { return index >= 0 && index < total && !isSeparatorTitle(titleGetter(index)); };
 }
 
 std::string UITheme::getCoverThumbPath(std::string coverBmpPath, int coverHeight) {

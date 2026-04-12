@@ -26,6 +26,15 @@
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
 
+std::string SettingInfo::getTitle() const {
+  const auto t = I18N.get(nameId);
+  return isSeparator ? UITheme::makeSeparatorTitle(t) : t;
+}
+
+bool SettingsActivity::isListItemSelectable(int settingIdx) const {
+  return settingIdx >= 0 && settingIdx < settingsCount && !(*currentSettings)[settingIdx].isSeparator;
+}
+
 void SettingsActivity::onEnter() {
   Activity::onEnter();
 
@@ -57,15 +66,23 @@ void SettingsActivity::onEnter() {
   // Append device-only ACTION items
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLOCK_SETTINGS, SettingAction::ClockSettings));
+
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
+  // Network section
+  systemSettings.push_back(SettingInfo::Separator(StrId::STR_MENU_SYS_NETWORK));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_BROWSER, SettingAction::OPDSBrowser));
+  // Tools section
+  systemSettings.push_back(SettingInfo::Separator(StrId::STR_MENU_SYS_TOOLS));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLOCK_SETTINGS, SettingAction::ClockSettings));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_WEATHER_SETTINGS, SettingAction::Weather));
+  // System section
+  systemSettings.push_back(SettingInfo::Separator(StrId::STR_MENU_SYS_SYSTEM));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SYSTEM_INFO, SettingAction::SystemInfo));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_WEATHER_SETTINGS, SettingAction::Weather));
+
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
 
   // Reset selection to first category
@@ -115,12 +132,14 @@ void SettingsActivity::loop() {
 
   // Handle navigation
   buttonNavigator.onNextRelease([this] {
-    selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
+    selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1,
+                                                      [this](int i) { return i == 0 || isListItemSelectable(i - 1); });
     requestUpdate();
   });
 
   buttonNavigator.onPreviousRelease([this] {
-    selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
+    selectedSettingIndex = ButtonNavigator::previousIndex(
+        selectedSettingIndex, settingsCount + 1, [this](int i) { return i == 0 || isListItemSelectable(i - 1); });
     requestUpdate();
   });
 
@@ -163,6 +182,7 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   const auto& setting = (*currentSettings)[selectedSetting];
+  if (setting.isSeparator) return;
 
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
     // Toggle the boolean value using the member pointer
@@ -258,8 +278,8 @@ void SettingsActivity::render(RenderLock&&) {
       Rect{contentRect.x, contentTop, contentRect.width,
            contentRect.height -
                (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing * 2)},
-      settingsCount, selectedSettingIndex - 1,
-      [&settings](int index) { return std::string(I18N.get(settings[index].nameId)); }, nullptr, nullptr,
+      settingsCount, selectedSettingIndex - 1, [&settings](int index) { return settings[index].getTitle(); }, nullptr,
+      nullptr,
       [&settings](int i) {
         const auto& setting = settings[i];
         std::string valueText = "";

@@ -67,8 +67,8 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
 
 void EpubReaderMenuActivity::onEnter() {
   Activity::onEnter();
-  const auto pred = UITheme::makeSelectablePredicate(
-      static_cast<int>(menuItems.size()), [this](int i) { return menuItems[i].getTitle(); });
+  const auto pred = UITheme::makeSelectablePredicate(static_cast<int>(menuItems.size()),
+                                                     [this](int i) { return menuItems[i].getTitle(); });
   buttonNavigator.setSelectablePredicate(pred, static_cast<int>(menuItems.size()));
   if (!pred(selectedIndex)) {
     selectedIndex = buttonNavigator.nextIndex(selectedIndex);
@@ -187,9 +187,7 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
 
   GUI.drawList(
       renderer, Rect{contentRect.x, startY, contentRect.width, listHeight}, static_cast<int>(menuItems.size()),
-      selectedIndex,
-      [this](int index) { return menuItems[index].getTitle(); },
-      nullptr, nullptr,
+      selectedIndex, [this](int index) { return menuItems[index].getTitle(); }, nullptr, nullptr,
       [this](int index) {
         const auto& item = menuItems[index];
         switch (item.action) {

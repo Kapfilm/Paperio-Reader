@@ -142,6 +142,17 @@ struct SettingInfo {
     s.category = category;
     return s;
   }
+
+  static SettingInfo Separator(StrId nameId) {
+    SettingInfo s;
+    s.nameId = nameId;
+    s.type = SettingType::ACTION;
+    s.isSeparator = true;
+    return s;
+  }
+
+  bool isSeparator = false;
+  [[nodiscard]] std::string getTitle() const;
 };
 
 class SettingsActivity final : public Activity {
@@ -163,6 +174,7 @@ class SettingsActivity final : public Activity {
 
   void enterCategory(int categoryIndex);
   void toggleCurrentSetting();
+  [[nodiscard]] bool isListItemSelectable(int settingIdx) const;
 
  public:
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

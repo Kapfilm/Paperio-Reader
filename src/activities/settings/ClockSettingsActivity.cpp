@@ -42,8 +42,8 @@ std::vector<ClockSettingsActivity::MenuItem> ClockSettingsActivity::buildMenuIte
 
 void ClockSettingsActivity::onEnter() {
   Activity::onEnter();
-  const auto pred = UITheme::makeSelectablePredicate(
-      static_cast<int>(menuItems.size()), [this](int i) { return menuItems[i].getTitle(); });
+  const auto pred = UITheme::makeSelectablePredicate(static_cast<int>(menuItems.size()),
+                                                     [this](int i) { return menuItems[i].getTitle(); });
   buttonNavigator.setSelectablePredicate(pred, static_cast<int>(menuItems.size()));
   if (!pred(selectedIndex)) {
     selectedIndex = buttonNavigator.nextIndex(selectedIndex);
@@ -126,8 +126,7 @@ void ClockSettingsActivity::render(RenderLock&&) {
 
   GUI.drawList(
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(menuItems.size()), selectedIndex,
-      [this](int index) { return menuItems[index].getTitle(); },
-      nullptr, nullptr,
+      [this](int index) { return menuItems[index].getTitle(); }, nullptr, nullptr,
       [this](int index) {
         const auto action = menuItems[index].action;
         switch (action) {
