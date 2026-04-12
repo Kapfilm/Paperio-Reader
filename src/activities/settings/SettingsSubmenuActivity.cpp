@@ -69,7 +69,7 @@ void SettingsSubmenuActivity::toggleItem() {
   if (setting.isSeparator) return;
 
   if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
-    SETTINGS.*(setting.valuePtr) = !SETTINGS.*(setting.valuePtr);
+    SETTINGS.*(setting.valuePtr) = !(SETTINGS.*(setting.valuePtr));
   } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
     const uint8_t cur = SETTINGS.*(setting.valuePtr);
     SETTINGS.*(setting.valuePtr) = (cur + 1) % static_cast<uint8_t>(setting.enumValues.size());
