@@ -38,11 +38,26 @@ bool SettingsActivity::isListItemSelectable(int settingIdx) const {
 void SettingsActivity::onEnter() {
   Activity::onEnter();
 
-  // Build per-category vectors from the shared settings list
+  // Build per-category vectors from the shared settings list.
+  // addTo tracks the last subcategory per vector and automatically inserts a separator
+  // row whenever a setting carries a new subcategory label.
   displaySettings.clear();
   readerSettings.clear();
   controlsSettings.clear();
   systemSettings.clear();
+
+  StrId lastDisplaySub = StrId::STR_NONE_OPT;
+  StrId lastReaderSub = StrId::STR_NONE_OPT;
+  StrId lastControlsSub = StrId::STR_NONE_OPT;
+  StrId lastSystemSub = StrId::STR_NONE_OPT;
+
+  auto addTo = [](std::vector<SettingInfo>& vec, StrId& lastSub, SettingInfo s) {
+    if (s.subcategory != StrId::STR_NONE_OPT && s.subcategory != lastSub) {
+      vec.push_back(SettingInfo::Separator(s.subcategory));
+      lastSub = s.subcategory;
+    }
+    vec.push_back(std::move(s));
+  };
 
   for (const auto& setting : getSettingsList()) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
@@ -52,38 +67,49 @@ void SettingsActivity::onEnter() {
       continue;
     }
     if (setting.category == StrId::STR_CAT_DISPLAY) {
-      displaySettings.push_back(setting);
+      addTo(displaySettings, lastDisplaySub, setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
-      readerSettings.push_back(setting);
+      addTo(readerSettings, lastReaderSub, setting);
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
-      controlsSettings.push_back(setting);
+      addTo(controlsSettings, lastControlsSub, setting);
     } else if (setting.category == StrId::STR_CAT_SYSTEM) {
-      systemSettings.push_back(setting);
+      addTo(systemSettings, lastSystemSub, setting);
     }
     // Web-only categories (KOReader Sync, OPDS Browser) are skipped for device UI
   }
 
-  // Append device-only ACTION items
+  // Device-only ACTION items — subcategory drives separator insertion automatically.
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
 
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-  // Network section
-  systemSettings.push_back(SettingInfo::Separator(StrId::STR_MENU_SYS_NETWORK));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_BROWSER, SettingAction::OPDSBrowser));
-  // Tools section
-  systemSettings.push_back(SettingInfo::Separator(StrId::STR_MENU_SYS_TOOLS));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLOCK_SETTINGS, SettingAction::ClockSettings));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_WEATHER_SETTINGS, SettingAction::Weather));
-  // System section
-  systemSettings.push_back(SettingInfo::Separator(StrId::STR_MENU_SYS_SYSTEM));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_SYSTEM_INFO, SettingAction::SystemInfo));
+  addTo(readerSettings, lastReaderSub,
+        SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
 
-  readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  addTo(systemSettings, lastSystemSub, SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
+  addTo(systemSettings, lastSystemSub,
+        SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network)
+            .withSubcategory(StrId::STR_MENU_SYS_NETWORK));
+  addTo(systemSettings, lastSystemSub,
+        SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync)
+            .withSubcategory(StrId::STR_MENU_SYS_NETWORK));
+  addTo(systemSettings, lastSystemSub,
+        SettingInfo::Action(StrId::STR_OPDS_BROWSER, SettingAction::OPDSBrowser)
+            .withSubcategory(StrId::STR_MENU_SYS_NETWORK));
+  addTo(systemSettings, lastSystemSub,
+        SettingInfo::Action(StrId::STR_CLOCK_SETTINGS, SettingAction::ClockSettings)
+            .withSubcategory(StrId::STR_MENU_SYS_TOOLS));
+  addTo(systemSettings, lastSystemSub,
+        SettingInfo::Action(StrId::STR_WEATHER_SETTINGS, SettingAction::Weather)
+            .withSubcategory(StrId::STR_MENU_SYS_TOOLS));
+  addTo(systemSettings, lastSystemSub,
+        SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache)
+            .withSubcategory(StrId::STR_MENU_SYS_SYSTEM));
+  addTo(systemSettings, lastSystemSub,
+        SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates)
+            .withSubcategory(StrId::STR_MENU_SYS_SYSTEM));
+  addTo(systemSettings, lastSystemSub,
+        SettingInfo::Action(StrId::STR_SYSTEM_INFO, SettingAction::SystemInfo)
+            .withSubcategory(StrId::STR_MENU_SYS_SYSTEM));
 
   // Reset selection to first category
   selectedCategoryIndex = 0;

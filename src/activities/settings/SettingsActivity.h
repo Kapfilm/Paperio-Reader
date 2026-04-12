@@ -152,7 +152,13 @@ struct SettingInfo {
   }
 
   bool isSeparator = false;
+  StrId subcategory = StrId::STR_NONE_OPT;
   [[nodiscard]] std::string getTitle() const;
+
+  SettingInfo& withSubcategory(StrId sub) {
+    subcategory = sub;
+    return *this;
+  }
 };
 
 class SettingsActivity final : public Activity {

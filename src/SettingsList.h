@@ -9,15 +9,30 @@
 #include "activities/settings/SettingsActivity.h"
 
 // Shared settings list used by both the device settings UI and the web settings API.
-// Each entry has a key (for JSON API) and category (for grouping).
-// ACTION-type entries and entries without a key are device-only.
+//
+// Fields that drive UI behaviour:
+//   category    — which tab the setting appears under (STR_CAT_DISPLAY, STR_CAT_READER, …).
+//                 Entries with STR_NONE_OPT or web-only categories are skipped by the device UI.
+//   subcategory — optional section heading within a tab.  Items remain in their defined order;
+//                 no reordering or grouping occurs.  When an item's subcategory differs from the
+//                 previous item's, SettingsActivity::onEnter() automatically inserts a separator
+//                 row before it.  Add with .withSubcategory(StrId::STR_MY_SECTION).
+//                 Items without a subcategory (STR_NONE_OPT) never trigger a separator.
+//   key         — JSON property name used by the web settings API (nullptr = device-only).
+//
+// ACTION-type entries and entries without a key are device-only and are added directly
+// in SettingsActivity::onEnter(), not here.
 inline const std::vector<SettingInfo>& getSettingsList() {
   static const std::vector<SettingInfo> list = {
       // --- Display ---
+      SettingInfo::Enum(StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeout,
+                        {StrId::STR_MIN_1, StrId::STR_MIN_5, StrId::STR_MIN_10, StrId::STR_MIN_15, StrId::STR_MIN_30},
+                        "sleepTimeout", StrId::STR_CAT_DISPLAY),
       SettingInfo::Enum(StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen,
                         {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER, StrId::STR_NONE_OPT,
                          StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY},
-                        "sleepScreen", StrId::STR_CAT_DISPLAY),
+                        "sleepScreen", StrId::STR_CAT_DISPLAY)
+          .withSubcategory(StrId::STR_MENU_DISP_SLEEP),
       SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
                         {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode", StrId::STR_CAT_DISPLAY),
       SettingInfo::Enum(StrId::STR_SLEEP_COVER_FILTER, &CrossPointSettings::sleepScreenCoverFilter,
@@ -31,16 +46,18 @@ inline const std::vector<SettingInfo>& getSettingsList() {
                         {StrId::STR_RANDOM, StrId::STR_SEQUENTIAL}, "sleepImagePickMode", StrId::STR_CAT_DISPLAY),
       SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &CrossPointSettings::hideBatteryPercentage,
                         {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
-                        StrId::STR_CAT_DISPLAY),
+                        StrId::STR_CAT_DISPLAY)
+          .withSubcategory(StrId::STR_MENU_DISP_BATTERY),
       SettingInfo::Enum(
           StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
           {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30},
-          "refreshFrequency", StrId::STR_CAT_DISPLAY),
+          "refreshFrequency", StrId::STR_CAT_DISPLAY)
+          .withSubcategory(StrId::STR_MENU_DISP_REFRESH),
+      SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
+                          StrId::STR_CAT_DISPLAY),
       SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
                         {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED}, "uiTheme",
                         StrId::STR_CAT_DISPLAY),
-      SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
-                          StrId::STR_CAT_DISPLAY),
 
       // --- Reader ---
       SettingInfo::Enum(StrId::STR_FONT_FAMILY, &CrossPointSettings::fontFamily,
@@ -74,12 +91,6 @@ inline const std::vector<SettingInfo>& getSettingsList() {
       SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                         {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                         "imageRendering", StrId::STR_CAT_READER),
-#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
-      SettingInfo::Enum(
-          StrId::STR_IMAGE_DITHERING, &CrossPointSettings::imageDithering,
-          {StrId::STR_IMAGE_DITHER_BAYER, StrId::STR_IMAGE_DITHER_ATKINSON, StrId::STR_IMAGE_DITHER_DIFFUSED_BAYER},
-          "imageDithering", StrId::STR_CAT_READER),
-#endif
       SettingInfo::Toggle(StrId::STR_CREATE_FALLBACK_FOR_INVALID_TOC, &CrossPointSettings::syntheticTocFallback,
                           "syntheticTocFallback", StrId::STR_CAT_READER),
       // --- Controls ---
@@ -92,9 +103,6 @@ inline const std::vector<SettingInfo>& getSettingsList() {
                         StrId::STR_CAT_CONTROLS),
 
       // --- System ---
-      SettingInfo::Enum(StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeout,
-                        {StrId::STR_MIN_1, StrId::STR_MIN_5, StrId::STR_MIN_10, StrId::STR_MIN_15, StrId::STR_MIN_30},
-                        "sleepTimeout", StrId::STR_CAT_SYSTEM),
       SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
                           StrId::STR_CAT_SYSTEM),
       SettingInfo::Toggle(StrId::STR_SHOW_FILE_EXTENSIONS, &CrossPointSettings::showFileExtensions,
