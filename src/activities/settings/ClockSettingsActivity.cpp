@@ -19,6 +19,11 @@ const StrId timeZoneNames[CrossPointSettings::TIMEZONE_COUNT] = {
     StrId::STR_TZ_EST,       StrId::STR_TZ_CST,  StrId::STR_TZ_MST,       StrId::STR_TZ_PST};
 }  // namespace
 
+std::string ClockSettingsActivity::MenuItem::getTitle() const {
+  const auto t = I18N.get(labelId);
+  return isSeparator ? UITheme::makeSeparatorTitle(t) : t;
+}
+
 std::vector<ClockSettingsActivity::MenuItem> ClockSettingsActivity::buildMenuItems() {
   std::vector<MenuItem> items;
   items.reserve(7);
@@ -38,10 +43,7 @@ std::vector<ClockSettingsActivity::MenuItem> ClockSettingsActivity::buildMenuIte
 void ClockSettingsActivity::onEnter() {
   Activity::onEnter();
   const auto pred = UITheme::makeSelectablePredicate(
-      static_cast<int>(menuItems.size()), [this](int i) {
-        const auto t = I18N.get(menuItems[i].labelId);
-        return menuItems[i].isSeparator ? UITheme::makeSeparatorTitle(t) : t;
-      });
+      static_cast<int>(menuItems.size()), [this](int i) { return menuItems[i].getTitle(); });
   buttonNavigator.setSelectablePredicate(pred, static_cast<int>(menuItems.size()));
   if (!pred(selectedIndex)) {
     selectedIndex = buttonNavigator.nextIndex(selectedIndex);
@@ -124,10 +126,7 @@ void ClockSettingsActivity::render(RenderLock&&) {
 
   GUI.drawList(
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(menuItems.size()), selectedIndex,
-      [this](int index) {
-        const auto title = I18N.get(menuItems[index].labelId);
-        return menuItems[index].isSeparator ? UITheme::makeSeparatorTitle(title) : title;
-      },
+      [this](int index) { return menuItems[index].getTitle(); },
       nullptr, nullptr,
       [this](int index) {
         const auto action = menuItems[index].action;

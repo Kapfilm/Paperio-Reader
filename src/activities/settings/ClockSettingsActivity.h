@@ -15,6 +15,7 @@ class ClockSettingsActivity final : public Activity {
     StrId labelId;
     bool isSeparator = false;
     static MenuItem separator(StrId label) { return {Action::NONE, label, true}; }
+    [[nodiscard]] std::string getTitle() const;
   };
 
   ButtonNavigator buttonNavigator;

@@ -46,6 +46,7 @@ class EpubReaderMenuActivity final : public Activity {
     StrId labelId;
     bool isSeparator = false;
     static MenuItem separator(StrId label) { return {MenuAction::NONE, label, true}; }
+    [[nodiscard]] std::string getTitle() const;
   };
 
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes);

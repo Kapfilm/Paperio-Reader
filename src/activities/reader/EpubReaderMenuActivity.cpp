@@ -25,6 +25,11 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {}
 
+std::string EpubReaderMenuActivity::MenuItem::getTitle() const {
+  const auto t = I18N.get(labelId);
+  return isSeparator ? UITheme::makeSeparatorTitle(t) : t;
+}
+
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes) {
   std::vector<MenuItem> items;
   items.reserve(18);
@@ -63,11 +68,7 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
 void EpubReaderMenuActivity::onEnter() {
   Activity::onEnter();
   const auto pred = UITheme::makeSelectablePredicate(
-      static_cast<int>(menuItems.size()), [this](int i) {
-        const auto& item = menuItems[i];
-        const auto t = I18N.get(item.labelId);
-        return item.isSeparator ? UITheme::makeSeparatorTitle(t) : t;
-      });
+      static_cast<int>(menuItems.size()), [this](int i) { return menuItems[i].getTitle(); });
   buttonNavigator.setSelectablePredicate(pred, static_cast<int>(menuItems.size()));
   if (!pred(selectedIndex)) {
     selectedIndex = buttonNavigator.nextIndex(selectedIndex);
@@ -187,11 +188,7 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   GUI.drawList(
       renderer, Rect{contentRect.x, startY, contentRect.width, listHeight}, static_cast<int>(menuItems.size()),
       selectedIndex,
-      [this](int index) {
-        const auto& item = menuItems[index];
-        const auto title = I18N.get(item.labelId);
-        return item.isSeparator ? UITheme::makeSeparatorTitle(title) : title;
-      },
+      [this](int index) { return menuItems[index].getTitle(); },
       nullptr, nullptr,
       [this](int index) {
         const auto& item = menuItems[index];
