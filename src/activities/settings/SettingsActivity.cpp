@@ -4,33 +4,16 @@
 #include <HalClock.h>
 #include <Logging.h>
 
-#include "ButtonRemapActivity.h"
-#include "CalibreSettingsActivity.h"
-#include "ClearCacheActivity.h"
-#include "ClockSettingsActivity.h"
 #include "CrossPointSettings.h"
-#include "DetectTimezoneActivity.h"
-#include "KOReaderSettingsActivity.h"
-#include "LanguageSelectActivity.h"
 #include "MappedInputManager.h"
-#include "OtaUpdateActivity.h"
+#include "SettingActionDispatch.h"
 #include "SettingsList.h"
 #include "SettingsSubmenuActivity.h"
-#include "StatusBarSettingsActivity.h"
-#include "SyncTimeActivity.h"
-#include "SystemInformationActivity.h"
-#include "activities/network/WifiSelectionActivity.h"
-#include "activities/weather/WeatherSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
-
-std::string SettingInfo::getTitle() const {
-  const auto t = I18N.get(nameId);
-  return isSeparator ? UITheme::makeSeparatorTitle(t) : t;
-}
 
 bool SettingsActivity::isListItemSelectable(int settingIdx) const {
   return settingIdx >= 0 && settingIdx < settingsCount && !(*currentSettings)[settingIdx].isSeparator;
@@ -225,82 +208,24 @@ void SettingsActivity::toggleCurrentSetting() {
   const auto& setting = (*currentSettings)[selectedSetting];
   if (setting.isSeparator) return;
 
-  if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
-    // Toggle the boolean value using the member pointer
-    const bool currentValue = SETTINGS.*(setting.valuePtr);
-    SETTINGS.*(setting.valuePtr) = !currentValue;
-  } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-    const uint8_t currentValue = SETTINGS.*(setting.valuePtr);
-    SETTINGS.*(setting.valuePtr) = (currentValue + 1) % static_cast<uint8_t>(setting.enumValues.size());
-  } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
-    const int8_t currentValue = SETTINGS.*(setting.valuePtr);
-    if (currentValue + setting.valueRange.step > setting.valueRange.max) {
-      SETTINGS.*(setting.valuePtr) = setting.valueRange.min;
-    } else {
-      SETTINGS.*(setting.valuePtr) = currentValue + setting.valueRange.step;
-    }
-  } else if (setting.type == SettingType::ACTION) {
+  if (setting.type == SettingType::ACTION) {
     auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
 
-    switch (setting.action) {
-      case SettingAction::RemapFrontButtons:
-        startActivityForResult(std::make_unique<ButtonRemapActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::CustomiseStatusBar:
-        startActivityForResult(std::make_unique<StatusBarSettingsActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::ClockSettings:
-        startActivityForResult(std::make_unique<ClockSettingsActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::KOReaderSync:
-        startActivityForResult(std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::OPDSBrowser:
-        startActivityForResult(std::make_unique<CalibreSettingsActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::Network:
-        startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false), resultHandler);
-        break;
-      case SettingAction::ClearCache:
-        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::CheckForUpdates:
-        startActivityForResult(std::make_unique<OtaUpdateActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::Language:
-        startActivityForResult(std::make_unique<LanguageSelectActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::Weather:
-        startActivityForResult(std::make_unique<WeatherSettingsActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::SystemInfo:
-        startActivityForResult(std::make_unique<SystemInformationActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::SyncTime:
-        startActivityForResult(std::make_unique<SyncTimeActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::DetectTimezone:
-        startActivityForResult(std::make_unique<DetectTimezoneActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::Submenu: {
-        const auto it = std::find_if(submenuData.cbegin(), submenuData.cend(),
-                                     [&setting](const SubmenuData& d) { return d.id == setting.nameId; });
-        if (it != submenuData.cend()) {
-          startActivityForResult(
-              std::make_unique<SettingsSubmenuActivity>(renderer, mappedInput, setting.nameId, it->items),
-              resultHandler);
-        }
-        break;
+    if (setting.action == SettingAction::Submenu) {
+      const auto it = std::find_if(submenuData.cbegin(), submenuData.cend(),
+                                   [&setting](const SubmenuData& d) { return d.id == setting.nameId; });
+      if (it != submenuData.cend()) {
+        startActivityForResult(
+            std::make_unique<SettingsSubmenuActivity>(renderer, mappedInput, setting.nameId, it->items), resultHandler);
       }
-      case SettingAction::None:
-        // Do nothing
-        break;
+    } else {
+      auto activity = createActivityForAction(setting.action, renderer, mappedInput);
+      if (activity) startActivityForResult(std::move(activity), resultHandler);
     }
-    return;  // Results will be handled in the result handler, so we can return early here
-  } else {
     return;
   }
 
+  setting.toggleValue();
   SETTINGS.saveToFile();
 }
 
@@ -331,24 +256,7 @@ void SettingsActivity::render(RenderLock&&) {
                (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing * 2)},
       settingsCount, selectedSettingIndex - 1, [&settings](int index) { return settings[index].getTitle(); }, nullptr,
       nullptr,
-      [&settings](int i) {
-        const auto& setting = settings[i];
-        if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
-          const bool value = SETTINGS.*(setting.valuePtr);
-          return std::string(value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF));
-        }
-        if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-          const uint8_t value = SETTINGS.*(setting.valuePtr);
-          return std::string(I18N.get(setting.enumValues[value]));
-        }
-        if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
-          return std::to_string(SETTINGS.*(setting.valuePtr));
-        }
-        if (setting.type == SettingType::ACTION && !setting.isSeparator) {
-          return std::string(">>");
-        }
-        return std::string();
-      },
+      [&settings](int i) { return settings[i].getDisplayValue(); },
       true);
 
   // Draw help text

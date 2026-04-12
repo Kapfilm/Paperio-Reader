@@ -31,15 +31,14 @@ class UITheme {
   // navigation. Pass the same title getter you pass to drawList so rendering and navigation
   // always agree on which items are separators.
   //
-  // Typical usage pattern for a menu with section headers:
+  // Preferred approach: derive from MenuListActivity (see MenuListActivity.h) which handles
+  // separator skipping, navigation, and drawList automatically via SettingInfo items.
   //
-  //   struct MenuItem {
-  //     Action action; StrId labelId; bool isSeparator = false;
-  //     static MenuItem separator(StrId label) { return {Action::NONE, label, true}; }
-  //     std::string getTitle() const;  // implemented in .cpp: makeSeparatorTitle when isSeparator
-  //   };
-  //   const std::vector<MenuItem> items = buildMenuItems();
-  //   // In buildMenuItems, use MenuItem::separator(StrId) for section headers.
+  // Manual usage (for activities that don't derive from MenuListActivity):
+  //
+  //   std::vector<SettingInfo> items;
+  //   items.push_back(SettingInfo::Separator(StrId::STR_MY_SECTION));
+  //   items.push_back(SettingInfo::Toggle(StrId::STR_MY_TOGGLE, &CrossPointSettings::myFlag));
   //
   //   // onEnter: wire navigation so separators are skipped:
   //   const auto pred = UITheme::makeSelectablePredicate(items.size(),
@@ -48,7 +47,9 @@ class UITheme {
   //
   //   // render: pass the same getter to drawList; separator rows are drawn automatically:
   //   GUI.drawList(renderer, rect, items.size(), selectedIndex,
-  //       [this](int i) { return items[i].getTitle(); }, ...);
+  //       [this](int i) { return items[i].getTitle(); },
+  //       nullptr, nullptr,
+  //       [this](int i) { return items[i].getDisplayValue(); }, true);
   static std::function<bool(int)> makeSelectablePredicate(int total, std::function<std::string(int)> titleGetter);
 
   // Returns the drawable content Rect accounting for screen orientation and visible button hints.
