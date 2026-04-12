@@ -62,7 +62,7 @@ void MenuListActivity::loop() {
     onBackPressed();
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     toggleCurrentItem();
     return;
   }
