@@ -73,7 +73,7 @@ void KOReaderSettingsActivity::onActionSelected(int index) {
                            });
   } else if (item.nameId == StrId::STR_PASSWORD) {
     startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_KOREADER_PASSWORD),
-                                                                   KOREADER_STORE.getPassword(), 64, false),
+                                                                   KOREADER_STORE.getPassword(), 64, true),
                            [this](const ActivityResult& result) {
                              if (!result.isCancelled) {
                                const auto& kb = std::get<KeyboardResult>(result.data);
