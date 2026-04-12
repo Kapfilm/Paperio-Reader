@@ -14,7 +14,7 @@ struct KeyDef {
   char secondary;
 };
 
-enum SpecialKeyType { SpecShift, SpecMode, SpecSpace, SpecDel, SpecOk };
+enum SpecialKeyType { SpecShift, SpecMode, SpecReveal, SpecSpace, SpecDel, SpecOk };
 
 class KeyboardEntryActivity : public Activity {
  public:
@@ -37,6 +37,7 @@ class KeyboardEntryActivity : public Activity {
   std::string text;
   size_t maxLength;
   bool isPassword;
+  bool passwordVisible = false;
 
   ButtonNavigator buttonNavigator;
 
@@ -147,6 +148,8 @@ class KeyboardEntryActivity : public Activity {
 
   int getContentRowCount() const;
   int getTotalRowCount() const;
+  int getBottomKeyCount() const;
+  SpecialKeyType getBottomSpecialKey(int index) const;
   bool isBottomRow(int row) const;
   char getSelectedChar() const;
   char getAlternativeChar() const;

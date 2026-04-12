@@ -2,6 +2,8 @@
 
 #include <I18n.h>
 
+#include <vector>
+
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -18,6 +20,8 @@ void KeyboardEntryActivity::onExit() { Activity::onExit(); }
 int KeyboardEntryActivity::getContentRowCount() const { return ABC_ROWS; }
 
 int KeyboardEntryActivity::getTotalRowCount() const { return getContentRowCount() + 1; }
+
+int KeyboardEntryActivity::getBottomKeyCount() const { return isPassword ? 6 : 5; }
 
 bool KeyboardEntryActivity::isBottomRow(const int row) const { return row == getContentRowCount(); }
 
@@ -54,9 +58,43 @@ bool KeyboardEntryActivity::insertChar(char c) {
   return true;
 }
 
+SpecialKeyType KeyboardEntryActivity::getBottomSpecialKey(int index) const {
+  if (isPassword) {
+    switch (index) {
+      case 0:
+        return SpecShift;
+      case 1:
+        return SpecMode;
+      case 2:
+        return SpecReveal;
+      case 3:
+        return SpecSpace;
+      case 4:
+        return SpecDel;
+      case 5:
+      default:
+        return SpecOk;
+    }
+  }
+
+  switch (index) {
+    case 0:
+      return SpecShift;
+    case 1:
+      return SpecMode;
+    case 2:
+      return SpecSpace;
+    case 3:
+      return SpecDel;
+    case 4:
+    default:
+      return SpecOk;
+  }
+}
+
 bool KeyboardEntryActivity::handleKeyPress() {
   if (isBottomRow(selectedRow)) {
-    switch (static_cast<SpecialKeyType>(selectedCol)) {
+    switch (getBottomSpecialKey(selectedCol)) {
       case SpecShift:
         if (symMode) return true;
         shiftState = (shiftState + 1) % 2;
@@ -66,12 +104,16 @@ bool KeyboardEntryActivity::handleKeyPress() {
         int maxRow = getTotalRowCount() - 1;
         if (selectedRow > maxRow) selectedRow = maxRow;
         if (isBottomRow(selectedRow)) {
-          if (selectedCol >= BOTTOM_KEY_COUNT) selectedCol = BOTTOM_KEY_COUNT - 1;
+          int bottomCount = getBottomKeyCount();
+          if (selectedCol >= bottomCount) selectedCol = bottomCount - 1;
         } else {
           if (selectedCol >= COLS) selectedCol = COLS - 1;
         }
         return true;
       }
+      case SpecReveal:
+        passwordVisible = !passwordVisible;
+        return true;
       case SpecSpace:
         return insertChar(' ');
       case SpecDel:
@@ -97,11 +139,11 @@ void KeyboardEntryActivity::loop() {
     bool wasBottom = isBottomRow(selectedRow);
     selectedRow = ButtonNavigator::previousIndex(selectedRow, totalRows);
     if (wasBottom && !isBottomRow(selectedRow)) {
-      selectedCol = selectedCol * 2;
+      selectedCol = selectedCol * COLS / getBottomKeyCount();
     } else if (!wasBottom && isBottomRow(selectedRow)) {
-      selectedCol = selectedCol / 2;
+      selectedCol = selectedCol * getBottomKeyCount() / COLS;
     }
-    int maxCol = isBottomRow(selectedRow) ? BOTTOM_KEY_COUNT - 1 : COLS - 1;
+    int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
     if (selectedCol > maxCol) selectedCol = maxCol;
     requestUpdate();
   });
@@ -110,23 +152,23 @@ void KeyboardEntryActivity::loop() {
     bool wasBottom = isBottomRow(selectedRow);
     selectedRow = ButtonNavigator::nextIndex(selectedRow, totalRows);
     if (wasBottom && !isBottomRow(selectedRow)) {
-      selectedCol = selectedCol * 2;
+      selectedCol = selectedCol * COLS / getBottomKeyCount();
     } else if (!wasBottom && isBottomRow(selectedRow)) {
-      selectedCol = selectedCol / 2;
+      selectedCol = selectedCol * getBottomKeyCount() / COLS;
     }
-    int maxCol = isBottomRow(selectedRow) ? BOTTOM_KEY_COUNT - 1 : COLS - 1;
+    int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
     if (selectedCol > maxCol) selectedCol = maxCol;
     requestUpdate();
   });
 
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] {
-    int maxCol = isBottomRow(selectedRow) ? BOTTOM_KEY_COUNT - 1 : COLS - 1;
+    int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
     selectedCol = ButtonNavigator::previousIndex(selectedCol, maxCol + 1);
     requestUpdate();
   });
 
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] {
-    int maxCol = isBottomRow(selectedRow) ? BOTTOM_KEY_COUNT - 1 : COLS - 1;
+    int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
     selectedCol = ButtonNavigator::nextIndex(selectedCol, maxCol + 1);
     requestUpdate();
   });
@@ -178,7 +220,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   int inputHeight = 0;
 
   std::string displayText;
-  if (isPassword) {
+  if (isPassword && !passwordVisible) {
     displayText = std::string(text.length(), '*');
   } else {
     displayText = text;
@@ -255,22 +297,27 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   const int bottomRowY = keyboardStartY + contentRows * (keyHeight + keySpacing) + bottomRowGap;
   const int bkSpacing = metrics.keyboardBottomKeySpacing;
   const int contentTotalWidth = COLS * keyWidth + (COLS - 1) * keySpacing;
-  const int bottomKeyWidth = (contentTotalWidth - (BOTTOM_KEY_COUNT - 1) * bkSpacing) / BOTTOM_KEY_COUNT;
+  const int bottomKeyCount = getBottomKeyCount();
+  const int bottomKeyWidth = (contentTotalWidth - (bottomKeyCount - 1) * bkSpacing) / bottomKeyCount;
   const bool bottomSelected = isBottomRow(selectedRow);
 
   struct BottomKeyInfo {
     KeyboardKeyType themeType;
     const char* label;
   };
-  const BottomKeyInfo bottomKeys[BOTTOM_KEY_COUNT] = {
-      {KeyboardKeyType::Shift, symMode ? shiftString[0] : shiftString[shiftState]},
-      {KeyboardKeyType::Mode, symMode ? "abc" : "#@!"},
-      {KeyboardKeyType::Space, nullptr},
-      {KeyboardKeyType::Del, nullptr},
-      {KeyboardKeyType::Ok, tr(STR_OK_BUTTON)},
-  };
 
-  for (int i = 0; i < BOTTOM_KEY_COUNT; i++) {
+  std::vector<BottomKeyInfo> bottomKeys;
+  bottomKeys.reserve(6);
+  bottomKeys.push_back({KeyboardKeyType::Shift, symMode ? shiftString[0] : shiftString[shiftState]});
+  bottomKeys.push_back({KeyboardKeyType::Mode, symMode ? "abc" : "#@!"});
+  if (isPassword) {
+    bottomKeys.push_back({KeyboardKeyType::Normal, passwordVisible ? tr(STR_HIDE) : tr(STR_SHOW)});
+  }
+  bottomKeys.push_back({KeyboardKeyType::Space, nullptr});
+  bottomKeys.push_back({KeyboardKeyType::Del, nullptr});
+  bottomKeys.push_back({KeyboardKeyType::Ok, tr(STR_OK_BUTTON)});
+
+  for (int i = 0; i < bottomKeyCount; i++) {
     const int keyX = leftMargin + i * (bottomKeyWidth + bkSpacing);
     const bool isSelected = bottomSelected && i == selectedCol;
 
