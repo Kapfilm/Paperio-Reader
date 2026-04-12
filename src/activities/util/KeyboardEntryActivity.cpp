@@ -23,7 +23,10 @@ int KeyboardEntryActivity::getBottomKeyCount() const { return isPassword ? 6 : 5
 
 bool KeyboardEntryActivity::isBottomRow(const int row) const { return row == getContentRowCount(); }
 
-const char* KeyboardEntryActivity::getShiftLabel() const { return tr(shiftState > 0 ? STR_SHIFT_CAPS : STR_SHIFT); }
+const char* KeyboardEntryActivity::getShiftLabel() const {
+  const StrId labelId = shiftState > 0 ? StrId::STR_SHIFT_CAPS : StrId::STR_SHIFT;
+  return I18n::getInstance().get(labelId);
+}
 
 char KeyboardEntryActivity::getSelectedChar() const {
   const KeyDef(*layout)[COLS] = symMode ? symLayout : abcLayout;
