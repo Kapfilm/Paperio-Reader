@@ -144,7 +144,7 @@ class KeyboardEntryActivity : public Activity {
        {'`', '\0'}},
   };
 
-  static const char* const shiftString[2];
+  const char* getShiftLabel() const;
 
   int getContentRowCount() const;
   int getTotalRowCount() const;

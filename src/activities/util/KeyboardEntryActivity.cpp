@@ -8,8 +8,6 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-const char* const KeyboardEntryActivity::shiftString[2] = {"shift", "SHIFT"};
-
 void KeyboardEntryActivity::onEnter() {
   Activity::onEnter();
   requestUpdate();
@@ -24,6 +22,8 @@ int KeyboardEntryActivity::getTotalRowCount() const { return getContentRowCount(
 int KeyboardEntryActivity::getBottomKeyCount() const { return isPassword ? 6 : 5; }
 
 bool KeyboardEntryActivity::isBottomRow(const int row) const { return row == getContentRowCount(); }
+
+const char* KeyboardEntryActivity::getShiftLabel() const { return tr(shiftState > 0 ? STR_SHIFT_CAPS : STR_SHIFT); }
 
 char KeyboardEntryActivity::getSelectedChar() const {
   const KeyDef(*layout)[COLS] = symMode ? symLayout : abcLayout;
@@ -308,8 +308,8 @@ void KeyboardEntryActivity::render(RenderLock&&) {
 
   std::vector<BottomKeyInfo> bottomKeys;
   bottomKeys.reserve(6);
-  bottomKeys.push_back({KeyboardKeyType::Shift, symMode ? shiftString[0] : shiftString[shiftState]});
-  bottomKeys.push_back({KeyboardKeyType::Mode, symMode ? "abc" : "#@!"});
+  bottomKeys.push_back({KeyboardKeyType::Shift, getShiftLabel()});
+  bottomKeys.push_back({KeyboardKeyType::Mode, symMode ? tr(STR_ABC) : "#@!"});
   if (isPassword) {
     bottomKeys.push_back({KeyboardKeyType::Reveal, passwordVisible ? tr(STR_HIDE) : tr(STR_SHOW)});
   }

@@ -913,10 +913,14 @@ void BaseTheme::drawKeyboardKey(const GfxRenderer& renderer, Rect rect, const ch
 
   const bool hasSecondary = secondaryLabel != nullptr && secondaryLabel[0] != '\0';
   const int primaryOffset = 0;
-  const int itemWidth = renderer.getTextWidth(UI_12_FONT_ID, label);
+  const int fontId = (keyType == KeyboardKeyType::Shift || keyType == KeyboardKeyType::Mode ||
+                      keyType == KeyboardKeyType::Reveal || keyType == KeyboardKeyType::Ok)
+                         ? UI_10_FONT_ID
+                         : UI_12_FONT_ID;
+  const int itemWidth = renderer.getTextWidth(fontId, label);
   const int textX = rect.x + (rect.width - itemWidth) / 2;
-  const int textY = rect.y + (rect.height - renderer.getLineHeight(UI_12_FONT_ID)) / 2 + primaryOffset;
-  renderer.drawText(UI_12_FONT_ID, textX, textY, label, !isSelected);
+  const int textY = rect.y + (rect.height - renderer.getLineHeight(fontId)) / 2 + primaryOffset;
+  renderer.drawText(fontId, textX, textY, label, !isSelected);
 
   if (hasSecondary) {
     const int secWidth = renderer.getTextWidth(SMALL_FONT_ID, secondaryLabel);
