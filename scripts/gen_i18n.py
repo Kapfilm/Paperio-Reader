@@ -280,8 +280,10 @@ def find_used_string_keys(
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            for m in pattern.finditer(text):
-                used.add(m.group(0))
+            for line in text.splitlines():
+                line = line.split("//", 1)[0]
+                for m in pattern.finditer(line):
+                    used.add(m.group(0))
 
     return used
 
