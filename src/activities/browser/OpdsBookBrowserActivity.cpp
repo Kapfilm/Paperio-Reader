@@ -176,7 +176,8 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
 
   // Browsing state
   // Show appropriate button hint based on selected entry type
-  const char* confirmLabel = (!entries.empty() && entries[selectorIndex].type == OpdsEntryType::BOOK) ? tr(STR_DOWNLOAD) : tr(STR_OPEN);
+  const char* confirmLabel =
+      (!entries.empty() && entries[selectorIndex].type == OpdsEntryType::BOOK) ? tr(STR_DOWNLOAD) : tr(STR_OPEN);
   const char* searchLabel = (!searchTemplate.empty() && selectorIndex == 0) ? tr(STR_SEARCH) : tr(STR_DIR_UP);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, searchLabel, tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -294,8 +295,10 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   downloadTotal = 0;
   requestUpdate(true);
 
-  std::string downloadUrl = (book.href.rfind("http", 0) == 0) ? book.href : UrlUtils::buildUrl(SETTINGS.opdsServerUrl, book.href);
-  std::string filename = "/" + StringUtils::sanitizeFilename(book.title + (book.author.empty() ? "" : " - " + book.author)) + ".epub";
+  std::string downloadUrl =
+      (book.href.rfind("http", 0) == 0) ? book.href : UrlUtils::buildUrl(SETTINGS.opdsServerUrl, book.href);
+  std::string filename =
+      "/" + StringUtils::sanitizeFilename(book.title + (book.author.empty() ? "" : " - " + book.author)) + ".epub";
 
   LOG_DBG("OPDS", "Downloading: %s -> %s", downloadUrl.c_str(), filename.c_str());
 
