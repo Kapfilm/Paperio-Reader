@@ -34,9 +34,10 @@ class UITheme {
   // Preferred approach: derive from MenuListActivity (see MenuListActivity.h) which handles
   // separator skipping, navigation, and drawList automatically via SettingInfo items.
   //
-  // Manual usage (for activities that don't derive from MenuListActivity):
+  // Manual usage (for activities that don't derive from MenuListActivity).
+  // Assumes `items` is a member variable (std::vector<SettingInfo> items):
   //
-  //   std::vector<SettingInfo> items;
+  //   // populate in constructor or onEnter:
   //   items.push_back(SettingInfo::Separator(StrId::STR_MY_SECTION));
   //   items.push_back(SettingInfo::Toggle(StrId::STR_MY_TOGGLE, &CrossPointSettings::myFlag));
   //
@@ -46,10 +47,11 @@ class UITheme {
   //   buttonNavigator.setSelectablePredicate(pred, items.size());
   //
   //   // render: pass the same getter to drawList; separator rows are drawn automatically:
-  //   GUI.drawList(renderer, rect, items.size(), selectedIndex,
-  //       [this](int i) { return items[i].getTitle(); },
+  //   const auto& s = items;  // local ref for lambda capture
+  //   GUI.drawList(renderer, rect, s.size(), selectedIndex,
+  //       [&s](int i) { return s[i].getTitle(); },
   //       nullptr, nullptr,
-  //       [this](int i) { return items[i].getDisplayValue(); }, true);
+  //       [&s](int i) { return s[i].getDisplayValue(); }, true);
   static std::function<bool(int)> makeSelectablePredicate(int total, std::function<std::string(int)> titleGetter);
 
   // Returns the drawable content Rect accounting for screen orientation and visible button hints.
