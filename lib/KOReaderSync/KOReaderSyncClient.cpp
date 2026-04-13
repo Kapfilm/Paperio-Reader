@@ -32,6 +32,30 @@ esp_http_client_handle_t g_sessionClient = nullptr;
 // numbers, and HTTP status. Single-threaded sync flow makes static safe.
 char g_failureDetailBuf[160] = {0};
 
+std::string previewBody(const char* body, const size_t maxLen = 120) {
+  if (!body || !*body) {
+    return "<empty>";
+  }
+
+  std::string preview;
+  preview.reserve(maxLen);
+  for (const char* p = body; *p && preview.size() < maxLen; ++p) {
+    const unsigned char c = static_cast<unsigned char>(*p);
+    if (c == '\r' || c == '\n' || c == '\t') {
+      preview.push_back(' ');
+    } else if (std::isprint(c)) {
+      preview.push_back(static_cast<char>(c));
+    } else {
+      preview.push_back('?');
+    }
+  }
+
+  if (strlen(body) > preview.size()) {
+    preview += "...";
+  }
+  return preview;
+}
+
 // Reset the static diagnostic state at the start of each request and capture pre-flight
 // heap so failure reporting always reflects what was available when the request started.
 void beginRequest(const char* operation) {
@@ -447,7 +471,12 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
       esp_http_client_cleanup(client);
     }
 
-    LOG_DBG("KOSync", "Get progress response: %d (err: %s) [attempt %d]", httpCode, esp_err_to_name(err), attempt);
+    const size_t bodyLen = activeBuf->data ? strlen(activeBuf->data) : 0;
+    LOG_DBG("KOSync", "GET %s -> %d (err: %s) [attempt %d body_len=%u]", url.c_str(), httpCode, esp_err_to_name(err),
+            attempt, static_cast<unsigned>(bodyLen));
+    if (err == ESP_OK && (httpCode < 200 || httpCode >= 300)) {
+      LOG_ERR("KOSync", "GET failure body preview: %s", previewBody(activeBuf->data).c_str());
+    }
 
     // Retry exactly once for connect-level failures only.
     // Why: this recovers short AP/roaming hiccups without masking persistent
@@ -497,7 +526,10 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
   }
 
   if (httpCode == 401) return AUTH_FAILED;
-  if (httpCode == 404) return NOT_FOUND;
+  if (httpCode == 404) {
+    LOG_DBG("KOSync", "GET progress returned 404 for %s - treating as NOT_FOUND", url.c_str());
+    return NOT_FOUND;
+  }
   return SERVER_ERROR;
 }
 
@@ -561,7 +593,14 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
       esp_http_client_cleanup(client);
     }
 
-    LOG_DBG("KOSync", "Update progress response: %d (err: %s) [attempt %d]", httpCode, esp_err_to_name(err), attempt);
+    const size_t bodyLen = activeBuf->data ? strlen(activeBuf->data) : 0;
+    LOG_DBG("KOSync", "PUT %s -> %d (err: %s) [attempt %d body_len=%u]", url.c_str(), httpCode, esp_err_to_name(err),
+            attempt, static_cast<unsigned>(bodyLen));
+    if (err == ESP_OK && (httpCode < 200 || httpCode >= 300)) {
+      LOG_ERR("KOSync", "PUT failure body preview: %s", previewBody(activeBuf->data).c_str());
+      LOG_ERR("KOSync", "PUT failure request summary: document=%s percentage=%.4f progress=%s", progress.document.c_str(),
+              progress.percentage, progress.progress.c_str());
+    }
 
     // Retry exactly once for connect-level failures only.
     // Why: same policy as GET keeps behavior predictable across both endpoints.

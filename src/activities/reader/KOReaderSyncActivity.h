@@ -1,12 +1,12 @@
 #pragma once
 #include <Epub.h>
 
-#include <functional>
 #include <memory>
 
 #include "ChapterXPathIndexer.h"
 #include "KOReaderSyncClient.h"
 #include "ProgressMapper.h"
+#include "CrossPointState.h"
 #include "activities/Activity.h"
 
 /**
@@ -27,24 +27,11 @@
  */
 class KOReaderSyncActivity final : public Activity {
  public:
-  // Intent controls UI/behavior split for the same sync pipeline.
-  // - COMPARE: fetch then let user choose apply/upload.
-  // - PULL_REMOTE: fetch and apply immediately.
-  // - PUSH_LOCAL: upload immediately.
-  // This keeps WiFi/NTP/hash/memory handling centralized while enabling a
-  // simpler KOReader-like reader menu UX.
-  enum class SyncIntent {
-    COMPARE,
-    PULL_REMOTE,
-    PUSH_LOCAL,
-  };
-
-  explicit KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                const std::shared_ptr<Epub>& epub, const std::string& epubPath, int currentSpineIndex,
-                                int currentPage, int totalPagesInSpine, uint16_t paragraphIndex = 0,
-                                bool hasParagraphIndex = false, SyncIntent syncIntent = SyncIntent::COMPARE)
+  explicit KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& epubPath,
+                                int currentSpineIndex, int currentPage, int totalPagesInSpine,
+                                uint16_t paragraphIndex = 0, bool hasParagraphIndex = false,
+                                KOReaderSyncIntentState syncIntent = KOReaderSyncIntentState::COMPARE)
       : Activity("KOReaderSync", renderer, mappedInput),
-        epub(epub),
         epubPath(epubPath),
         currentSpineIndex(currentSpineIndex),
         currentPage(currentPage),
@@ -83,7 +70,7 @@ class KOReaderSyncActivity final : public Activity {
   int totalPagesInSpine;
   uint16_t localParagraphIndex;
   bool hasLocalParagraphIndex;
-  SyncIntent syncIntent = SyncIntent::COMPARE;
+  KOReaderSyncIntentState syncIntent = KOReaderSyncIntentState::COMPARE;
 
   State state = WIFI_SELECTION;
   std::string statusMessage;
@@ -111,6 +98,7 @@ class KOReaderSyncActivity final : public Activity {
   void performSync();
   void performUpload();
   void closeCancelled();
+  void resumeReader(KOReaderSyncOutcomeState outcome, const SyncResult* appliedResult = nullptr);
   bool ensureEpubLoadedForMapping();
   void releaseEpubForMapping();
   bool computeLocalProgressAndChapter();

@@ -76,6 +76,8 @@ bool CrossPointState::loadFromBinaryFile() {
     lastSleepFromReader = false;
   }
 
+  koReaderSyncSession.clear();
+
   inputFile.close();
   return true;
 }
