@@ -1,16 +1,21 @@
 #pragma once
 #include <Epub.h>
 
-#include <functional>
 #include <memory>
 
 #include "ChapterXPathIndexer.h"
+#include "CrossPointState.h"
 #include "KOReaderSyncClient.h"
 #include "ProgressMapper.h"
 #include "activities/Activity.h"
 
 /**
  * Activity for syncing reading progress with KOReader sync server.
+ *
+ * This activity is launched as a standalone replacement screen, not as a
+ * child activity of the reader. The reader persists a compact handoff record,
+ * is destroyed to reclaim memory before WiFi/TLS work begins, and a fresh
+ * reader instance is reopened after sync completes or is cancelled.
  *
  * Shared pipeline:
  * 1. Connect to WiFi (if not connected)
@@ -21,30 +26,17 @@
  * - COMPARE: fetch remote progress, show full comparison screen, let user
  *   choose Apply or Upload.
  * - PULL_REMOTE: fetch and map remote progress, show success feedback, then
- *   return applied SyncResult to reader.
+ *   persist an applied SyncResult for the reopened reader.
  * - PUSH_LOCAL: compute local mapping, warm session with GET, then upload via
  *   reused connection to avoid a second full TLS handshake.
  */
 class KOReaderSyncActivity final : public Activity {
  public:
-  // Intent controls UI/behavior split for the same sync pipeline.
-  // - COMPARE: fetch then let user choose apply/upload.
-  // - PULL_REMOTE: fetch and apply immediately.
-  // - PUSH_LOCAL: upload immediately.
-  // This keeps WiFi/NTP/hash/memory handling centralized while enabling a
-  // simpler KOReader-like reader menu UX.
-  enum class SyncIntent {
-    COMPARE,
-    PULL_REMOTE,
-    PUSH_LOCAL,
-  };
-
-  explicit KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                const std::shared_ptr<Epub>& epub, const std::string& epubPath, int currentSpineIndex,
-                                int currentPage, int totalPagesInSpine, uint16_t paragraphIndex = 0,
-                                bool hasParagraphIndex = false, SyncIntent syncIntent = SyncIntent::COMPARE)
+  explicit KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& epubPath,
+                                int currentSpineIndex, int currentPage, int totalPagesInSpine,
+                                uint16_t paragraphIndex = 0, bool hasParagraphIndex = false,
+                                KOReaderSyncIntentState syncIntent = KOReaderSyncIntentState::COMPARE)
       : Activity("KOReaderSync", renderer, mappedInput),
-        epub(epub),
         epubPath(epubPath),
         currentSpineIndex(currentSpineIndex),
         currentPage(currentPage),
@@ -83,7 +75,7 @@ class KOReaderSyncActivity final : public Activity {
   int totalPagesInSpine;
   uint16_t localParagraphIndex;
   bool hasLocalParagraphIndex;
-  SyncIntent syncIntent = SyncIntent::COMPARE;
+  KOReaderSyncIntentState syncIntent = KOReaderSyncIntentState::COMPARE;
 
   State state = WIFI_SELECTION;
   std::string statusMessage;
@@ -111,6 +103,7 @@ class KOReaderSyncActivity final : public Activity {
   void performSync();
   void performUpload();
   void closeCancelled();
+  void resumeReader(KOReaderSyncOutcomeState outcome, const SyncResult* appliedResult = nullptr);
   bool ensureEpubLoadedForMapping();
   void releaseEpubForMapping();
   bool computeLocalProgressAndChapter();

@@ -48,7 +48,6 @@ class EpubReaderActivity final : public Activity {
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   ReaderUtils::InputDrainGuard inputDrainGuard;
   bool automaticPageTurnActive = false;
-  std::string deferredSyncEpubPath;
   // -1 means use global SETTINGS value.
   int8_t bookEmbeddedStyleOverride = -1;
   int8_t bookImageRenderingOverride = -1;
@@ -72,7 +71,11 @@ class EpubReaderActivity final : public Activity {
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   void launchKOReaderSync(SyncLaunchMode mode = SyncLaunchMode::COMPARE);
-  void handleSyncResult(const ActivityResult& result);
+  // Consume a persisted standalone KOReader sync session for this EPUB. Remote
+  // apply writes the mapped reopen position into progress.bin before the normal
+  // reader startup path reads it. Upload-complete leaves the existing local
+  // progress.bin untouched and simply clears the pending session marker.
+  void applyPendingSyncSession();
   void applyOrientation(uint8_t orientation);
   void applyTextDarkness(uint8_t textDarkness);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);

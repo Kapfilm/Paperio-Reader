@@ -73,6 +73,20 @@ bool JsonSettingsIO::saveState(const CrossPointState& s, const char* path) {
   doc["lastSleepImage"] = s.lastSleepImage;
   doc["readerActivityLoadCount"] = s.readerActivityLoadCount;
   doc["lastSleepFromReader"] = s.lastSleepFromReader;
+  JsonObject sync = doc["koReaderSyncSession"].to<JsonObject>();
+  sync["active"] = s.koReaderSyncSession.active;
+  sync["epubPath"] = s.koReaderSyncSession.epubPath;
+  sync["spineIndex"] = s.koReaderSyncSession.spineIndex;
+  sync["page"] = s.koReaderSyncSession.page;
+  sync["totalPagesInSpine"] = s.koReaderSyncSession.totalPagesInSpine;
+  sync["paragraphIndex"] = s.koReaderSyncSession.paragraphIndex;
+  sync["hasParagraphIndex"] = s.koReaderSyncSession.hasParagraphIndex;
+  sync["intent"] = static_cast<uint8_t>(s.koReaderSyncSession.intent);
+  sync["outcome"] = static_cast<uint8_t>(s.koReaderSyncSession.outcome);
+  sync["resultSpineIndex"] = s.koReaderSyncSession.resultSpineIndex;
+  sync["resultPage"] = s.koReaderSyncSession.resultPage;
+  sync["resultParagraphIndex"] = s.koReaderSyncSession.resultParagraphIndex;
+  sync["resultHasParagraphIndex"] = s.koReaderSyncSession.resultHasParagraphIndex;
 
   String json;
   serializeJson(doc, json);
@@ -91,6 +105,22 @@ bool JsonSettingsIO::loadState(CrossPointState& s, const char* json) {
   s.lastSleepImage = doc["lastSleepImage"] | SIZE_MAX;
   s.readerActivityLoadCount = doc["readerActivityLoadCount"] | (uint8_t)0;
   s.lastSleepFromReader = doc["lastSleepFromReader"] | false;
+  JsonObject sync = doc["koReaderSyncSession"].as<JsonObject>();
+  s.koReaderSyncSession.active = sync["active"] | false;
+  s.koReaderSyncSession.epubPath = sync["epubPath"] | std::string("");
+  s.koReaderSyncSession.spineIndex = sync["spineIndex"] | 0;
+  s.koReaderSyncSession.page = sync["page"] | 0;
+  s.koReaderSyncSession.totalPagesInSpine = sync["totalPagesInSpine"] | 0;
+  s.koReaderSyncSession.paragraphIndex = sync["paragraphIndex"] | (uint16_t)0;
+  s.koReaderSyncSession.hasParagraphIndex = sync["hasParagraphIndex"] | false;
+  s.koReaderSyncSession.intent =
+      static_cast<KOReaderSyncIntentState>(sync["intent"] | static_cast<uint8_t>(KOReaderSyncIntentState::COMPARE));
+  s.koReaderSyncSession.outcome =
+      static_cast<KOReaderSyncOutcomeState>(sync["outcome"] | static_cast<uint8_t>(KOReaderSyncOutcomeState::NONE));
+  s.koReaderSyncSession.resultSpineIndex = sync["resultSpineIndex"] | 0;
+  s.koReaderSyncSession.resultPage = sync["resultPage"] | 0;
+  s.koReaderSyncSession.resultParagraphIndex = sync["resultParagraphIndex"] | (uint16_t)0;
+  s.koReaderSyncSession.resultHasParagraphIndex = sync["resultHasParagraphIndex"] | false;
   return true;
 }
 

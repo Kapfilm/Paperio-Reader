@@ -3,8 +3,12 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "Epub.h"
 #include "EpubReaderActivity.h"
 #include "Txt.h"
@@ -15,6 +19,14 @@
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+void logReaderLaunchMemSnapshot(const char* stage) {
+  const uint32_t freeHeap = esp_get_free_heap_size();
+  const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+  LOG_DBG("READER", "Reader mem[%s]: free=%lu contig=%lu", stage, freeHeap, contigHeap);
+}
+}  // namespace
 
 std::string ReaderActivity::extractFolderPath(const std::string& filePath) {
   const auto lastSlash = filePath.find_last_of('/');
@@ -90,6 +102,7 @@ void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
+  logReaderLaunchMemSnapshot("before_push_epub_reader");
   startActivityForResult(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)),
                          [this](const ActivityResult&) { finish(); });
 }
@@ -115,10 +128,16 @@ void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
 
 void ReaderActivity::onEnter() {
   Activity::onEnter();
+  logReaderLaunchMemSnapshot("onEnter_begin");
 
   if (initialBookPath.empty()) {
     goToLibrary();  // Start from root when entering via Browse
     return;
+  }
+
+  if (APP_STATE.koReaderSyncSession.active && APP_STATE.koReaderSyncSession.epubPath == initialBookPath) {
+    LOG_DBG("READER", "Opening EPUB with pending KOReader sync outcome=%d",
+            static_cast<int>(APP_STATE.koReaderSyncSession.outcome));
   }
 
   currentBookPath = initialBookPath;

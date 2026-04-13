@@ -29,9 +29,10 @@ void logSyncMemSnapshot(const char* stage) {
           integrityOk ? "ok" : "fail");
 }
 
-// Frees renderer-owned caches right before network work.
-// Why: TLS handshake needs a large contiguous block, and font cache memory can
-// increase fragmentation even when total free heap looks acceptable.
+// Frees renderer-owned caches inside the standalone sync activity right before
+// network work. The reader activity is already gone by this point, but sync UI
+// rendering (status popups, compare screen, result screen) can repopulate font
+// caches and chip away at the largest free block needed for TLS.
 void trimMemoryBeforeTls(const GfxRenderer& renderer) {
   if (auto* cacheManager = renderer.getFontCacheManager()) {
     cacheManager->clearCache();
@@ -57,11 +58,8 @@ bool shouldSyncNtpNow() {
 
 void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {
-    LOG_DBG("KOSync", "WiFi connection failed, exiting");
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
+    LOG_DBG("KOSync", "WiFi connection failed, resuming reader");
+    resumeReader(KOReaderSyncOutcomeState::CANCELLED);
     return;
   }
 
@@ -118,7 +116,7 @@ void KOReaderSyncActivity::performSync() {
 
   // Local mapping is only needed for compare/upload paths.
   // Pull-only mode can skip this expensive step and go straight to remote fetch.
-  if (syncIntent != SyncIntent::PULL_REMOTE) {
+  if (syncIntent != KOReaderSyncIntentState::PULL_REMOTE) {
     // Precompute local mapping before first network request so the expensive
     // inflate/index work happens before TLS. This avoids a second local mapping
     // pass later and keeps the upload path lightweight.
@@ -143,7 +141,7 @@ void KOReaderSyncActivity::performSync() {
 
   // Push intent skips comparison UI but still warms an HTTP/TLS session first
   // so PUT can reuse the connection instead of forcing a fresh handshake.
-  if (syncIntent == SyncIntent::PUSH_LOCAL) {
+  if (syncIntent == KOReaderSyncIntentState::PUSH_LOCAL) {
     // Direct push previously started with no reusable HTTP/TLS session, forcing
     // a fresh handshake in updateProgress. Compare flow often succeeds because
     // upload reuses the GET session. Warm the session here so push can take the
@@ -184,7 +182,7 @@ void KOReaderSyncActivity::performSync() {
   const auto result = KOReaderSyncClient::getProgress(documentHash, remoteProgress);
 
   if (result == KOReaderSyncClient::NOT_FOUND) {
-    if (syncIntent == SyncIntent::PULL_REMOTE) {
+    if (syncIntent == KOReaderSyncIntentState::PULL_REMOTE) {
       // Pull intent must not silently fall back to upload when server has no
       // remote progress. Failing explicitly keeps action semantics predictable.
       KOReaderSyncClient::endPersistentSession();
@@ -236,7 +234,7 @@ void KOReaderSyncActivity::performSync() {
   remotePosition.hasParagraphIndex = false;
   remoteChapterLabel.clear();
 
-  if (syncIntent == SyncIntent::PULL_REMOTE) {
+  if (syncIntent == KOReaderSyncIntentState::PULL_REMOTE) {
     // Pull intent applies immediately and exits. We bypass chooser UI to keep
     // reader menu actions deterministic ("pull" always means apply remote).
     if (!ensureRemotePositionMapped()) {
@@ -251,8 +249,13 @@ void KOReaderSyncActivity::performSync() {
 
     // Preserve the apply result and show explicit confirmation before returning
     // to the reader so users can tell pull succeeded.
-    setResult(SyncResult{remotePosition.spineIndex, remotePosition.pageNumber, remotePosition.paragraphIndex,
-                         remotePosition.hasParagraphIndex});
+    auto& sync = APP_STATE.koReaderSyncSession;
+    sync.outcome = KOReaderSyncOutcomeState::APPLIED_REMOTE;
+    sync.resultSpineIndex = remotePosition.spineIndex;
+    sync.resultPage = remotePosition.pageNumber;
+    sync.resultParagraphIndex = remotePosition.paragraphIndex;
+    sync.resultHasParagraphIndex = remotePosition.hasParagraphIndex;
+    APP_STATE.saveToFile();
     {
       RenderLock lock(*this);
       state = APPLY_COMPLETE;
@@ -328,8 +331,8 @@ void KOReaderSyncActivity::performUpload() {
     return;
   }
 
-  // Result screen rendering repopulates glyph caches; trim again right before
-  // the upload handshake to maximize contiguous heap for TLS.
+  // Sync UI rendering can repopulate glyph caches after the initial GET / compare
+  // phase, so trim again right before the upload request.
   trimMemoryBeforeTls(renderer);
   logSyncMemSnapshot("after_trim_before_updateProgress");
 
@@ -370,6 +373,8 @@ void KOReaderSyncActivity::performUpload() {
   }
 
   HalClock::wifiOff(true);
+  APP_STATE.koReaderSyncSession.outcome = KOReaderSyncOutcomeState::UPLOAD_COMPLETE;
+  APP_STATE.saveToFile();
   {
     RenderLock lock(*this);
     state = UPLOAD_COMPLETE;
@@ -380,6 +385,9 @@ void KOReaderSyncActivity::performUpload() {
 
 void KOReaderSyncActivity::onEnter() {
   Activity::onEnter();
+  logSyncMemSnapshot("onEnter_begin");
+  LOG_DBG("KOSync", "Standalone sync start: path=%s spine=%d page=%d/%d intent=%d", epubPath.c_str(), currentSpineIndex,
+          currentPage, totalPagesInSpine, static_cast<int>(syncIntent));
 
   // Check for credentials first
   if (!KOREADER_STORE.hasCredentials()) {
@@ -404,8 +412,11 @@ void KOReaderSyncActivity::onEnter() {
 void KOReaderSyncActivity::onExit() {
   Activity::onExit();
 
+  logSyncMemSnapshot("onExit_before_cleanup");
   KOReaderSyncClient::endPersistentSession();
   HalClock::wifiOff(true);
+  releaseEpubForMapping();
+  logSyncMemSnapshot("onExit_after_cleanup");
 }
 
 void KOReaderSyncActivity::closeCancelled() {
@@ -413,11 +424,34 @@ void KOReaderSyncActivity::closeCancelled() {
     return;
   }
 
+  resumeReader(KOReaderSyncOutcomeState::CANCELLED);
+}
+
+void KOReaderSyncActivity::resumeReader(const KOReaderSyncOutcomeState outcome, const SyncResult* appliedResult) {
+  if (closeRequested) {
+    return;
+  }
+
   closeRequested = true;
-  ActivityResult result;
-  result.isCancelled = true;
-  setResult(std::move(result));
-  finish();
+  auto& sync = APP_STATE.koReaderSyncSession;
+  sync.outcome = outcome;
+  if (appliedResult) {
+    sync.resultSpineIndex = appliedResult->spineIndex;
+    sync.resultPage = appliedResult->page;
+    sync.resultParagraphIndex = appliedResult->paragraphIndex;
+    sync.resultHasParagraphIndex = appliedResult->hasParagraphIndex;
+  } else if (outcome != KOReaderSyncOutcomeState::APPLIED_REMOTE) {
+    // Only zero the result fields when not resuming an already-applied remote
+    // position. The PULL_REMOTE path pre-saves the mapped result into APP_STATE
+    // before entering APPLY_COMPLETE; zeroing here would overwrite it.
+    sync.resultSpineIndex = 0;
+    sync.resultPage = 0;
+    sync.resultParagraphIndex = 0;
+    sync.resultHasParagraphIndex = false;
+  }
+  APP_STATE.saveToFile();
+  logSyncMemSnapshot("before_resume_reader");
+  activityManager.goToReader(epubPath);
 }
 
 void KOReaderSyncActivity::render(RenderLock&&) {
@@ -626,22 +660,23 @@ void KOReaderSyncActivity::computeRemoteChapter() {
 void KOReaderSyncActivity::loop() {
   if (state == NO_CREDENTIALS || state == SYNC_FAILED || state == UPLOAD_COMPLETE || state == APPLY_COMPLETE) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      // APPLY_COMPLETE already has a valid SyncResult, so exit normally.
-      // Other terminal states are treated as cancelled when backing out.
       if (state == APPLY_COMPLETE) {
-        finish();
+        resumeReader(KOReaderSyncOutcomeState::APPLIED_REMOTE);
+      } else if (state == UPLOAD_COMPLETE) {
+        resumeReader(KOReaderSyncOutcomeState::UPLOAD_COMPLETE);
+      } else if (state == SYNC_FAILED || state == NO_CREDENTIALS) {
+        resumeReader(KOReaderSyncOutcomeState::FAILED);
       } else {
-        closeCancelled();
+        resumeReader(KOReaderSyncOutcomeState::CANCELLED);
       }
       return;
     }
 
     if ((state == UPLOAD_COMPLETE || state == APPLY_COMPLETE) && millis() - uploadCompleteTime >= 3000) {
-      // Keep pull/apply result on auto-close; upload-complete remains cancel-style.
       if (state == APPLY_COMPLETE) {
-        finish();
+        resumeReader(KOReaderSyncOutcomeState::APPLIED_REMOTE);
       } else {
-        closeCancelled();
+        resumeReader(KOReaderSyncOutcomeState::UPLOAD_COMPLETE);
       }
     }
     return;
@@ -671,9 +706,9 @@ void KOReaderSyncActivity::loop() {
           return;
         }
         // Wifi will be turned off in onExit()
-        setResult(SyncResult{remotePosition.spineIndex, remotePosition.pageNumber, remotePosition.paragraphIndex,
-                             remotePosition.hasParagraphIndex});
-        finish();
+        const SyncResult result = {remotePosition.spineIndex, remotePosition.pageNumber, remotePosition.paragraphIndex,
+                                   remotePosition.hasParagraphIndex};
+        resumeReader(KOReaderSyncOutcomeState::APPLIED_REMOTE, &result);
       } else if (selectedOption == 1) {
         // Upload local progress
         performUpload();

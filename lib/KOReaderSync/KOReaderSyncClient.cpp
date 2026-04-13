@@ -31,6 +31,37 @@ esp_http_client_handle_t g_sessionClient = nullptr;
 // the longest expected message including esp_err name (~32 chars), opcode (~10), heap
 // numbers, and HTTP status. Single-threaded sync flow makes static safe.
 char g_failureDetailBuf[160] = {0};
+char g_lastResponsePreview[160] = {0};
+
+std::string previewBody(const char* body, const size_t maxLen = 120) {
+  if (!body || !*body) {
+    return "<empty>";
+  }
+
+  std::string preview;
+  preview.reserve(maxLen);
+  for (const char* p = body; *p && preview.size() < maxLen; ++p) {
+    const unsigned char c = static_cast<unsigned char>(*p);
+    if (c == '\r' || c == '\n' || c == '\t') {
+      preview.push_back(' ');
+    } else if (std::isprint(c)) {
+      preview.push_back(static_cast<char>(c));
+    } else {
+      preview.push_back('?');
+    }
+  }
+
+  if (strlen(body) > preview.size()) {
+    preview += "...";
+  }
+  return preview;
+}
+
+void rememberResponsePreview(const char* body) {
+  const std::string preview = previewBody(body, sizeof(g_lastResponsePreview) - 1);
+  strncpy(g_lastResponsePreview, preview.c_str(), sizeof(g_lastResponsePreview) - 1);
+  g_lastResponsePreview[sizeof(g_lastResponsePreview) - 1] = '\0';
+}
 
 // Reset the static diagnostic state at the start of each request and capture pre-flight
 // heap so failure reporting always reflects what was available when the request started.
@@ -40,6 +71,7 @@ void beginRequest(const char* operation) {
   KOReaderSyncClient::lastHttpCode = 0;
   KOReaderSyncClient::lastHeapAtFailure = ESP.getFreeHeap();
   KOReaderSyncClient::lastContigHeapAtFailure = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+  g_lastResponsePreview[0] = '\0';
 }
 
 // Skip a leading UTF-8 BOM (EF BB BF) and ASCII whitespace, returning a pointer
@@ -240,9 +272,9 @@ esp_http_client_handle_t createClient(const char* url, ResponseBuffer* buf,
   config.event_handler = httpEventHandler;
   config.user_data = activeBuf;
   config.method = method;
-  config.timeout_ms = 15000;
+  config.timeout_ms = 5000;
   config.buffer_size = HTTP_BUF_SIZE;
-  config.buffer_size_tx = HTTP_BUF_SIZE;
+  config.buffer_size_tx = 512;
   config.crt_bundle_attach = esp_crt_bundle_attach;
   config.keep_alive_enable = g_keepSessionOpen;
   // Follow up to 3 redirects (e.g. HTTP→HTTPS, path normalization, DuckDNS proxy).
@@ -447,7 +479,13 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
       esp_http_client_cleanup(client);
     }
 
-    LOG_DBG("KOSync", "Get progress response: %d (err: %s) [attempt %d]", httpCode, esp_err_to_name(err), attempt);
+    const size_t bodyLen = activeBuf->data ? strlen(activeBuf->data) : 0;
+    LOG_DBG("KOSync", "GET %s -> %d (err: %s) [attempt %d body_len=%u]", url.c_str(), httpCode, esp_err_to_name(err),
+            attempt, static_cast<unsigned>(bodyLen));
+    if (err == ESP_OK && (httpCode < 200 || httpCode >= 300)) {
+      rememberResponsePreview(activeBuf->data);
+      LOG_ERR("KOSync", "GET failure body preview: %s", g_lastResponsePreview);
+    }
 
     // Retry exactly once for connect-level failures only.
     // Why: this recovers short AP/roaming hiccups without masking persistent
@@ -497,7 +535,10 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
   }
 
   if (httpCode == 401) return AUTH_FAILED;
-  if (httpCode == 404) return NOT_FOUND;
+  if (httpCode == 404) {
+    LOG_DBG("KOSync", "GET progress returned 404 for %s - treating as NOT_FOUND", url.c_str());
+    return NOT_FOUND;
+  }
   return SERVER_ERROR;
 }
 
@@ -561,7 +602,15 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
       esp_http_client_cleanup(client);
     }
 
-    LOG_DBG("KOSync", "Update progress response: %d (err: %s) [attempt %d]", httpCode, esp_err_to_name(err), attempt);
+    const size_t bodyLen = activeBuf->data ? strlen(activeBuf->data) : 0;
+    LOG_DBG("KOSync", "PUT %s -> %d (err: %s) [attempt %d body_len=%u]", url.c_str(), httpCode, esp_err_to_name(err),
+            attempt, static_cast<unsigned>(bodyLen));
+    if (err == ESP_OK && (httpCode < 200 || httpCode >= 300)) {
+      rememberResponsePreview(activeBuf->data);
+      LOG_ERR("KOSync", "PUT failure body preview: %s", g_lastResponsePreview);
+      LOG_ERR("KOSync", "PUT failure request summary: document=%s percentage=%.4f progress=%s",
+              progress.document.c_str(), progress.percentage, progress.progress.c_str());
+    }
 
     // Retry exactly once for connect-level failures only.
     // Why: same policy as GET keeps behavior predictable across both endpoints.
@@ -631,6 +680,21 @@ const char* KOReaderSyncClient::lastFailureDetail() {
   }
   // Server case: got an HTTP status the client didn't recognize as success.
   if (lastHttpCode != 0) {
+    if (lastHttpCode == 404 && lastOperation && strcmp(lastOperation, "update progress") == 0) {
+      std::string lowerPreview = g_lastResponsePreview;
+      std::transform(lowerPreview.begin(), lowerPreview.end(), lowerPreview.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+      if (lowerPreview.find("book not found") != std::string::npos) {
+        snprintf(g_failureDetailBuf, sizeof(g_failureDetailBuf),
+                 "%s: server does not know this book yet; server expects the same file to already exist there, usually "
+                 "downloaded via OPDS",
+                 lastOperation);
+        return g_failureDetailBuf;
+      }
+      snprintf(g_failureDetailBuf, sizeof(g_failureDetailBuf),
+               "%s: HTTP 404 (upload rejected; server may require book to be known)", lastOperation);
+      return g_failureDetailBuf;
+    }
     snprintf(g_failureDetailBuf, sizeof(g_failureDetailBuf), "%s: HTTP %d", lastOperation, lastHttpCode);
     return g_failureDetailBuf;
   }
