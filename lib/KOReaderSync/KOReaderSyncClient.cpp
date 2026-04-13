@@ -609,8 +609,17 @@ const char* KOReaderSyncClient::lastFailureDetail() {
   }
   // Network/TLS case: esp_http_client_perform() failed before getting a status code.
   if (lastHttpCode == 0 && lastEspError != 0) {
-    snprintf(g_failureDetailBuf, sizeof(g_failureDetailBuf), "%s: %s (heap %u/%u contig)", lastOperation,
-             esp_err_to_name(lastEspError), lastHeapAtFailure, lastContigHeapAtFailure);
+    // Detect TLS handshake failures on HTTPS URLs — likely caused by the server
+    // requiring TLS 1.3 which the ESP32 mbedTLS library does not support.
+    if (lastEspError == ESP_ERR_HTTP_CONNECT && KOREADER_STORE.getBaseUrl().rfind("https", 0) == 0) {
+      snprintf(
+          g_failureDetailBuf, sizeof(g_failureDetailBuf),
+          "%s: TLS handshake failed. Server may require TLS 1.3 (unsupported). Try a different server or use HTTP.",
+          lastOperation);
+    } else {
+      snprintf(g_failureDetailBuf, sizeof(g_failureDetailBuf), "%s: %s (heap %u/%u contig)", lastOperation,
+               esp_err_to_name(lastEspError), lastHeapAtFailure, lastContigHeapAtFailure);
+    }
     return g_failureDetailBuf;
   }
   // Server case: got an HTTP status the client didn't recognize as success.
