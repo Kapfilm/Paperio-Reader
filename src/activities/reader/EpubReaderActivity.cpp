@@ -597,9 +597,16 @@ void EpubReaderActivity::applyPendingSyncSession() {
             restorePage, pendingParagraphIndex, pendingParagraphLookup ? "yes" : "no");
   }
 
-  if (writeReaderProgressCache(epub->getCachePath(), restoreSpineIndex, restorePage, sync.totalPagesInSpine)) {
+  // sync.totalPagesInSpine is the page count of the local spine at launch time.
+  // When the restore targets a different spine, that count is meaningless for the
+  // rescaling logic in render() and can cause out-of-bounds pages (the estimated
+  // page number may exceed the local spine's count, producing progress > 1.0).
+  // Store 0 to disable rescaling; the paragraph lookup handles precise positioning.
+  const int restorePageCount = (restoreSpineIndex == sync.spineIndex) ? sync.totalPagesInSpine : 0;
+
+  if (writeReaderProgressCache(epub->getCachePath(), restoreSpineIndex, restorePage, restorePageCount)) {
     cachedSpineIndex = restoreSpineIndex;
-    cachedChapterTotalPageCount = sync.totalPagesInSpine;
+    cachedChapterTotalPageCount = restorePageCount;
     LOG_DBG("ERS", "Prepared progress.bin for sync restore: spine=%d page=%d/%d", restoreSpineIndex, restorePage,
             sync.totalPagesInSpine);
   } else {
@@ -607,7 +614,7 @@ void EpubReaderActivity::applyPendingSyncSession() {
     currentSpineIndex = restoreSpineIndex;
     nextPageNumber = restorePage;
     cachedSpineIndex = restoreSpineIndex;
-    cachedChapterTotalPageCount = sync.totalPagesInSpine;
+    cachedChapterTotalPageCount = restorePageCount;
   }
 
   sync.clear();
@@ -867,6 +874,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         section->currentPage = newPage;
       }
       cachedChapterTotalPageCount = 0;  // resets to 0 to prevent reading cached progress again
+    }
+
+    // Safety clamp: estimated page numbers from sync or progress.bin may exceed
+    // the actual page count when the section was built with different settings or
+    // the estimate was based on a different spine's density.
+    if (section->pageCount > 0 && section->currentPage >= section->pageCount) {
+      LOG_DBG("ERS", "Clamping page %d to last page %d", section->currentPage, section->pageCount - 1);
+      section->currentPage = section->pageCount - 1;
     }
 
     if (pendingPercentJump && section->pageCount > 0) {
