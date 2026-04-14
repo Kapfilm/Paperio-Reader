@@ -48,6 +48,13 @@ class KeyboardEntryActivity : public Activity {
   bool confirmHeld = false;
   bool confirmLongHandled = false;
 
+  bool cursorMode = false;
+  size_t cursorPos = 0;
+  bool upHeld = false;
+  bool upLongHandled = false;
+  bool downHeld = false;
+  bool downLongHandled = false;
+
   void onComplete(std::string text);
   void onCancel();
 

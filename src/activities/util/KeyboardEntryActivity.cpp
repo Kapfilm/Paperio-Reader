@@ -10,6 +10,7 @@
 
 void KeyboardEntryActivity::onEnter() {
   Activity::onEnter();
+  cursorPos = text.length();
   requestUpdate();
 }
 
@@ -58,7 +59,8 @@ bool KeyboardEntryActivity::insertChar(char c) {
   if (c == '\0') return true;
   if (maxLength != 0 && text.length() >= maxLength) return true;
 
-  text += c;
+  text.insert(cursorPos, 1, c);
+  cursorPos++;
   return true;
 }
 
@@ -121,8 +123,9 @@ bool KeyboardEntryActivity::handleKeyPress() {
       case SpecSpace:
         return insertChar(' ');
       case SpecDel:
-        if (!text.empty()) {
-          text.pop_back();
+        if (cursorPos > 0 && !text.empty()) {
+          text.erase(cursorPos - 1, 1);
+          cursorPos--;
         }
         return true;
       case SpecOk:
@@ -139,39 +142,84 @@ bool KeyboardEntryActivity::handleKeyPress() {
 void KeyboardEntryActivity::loop() {
   const int totalRows = getTotalRowCount();
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this, totalRows] {
-    bool wasBottom = isBottomRow(selectedRow);
-    selectedRow = ButtonNavigator::previousIndex(selectedRow, totalRows);
-    if (wasBottom && !isBottomRow(selectedRow)) {
-      selectedCol = selectedCol * COLS / getBottomKeyCount();
-    } else if (!wasBottom && isBottomRow(selectedRow)) {
-      selectedCol = selectedCol * getBottomKeyCount() / COLS;
-    }
-    int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
-    if (selectedCol > maxCol) selectedCol = maxCol;
-    requestUpdate();
-  });
+  if (!cursorMode && mappedInput.wasPressed(MappedInputManager::Button::Up)) {
+    upHeld = true;
+    upLongHandled = false;
+  }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this, totalRows] {
-    bool wasBottom = isBottomRow(selectedRow);
-    selectedRow = ButtonNavigator::nextIndex(selectedRow, totalRows);
-    if (wasBottom && !isBottomRow(selectedRow)) {
-      selectedCol = selectedCol * COLS / getBottomKeyCount();
-    } else if (!wasBottom && isBottomRow(selectedRow)) {
-      selectedCol = selectedCol * getBottomKeyCount() / COLS;
-    }
-    int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
-    if (selectedCol > maxCol) selectedCol = maxCol;
+  if (upHeld && !upLongHandled && mappedInput.isPressed(MappedInputManager::Button::Up) &&
+      mappedInput.getHeldTime() > LONG_PRESS_MS) {
+    cursorMode = true;
+    upLongHandled = true;
     requestUpdate();
-  });
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+    if (upHeld && !upLongHandled && !cursorMode) {
+      bool wasBottom = isBottomRow(selectedRow);
+      selectedRow = ButtonNavigator::previousIndex(selectedRow, totalRows);
+      if (wasBottom && !isBottomRow(selectedRow)) {
+        selectedCol = selectedCol * 2;
+      } else if (!wasBottom && isBottomRow(selectedRow)) {
+        selectedCol = selectedCol / 2;
+      }
+      int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
+      if (selectedCol > maxCol) selectedCol = maxCol;
+      requestUpdate();
+    }
+    upHeld = false;
+    upLongHandled = false;
+  }
+
+  if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
+    downHeld = true;
+    if (cursorMode) {
+      cursorMode = false;
+      downLongHandled = true;
+      requestUpdate();
+    } else {
+      downLongHandled = false;
+    }
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+    if (downHeld && !downLongHandled && !cursorMode) {
+      bool wasBottom = isBottomRow(selectedRow);
+      selectedRow = ButtonNavigator::nextIndex(selectedRow, totalRows);
+      if (wasBottom && !isBottomRow(selectedRow)) {
+        selectedCol = selectedCol * 2;
+      } else if (!wasBottom && isBottomRow(selectedRow)) {
+        selectedCol = selectedCol / 2;
+      }
+      int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
+      if (selectedCol > maxCol) selectedCol = maxCol;
+      requestUpdate();
+    }
+    downHeld = false;
+    downLongHandled = false;
+  }
 
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Left}, [this] {
+    if (cursorMode) {
+      if (cursorPos > 0) {
+        cursorPos--;
+        requestUpdate();
+      }
+      return;
+    }
     int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
     selectedCol = ButtonNavigator::previousIndex(selectedCol, maxCol + 1);
     requestUpdate();
   });
 
   buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Right}, [this] {
+    if (cursorMode) {
+      if (cursorPos < text.length()) {
+        cursorPos++;
+        requestUpdate();
+      }
+      return;
+    }
     int maxCol = isBottomRow(selectedRow) ? getBottomKeyCount() - 1 : COLS - 1;
     selectedCol = ButtonNavigator::nextIndex(selectedCol, maxCol + 1);
     requestUpdate();
@@ -230,15 +278,29 @@ void KeyboardEntryActivity::render(RenderLock&&) {
     displayText = text;
   }
 
-  displayText += "_";
-
   int lineStartIdx = 0;
   int lineEndIdx = displayText.length();
   int textWidth = 0;
+  int cursorPixelX = metrics.contentSidePadding;
+  int cursorLineY = inputStartY;
+  bool cursorDrawn = false;
+
   while (true) {
     std::string lineText = displayText.substr(lineStartIdx, lineEndIdx - lineStartIdx);
     textWidth = renderer.getTextWidth(UI_12_FONT_ID, lineText.c_str());
-    if (textWidth <= contentRect.width - 2 * metrics.contentSidePadding) {
+    if (textWidth <= pageWidth - 2 * metrics.contentSidePadding) {
+      if (!cursorDrawn && cursorPos >= lineStartIdx && cursorPos <= lineEndIdx) {
+        std::string beforeCursor = displayText.substr(lineStartIdx, cursorPos - lineStartIdx);
+        int beforeWidth = renderer.getTextWidth(UI_12_FONT_ID, beforeCursor.c_str());
+        if (metrics.keyboardCenteredText) {
+          cursorPixelX = (pageWidth - textWidth) / 2 + beforeWidth;
+        } else {
+          cursorPixelX = metrics.contentSidePadding + beforeWidth;
+        }
+        cursorLineY = inputStartY + inputHeight;
+        cursorDrawn = true;
+      }
+
       if (metrics.keyboardCenteredText) {
         const int centeredX = contentRect.x + (contentRect.width - textWidth) / 2;
         renderer.drawText(UI_12_FONT_ID, centeredX, inputStartY + inputHeight, lineText.c_str());
@@ -259,6 +321,18 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   }
 
   GUI.drawTextField(renderer, Rect{contentRect.x, inputStartY, contentRect.width, inputHeight}, textWidth);
+
+  const int cursorCharWidth = renderer.getTextWidth(UI_12_FONT_ID, "_");
+  if (cursorMode) {
+    renderer.fillRect(cursorPixelX, cursorLineY, cursorCharWidth, lineHeight, true);
+    if (cursorPos < displayText.length()) {
+      const char buf[2] = {displayText[cursorPos], '\0'};
+      renderer.drawText(UI_12_FONT_ID, cursorPixelX, cursorLineY, buf, false);
+    }
+  } else {
+    renderer.drawLine(cursorPixelX, cursorLineY + lineHeight - 1, cursorPixelX + cursorCharWidth,
+                      cursorLineY + lineHeight - 1, 2, true);
+  }
 
   const int keyHeight = metrics.keyboardKeyHeight;
   const int bottomKeyHeight = metrics.keyboardBottomKeyHeight;
@@ -293,9 +367,9 @@ void KeyboardEntryActivity::render(RenderLock&&) {
 
       const char primaryBuf[2] = {primaryChar, '\0'};
       const char secondaryBuf[2] = {secondaryChar, '\0'};
-
       const bool showSecondary = !symMode && row == 0 && secondaryChar != '\0';
-      GUI.drawKeyboardKey(renderer, Rect{keyX, rowY, keyWidth, keyHeight}, primaryBuf, isSelected,
+      const bool activeKeySelected = isSelected && !cursorMode;
+      GUI.drawKeyboardKey(renderer, Rect{keyX, rowY, keyWidth, keyHeight}, primaryBuf, activeKeySelected,
                           showSecondary ? secondaryBuf : nullptr);
     }
   }
@@ -327,8 +401,25 @@ void KeyboardEntryActivity::render(RenderLock&&) {
     const int keyX = leftMargin + i * (bottomKeyWidth + bkSpacing);
     const bool isSelected = bottomSelected && i == selectedCol;
 
+    const bool activeKeySelected = isSelected && !cursorMode;
     GUI.drawKeyboardKey(renderer, Rect{keyX, bottomRowY, bottomKeyWidth, bottomKeyHeight}, bottomKeys[i].label,
-                        isSelected, nullptr, bottomKeys[i].themeType);
+                        activeKeySelected, nullptr, bottomKeys[i].themeType);
+  }
+
+  if (cursorMode) {
+    int selKeyX, selKeyY, selKeyW, selKeyH;
+    if (isBottomRow(selectedRow)) {
+      selKeyX = leftMargin + selectedCol * (bottomKeyWidth + bkSpacing);
+      selKeyY = bottomRowY;
+      selKeyW = bottomKeyWidth;
+      selKeyH = bottomKeyHeight;
+    } else {
+      selKeyX = leftMargin + selectedCol * (keyWidth + keySpacing);
+      selKeyY = keyboardStartY + selectedRow * (keyHeight + keySpacing);
+      selKeyW = keyWidth;
+      selKeyH = keyHeight;
+    }
+    renderer.drawRect(selKeyX - 1, selKeyY - 1, selKeyW + 2, selKeyH + 2, 2, true);
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
