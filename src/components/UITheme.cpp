@@ -2,6 +2,7 @@
 
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <I18n.h>
 #include <Logging.h>
 
@@ -77,19 +78,39 @@ Rect UITheme::getContentRect(const GfxRenderer& renderer, bool hasBottomHints, b
   switch (renderer.getOrientation()) {
     case GfxRenderer::Portrait:
       bottom = bh;
-      right = sw;
+      if (gpio.deviceIsX3() && hasSideHints) {
+        left = sw;
+        right = sw;
+      } else {
+        right = sw;
+      }
       break;
     case GfxRenderer::PortraitInverted:
       top = bh;
-      left = sw;
+      if (gpio.deviceIsX3() && hasSideHints) {
+        left = sw;
+        right = sw;
+      } else {
+        left = sw;
+      }
       break;
     case GfxRenderer::LandscapeClockwise:
       left = bh;
-      bottom = sw;
+      if (gpio.deviceIsX3() && hasSideHints) {
+        top = sw;
+        bottom = sw;
+      } else {
+        bottom = sw;
+      }
       break;
     case GfxRenderer::LandscapeCounterClockwise:
       right = bh;
-      top = sw;
+      if (gpio.deviceIsX3() && hasSideHints) {
+        top = sw;
+        bottom = sw;
+      } else {
+        top = sw;
+      }
       break;
   }
 

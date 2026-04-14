@@ -55,7 +55,8 @@ class UITheme {
   static std::function<bool(int)> makeSelectablePredicate(int total, std::function<std::string(int)> titleGetter);
 
   // Returns the drawable content Rect accounting for screen orientation and visible button hints.
-  // Bottom hints occupy the physical bottom edge; side hints occupy the physical right edge.
+  // Bottom hints occupy the physical bottom edge.
+  // Side hints occupy the physical right edge on X4, and both physical sides on X3.
   // The mapping to logical edges is orientation-dependent.
   static Rect getContentRect(const GfxRenderer& renderer, bool hasBottomHints, bool hasSideHints);
   static std::string getCoverThumbPath(std::string coverBmpPath, int coverHeight);
