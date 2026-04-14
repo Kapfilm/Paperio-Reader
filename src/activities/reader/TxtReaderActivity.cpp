@@ -153,7 +153,9 @@ void TxtReaderActivity::loop() {
   // Star page toggle via short power button press
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::STAR_PAGE &&
       mappedInput.wasReleased(MappedInputManager::Button::Power)) {
-    bookmarkStore.toggle(0, static_cast<uint16_t>(currentPage));
+    if (currentPage >= 0) {
+      bookmarkStore.toggle(0, static_cast<uint16_t>(currentPage));
+    }
     requestUpdate();
     return;
   }

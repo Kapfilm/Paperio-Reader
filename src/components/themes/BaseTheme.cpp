@@ -866,7 +866,8 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
       // No progress text, place star at right edge
       starX = renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight - starWidth;
     }
-    renderer.drawText(SMALL_FONT_ID, starX, textY + textYOffset, "*");
+    const int starY = title.empty() ? textY : (textY + textYOffset);
+    renderer.drawText(SMALL_FONT_ID, starX, starY, "*");
   }
 }
 
