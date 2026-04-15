@@ -4,6 +4,7 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <numeric>
 
 GlobalBookmarkIndex GlobalBookmarkIndex::instance;
 
@@ -187,7 +188,6 @@ bool GlobalBookmarkIndex::reconcile() {
 }
 
 size_t GlobalBookmarkIndex::totalBookmarkCount() const {
-  size_t total = 0;
-  for (const auto& e : entries) total += e.bookmarks.size();
-  return total;
+  return std::accumulate(entries.begin(), entries.end(), static_cast<size_t>(0),
+                         [](size_t sum, const Entry& e) { return sum + e.bookmarks.size(); });
 }
