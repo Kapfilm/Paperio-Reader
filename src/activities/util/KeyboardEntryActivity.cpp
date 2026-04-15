@@ -6,7 +6,9 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-const char* const KeyboardEntryActivity::shiftString[2] = {"shift", "SHIFT"};
+const char* KeyboardEntryActivity::shiftLabel(int shiftState) {
+  return shiftState ? tr(STR_SHIFT_CAPS) : tr(STR_SHIFT);
+}
 
 void KeyboardEntryActivity::onEnter() {
   Activity::onEnter();
@@ -294,16 +296,20 @@ void KeyboardEntryActivity::loop() {
 void KeyboardEntryActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
+  const Rect contentRect = UITheme::getContentRect(renderer, true, false);
+  const int pageWidth = contentRect.width;
+  const int pageHeight = contentRect.height;
+  const int contentX = contentRect.x;
+  const int contentY = contentRect.y;
   const auto& metrics = UITheme::getInstance().getMetrics();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, title.c_str());
+  GUI.drawHeader(renderer, Rect{contentX, contentY + metrics.topPadding, pageWidth, metrics.headerHeight},
+                 title.c_str());
 
   const int lineHeight = renderer.getLineHeight(UI_12_FONT_ID);
-  const int inputStartY = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing +
+  const int inputStartY = contentY + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing +
                           metrics.verticalSpacing * 4 + metrics.keyboardVerticalOffset;
-  int inputHeight = 0;
+  int inputHeight = lineHeight;
 
   std::string displayText;
   if (inputType == InputType::Password && !passwordVisible) {
@@ -336,6 +342,52 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   const int maxLineWidth = textAreaWidth;
   const bool centerText = metrics.keyboardCenteredText;
 
+  const int keyHeight = metrics.keyboardKeyHeight;
+  const int bottomKeyHeight = metrics.keyboardBottomKeyHeight;
+  const int keySpacing = metrics.keyboardKeySpacing;
+  const int contentCols = getContentColCount();
+  const int keyWidth = (pageWidth * 95 / 100 - (contentCols - 1) * keySpacing) / contentCols;
+  const int leftMargin = contentX + (pageWidth - (contentCols * keyWidth + (contentCols - 1) * keySpacing)) / 2;
+
+  const int bottomRowGap = metrics.keyboardBottomKeySpacing > 0 ? 4 : 0;
+  const int keyboardStartY = metrics.keyboardBottomAligned
+                                 ? contentY + contentRect.height - metrics.verticalSpacing -
+                                       (keyHeight + keySpacing) * getContentRowCount() - bottomKeyHeight -
+                                       bottomRowGap + metrics.keyboardVerticalOffset
+                                 : inputStartY + inputHeight + lineHeight + metrics.verticalSpacing;
+
+  const char* helpTexts[3];
+  if (inputType == InputType::Url) {
+    helpTexts[0] = tr(STR_KEYBOARD_HELP_URL_LINE_1);
+    helpTexts[1] = tr(STR_KEYBOARD_HELP_URL_LINE_2);
+    helpTexts[2] = tr(STR_KEYBOARD_HELP_URL_LINE_3);
+  } else if (cursorMode) {
+    helpTexts[0] = tr(STR_KEYBOARD_HELP_CURSOR_LINE_1);
+    helpTexts[1] = tr(STR_KEYBOARD_HELP_CURSOR_LINE_2);
+    helpTexts[2] = tr(STR_KEYBOARD_HELP_CURSOR_LINE_3);
+  } else if (inputType == InputType::Password) {
+    helpTexts[0] = tr(STR_KEYBOARD_HELP_PASSWORD_LINE_1);
+    helpTexts[1] = tr(STR_KEYBOARD_HELP_PASSWORD_LINE_2);
+    helpTexts[2] = tr(STR_KEYBOARD_HELP_PASSWORD_LINE_3);
+  } else {
+    helpTexts[0] = tr(STR_KEYBOARD_HELP_DEFAULT_LINE_1);
+    helpTexts[1] = tr(STR_KEYBOARD_HELP_DEFAULT_LINE_2);
+    helpTexts[2] = tr(STR_KEYBOARD_HELP_DEFAULT_LINE_3);
+  }
+
+  const int helpTop = inputStartY + inputHeight + metrics.verticalSpacing;
+  const int helpHeight = keyboardStartY - helpTop;
+  const int helpLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const int maxHelpLines = std::max(0, helpHeight / helpLineHeight);
+  const int helpLineCount = std::min(3, maxHelpLines);
+  const int helpLineWidth = pageWidth - 2 * metrics.contentSidePadding;
+  for (int i = 0; i < helpLineCount; ++i) {
+    const char* helpText = helpTexts[i];
+    const std::string line = renderer.truncatedText(SMALL_FONT_ID, helpText, helpLineWidth, EpdFontFamily::ITALIC);
+    renderer.drawText(SMALL_FONT_ID, contentX + metrics.contentSidePadding, helpTop + i * helpLineHeight, line.c_str(),
+                      true, EpdFontFamily::ITALIC);
+  }
+
   int cursorCharWidth;
   if (cursorPos < text.length()) {
     cursorCharWidth = renderer.getTextWidth(UI_12_FONT_ID, text.substr(cursorPos, 1).c_str());
@@ -346,7 +398,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   int lineStartIdx = 0;
   int lineEndIdx = displayText.length();
   int textWidth = 0;
-  int cursorPixelX = metrics.contentSidePadding;
+  int cursorPixelX = contentX + metrics.contentSidePadding;
   int cursorLineY = inputStartY;
   bool cursorDrawn = false;
 
@@ -366,16 +418,17 @@ void KeyboardEntryActivity::render(RenderLock&&) {
         }
         int beforeWidth = renderer.getTextWidth(UI_12_FONT_ID, beforeCursor.c_str());
         if (centerText) {
-          cursorPixelX = effectiveMargin + (maxLineWidth - textWidth) / 2 + beforeWidth;
+          cursorPixelX = contentX + effectiveMargin + (maxLineWidth - textWidth) / 2 + beforeWidth;
         } else {
-          cursorPixelX = effectiveMargin + beforeWidth;
+          cursorPixelX = contentX + effectiveMargin + beforeWidth;
         }
         cursorLineY = inputStartY + inputHeight;
         cursorDrawn = true;
         isCursorLine = true;
       }
 
-      const int lineStartX = centerText ? effectiveMargin + (maxLineWidth - textWidth) / 2 : effectiveMargin;
+      const int lineStartX =
+          contentX + (centerText ? effectiveMargin + (maxLineWidth - textWidth) / 2 : effectiveMargin);
       if (isCursorLine && cursorMode && isPassword && !passwordVisible) {
         // Draw text in 3 parts to avoid block cursor overflowing onto next char.
         // displayText uses '*' for all chars; actual char may be wider than '*'.
@@ -407,7 +460,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
 
   const int fieldWidth = (inputHeight > 0) ? maxLineWidth : textWidth;
   const int lineMargin = margin + extraMargin - 5;
-  GUI.drawTextField(renderer, Rect{0, inputStartY, pageWidth, inputHeight}, fieldWidth, cursorMode, lineMargin,
+  GUI.drawTextField(renderer, Rect{contentX, inputStartY, pageWidth, inputHeight}, fieldWidth, cursorMode, lineMargin,
                     pageWidth - 2 * lineMargin);
 
   if (cursorMode && cursorPos <= displayText.length()) {
@@ -432,7 +485,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
   if (isPassword) {
     const char* toggleLabel = passwordVisible ? "[***]" : "[abc]";
     const int toggleWidth = renderer.getTextWidth(UI_12_FONT_ID, toggleLabel);
-    const int toggleX = pageWidth - effectiveMargin - toggleWidth;
+    const int toggleX = contentX + pageWidth - effectiveMargin - toggleWidth;
     const int toggleY = inputStartY + inputHeight;
     const bool toggleSelected = cursorMode && cursorPos > text.length();
 
@@ -444,26 +497,12 @@ void KeyboardEntryActivity::render(RenderLock&&) {
     }
   }
 
-  const int keyHeight = metrics.keyboardKeyHeight;
-  const int bottomKeyHeight = metrics.keyboardBottomKeyHeight;
-  const int keySpacing = metrics.keyboardKeySpacing;
-  const int contentCols = getContentColCount();
-  const int keyWidth = (pageWidth * 95 / 100 - (contentCols - 1) * keySpacing) / contentCols;
-  const int leftMargin = (pageWidth - (contentCols * keyWidth + (contentCols - 1) * keySpacing)) / 2;
-
-  const int bottomRowGap = metrics.keyboardBottomKeySpacing > 0 ? 4 : 0;
-  const int keyboardStartY = metrics.keyboardBottomAligned
-                                 ? pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing -
-                                       (keyHeight + keySpacing) * getContentRowCount() - bottomKeyHeight -
-                                       bottomRowGap + metrics.keyboardVerticalOffset
-                                 : inputStartY + inputHeight + lineHeight + metrics.verticalSpacing;
-
   const int bkSpacing = metrics.keyboardBottomKeySpacing;
   const int contentTotalWidth =
       COLS * ((pageWidth * 95 / 100 - (COLS - 1) * keySpacing) / COLS) + (COLS - 1) * keySpacing;
   const int bottomKeyWidth = (contentTotalWidth - (BOTTOM_KEY_COUNT - 1) * bkSpacing) / BOTTOM_KEY_COUNT;
   const int bottomLeftMargin =
-      (pageWidth - (BOTTOM_KEY_COUNT * bottomKeyWidth + (BOTTOM_KEY_COUNT - 1) * bkSpacing)) / 2;
+      contentX + (pageWidth - (BOTTOM_KEY_COUNT * bottomKeyWidth + (BOTTOM_KEY_COUNT - 1) * bkSpacing)) / 2;
 
   int urlLeftMargin = leftMargin;
   if (urlMode) {
@@ -518,7 +557,7 @@ void KeyboardEntryActivity::render(RenderLock&&) {
     const char* label;
   };
   const BottomKeyInfo bottomKeys[BOTTOM_KEY_COUNT] = {
-      {KeyboardKeyType::Shift, (symMode || urlMode) ? shiftString[0] : shiftString[shiftState]},
+      {KeyboardKeyType::Shift, (symMode || urlMode) ? shiftLabel(0) : shiftLabel(shiftState)},
       {KeyboardKeyType::Mode, urlMode ? "abc" : (symMode ? "abc" : "#@!")},
       {inputType == InputType::Url ? KeyboardKeyType::Mode : KeyboardKeyType::Space,
        inputType == InputType::Url ? "URL" : nullptr},
