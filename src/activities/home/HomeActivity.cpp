@@ -260,7 +260,7 @@ void HomeActivity::loop() {
   if (firstRenderDone && !recentsLoaded && !recentsLoading) {
     const auto& metrics = UITheme::getInstance().getMetrics();
     const Rect contentRect = UITheme::getContentRect(renderer, true, false);
-    const int menuItemCount = hasOpdsUrl ? 6 : 5;
+    const int menuItemCount = getMenuItemCount();
     const HomeScreenLayout layout = computeHomeScreenLayout(metrics, contentRect.height, menuItemCount);
     loadRecentCovers(getHomeCoverRenderHeight(layout));
     return;

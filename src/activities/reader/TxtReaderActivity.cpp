@@ -438,6 +438,8 @@ void TxtReaderActivity::applyPendingBookmarkJump() {
     return;
   }
   LOG_DBG("TRS", "Applying pending bookmark jump: page=%u", jump.pageNumber);
+
+  bool persisted = false;
   FsFile f;
   if (Storage.openFileForWrite("TRS", txt->getCachePath() + "/progress.bin", f)) {
     uint8_t data[6] = {0};
@@ -445,11 +447,17 @@ void TxtReaderActivity::applyPendingBookmarkJump() {
     data[1] = (jump.pageNumber >> 8) & 0xFF;
     // Offset bytes stay 0: loadProgress reads only the page, and the lazy
     // initializeReader() rebuilds the page index on first render anyway.
-    f.write(data, 6);
-    f.close();
+    if (f.write(data, 6) == 6) {
+      persisted = f.close();
+    } else {
+      f.close();
+    }
   }
-  jump.clear();
-  APP_STATE.saveToFile();
+
+  if (persisted) {
+    jump.clear();
+    APP_STATE.saveToFile();
+  }
 }
 
 void TxtReaderActivity::loadProgress() {

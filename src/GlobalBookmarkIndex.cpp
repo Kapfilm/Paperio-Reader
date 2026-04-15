@@ -176,7 +176,11 @@ bool GlobalBookmarkIndex::reconcile() {
   entries.erase(std::remove_if(entries.begin(), entries.end(),
                                [](const Entry& e) {
                                  if (!Storage.exists(e.sourcePath.c_str())) {
-                                   LOG_DBG("GBI", "Dropping orphan entry: %s", e.sourcePath.c_str());
+                                   LOG_DBG("GBI", "Dropping orphan entry: missing sourcePath=%s", e.sourcePath.c_str());
+                                   return true;
+                                 }
+                                 if (!Storage.exists(e.cacheDir.c_str())) {
+                                   LOG_DBG("GBI", "Dropping orphan entry: missing cacheDir=%s", e.cacheDir.c_str());
                                    return true;
                                  }
                                  return false;

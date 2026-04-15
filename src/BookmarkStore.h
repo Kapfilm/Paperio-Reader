@@ -83,7 +83,7 @@ class BookmarkStore {
       return;
     }
 
-    if (bookmarks.size() > UINT16_MAX) {
+    if (bookmarks.size() > MAX_BOOKMARKS) {
       LOG_ERR("BKM", "Too many bookmarks to save: %u", static_cast<unsigned>(bookmarks.size()));
       return;
     }
@@ -109,7 +109,6 @@ class BookmarkStore {
       }
     }
 
-    bool closeOk = false;
     if (ok) {
       if (!f.close()) {
         LOG_ERR("BKM", "Failed to close bookmarks file");

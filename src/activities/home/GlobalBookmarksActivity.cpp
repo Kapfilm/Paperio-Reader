@@ -20,9 +20,7 @@
 void GlobalBookmarksActivity::onEnter() {
   Activity::onEnter();
 
-  if (GLOBAL_BOOKMARKS.reconcile()) {
-    GLOBAL_BOOKMARKS.save();
-  }
+  GLOBAL_BOOKMARKS.reconcile();
   rebuildRows();
 
   const int first = firstSelectableIndex();
