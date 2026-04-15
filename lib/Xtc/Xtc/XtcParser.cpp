@@ -304,8 +304,10 @@ XtcError XtcParser::readChapters() {
   }
 
   constexpr size_t chapterSize = 96;
+  constexpr uint64_t kMaxChapters = 4096;
   const uint64_t available = maxOffset - chapterOffset;
-  const size_t chapterCount = static_cast<size_t>(available / chapterSize);
+  const uint64_t rawCount = available / chapterSize;
+  const size_t chapterCount = static_cast<size_t>(rawCount > kMaxChapters ? kMaxChapters : rawCount);
   if (chapterCount == 0) {
     return XtcError::OK;
   }
@@ -396,11 +398,13 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
   PageInfo page;
   if (!readPageTableEntry(pageIndex, page)) {
     m_lastError = XtcError::READ_ERROR;
+    closeFile();
     return 0;
   }
 
   if (!ensureFileOpen()) {
     m_lastError = XtcError::FILE_NOT_FOUND;
+    closeFile();
     return 0;
   }
 
@@ -408,6 +412,7 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
   if (!m_file.seek64(page.offset)) {
     LOG_DBG("XTC", "Failed to seek to page %u at offset %lu", pageIndex, page.offset);
     m_lastError = XtcError::READ_ERROR;
+    closeFile();
     return 0;
   }
 
@@ -417,6 +422,7 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
   if (headerRead != sizeof(XtgPageHeader)) {
     LOG_DBG("XTC", "Failed to read page header for page %u", pageIndex);
     m_lastError = XtcError::READ_ERROR;
+    closeFile();
     return 0;
   }
 
@@ -426,6 +432,7 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
     LOG_DBG("XTC", "Invalid page magic for page %u: 0x%08X (expected 0x%08X)", pageIndex, pageHeader.magic,
             expectedMagic);
     m_lastError = XtcError::INVALID_MAGIC;
+    closeFile();
     return 0;
   }
 
@@ -444,6 +451,7 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
   if (bufferSize < bitmapSize) {
     LOG_DBG("XTC", "Buffer too small: need %u, have %u", bitmapSize, bufferSize);
     m_lastError = XtcError::MEMORY_ERROR;
+    closeFile();
     return 0;
   }
 
@@ -452,10 +460,12 @@ size_t XtcParser::loadPage(uint32_t pageIndex, uint8_t* buffer, size_t bufferSiz
   if (bytesRead != bitmapSize) {
     LOG_DBG("XTC", "Page read error: expected %u, got %u", bitmapSize, bytesRead);
     m_lastError = XtcError::READ_ERROR;
+    closeFile();
     return 0;
   }
 
   m_lastError = XtcError::OK;
+  m_file.close();
   return bytesRead;
 }
 
@@ -472,15 +482,18 @@ XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
 
   PageInfo page;
   if (!readPageTableEntry(pageIndex, page)) {
+    closeFile();
     return XtcError::READ_ERROR;
   }
 
   if (!ensureFileOpen()) {
+    closeFile();
     return XtcError::FILE_NOT_FOUND;
   }
 
   // Seek to page data
   if (!m_file.seek64(page.offset)) {
+    closeFile();
     return XtcError::READ_ERROR;
   }
 
@@ -489,6 +502,7 @@ XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
   size_t headerRead = m_file.read(reinterpret_cast<uint8_t*>(&pageHeader), sizeof(XtgPageHeader));
   const uint32_t expectedMagic = (m_bitDepth == 2) ? XTH_MAGIC : XTG_MAGIC;
   if (headerRead != sizeof(XtgPageHeader) || pageHeader.magic != expectedMagic) {
+    closeFile();
     return XtcError::READ_ERROR;
   }
 
@@ -511,6 +525,7 @@ XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
     size_t bytesRead = m_file.read(chunk.data(), toRead);
 
     if (bytesRead == 0) {
+      closeFile();
       return XtcError::READ_ERROR;
     }
 
@@ -518,6 +533,7 @@ XtcError XtcParser::loadPageStreaming(uint32_t pageIndex,
     totalRead += bytesRead;
   }
 
+  closeFile();
   return XtcError::OK;
 }
 
