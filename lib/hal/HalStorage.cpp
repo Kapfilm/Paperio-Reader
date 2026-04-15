@@ -183,13 +183,22 @@ bool HalStorage::copyFile(const char* moduleName, const std::string& srcPath, co
 
 void HalFile::flush() { HAL_FILE_WRAPPED_CALL(flush, ); }
 size_t HalFile::getName(char* name, size_t len) { HAL_FILE_WRAPPED_CALL(getName, name, len); }
-size_t HalFile::size() { assert(impl != nullptr); return static_cast<size_t>(impl->file.size()); }
-size_t HalFile::fileSize() { assert(impl != nullptr); return static_cast<size_t>(impl->file.fileSize()); }
+size_t HalFile::size() {
+  assert(impl != nullptr);
+  return static_cast<size_t>(impl->file.size());
+}
+size_t HalFile::fileSize() {
+  assert(impl != nullptr);
+  return static_cast<size_t>(impl->file.fileSize());
+}
 bool HalFile::seek(size_t pos) { HAL_FILE_WRAPPED_CALL(seekSet, pos); }
 bool HalFile::seekCur(int64_t offset) { HAL_FILE_WRAPPED_CALL(seekCur, offset); }
 bool HalFile::seekSet(size_t offset) { HAL_FILE_WRAPPED_CALL(seekSet, offset); }
 int HalFile::available() const { HAL_FILE_WRAPPED_CALL(available, ); }
-size_t HalFile::position() const { assert(impl != nullptr); return static_cast<size_t>(impl->file.position()); }
+size_t HalFile::position() const {
+  assert(impl != nullptr);
+  return static_cast<size_t>(impl->file.position());
+}
 int HalFile::read(void* buf, size_t count) { HAL_FILE_WRAPPED_CALL(read, buf, count); }
 int HalFile::read() { HAL_FILE_WRAPPED_CALL(read, ); }
 size_t HalFile::write(const void* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
