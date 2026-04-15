@@ -25,6 +25,9 @@ bool readString(FsFile& f, std::string& out) {
   out.resize(len);
   return f.read(reinterpret_cast<uint8_t*>(&out[0]), len) == len;
 }
+
+constexpr uint16_t MAX_ENTRIES = 1000;
+constexpr uint16_t MAX_BOOKMARKS_PER_ENTRY = 1000;
 }  // namespace
 
 std::vector<GlobalBookmarkIndex::Entry>::iterator GlobalBookmarkIndex::findBySourcePath(const std::string& sourcePath) {
@@ -50,7 +53,9 @@ void GlobalBookmarkIndex::load() {
   }
 
   uint16_t entryCount = 0;
-  if (f.read(reinterpret_cast<uint8_t*>(&entryCount), sizeof(entryCount)) != sizeof(entryCount)) {
+  if (f.read(reinterpret_cast<uint8_t*>(&entryCount), sizeof(entryCount)) != sizeof(entryCount) ||
+      entryCount > MAX_ENTRIES) {
+    LOG_ERR("GBI", "Invalid entry count: %u", static_cast<unsigned>(entryCount));
     f.close();
     return;
   }
@@ -69,7 +74,9 @@ void GlobalBookmarkIndex::load() {
     e.isTxt = (isTxtByte != 0);
 
     uint16_t bmCount = 0;
-    if (f.read(reinterpret_cast<uint8_t*>(&bmCount), sizeof(bmCount)) != sizeof(bmCount)) {
+    if (f.read(reinterpret_cast<uint8_t*>(&bmCount), sizeof(bmCount)) != sizeof(bmCount) ||
+        bmCount > MAX_BOOKMARKS_PER_ENTRY) {
+      LOG_ERR("GBI", "Invalid bookmark count for entry %u: %u", i, static_cast<unsigned>(bmCount));
       entries.clear();
       f.close();
       return;
