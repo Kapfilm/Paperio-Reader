@@ -298,7 +298,6 @@ void KeyboardEntryActivity::render(RenderLock&&) {
 
   const Rect contentRect = UITheme::getContentRect(renderer, true, true);
   const int pageWidth = contentRect.width;
-  const int pageHeight = contentRect.height;
   const int contentX = contentRect.x;
   const int contentY = contentRect.y;
   const auto& metrics = UITheme::getInstance().getMetrics();
