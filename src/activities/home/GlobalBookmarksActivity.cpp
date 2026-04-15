@@ -272,7 +272,7 @@ void GlobalBookmarksActivity::render(RenderLock&&) {
 
   if (rows.empty()) {
     renderer.drawText(UI_10_FONT_ID, contentRect.x + metrics.contentSidePadding, contentTop + 20,
-                      tr(STR_NO_STARRED_PAGES));
+                      tr(STR_NO_GLOBAL_BOOKMARKS));
   } else {
     GUI.drawList(renderer, Rect{contentRect.x, contentTop, contentRect.width, contentHeight},
                  static_cast<int>(rows.size()), selectorIndex, [this](int index) { return getRowTitle(index); });
