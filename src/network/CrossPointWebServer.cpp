@@ -402,6 +402,9 @@ void CrossPointWebServer::handleStatus() const {
 
   JsonDocument doc;
   doc["version"] = status.version;
+  doc["deviceType"] = status.deviceType;
+  doc["displayWidth"] = status.displayWidth;
+  doc["displayHeight"] = status.displayHeight;
   doc["chipVersion"] = status.chipVersion;
   doc["cpuMHz"] = status.cpuFreqMHz;
   doc["ip"] = status.ip;
@@ -412,8 +415,7 @@ void CrossPointWebServer::handleStatus() const {
   doc["minFreeHeap"] = status.minFreeHeapBytes;
   doc["maxAllocHeap"] = status.maxAllocHeapBytes;
   doc["flashTotal"] = status.flashBytes;
-  doc["flashAppUsed"] = status.flashAppUsedBytes;
-  doc["flashAppFree"] = status.flashAppFreeBytes;
+  doc["appPartitionSize"] = status.flashAppPartitionSize;
   doc["batteryPercent"] = status.batteryPercent;
   doc["charging"] = status.charging;
   doc["uptime"] = status.uptimeSeconds;
@@ -436,6 +438,9 @@ void CrossPointWebServer::handleStatusFast() const {
 
   JsonDocument doc;
   doc["version"] = status.version;
+  doc["deviceType"] = status.deviceType;
+  doc["displayWidth"] = status.displayWidth;
+  doc["displayHeight"] = status.displayHeight;
   doc["chipVersion"] = status.chipVersion;
   doc["cpuMHz"] = status.cpuFreqMHz;
   doc["ip"] = status.ip;
@@ -446,8 +451,7 @@ void CrossPointWebServer::handleStatusFast() const {
   doc["minFreeHeap"] = status.minFreeHeapBytes;
   doc["maxAllocHeap"] = status.maxAllocHeapBytes;
   doc["flashTotal"] = status.flashBytes;
-  doc["flashAppUsed"] = status.flashAppUsedBytes;
-  doc["flashAppFree"] = status.flashAppFreeBytes;
+  doc["appPartitionSize"] = status.flashAppPartitionSize;
   doc["batteryPercent"] = status.batteryPercent;
   doc["charging"] = status.charging;
   doc["uptime"] = status.uptimeSeconds;

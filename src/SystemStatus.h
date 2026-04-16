@@ -5,13 +5,18 @@
 #include <Logging.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include <esp_ota_ops.h>
 
+#include "HalGPIO.h"
 #include "HalPowerManager.h"
 
 // Snapshot of device system status, shared between the web server and the
 // System Information activity so both surfaces show consistent data.
 struct SystemStatus {
   const char* version;
+  const char* deviceType;  // "X3" or "X4"
+  uint16_t displayWidth;   // Native panel width in pixels (long edge)
+  uint16_t displayHeight;  // Native panel height in pixels (short edge)
   std::string chipVersion;
   uint32_t cpuFreqMHz;
   std::string ip;
@@ -21,9 +26,8 @@ struct SystemStatus {
   uint32_t freeHeapBytes;
   uint32_t minFreeHeapBytes;
   uint32_t maxAllocHeapBytes;
-  uint64_t flashBytes;
-  uint64_t flashAppUsedBytes;
-  uint64_t flashAppFreeBytes;
+  uint64_t flashBytes;             // Total flash chip size
+  uint64_t flashAppPartitionSize;  // Size of the running OTA app partition
   uint16_t batteryPercent;
   bool charging;
   uint32_t uptimeSeconds;
@@ -34,6 +38,15 @@ struct SystemStatus {
   static SystemStatus collectFast() {
     SystemStatus s;
     s.version = CROSSPOINT_VERSION;
+    if (gpio.deviceIsX3()) {
+      s.deviceType = "X3";
+      s.displayWidth = 792;
+      s.displayHeight = 528;
+    } else {
+      s.deviceType = "X4";
+      s.displayWidth = 800;
+      s.displayHeight = 480;
+    }
     s.chipVersion = ESP.getChipModel();
     s.chipVersion += " rev ";
     s.chipVersion += std::to_string(ESP.getChipRevision());
@@ -42,8 +55,11 @@ struct SystemStatus {
     s.minFreeHeapBytes = ESP.getMinFreeHeap();
     s.maxAllocHeapBytes = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     s.flashBytes = static_cast<uint64_t>(ESP.getFlashChipSize());
-    s.flashAppUsedBytes = static_cast<uint64_t>(ESP.getSketchSize());
-    s.flashAppFreeBytes = static_cast<uint64_t>(ESP.getFreeSketchSpace());
+    // ESP.getSketchSize() is unreliable on custom partition layouts (the
+    // underlying esp_image_verify() call silently fails), so we report the
+    // running OTA partition capacity instead — a firm, measurable number.
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    s.flashAppPartitionSize = running ? static_cast<uint64_t>(running->size) : 0;
     s.batteryPercent = powerManager.getBatteryPercentage();
     s.charging = digitalRead(UART0_RXD) == HIGH;
     s.uptimeSeconds = millis() / 1000;
