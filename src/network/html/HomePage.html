@@ -58,6 +58,25 @@
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
     }
 
+    .section {
+      margin-top: 18px;
+    }
+
+    .section:first-of-type {
+      margin-top: 0;
+    }
+
+    .section-title {
+      font-size: 0.85em;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--label-color);
+      margin: 0 0 4px 0;
+      padding-bottom: 4px;
+      border-bottom: 1px solid var(--accent-color);
+    }
+
     .info-row {
       display: flex;
       justify-content: space-between;
@@ -130,6 +149,18 @@
       opacity: 0.6;
       cursor: default;
     }
+
+    .debug-footer {
+      margin-top: 24px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 0.75em;
+      color: var(--label-color);
+      opacity: 0.7;
+    }
   </style>
 </head>
 
@@ -144,68 +175,93 @@
 
   <div class="card">
     <h2>Device Status</h2>
-    <div class="info-row">
-      <span class="label">Version</span>
-      <span class="value" id="version">Loading...</span>
+
+    <div class="section">
+      <div class="section-title">Version</div>
+      <div class="info-row">
+        <span class="label">Firmware</span>
+        <span class="value" id="version">Loading...</span>
+      </div>
+      <div class="info-row">
+        <span class="label">Device</span>
+        <span class="value" id="device">Loading...</span>
+      </div>
     </div>
-    <div class="info-row">
-      <span class="label">Chip</span>
-      <span class="value" id="chip-version">Loading...</span>
+
+    <div class="section">
+      <div class="section-title">Chip</div>
+      <div class="info-row">
+        <span class="label">Chip</span>
+        <span class="value" id="chip-version">Loading...</span>
+      </div>
+      <div class="info-row">
+        <span class="label">CPU</span>
+        <span class="value" id="cpu-mhz">Loading...</span>
+      </div>
     </div>
-    <div class="info-row">
-      <span class="label">CPU</span>
-      <span class="value" id="cpu-mhz">Loading...</span>
+
+    <div class="section">
+      <div class="section-title">Network</div>
+      <div class="info-row">
+        <span class="label">WiFi Status</span>
+        <span class="status" id="wifi-status">Loading...</span>
+      </div>
+      <div class="info-row">
+        <span class="label">IP Address</span>
+        <span class="value" id="ip-address">Loading...</span>
+      </div>
+      <div class="info-row">
+        <span class="label">MAC Address</span>
+        <span class="value" id="mac-address">Loading...</span>
+      </div>
     </div>
-    <div class="info-row">
-      <span class="label">WiFi Status</span>
-      <span class="status" id="wifi-status">Loading...</span>
+
+    <div class="section">
+      <div class="section-title">Memory</div>
+      <div class="info-row">
+        <span class="label">Free / Min / Max</span>
+        <span class="value" id="heap-combined">Loading...</span>
+      </div>
     </div>
-    <div class="info-row">
-      <span class="label">IP Address</span>
-      <span class="value" id="ip-address">Loading...</span>
+
+    <div class="section">
+      <div class="section-title">Flash</div>
+      <div class="info-row">
+        <span class="label">App partition</span>
+        <span class="value" id="app-partition-size">Loading...</span>
+      </div>
+      <div class="info-row">
+        <span class="label">Total flash</span>
+        <span class="value" id="flash-total">Loading...</span>
+      </div>
     </div>
-    <div class="info-row">
-      <span class="label">MAC Address</span>
-      <span class="value" id="mac-address">Loading...</span>
+
+    <div class="section">
+      <div class="section-title">Runtime</div>
+      <div class="info-row">
+        <span class="label">Uptime</span>
+        <span class="value" id="uptime">Loading...</span>
+      </div>
+      <div class="info-row">
+        <span class="label">Battery</span>
+        <span class="value" id="battery">Loading...</span>
+      </div>
     </div>
-    <div class="info-row">
-      <span class="label">Free Memory</span>
-      <span class="value" id="free-heap">Loading...</span>
+
+    <div class="section">
+      <div class="section-title">Storage</div>
+      <div class="info-row">
+        <span class="label">SD Card</span>
+        <span class="value" id="sd-space">Not loaded</span>
+      </div>
+      <div class="action-row">
+        <button id="load-sd-button">Load SD info</button>
+      </div>
     </div>
-    <div class="info-row">
-      <span class="label">Min Free</span>
-      <span class="value" id="min-free-heap">Loading...</span>
-    </div>
-    <div class="info-row">
-      <span class="label">Max Block</span>
-      <span class="value" id="max-alloc-heap">Loading...</span>
-    </div>
-    <div class="info-row">
-      <span class="label">Flash Used</span>
-      <span class="value" id="flash-used">Loading...</span>
-    </div>
-    <div class="info-row">
-      <span class="label">Battery</span>
-      <span class="value" id="battery">Loading...</span>
-    </div>
-    <div class="info-row">
-      <span class="label">Uptime</span>
-      <span class="value" id="uptime">Loading...</span>
-    </div>
-    <div class="info-row">
-      <span class="label">Fast status fetch</span>
-      <span class="value" id="fast-status-duration">Loading...</span>
-    </div>
-    <div class="info-row">
-      <span class="label">Full status fetch</span>
-      <span class="value" id="full-status-duration">Not loaded</span>
-    </div>
-    <div class="info-row">
-      <span class="label">SD Card</span>
-      <span class="value" id="sd-space">Not loaded</span>
-    </div>
-    <div class="action-row">
-      <button id="load-sd-button">Load SD info</button>
+
+    <div class="debug-footer">
+      <span>Fast fetch: <span id="fast-status-duration">…</span></span>
+      <span>Full fetch: <span id="full-status-duration">—</span></span>
     </div>
   </div>
 
@@ -215,12 +271,25 @@
     </p>
   </div>
   <script>
+    function pickUnit(maxBytes) {
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let div = 1, i = 0;
+      while (maxBytes >= 1024 && i < units.length - 1) { maxBytes /= 1024; div *= 1024; i++; }
+      return { unit: units[i], div };
+    }
+
     function formatBytes(bytes) {
       if (bytes == null) return 'N/A';
-      const units = ['B', 'KB', 'MB', 'GB'];
-      let val = bytes, i = 0;
-      while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
-      return parseFloat(val.toFixed(2)).toLocaleString() + ' ' + units[i];
+      const { unit, div } = pickUnit(bytes);
+      if (div === 1) return bytes.toLocaleString() + ' ' + unit;
+      return parseFloat((bytes / div).toFixed(2)).toLocaleString() + ' ' + unit;
+    }
+
+    function formatBytesTriple(a, b, c) {
+      if (a == null || b == null || c == null) return 'N/A';
+      const { unit, div } = pickUnit(Math.max(a, b, c));
+      const fmt = (v) => div === 1 ? v.toLocaleString() : parseFloat((v / div).toFixed(2)).toLocaleString();
+      return fmt(a) + ' / ' + fmt(b) + ' / ' + fmt(c) + ' ' + unit;
     }
 
     const SD_LABELS = {
@@ -246,6 +315,12 @@
 
     function applyStatus(data, includeSd) {
       document.getElementById('version').textContent = data.version || 'N/A';
+      const deviceLabel = data.deviceType
+        ? (data.displayWidth && data.displayHeight
+          ? data.deviceType + ' (' + data.displayWidth + ' × ' + data.displayHeight + ' px)'
+          : data.deviceType)
+        : 'N/A';
+      document.getElementById('device').textContent = deviceLabel;
       document.getElementById('chip-version').textContent = data.chipVersion || 'N/A';
       document.getElementById('cpu-mhz').textContent = data.cpuMHz
         ? data.cpuMHz.toLocaleString() + ' MHz'
@@ -254,17 +329,13 @@
       wifiStatus.textContent = data.mode || 'N/A';
       document.getElementById('ip-address').textContent = data.ip || 'N/A';
       document.getElementById('mac-address').textContent = data.macAddress || 'N/A';
-      document.getElementById('free-heap').textContent = data.freeHeap
-        ? formatBytes(data.freeHeap)
+      document.getElementById('heap-combined').textContent =
+        formatBytesTriple(data.freeHeap, data.minFreeHeap, data.maxAllocHeap);
+      document.getElementById('app-partition-size').textContent = data.appPartitionSize != null
+        ? formatBytes(data.appPartitionSize)
         : 'N/A';
-      document.getElementById('min-free-heap').textContent = data.minFreeHeap
-        ? formatBytes(data.minFreeHeap)
-        : 'N/A';
-      document.getElementById('max-alloc-heap').textContent = data.maxAllocHeap
-        ? formatBytes(data.maxAllocHeap)
-        : 'N/A';
-      document.getElementById('flash-used').textContent = data.flashAppUsed
-        ? (formatBytes(data.flashAppUsed) + ' / ' + formatBytes((data.flashAppUsed || 0) + (data.flashAppFree || 0)))
+      document.getElementById('flash-total').textContent = data.flashTotal != null
+        ? formatBytes(data.flashTotal)
         : 'N/A';
       document.getElementById('battery').textContent = (data.batteryPercent != null)
         ? (data.batteryPercent + '%' + (data.charging ? ' (Charging)' : ''))
