@@ -4,6 +4,7 @@
 #include <HalGPIO.h>
 #include <Logging.h>
 #include <Utf8.h>
+#include <esp_heap_caps.h>
 
 #include "FontCacheManager.h"
 
@@ -33,7 +34,8 @@ void GfxRenderer::begin() {
   panelHeight = display.getDisplayHeight();
   panelWidthBytes = display.getDisplayWidthBytes();
   frameBufferSize = display.getBufferSize();
-  bwBufferChunks.assign((frameBufferSize + BW_BUFFER_CHUNK_SIZE - 1) / BW_BUFFER_CHUNK_SIZE, nullptr);
+  bwBufferChunkSize = BW_BUFFER_CHUNK_SIZE;
+  bwBufferChunks.assign((frameBufferSize + bwBufferChunkSize - 1) / bwBufferChunkSize, nullptr);
 }
 
 void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) { fontMap.insert({fontId, font}); }
@@ -2037,31 +2039,55 @@ void GfxRenderer::freeBwBufferChunks() {
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
 bool GfxRenderer::storeBwBuffer() {
-  // Allocate and copy each chunk
-  for (size_t i = 0; i < bwBufferChunks.size(); i++) {
-    // Check if any chunks are already allocated
-    if (bwBufferChunks[i]) {
-      LOG_ERR("GFX", "!! BW buffer chunk %zu already stored - this is likely a bug, freeing chunk", i);
-      free(bwBufferChunks[i]);
-      bwBufferChunks[i] = nullptr;
+  auto attemptStore = [&](size_t chunkSize) {
+    bwBufferChunks.assign((frameBufferSize + chunkSize - 1) / chunkSize, nullptr);
+    for (size_t i = 0; i < bwBufferChunks.size(); i++) {
+      if (bwBufferChunks[i]) {
+        LOG_ERR("GFX", "!! BW buffer chunk %zu already stored - this is likely a bug, freeing chunk", i);
+        free(bwBufferChunks[i]);
+        bwBufferChunks[i] = nullptr;
+      }
+
+      const size_t offset = i * chunkSize;
+      const size_t allocSize = std::min(chunkSize, static_cast<size_t>(frameBufferSize - offset));
+      bwBufferChunks[i] = static_cast<uint8_t*>(malloc(allocSize));
+
+      if (!bwBufferChunks[i]) {
+        const uint32_t freeHeap = esp_get_free_heap_size();
+        const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+        LOG_ERR("GFX", "!! Failed to allocate BW buffer chunk %zu (%zu bytes): free=%u contig=%u", i, allocSize,
+                freeHeap, contigHeap);
+        freeBwBufferChunks();
+        return false;
+      }
+
+      memcpy(bwBufferChunks[i], frameBuffer + offset, allocSize);
     }
+    bwBufferChunkSize = chunkSize;
+    LOG_DBG("GFX", "Stored BW buffer in %zu chunks (%zu bytes each)", bwBufferChunks.size(), chunkSize);
+    return true;
+  };
 
-    const size_t offset = i * BW_BUFFER_CHUNK_SIZE;
-    const size_t chunkSize = std::min(BW_BUFFER_CHUNK_SIZE, static_cast<size_t>(frameBufferSize - offset));
-    bwBufferChunks[i] = static_cast<uint8_t*>(malloc(chunkSize));
-
-    if (!bwBufferChunks[i]) {
-      LOG_ERR("GFX", "!! Failed to allocate BW buffer chunk %zu (%zu bytes)", i, chunkSize);
-      // Free previously allocated chunks
-      freeBwBufferChunks();
-      return false;
-    }
-
-    memcpy(bwBufferChunks[i], frameBuffer + offset, chunkSize);
+  if (attemptStore(bwBufferChunkSize)) {
+    return true;
   }
 
-  LOG_DBG("GFX", "Stored BW buffer in %zu chunks (%zu bytes each)", bwBufferChunks.size(), BW_BUFFER_CHUNK_SIZE);
-  return true;
+  if (bwBufferChunkSize > 4096) {
+    LOG_INF("GFX", "BW buffer allocation failed with chunk size %zu, retrying with 4096", bwBufferChunkSize);
+    if (attemptStore(4096)) {
+      return true;
+    }
+  }
+
+  if (bwBufferChunkSize > 2048) {
+    LOG_INF("GFX", "BW buffer allocation still failed, retrying with 2048");
+    if (attemptStore(2048)) {
+      return true;
+    }
+  }
+
+  LOG_ERR("GFX", "!! BW buffer storage failed after retrying smaller chunk sizes");
+  return false;
 }
 
 /**
@@ -2090,8 +2116,8 @@ void GfxRenderer::restoreBwBuffer() {
   }
 
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
-    const size_t offset = i * BW_BUFFER_CHUNK_SIZE;
-    const size_t chunkSize = std::min(BW_BUFFER_CHUNK_SIZE, static_cast<size_t>(frameBufferSize - offset));
+    const size_t offset = i * bwBufferChunkSize;
+    const size_t chunkSize = std::min(bwBufferChunkSize, static_cast<size_t>(frameBufferSize - offset));
     memcpy(frameBuffer + offset, bwBufferChunks[i], chunkSize);
   }
 
