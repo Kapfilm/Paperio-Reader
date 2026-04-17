@@ -286,12 +286,27 @@ void KOReaderSyncActivity::performSync() {
     RenderLock lock(*this);
     state = SHOWING_RESULT;
 
-    // Default to the option that corresponds to the furthest progress
-    if (localProgress.percentage > remoteProgress.percentage) {
-      selectedOption = 1;  // Upload local progress
-    } else {
-      selectedOption = 0;  // Apply remote progress
-    }
+    // Default to the option that corresponds to the furthest progress.
+    // Compare in the shared CrossPoint coordinate system (spine → page → paragraph)
+    // rather than percentage, since percentages are derived differently on each
+    // side and lose resolution. Remote has already been mapped via
+    // ensureRemotePositionMapped() at this point.
+    auto isLocalAhead = [&]() {
+      if (remotePosition.spineIndex < 0) {
+        return localProgress.percentage > remoteProgress.percentage;  // mapping unavailable; fall back
+      }
+      if (currentSpineIndex != remotePosition.spineIndex) {
+        return currentSpineIndex > remotePosition.spineIndex;
+      }
+      if (currentPage != remotePosition.pageNumber) {
+        return currentPage > remotePosition.pageNumber;
+      }
+      if (hasLocalParagraphIndex && remotePosition.hasParagraphIndex) {
+        return localParagraphIndex > remotePosition.paragraphIndex;
+      }
+      return false;
+    };
+    selectedOption = isLocalAhead() ? 1 /* Upload local */ : 0 /* Apply remote */;
   }
   requestUpdate(true);
 }
