@@ -545,13 +545,14 @@ void updatePeriodic() {
   // DS3231 (if present) has priority, synchronize the system time
   // every 10 minutes directly against the RTC, instead of calculating.
   if (initExternalRTC()) {
-    time_t rtcTime = readExternalRTC();
     unsigned long nowMs = millis();
-    if ((nowMs - lastPeriodicUpdateMs >= PERIODIC_UPDATE_INTERVAL_MS) &&
-        (rtcTime > 1577836800)) {  // Check if time is after 2020 (plausible timestamp)
-      lastPeriodicUpdateMs = nowMs;
-      setSystemClock(rtcTime);
-      LOG_DBG("CLK", "Systemtime has been taken from DS3231");
+    if (nowMs - lastPeriodicUpdateMs >= PERIODIC_UPDATE_INTERVAL_MS) {
+      time_t rtcTime = readExternalRTC();
+      if (rtcTime > 1577836800) {  // Check if time is after 2020 (plausible timestamp)
+        lastPeriodicUpdateMs = nowMs;
+        setSystemClock(rtcTime);
+        LOG_DBG("CLK", "Systemtime has been taken from DS3231");
+      }
     }
     return;
   }
