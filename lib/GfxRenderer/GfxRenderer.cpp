@@ -2086,6 +2086,13 @@ bool GfxRenderer::storeBwBuffer() {
     }
   }
 
+  if (bwBufferChunkSize > 1024) {
+    LOG_INF("GFX", "BW buffer allocation still failed, retrying with 1024");
+    if (attemptStore(1024)) {
+      return true;
+    }
+  }
+
   LOG_ERR("GFX", "!! BW buffer storage failed after retrying smaller chunk sizes");
   return false;
 }

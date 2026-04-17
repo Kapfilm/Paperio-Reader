@@ -53,7 +53,7 @@ struct SettingInfo {
   // Function pointers + opaque context avoid the heap allocation of std::function. Stateless
   // lambdas pass ctx=nullptr; captures must be hand-written as trampoline functions. See
   // DynamicEnumCtx / DynamicStringCtx factories below.
-  using ValueGetterFn = uint8_t (*)(void*);
+  using ValueGetterFn = uint8_t (*)(const void*);
   using ValueSetterFn = void (*)(void*, uint8_t);
   using StringGetterFn = std::string (*)(void*);
   using StringSetterFn = void (*)(void*, const std::string&);
