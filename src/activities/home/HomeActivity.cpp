@@ -293,7 +293,7 @@ void HomeActivity::loop() {
       onSelectBook(recentBooks[selectorIndex].path);
     } else {
       const int menuIdx = selectorIndex - recentsCount;
-      if (menuIdx >= 0 && menuIdx < static_cast<int>(menuEntries.size())) {
+      if (menuIdx < static_cast<int>(menuEntries.size())) {
         dispatchMenuAction(menuEntries[menuIdx].action);
       }
     }
