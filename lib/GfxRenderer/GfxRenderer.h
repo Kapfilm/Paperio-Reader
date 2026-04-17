@@ -54,6 +54,7 @@ class GfxRenderer {
   uint16_t panelHeight = 0;      // set in begin()
   uint16_t panelWidthBytes = 0;  // set in begin()
   uint32_t frameBufferSize = 0;  // set in begin()
+  size_t bwBufferChunkSize = BW_BUFFER_CHUNK_SIZE;
   std::vector<uint8_t*> bwBufferChunks;
   std::map<int, EpdFontFamily> fontMap;
 
