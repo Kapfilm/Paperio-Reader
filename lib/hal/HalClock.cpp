@@ -1,6 +1,7 @@
 #include "HalClock.h"
 
 #include <Arduino.h>
+#include <HalGPIO.h>
 #include <Logging.h>
 #include <Preferences.h>
 #include <WiFi.h>
@@ -189,6 +190,12 @@ static bool initExternalRTC() {
   static bool initialized = false;
   static bool exists = false;
   if (initialized) return exists;
+  initialized = true;
+
+  if (!gpio.deviceIsX3()) {
+    LOG_DBG("CLK", "Skipping DS3231 init on non-X3 board");
+    return false;
+  }
 
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.beginTransmission(DS3231_ADDRESS);
@@ -198,7 +205,6 @@ static bool initExternalRTC() {
   } else {
     LOG_INF("CLK", "No DS3231 found.");
   }
-  initialized = true;
   return exists;
 }
 
