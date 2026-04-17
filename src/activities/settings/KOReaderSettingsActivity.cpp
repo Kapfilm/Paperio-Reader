@@ -26,7 +26,7 @@ void KOReaderSettingsActivity::buildMenuItems() {
   // Document matching: DynamicEnum toggling between Filename and Binary
   menuItems.push_back(SettingInfo::DynamicEnum(
       StrId::STR_DOCUMENT_MATCHING, {StrId::STR_FILENAME, StrId::STR_BINARY},
-      [](void*) { return static_cast<uint8_t>(KOREADER_STORE.getMatchMethod()); },
+      static_cast<SettingInfo::ValueGetterFn>([](const void*) -> uint8_t { return static_cast<uint8_t>(KOREADER_STORE.getMatchMethod()); }),
       [](void*, uint8_t v) {
         KOREADER_STORE.setMatchMethod(static_cast<DocumentMatchMethod>(v));
         KOREADER_STORE.saveToFile();

@@ -34,6 +34,22 @@
 // deep inside the heap allocator chain — enough stack to overflow the 8 KB loop task stack
 // when called from inside SETTINGS.loadFromFile() at boot time.
 namespace SettingsListDetail {
+inline uint8_t getKoReaderMatchMethod(const void*) {
+  return static_cast<uint8_t>(KOREADER_STORE.getMatchMethod());
+}
+
+inline std::string getKoReaderServerUrl(void*) {
+  return KOREADER_STORE.getServerUrl();
+}
+
+inline std::string getKoReaderUsername(void*) {
+  return KOREADER_STORE.getUsername();
+}
+
+inline std::string getKoReaderPassword(void*) {
+  return KOREADER_STORE.getPassword();
+}
+
 inline const std::vector<SettingInfo> list = {
     // --- Display ---
     SettingInfo::Enum(StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeout,
@@ -151,21 +167,24 @@ inline const std::vector<SettingInfo> list = {
 
     // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
     SettingInfo::DynamicString(
-        StrId::STR_SYNC_SERVER_URL, [](void*) { return KOREADER_STORE.getServerUrl(); },
+        StrId::STR_SYNC_SERVER_URL,
+        static_cast<SettingInfo::StringGetterFn>(getKoReaderServerUrl),
         [](void*, const std::string& v) {
           KOREADER_STORE.setServerUrl(v);
           KOREADER_STORE.saveToFile();
         },
         "koServerUrl", StrId::STR_KOREADER_SYNC),
     SettingInfo::DynamicString(
-        StrId::STR_KOREADER_USERNAME, [](void*) { return KOREADER_STORE.getUsername(); },
+        StrId::STR_KOREADER_USERNAME,
+        static_cast<SettingInfo::StringGetterFn>(getKoReaderUsername),
         [](void*, const std::string& v) {
           KOREADER_STORE.setCredentials(v, KOREADER_STORE.getPassword());
           KOREADER_STORE.saveToFile();
         },
         "koUsername", StrId::STR_KOREADER_SYNC),
     SettingInfo::DynamicString(
-        StrId::STR_KOREADER_PASSWORD, [](void*) { return KOREADER_STORE.getPassword(); },
+        StrId::STR_KOREADER_PASSWORD,
+        static_cast<SettingInfo::StringGetterFn>(getKoReaderPassword),
         [](void*, const std::string& v) {
           KOREADER_STORE.setCredentials(KOREADER_STORE.getUsername(), v);
           KOREADER_STORE.saveToFile();
@@ -174,7 +193,7 @@ inline const std::vector<SettingInfo> list = {
         .withObfuscated(),
     SettingInfo::DynamicEnum(
         StrId::STR_DOCUMENT_MATCHING, {StrId::STR_FILENAME, StrId::STR_BINARY},
-        [](void*) { return static_cast<uint8_t>(KOREADER_STORE.getMatchMethod()); },
+        getKoReaderMatchMethod,
         [](void*, uint8_t v) {
           KOREADER_STORE.setMatchMethod(static_cast<DocumentMatchMethod>(v));
           KOREADER_STORE.saveToFile();
