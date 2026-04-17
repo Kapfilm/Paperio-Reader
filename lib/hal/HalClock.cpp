@@ -4,6 +4,7 @@
 #include <Logging.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <Wire.h>  // Needed for I2C communication with the RTC
 #include <esp_private/esp_clk.h>
 #include <esp_sntp.h>
 #include <sys/time.h>
@@ -11,6 +12,14 @@
 
 #include <cmath>
 #include <cstdlib>
+
+// ---- RTC / I2C configuration ----------------------------------------------
+// Pins for ESP32-C3 (according to https://gist.github.com/CrazyCoder/1c5f846adee18e21f91e264601a6ddce)
+static constexpr uint8_t DS3231_ADDRESS = 0x68;
+static constexpr int I2C_SDA = 8;
+static constexpr int I2C_SCL = 9;
+static uint8_t bin2bcd(uint8_t val) { return val + 6 * (val / 10); }
+static uint8_t bcd2bin(uint8_t val) { return val - 6 * (val >> 4); }
 
 // ---- RTC-memory state (survives deep sleep, not cold boot) ----------------
 
@@ -174,6 +183,78 @@ static float readChipTemperatureC() {
   return (float)temperatureRead();
 }
 
+// ---- New internal helpers for DS3231 ---------------------------------------
+
+static bool initExternalRTC() {
+  static bool initialized = false;
+  static bool exists = false;
+  if (initialized) return exists;
+
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.beginTransmission(DS3231_ADDRESS);
+  if (Wire.endTransmission() == 0) {
+    exists = true;
+    LOG_INF("CLK", "DS3231 Hardware via I2C found.");
+  } else {
+    LOG_INF("CLK", "No DS3231 found.");
+  }
+  initialized = true;
+  return exists;
+}
+
+// Write time to DS3231
+static void writeExternalRTC(time_t t) {
+  struct tm timeinfo;
+  gmtime_r(&t, &timeinfo);  // DS3231 wird meist in UTC betrieben
+
+  Wire.beginTransmission(DS3231_ADDRESS);
+  Wire.write(0x00);  // Start-Register (Sekunden)
+  Wire.write(bin2bcd(timeinfo.tm_sec));
+  Wire.write(bin2bcd(timeinfo.tm_min));
+  Wire.write(bin2bcd(timeinfo.tm_hour));
+  Wire.write(bin2bcd(0));  // Wochentag (hier ignoriert)
+  Wire.write(bin2bcd(timeinfo.tm_mday));
+  Wire.write(bin2bcd(timeinfo.tm_mon + 1));
+  Wire.write(bin2bcd(timeinfo.tm_year - 100));  // DS3231 speichert Jahre seit 2000
+  Wire.endTransmission();
+}
+
+// Liest die Zeit vom DS3231
+static time_t readExternalRTC() {
+  Wire.beginTransmission(DS3231_ADDRESS);
+  Wire.write(0x00);
+  if (Wire.endTransmission() != 0) return 0;
+
+  Wire.requestFrom(DS3231_ADDRESS, (uint8_t)7);
+  if (Wire.available() < 7) return 0;
+
+  struct tm timeinfo = {};
+  timeinfo.tm_sec = bcd2bin(Wire.read() & 0x7F);
+  timeinfo.tm_min = bcd2bin(Wire.read());
+  timeinfo.tm_hour = bcd2bin(Wire.read() & 0x3F);
+  Wire.read();  // Wochentag überspringen
+  timeinfo.tm_mday = bcd2bin(Wire.read());
+  timeinfo.tm_mon = bcd2bin(Wire.read()) - 1;
+  timeinfo.tm_year = bcd2bin(Wire.read()) + 100;
+  timeinfo.tm_isdst = 0;
+
+  return mktime(&timeinfo);
+}
+
+// Read temperature (Register 0x11)
+static float readExternalTemp() {
+  Wire.beginTransmission(DS3231_ADDRESS);
+  Wire.write(0x11);
+  Wire.endTransmission();
+  Wire.requestFrom(DS3231_ADDRESS, (uint8_t)2);
+
+  int8_t msb = Wire.read();
+  uint8_t lsb = Wire.read();
+  return (float)msb + (lsb >> 6) * 0.25f;
+}
+
+// ----
+
 static void setSystemClock(time_t epoch) {
   struct timeval tv = {};
   tv.tv_sec = epoch;
@@ -231,6 +312,10 @@ static double computeCorrectedElapsedSec(uint64_t lpNow, float tempNow) {
 /// Capture current time + LP timer into RTC memory, and epoch into NVS.
 static void capture(bool lpValid) {
   rtcEpoch = time(nullptr);
+  // Update DS3231
+  if (initExternalRTC()) {
+    writeExternalRTC(rtcEpoch);
+  }
   rtcLpTimeUs = esp_clk_rtc_time();
   rtcSlowCal = esp_clk_slowclk_cal_get();
   rtcTemperatureC = readChipTemperatureC();
@@ -337,8 +422,19 @@ void saveBeforeSleep(bool keepLpAlive) {
 }
 
 void restore() {
-  rtcDriftScale = nvsReadDriftScale();
+  // PRIORITY 1: DS3231 (Hardware-RTC)
+  if (initExternalRTC()) {
+    time_t rtcTime = readExternalRTC();
+    if (rtcTime > 1577836800) {  // Check if time is after 2020 (plausible timestamp)
+      setSystemClock(rtcTime);
+      rtcEpoch = rtcTime;
+      clockApproximate = false;
+      LOG_INF("CLK", "Got time from DS3231.");
+      return;
+    }
+  }
 
+  rtcDriftScale = nvsReadDriftScale();
   const bool lpValid = (rtcClockFlags & CLOCK_RTC_FLAG_LP_VALID) != 0;
   if (rtcValid() && lpValid) {
     // RTC memory survived — we woke from deep sleep.
@@ -411,6 +507,20 @@ time_t now() {
 }
 
 void updatePeriodic() {
+  // DS3231 (if present) has priority, synchronize the system time
+  // every 10 minutes directly against the RTC, instead of calculating.
+  if (initExternalRTC()) {
+    time_t rtcTime = readExternalRTC();
+    unsigned long nowMs = millis();
+    if ((nowMs - lastPeriodicUpdateMs >= PERIODIC_UPDATE_INTERVAL_MS) &&
+        (rtcTime > 1577836800)) {  // Check if time is after 2020 (plausible timestamp)
+      lastPeriodicUpdateMs = nowMs;
+      setSystemClock(rtcTime);
+      LOG_DBG("CLK", "Systemtime has been taken from DS3231");
+    }
+    return;
+  }
+
   if (!isSynced()) {
     return;
   }
