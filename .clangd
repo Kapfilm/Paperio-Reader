@@ -1,2 +1,5 @@
 CompileFlags:
     Add: [-std=c++2a]
+    Remove:
+      - -fno-tree-switch-conversion
+      - -fstrict-volatile-bitfields
