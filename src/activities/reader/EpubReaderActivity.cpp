@@ -91,10 +91,13 @@ void EpubReaderActivity::onEnter() {
     RenderLock lock(*this);
     ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   }
+  logReaderMemSnapshot("onEnter_after_orientation");
 
   epub->setupCacheDir();
+  logReaderMemSnapshot("onEnter_after_setupCacheDir");
   applyPendingSyncSession();
   applyPendingBookmarkJump();
+  logReaderMemSnapshot("onEnter_after_pending_sync");
 
   FsFile f;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
@@ -120,9 +123,11 @@ void EpubReaderActivity::onEnter() {
       LOG_DBG("ERS", "Opened for first time, navigating to text reference at index %d", textSpineIndex);
     }
   }
+  logReaderMemSnapshot("onEnter_after_progress_load");
 
   // Load bookmarks for this book
   bookmarkStore.load(epub->getCachePath());
+  logReaderMemSnapshot("onEnter_after_bookmarks_loaded");
 
   // Save current epub as last opened epub and add to recent books
   APP_STATE.openEpubPath = epub->getPath();
@@ -135,8 +140,10 @@ void EpubReaderActivity::onEnter() {
   const RecentBook currentBook = RECENT_BOOKS.getBookByPath(epub->getPath());
   bookEmbeddedStyleOverride = currentBook.embeddedStyleOverride;
   bookImageRenderingOverride = currentBook.imageRenderingOverride;
+  logReaderMemSnapshot("onEnter_after_recent_books");
 
   // Trigger first update
+  logReaderMemSnapshot("onEnter_before_request_update");
   requestUpdate();
   logReaderMemSnapshot("onEnter_ready");
 }
@@ -1095,6 +1102,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   logReaderMemSnapshot("render_start");
   auto* fcm = renderer.getFontCacheManager();
   fcm->resetStats();
+  logReaderMemSnapshot("prewarm_begin");
 
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   const uint32_t heapBefore = esp_get_free_heap_size();
