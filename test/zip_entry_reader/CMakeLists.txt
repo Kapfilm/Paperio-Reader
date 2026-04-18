@@ -24,6 +24,7 @@ target_include_directories(ZipEntryReaderTest PRIVATE
   ${REPO_ROOT}/lib/ZipFile
   ${REPO_ROOT}/lib/InflateReader
   ${REPO_ROOT}/lib/Logging
+  ${REPO_ROOT}/lib/Memory
   ${REPO_ROOT}/test/shims           # Print.h, HardwareSerial.h, WString.h
 )
 
