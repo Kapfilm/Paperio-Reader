@@ -68,7 +68,7 @@ class Section {
   std::optional<uint16_t> getPageForAnchor(const std::string& anchor) const;
 
   // Look up the page number for a paragraph index (1-based, from XPath p[N]).
-  // Uses the per-page paragraph index LUT stored in the section cache.
+  // Uses the per-page paragraph LUT stored in the section cache.
   // Returns nullopt if the paragraph LUT is not available (old cache format).
   std::optional<uint16_t> getPageForParagraphIndex(uint16_t pIndex) const;
 
@@ -76,4 +76,11 @@ class Section {
   // Returns the 1-based paragraph index of the last <p> element on or before the page.
   // Returns nullopt if the paragraph LUT is not available (old cache format).
   std::optional<uint16_t> getParagraphIndexForPage(uint16_t page) const;
+
+  // Look up the XHTML byte offset recorded at the page break that started the given page.
+  // This is the Expat byte position within the decompressed spine XHTML file — useful as a
+  // seek hint for findXPathForParagraph to avoid scanning from byte 0 on large chapters.
+  // Returns nullopt if the paragraph LUT is unavailable (old cache format) or offset is 0
+  // (last page, recorded after parse completion).
+  std::optional<uint32_t> getXhtmlByteOffsetForPage(uint16_t page) const;
 };

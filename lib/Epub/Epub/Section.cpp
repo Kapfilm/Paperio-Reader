@@ -12,7 +12,7 @@
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION = 20;
+constexpr uint8_t SECTION_FILE_VERSION = 21;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) +   // SECTION_FILE_VERSION
                                  sizeof(int) +       // fontId
                                  sizeof(float) +     // lineCompression
@@ -309,12 +309,15 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     serialization::writePod(file, page);
   }
 
-  // Write per-page paragraph index LUT for XPath-to-page resolution
+  // Write per-page paragraph LUT: count + array of {xhtmlByteOffset(u32), paragraphIndex(u16)}.
+  // The byte offset lets findXPathForParagraph seek near the target paragraph without scanning
+  // from the beginning of the XHTML file, reducing SD reads on large chapters.
   const uint32_t paragraphLutOffset = file.position();
-  const auto& paragraphPerPage = visitor.getParagraphIndexPerPage();
-  serialization::writePod(file, static_cast<uint16_t>(paragraphPerPage.size()));
-  for (const uint16_t& pIdx : paragraphPerPage) {
-    serialization::writePod(file, pIdx);
+  const auto& paragraphLut = visitor.getParagraphLutPerPage();
+  serialization::writePod(file, static_cast<uint16_t>(paragraphLut.size()));
+  for (const auto& entry : paragraphLut) {
+    serialization::writePod(file, entry.xhtmlByteOffset);
+    serialization::writePod(file, entry.paragraphIndex);
   }
 
   // Patch header with final pageCount, lutOffset, anchorMapOffset, and paragraphLutOffset
@@ -573,18 +576,20 @@ std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex)
     return std::nullopt;
   }
 
-  // Validate that all entries fit within the file
-  const uint32_t lutEnd = paragraphLutOffset + sizeof(uint16_t) + count * sizeof(uint16_t);
+  // Each entry: uint32_t xhtmlByteOffset + uint16_t paragraphIndex
+  constexpr uint32_t ENTRY_SIZE = sizeof(uint32_t) + sizeof(uint16_t);
+  const uint32_t lutEnd = paragraphLutOffset + sizeof(uint16_t) + count * ENTRY_SIZE;
   if (lutEnd > fileSize) {
     f.close();
     return std::nullopt;
   }
 
   // Find the first page whose paragraph index >= pIndex.
-  // Each entry stores the <p> index at the time that page was completed.
   uint16_t resultPage = count - 1;  // default to last page
   for (uint16_t i = 0; i < count; i++) {
+    uint32_t byteOffset;
     uint16_t pagePIdx;
+    serialization::readPod(f, byteOffset);
     serialization::readPod(f, pagePIdx);
     if (pagePIdx >= pIndex) {
       resultPage = i;
@@ -620,18 +625,59 @@ std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) c
     return std::nullopt;
   }
 
-  // Validate that the target entry fits within the file
-  const uint32_t entryEnd = paragraphLutOffset + sizeof(uint16_t) + (page + 1) * sizeof(uint16_t);
+  // Each entry: uint32_t xhtmlByteOffset + uint16_t paragraphIndex
+  constexpr uint32_t ENTRY_SIZE = sizeof(uint32_t) + sizeof(uint16_t);
+  const uint32_t entryEnd = paragraphLutOffset + sizeof(uint16_t) + (page + 1) * ENTRY_SIZE;
   if (entryEnd > fileSize) {
     f.close();
     return std::nullopt;
   }
 
-  // Seek to the entry for the requested page
-  f.seek(paragraphLutOffset + sizeof(uint16_t) + page * sizeof(uint16_t));
+  // Seek directly to the paragraphIndex field of the requested entry (skip xhtmlByteOffset)
+  f.seek(paragraphLutOffset + sizeof(uint16_t) + page * ENTRY_SIZE + sizeof(uint32_t));
   uint16_t pIdx;
   serialization::readPod(f, pIdx);
 
   f.close();
   return pIdx;
+}
+
+std::optional<uint32_t> Section::getXhtmlByteOffsetForPage(const uint16_t page) const {
+  FsFile f;
+  if (!Storage.openFileForRead("SCT", filePath, f)) {
+    return std::nullopt;
+  }
+
+  const uint32_t fileSize = f.size();
+
+  f.seek(HEADER_SIZE - sizeof(uint32_t));
+  uint32_t paragraphLutOffset;
+  serialization::readPod(f, paragraphLutOffset);
+  if (paragraphLutOffset == 0 || paragraphLutOffset >= fileSize) {
+    f.close();
+    return std::nullopt;
+  }
+
+  f.seek(paragraphLutOffset);
+  uint16_t count;
+  serialization::readPod(f, count);
+  if (count == 0 || page >= count) {
+    f.close();
+    return std::nullopt;
+  }
+
+  constexpr uint32_t ENTRY_SIZE = sizeof(uint32_t) + sizeof(uint16_t);
+  const uint32_t entryEnd = paragraphLutOffset + sizeof(uint16_t) + (page + 1) * ENTRY_SIZE;
+  if (entryEnd > fileSize) {
+    f.close();
+    return std::nullopt;
+  }
+
+  f.seek(paragraphLutOffset + sizeof(uint16_t) + page * ENTRY_SIZE);
+  uint32_t byteOffset;
+  serialization::readPod(f, byteOffset);
+
+  f.close();
+  // A zero offset means the entry was recorded post-parse (last page), so it's unusable as a hint.
+  return byteOffset > 0 ? std::optional<uint32_t>{byteOffset} : std::nullopt;
 }

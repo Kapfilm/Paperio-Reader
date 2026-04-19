@@ -223,12 +223,15 @@ struct SectionBin {
     u16 anchorCount;
     AnchorEntry anchors[anchorCount];
 
-    // === Paragraph Index LUT ===
-    // One entry per page: the 1-based <p> sibling index (XPath convention)
-    // at the time each page was completed during parsing.
-    // Used to resolve KOReader XPath p[N] positions to page numbers.
+    // === Paragraph LUT (deep entries) ===
+    // One entry per page: XHTML byte offset at the page break + 1-based <p> sibling index.
+    // xhtmlByteOffset is the Expat byte position within the decompressed spine XHTML at the
+    // moment the page break fired — used as a seek hint to avoid scanning from byte 0 when
+    // generating XPaths for upload.  0 means no hint (last page, recorded post-parse).
+    // paragraphIndex is 1-based, matching KOReader XPath p[N] convention.
+    struct ParagraphLutEntry { u32 xhtmlByteOffset; u16 paragraphIndex; };
     u16 paragraphEntryCount;
-    u16 paragraphIndexPerPage[paragraphEntryCount] [[comment("1-based <p> index at page completion")]];
+    ParagraphLutEntry paragraphLut[paragraphEntryCount];
 };
 
 // === File Parsing ===

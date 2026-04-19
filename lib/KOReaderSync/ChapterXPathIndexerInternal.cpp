@@ -272,6 +272,42 @@ bool runParse(XML_Parser parser, const std::string& path) {
   return ok;
 }
 
+bool runParseFromOffset(XML_Parser parser, const std::string& path, const uint32_t seekBytes) {
+  if (seekBytes == 0) {
+    return runParse(parser, path);
+  }
+
+  FsFile file;
+  if (!Storage.openFileForRead("KOX", path, file)) {
+    return false;
+  }
+
+  if (!file.seek(seekBytes)) {
+    file.close();
+    return runParse(parser, path);  // fall back to full scan if seek fails
+  }
+
+  constexpr size_t kBufSize = 1024;
+  bool ok = true;
+  int done;
+  do {
+    void* const buf = XML_GetBuffer(parser, kBufSize);
+    if (!buf) {
+      ok = false;
+      break;
+    }
+    const size_t len = file.read(buf, kBufSize);
+    done = file.available() == 0;
+    if (XML_ParseBuffer(parser, static_cast<int>(len), done) == XML_STATUS_ERROR) {
+      ok = (XML_GetErrorCode(parser) == XML_ERROR_ABORTED);
+      break;
+    }
+  } while (!done);
+
+  file.close();
+  return ok;
+}
+
 bool isEntityRef(const XML_Char* text, const int len) {
   if (len < 3 || text[0] != '&' || text[len - 1] != ';') {
     return false;
