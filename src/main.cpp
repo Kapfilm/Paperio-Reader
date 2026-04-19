@@ -131,7 +131,10 @@ void enterDeepSleep() {
           gpio.isPressed(HalGPIO::BTN_POWER), digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
   HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
-  HalClock::saveBeforeSleep(SETTINGS.useClock);
+  // On X3 the DS3231 keeps time independently, so there's no need to keep the MCU
+  // powered during deep sleep for LP timer preservation.
+  const bool keepLpAlive = SETTINGS.useClock && !gpio.deviceIsX3();
+  HalClock::saveBeforeSleep(keepLpAlive);
   APP_STATE.saveToFile();
 
   activityManager.goToSleep();
@@ -140,7 +143,7 @@ void enterDeepSleep() {
   LOG_DBG("MAIN", "Entering deep sleep (powerBtn isPressed=%d, rawPin=%d)", gpio.isPressed(HalGPIO::BTN_POWER),
           digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
 
-  powerManager.startDeepSleep(gpio, SETTINGS.useClock);
+  powerManager.startDeepSleep(gpio, keepLpAlive);
 }
 
 void setupDisplayAndFonts() {
