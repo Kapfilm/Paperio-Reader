@@ -32,6 +32,7 @@ struct SettingInfo {
   SettingType type;
   uint8_t CrossPointSettings::* valuePtr = nullptr;
   std::vector<StrId> enumValues;
+  std::vector<std::string> enumLabels;
   SettingAction action = SettingAction::None;
 
   struct ValueRange {

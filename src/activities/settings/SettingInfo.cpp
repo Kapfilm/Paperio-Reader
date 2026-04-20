@@ -32,6 +32,10 @@ std::string SettingInfo::getDisplayValue() const {
         value = callValueGetter();
       else
         return {};
+      if (!enumLabels.empty()) {
+        if (value < enumLabels.size()) return enumLabels[value];
+        return {};
+      }
       if (value < enumValues.size()) return std::string(I18N.get(enumValues[value]));
       return {};
     }
@@ -61,7 +65,7 @@ void SettingInfo::toggleValue() const {
       break;
 
     case SettingType::ENUM: {
-      const auto count = static_cast<uint8_t>(enumValues.size());
+      const auto count = static_cast<uint8_t>(enumLabels.empty() ? enumValues.size() : enumLabels.size());
       if (count == 0) break;
       if (valuePtr) {
         SETTINGS.*(valuePtr) = (SETTINGS.*(valuePtr) + 1) % count;

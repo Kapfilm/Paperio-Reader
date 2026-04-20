@@ -15,7 +15,8 @@ const StrId timeZoneNames[CrossPointSettings::TIMEZONE_COUNT] = {
     StrId::STR_TZ_UTC,       StrId::STR_TZ_CET,  StrId::STR_TZ_EET,       StrId::STR_TZ_MSK,
     StrId::STR_TZ_UTC_PLUS4, StrId::STR_TZ_IST,  StrId::STR_TZ_UTC_PLUS7, StrId::STR_TZ_UTC_PLUS8,
     StrId::STR_TZ_UTC_PLUS9, StrId::STR_TZ_AEST, StrId::STR_TZ_NZST,      StrId::STR_TZ_UTC_MINUS3,
-    StrId::STR_TZ_EST,       StrId::STR_TZ_CST,  StrId::STR_TZ_MST,       StrId::STR_TZ_PST};
+    StrId::STR_TZ_EST,       StrId::STR_TZ_CST,  StrId::STR_TZ_MST,       StrId::STR_TZ_PST,
+    StrId::STR_TZ_UTC,       StrId::STR_TZ_UTC,  StrId::STR_TZ_UTC};
 }  // namespace
 
 void ClockSettingsActivity::buildMenuItems() {
@@ -25,13 +26,35 @@ void ClockSettingsActivity::buildMenuItems() {
       SettingInfo::Toggle(StrId::STR_USE_CLOCK, &CrossPointSettings::useClock, "useClock", StrId::STR_CAT_SYSTEM));
   menuItems.push_back(SettingInfo::Enum(StrId::STR_CLOCK_FORMAT, &CrossPointSettings::clockFormat12h,
                                         {StrId::STR_24H, StrId::STR_12H}, "clockFormat12h", StrId::STR_CAT_SYSTEM));
-  menuItems.push_back(
-      SettingInfo::Enum(StrId::STR_TIMEZONE, &CrossPointSettings::timeZone,
-                        {StrId::STR_TZ_UTC, StrId::STR_TZ_CET, StrId::STR_TZ_EET, StrId::STR_TZ_MSK,
-                         StrId::STR_TZ_UTC_PLUS4, StrId::STR_TZ_IST, StrId::STR_TZ_UTC_PLUS7, StrId::STR_TZ_UTC_PLUS8,
-                         StrId::STR_TZ_UTC_PLUS9, StrId::STR_TZ_AEST, StrId::STR_TZ_NZST, StrId::STR_TZ_UTC_MINUS3,
-                         StrId::STR_TZ_EST, StrId::STR_TZ_CST, StrId::STR_TZ_MST, StrId::STR_TZ_PST},
-                        "timeZone", StrId::STR_CAT_SYSTEM));
+  {
+    auto tzSetting = SettingInfo::Enum(
+        StrId::STR_TIMEZONE, &CrossPointSettings::timeZone,
+        {StrId::STR_TZ_UTC, StrId::STR_TZ_CET, StrId::STR_TZ_EET, StrId::STR_TZ_MSK, StrId::STR_TZ_UTC_PLUS4,
+         StrId::STR_TZ_IST, StrId::STR_TZ_UTC_PLUS7, StrId::STR_TZ_UTC_PLUS8, StrId::STR_TZ_UTC_PLUS9,
+         StrId::STR_TZ_AEST, StrId::STR_TZ_NZST, StrId::STR_TZ_UTC_MINUS3, StrId::STR_TZ_EST, StrId::STR_TZ_CST,
+         StrId::STR_TZ_MST, StrId::STR_TZ_PST, StrId::STR_TZ_UTC, StrId::STR_TZ_UTC, StrId::STR_TZ_UTC},
+        "timeZone", StrId::STR_CAT_SYSTEM);
+    tzSetting.enumLabels = {"UTC (GMT/BST)",
+                            "Central European (CET/CEST)",
+                            "Eastern European (EET/EEST)",
+                            "Moscow (MSK)",
+                            "UTC+4",
+                            "India (IST)",
+                            "UTC+7",
+                            "UTC+8",
+                            "UTC+9",
+                            "Australia Eastern (AEST/AEDT)",
+                            "New Zealand (NZST/NZDT)",
+                            "UTC-3",
+                            "Eastern US/Canada (EST/EDT)",
+                            "Central US/Canada (CST/CDT)",
+                            "Mountain US/Canada (MST/MDT)",
+                            "Pacific US/Canada (PST/PDT)",
+                            "Atlantic Canada (AST/ADT)",
+                            "Australia Central (ACST/ACDT)",
+                            "Alaska (AKST/AKDT)"};
+    menuItems.push_back(std::move(tzSetting));
+  }
 
   menuItems.push_back(SettingInfo::Action(StrId::STR_DETECT_TIMEZONE, SettingAction::DetectTimezone)
                           .withSubcategory(StrId::STR_READER_TOOLS));

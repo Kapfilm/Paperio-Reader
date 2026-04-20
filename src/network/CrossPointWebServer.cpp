@@ -1238,8 +1238,14 @@ void CrossPointWebServer::handleGetSettings() const {
           doc["value"] = static_cast<int>(s.callValueGetter());
         }
         JsonArray options = doc["options"].to<JsonArray>();
-        for (const auto& opt : s.enumValues) {
-          options.add(I18N.get(opt));
+        if (!s.enumLabels.empty()) {
+          for (const auto& opt : s.enumLabels) {
+            options.add(opt);
+          }
+        } else {
+          for (const auto& opt : s.enumValues) {
+            options.add(I18N.get(opt));
+          }
         }
         break;
       }
