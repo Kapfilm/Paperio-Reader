@@ -184,6 +184,9 @@ class CrossPointSettings {
     TZ_CST = 13,
     TZ_MST = 14,
     TZ_PST = 15,
+    TZ_AST_ADT = 16,
+    TZ_ACST_ACDT = 17,
+    TZ_AKST_AKDT = 18,
     TIMEZONE_COUNT
   };
 
