@@ -25,10 +25,18 @@ HalStorage::HalStorage() {
 bool HalStorage::begin() {
   if (!SDCard.begin()) return false;
   FsDateTime::setCallback([](uint16_t* date, uint16_t* time) {
-    if (!HalClock::isSynced()) return;
+    if (!HalClock::isSynced()) {
+      *date = FS_DATE(1980, 1, 1);
+      *time = FS_TIME(0, 0, 0);
+      return;
+    }
     const time_t t = HalClock::now();
     const struct tm* tm = localtime(&t);
-    if (!tm) return;
+    if (!tm) {
+      *date = FS_DATE(1980, 1, 1);
+      *time = FS_TIME(0, 0, 0);
+      return;
+    }
     *date = FS_DATE(tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
     *time = FS_TIME(tm->tm_hour, tm->tm_min, tm->tm_sec);
   });
