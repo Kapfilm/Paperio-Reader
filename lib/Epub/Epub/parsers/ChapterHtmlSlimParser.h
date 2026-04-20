@@ -92,9 +92,15 @@ class ChapterHtmlSlimParser {
   // without reparsing, and current page can generate an XPath without reparsing.
   uint16_t xpathParagraphIndex = 0;  // current <p> sibling index (1-based)
   int xpathBodyDepth = -1;           // depth of the <body> element (-1 = not yet seen)
+  // Byte offset of the most recent direct-body-child element start (any tag at xpathBodyDepth+1).
+  // Recorded at the same depth condition that increments xpathParagraphIndex, so the stored
+  // offset is guaranteed to land on a body-child element boundary. This keeps the XPath forward
+  // mapper's partial-parse heuristic reliable for wrapped chapters: without this, the offset
+  // could point mid-way into a nested <div>/<section>, which confuses partialBaseDepth.
+  uint32_t lastBodyChildByteOffset = 0;
 
   struct ParagraphLutEntry {
-    uint32_t xhtmlByteOffset;  // Expat byte offset at page break — used to seek near target paragraph
+    uint32_t xhtmlByteOffset;  // byte offset of most recent body-child element start at page break
     uint16_t paragraphIndex;   // 1-based <p> index at page completion
   };
   std::vector<ParagraphLutEntry> paragraphLutPerPage;  // deep LUT: one entry per page

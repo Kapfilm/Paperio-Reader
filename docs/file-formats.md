@@ -104,7 +104,7 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 20
+### Version 21
 
 ImHex Pattern:
 
@@ -114,7 +114,7 @@ import std.string;
 import std.core;
 
 // === Configuration ===
-#define EXPECTED_VERSION 20
+#define EXPECTED_VERSION 21
 #define MAX_STRING_LENGTH 65535
 
 // === String Structure ===
@@ -206,7 +206,7 @@ struct SectionBin {
     u8 imageRendering;
     u32 pageLutOffset [[comment("Offset to page offset LUT")]];
     u32 anchorMapOffset [[comment("Offset to anchor map")]];
-    u32 paragraphLutOffset [[comment("Offset to per-page paragraph index LUT")]];
+    u32 paragraphLutOffset [[comment("Offset to per-page paragraph LUT (byte offset + <p> index)")]];
 
     Page page[pageCount];
 

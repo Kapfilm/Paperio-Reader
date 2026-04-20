@@ -593,9 +593,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     (self->currentPageNextY + totalImageHeightWithSpacing > self->viewportHeight)) {
                   LOG_DBG("EHP", "Image page break: currentY=%d needed=%d viewportH=%d", self->currentPageNextY,
                           totalImageHeightWithSpacing, self->viewportHeight);
-                  const uint32_t byteOff =
-                      self->activeParser ? static_cast<uint32_t>(XML_GetCurrentByteIndex(self->activeParser)) : 0;
-                  self->paragraphLutPerPage.push_back({byteOff, self->xpathParagraphIndex});
+                  self->paragraphLutPerPage.push_back({self->lastBodyChildByteOffset, self->xpathParagraphIndex});
                   self->completePageFn(std::move(self->currentPage));
                   self->completedPageCount++;
                   self->currentPage.reset(new Page());
@@ -689,8 +687,16 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // check so that hidden <p> elements are still counted, matching ChapterXPathIndexer's
   // counting (pure XML, no CSS). This ensures paragraph indices in the section cache LUT
   // align with KOReader's crengine XPath indices.
-  if (self->xpathBodyDepth >= 0 && self->depth == self->xpathBodyDepth + 1 && strcmp(name, "p") == 0) {
-    self->xpathParagraphIndex++;
+  // At the same time, record the byte offset of every direct-body-child element start:
+  // the forward mapper's partial-parse heuristic requires the seek hint to land on a
+  // body-child boundary, otherwise partialBaseDepth can misidentify wrapped paragraphs.
+  if (self->xpathBodyDepth >= 0 && self->depth == self->xpathBodyDepth + 1) {
+    if (self->activeParser) {
+      self->lastBodyChildByteOffset = static_cast<uint32_t>(XML_GetCurrentByteIndex(self->activeParser));
+    }
+    if (strcmp(name, "p") == 0) {
+      self->xpathParagraphIndex++;
+    }
   }
 
   if (matches(name, SKIP_TAGS, NUM_SKIP_TAGS)) {
@@ -1438,8 +1444,7 @@ ParsedText::LineProcessResult ChapterHtmlSlimParser::addLineToPage(std::shared_p
   }
 
   if (currentPageNextY + lineHeight > viewportHeight) {
-    const uint32_t byteOff = activeParser ? static_cast<uint32_t>(XML_GetCurrentByteIndex(activeParser)) : 0;
-    paragraphLutPerPage.push_back({byteOff, xpathParagraphIndex});
+    paragraphLutPerPage.push_back({lastBodyChildByteOffset, xpathParagraphIndex});
     completePageFn(std::move(currentPage));
     completedPageCount++;
     currentPage.reset(new Page());

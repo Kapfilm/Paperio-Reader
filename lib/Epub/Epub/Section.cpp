@@ -27,6 +27,12 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) +   // SECTION_FILE_VERSION
                                  sizeof(uint32_t) +  // page LUT offset
                                  sizeof(uint32_t) +  // anchor map offset
                                  sizeof(uint32_t);   // paragraph LUT offset
+
+// On-disk paragraph LUT entry: u32 xhtmlByteOffset + u16 paragraphIndex.
+constexpr uint32_t PARAGRAPH_LUT_ENTRY_SIZE = sizeof(uint32_t) + sizeof(uint16_t);
+inline uint32_t paragraphLutEntryOffset(uint32_t lutStart, uint16_t page) {
+  return lutStart + page * PARAGRAPH_LUT_ENTRY_SIZE;
+}
 }  // namespace
 
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
@@ -551,36 +557,43 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
   return std::nullopt;
 }
 
+bool Section::readParagraphLutHeader(FsFile& outFile, uint16_t& outCount, uint32_t& outLutStart) const {
+  if (!Storage.openFileForRead("SCT", filePath, outFile)) {
+    return false;
+  }
+
+  const uint32_t fileSize = outFile.size();
+
+  outFile.seek(HEADER_SIZE - sizeof(uint32_t));
+  uint32_t paragraphLutOffset;
+  serialization::readPod(outFile, paragraphLutOffset);
+  if (paragraphLutOffset == 0 || paragraphLutOffset >= fileSize) {
+    outFile.close();
+    return false;
+  }
+
+  outFile.seek(paragraphLutOffset);
+  serialization::readPod(outFile, outCount);
+  if (outCount == 0) {
+    outFile.close();
+    return false;
+  }
+
+  outLutStart = paragraphLutOffset + sizeof(uint16_t);
+  const uint32_t lutEnd = outLutStart + outCount * PARAGRAPH_LUT_ENTRY_SIZE;
+  if (lutEnd > fileSize) {
+    outFile.close();
+    return false;
+  }
+
+  return true;
+}
+
 std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex) const {
   FsFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
-    return std::nullopt;
-  }
-
-  const uint32_t fileSize = f.size();
-
-  // Read paragraph LUT offset from end of header
-  f.seek(HEADER_SIZE - sizeof(uint32_t));
-  uint32_t paragraphLutOffset;
-  serialization::readPod(f, paragraphLutOffset);
-  if (paragraphLutOffset == 0 || paragraphLutOffset >= fileSize) {
-    f.close();
-    return std::nullopt;
-  }
-
-  f.seek(paragraphLutOffset);
-  uint16_t count;
-  serialization::readPod(f, count);
-  if (count == 0) {
-    f.close();
-    return std::nullopt;
-  }
-
-  // Each entry: uint32_t xhtmlByteOffset + uint16_t paragraphIndex
-  constexpr uint32_t ENTRY_SIZE = sizeof(uint32_t) + sizeof(uint16_t);
-  const uint32_t lutEnd = paragraphLutOffset + sizeof(uint16_t) + count * ENTRY_SIZE;
-  if (lutEnd > fileSize) {
-    f.close();
+  uint16_t count = 0;
+  uint32_t lutStart = 0;
+  if (!readParagraphLutHeader(f, count, lutStart)) {
     return std::nullopt;
   }
 
@@ -588,7 +601,7 @@ std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex)
   // <p> whose start tag had been seen while page i was being laid out. Paragraph
   // P therefore first appears on the smallest i where storedPIdx[i] >= P.
   for (uint16_t i = 0; i < count; i++) {
-    f.seek(paragraphLutOffset + sizeof(uint16_t) + i * ENTRY_SIZE + sizeof(uint32_t));
+    f.seek(paragraphLutEntryOffset(lutStart, i) + sizeof(uint32_t));
     uint16_t pagePIdx;
     serialization::readPod(f, pagePIdx);
     if (pagePIdx >= pIndex) {
@@ -603,38 +616,18 @@ std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex)
 
 std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) const {
   FsFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  uint16_t count = 0;
+  uint32_t lutStart = 0;
+  if (!readParagraphLutHeader(f, count, lutStart)) {
     return std::nullopt;
   }
-
-  const uint32_t fileSize = f.size();
-
-  f.seek(HEADER_SIZE - sizeof(uint32_t));
-  uint32_t paragraphLutOffset;
-  serialization::readPod(f, paragraphLutOffset);
-  if (paragraphLutOffset == 0 || paragraphLutOffset >= fileSize) {
-    f.close();
-    return std::nullopt;
-  }
-
-  f.seek(paragraphLutOffset);
-  uint16_t count;
-  serialization::readPod(f, count);
-  if (count == 0 || page >= count) {
-    f.close();
-    return std::nullopt;
-  }
-
-  // Each entry: uint32_t xhtmlByteOffset + uint16_t paragraphIndex
-  constexpr uint32_t ENTRY_SIZE = sizeof(uint32_t) + sizeof(uint16_t);
-  const uint32_t entryEnd = paragraphLutOffset + sizeof(uint16_t) + (page + 1) * ENTRY_SIZE;
-  if (entryEnd > fileSize) {
+  if (page >= count) {
     f.close();
     return std::nullopt;
   }
 
   // Seek directly to the paragraphIndex field of the requested entry (skip xhtmlByteOffset)
-  f.seek(paragraphLutOffset + sizeof(uint16_t) + page * ENTRY_SIZE + sizeof(uint32_t));
+  f.seek(paragraphLutEntryOffset(lutStart, page) + sizeof(uint32_t));
   uint16_t pIdx;
   serialization::readPod(f, pIdx);
 
@@ -644,36 +637,17 @@ std::optional<uint16_t> Section::getParagraphIndexForPage(const uint16_t page) c
 
 std::optional<uint32_t> Section::getXhtmlByteOffsetForPage(const uint16_t page) const {
   FsFile f;
-  if (!Storage.openFileForRead("SCT", filePath, f)) {
+  uint16_t count = 0;
+  uint32_t lutStart = 0;
+  if (!readParagraphLutHeader(f, count, lutStart)) {
     return std::nullopt;
   }
-
-  const uint32_t fileSize = f.size();
-
-  f.seek(HEADER_SIZE - sizeof(uint32_t));
-  uint32_t paragraphLutOffset;
-  serialization::readPod(f, paragraphLutOffset);
-  if (paragraphLutOffset == 0 || paragraphLutOffset >= fileSize) {
+  if (page >= count) {
     f.close();
     return std::nullopt;
   }
 
-  f.seek(paragraphLutOffset);
-  uint16_t count;
-  serialization::readPod(f, count);
-  if (count == 0 || page >= count) {
-    f.close();
-    return std::nullopt;
-  }
-
-  constexpr uint32_t ENTRY_SIZE = sizeof(uint32_t) + sizeof(uint16_t);
-  const uint32_t entryEnd = paragraphLutOffset + sizeof(uint16_t) + (page + 1) * ENTRY_SIZE;
-  if (entryEnd > fileSize) {
-    f.close();
-    return std::nullopt;
-  }
-
-  f.seek(paragraphLutOffset + sizeof(uint16_t) + page * ENTRY_SIZE);
+  f.seek(paragraphLutEntryOffset(lutStart, page));
   uint32_t byteOffset;
   serialization::readPod(f, byteOffset);
 

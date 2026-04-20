@@ -32,6 +32,12 @@ class Section {
   void buildTocBoundaries(const std::vector<std::pair<std::string, uint16_t>>& anchors);
   void buildTocBoundariesFromFile(FsFile& f);
 
+  // Open the section file and seek to the first paragraph LUT entry, validating the header
+  // and LUT bounds against fileSize. On success, returns true with `outLutStart` set to the
+  // byte offset of the first entry (just past the count) and `outCount` to the entry count.
+  // Caller is responsible for closing `outFile`. Returns false on any I/O or validation error.
+  bool readParagraphLutHeader(FsFile& outFile, uint16_t& outCount, uint32_t& outLutStart) const;
+
  public:
   uint16_t pageCount = 0;
   int currentPage = 0;

@@ -63,8 +63,14 @@ KOReaderPosition ProgressMapper::toKOReader(const std::shared_ptr<Epub>& epub, c
   // where paragraphs are nested inside divs/sections.  Fall back to the progress-based
   // scan (which works for any content) when no paragraph index is available.
   if (pos.hasParagraphIndex && pos.paragraphIndex > 0) {
-    result.xpath =
-        ChapterXPathIndexer::findXPathForParagraph(epub, pos.spineIndex, pos.paragraphIndex, pos.xhtmlSeekHint);
+    // When a seek hint is set, the LUT entry's paragraphIndex equals pos.paragraphIndex
+    // (both describe the same page). The byte offset now points at the body-child element
+    // that was current at the page break, so re-parsing from there will re-encounter that
+    // paragraph — seed startParagraphCount with paragraphIndex-1 to avoid double counting.
+    const uint16_t startCount =
+        pos.xhtmlSeekHint > 0 && pos.paragraphIndex > 0 ? static_cast<uint16_t>(pos.paragraphIndex - 1) : 0;
+    result.xpath = ChapterXPathIndexer::findXPathForParagraph(epub, pos.spineIndex, pos.paragraphIndex,
+                                                              pos.xhtmlSeekHint, startCount);
   }
   if (result.xpath.empty()) {
     result.xpath = ChapterXPathIndexer::findXPathForProgress(epub, pos.spineIndex, intraSpineProgress);

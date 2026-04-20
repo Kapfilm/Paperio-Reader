@@ -223,7 +223,10 @@ std::string findXPathForParagraphInternal(const std::shared_ptr<Epub>& epub, con
     // Partial parse missed — reset and retry from beginning with full-document context.
     XML_ParserFree(parser);
     parser = XML_ParserCreate(nullptr);
-    if (parser) {
+    if (!parser) {
+      LOG_ERR("KOX", "XML_ParserCreate failed on retry: spine=%d p[%u] tmp=%s", spineIndex, paragraphIndex,
+              tmpPath.c_str());
+    } else {
       ParagraphState fullState(spineIndex, paragraphIndex, 0, false);
       fullState.parser = parser;
       XML_SetUserData(parser, &fullState);
