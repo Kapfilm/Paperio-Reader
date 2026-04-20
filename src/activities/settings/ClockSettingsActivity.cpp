@@ -13,15 +13,6 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-namespace {
-const StrId timeZoneNames[CrossPointSettings::TIMEZONE_COUNT] = {
-    StrId::STR_TZ_UTC,       StrId::STR_TZ_CET,  StrId::STR_TZ_EET,       StrId::STR_TZ_MSK,
-    StrId::STR_TZ_UTC_PLUS4, StrId::STR_TZ_IST,  StrId::STR_TZ_UTC_PLUS7, StrId::STR_TZ_UTC_PLUS8,
-    StrId::STR_TZ_UTC_PLUS9, StrId::STR_TZ_AEST, StrId::STR_TZ_NZST,      StrId::STR_TZ_UTC_MINUS3,
-    StrId::STR_TZ_EST,       StrId::STR_TZ_CST,  StrId::STR_TZ_MST,       StrId::STR_TZ_PST,
-    StrId::STR_TZ_UTC,       StrId::STR_TZ_UTC,  StrId::STR_TZ_UTC};
-}  // namespace
-
 void ClockSettingsActivity::buildMenuItems() {
   menuItems.reserve(6);
   menuItems.push_back(SettingInfo::Separator(StrId::STR_SETTINGS_TITLE));
@@ -35,27 +26,8 @@ void ClockSettingsActivity::buildMenuItems() {
         {StrId::STR_TZ_UTC, StrId::STR_TZ_CET, StrId::STR_TZ_EET, StrId::STR_TZ_MSK, StrId::STR_TZ_UTC_PLUS4,
          StrId::STR_TZ_IST, StrId::STR_TZ_UTC_PLUS7, StrId::STR_TZ_UTC_PLUS8, StrId::STR_TZ_UTC_PLUS9,
          StrId::STR_TZ_AEST, StrId::STR_TZ_NZST, StrId::STR_TZ_UTC_MINUS3, StrId::STR_TZ_EST, StrId::STR_TZ_CST,
-         StrId::STR_TZ_MST, StrId::STR_TZ_PST, StrId::STR_TZ_UTC, StrId::STR_TZ_UTC, StrId::STR_TZ_UTC},
+         StrId::STR_TZ_MST, StrId::STR_TZ_PST, StrId::STR_TZ_AST_ADT, StrId::STR_TZ_ACST_ACDT, StrId::STR_TZ_AKST_AKDT},
         "timeZone", StrId::STR_CAT_SYSTEM);
-    tzSetting.enumLabels = {"UTC (GMT/BST)",
-                            "Central European (CET/CEST)",
-                            "Eastern European (EET/EEST)",
-                            "Moscow (MSK)",
-                            "UTC+4",
-                            "India (IST)",
-                            "UTC+7",
-                            "UTC+8",
-                            "UTC+9",
-                            "Australia Eastern (AEST/AEDT)",
-                            "New Zealand (NZST/NZDT)",
-                            "UTC-3",
-                            "Eastern US/Canada (EST/EDT)",
-                            "Central US/Canada (CST/CDT)",
-                            "Mountain US/Canada (MST/MDT)",
-                            "Pacific US/Canada (PST/PDT)",
-                            "Atlantic Canada (AST/ADT)",
-                            "Australia Central (ACST/ACDT)",
-                            "Alaska (AKST/AKDT)"};
     menuItems.push_back(std::move(tzSetting));
   }
 

@@ -65,6 +65,10 @@ bool mapIanaTimezone(const std::string& tz, uint8_t& outSetting) {
     outSetting = TZ::TZ_AKST_AKDT;
     return true;
   }
+  if (tz == "Australia/Adelaide" || tz == "Australia/Broken_Hill") {
+    outSetting = TZ::TZ_ACST_ACDT;
+    return true;
+  }
   if (tz == "America/Sao_Paulo" || tz == "America/Argentina/Buenos_Aires" || tz == "America/Montevideo") {
     outSetting = TZ::TZ_UTC_MINUS3;
     return true;
