@@ -1,7 +1,9 @@
 #include "ChapterXPathIndexerInternal.h"
 
+#include <Epub/htmlEntities.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Utf8.h>
 
 #include <algorithm>
 #include <cctype>
@@ -27,7 +29,24 @@ bool isWhitespaceOnly(const XML_Char* text, const int len) {
   return true;
 }
 
+static size_t countVisibleBytesInUtf8String(const char* str) {
+  size_t count = 0;
+  for (const unsigned char* ptr = reinterpret_cast<const unsigned char*>(str); *ptr != 0; ++ptr) {
+    if (!std::isspace(*ptr)) {
+      count++;
+    }
+  }
+  return count;
+}
+
 size_t countVisibleBytes(const XML_Char* text, const int len) {
+  if (isEntityRef(text, len)) {
+    const char* resolved = lookupHtmlEntity(text, static_cast<size_t>(len));
+    if (resolved) {
+      return countVisibleBytesInUtf8String(resolved);
+    }
+  }
+
   size_t count = 0;
   for (int i = 0; i < len; i++) {
     if (!std::isspace(static_cast<unsigned char>(text[i]))) {
@@ -38,6 +57,19 @@ size_t countVisibleBytes(const XML_Char* text, const int len) {
 }
 
 size_t countUtf8Codepoints(const XML_Char* text, const int len) {
+  if (isEntityRef(text, len)) {
+    const char* resolved = lookupHtmlEntity(text, static_cast<size_t>(len));
+    if (resolved) {
+      size_t count = 0;
+      const unsigned char* ptr = reinterpret_cast<const unsigned char*>(resolved);
+      while (*ptr != 0) {
+        utf8NextCodepoint(&ptr);
+        count++;
+      }
+      return count;
+    }
+  }
+
   size_t count = 0;
   for (int i = 0; i < len; i++) {
     if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80) {
@@ -48,6 +80,29 @@ size_t countUtf8Codepoints(const XML_Char* text, const int len) {
 }
 
 size_t codepointAtVisibleByte(const XML_Char* text, const int len, const size_t targetVisibleByte) {
+  if (isEntityRef(text, len)) {
+    const char* resolved = lookupHtmlEntity(text, static_cast<size_t>(len));
+    if (resolved) {
+      size_t codepoints = 0;
+      size_t visibleBytes = 0;
+      const unsigned char* ptr = reinterpret_cast<const unsigned char*>(resolved);
+      while (*ptr != 0) {
+        const unsigned char* cpStart = ptr;
+        utf8NextCodepoint(&ptr);
+        codepoints++;
+        for (const unsigned char* it = cpStart; it < ptr; ++it) {
+          if (!std::isspace(*it)) {
+            if (visibleBytes == targetVisibleByte) {
+              return codepoints - 1;
+            }
+            visibleBytes++;
+          }
+        }
+      }
+      return codepoints;
+    }
+  }
+
   size_t codepoints = 0;
   size_t visibleBytes = 0;
   for (int i = 0; i < len; i++) {
@@ -67,6 +122,26 @@ size_t codepointAtVisibleByte(const XML_Char* text, const int len, const size_t 
 }
 
 size_t visibleBytesBeforeCodepoint(const XML_Char* text, const int len, const size_t targetCodepointOffset) {
+  if (isEntityRef(text, len)) {
+    const char* resolved = lookupHtmlEntity(text, static_cast<size_t>(len));
+    if (resolved) {
+      size_t visibleBytes = 0;
+      size_t codepointIndex = 0;
+      const unsigned char* ptr = reinterpret_cast<const unsigned char*>(resolved);
+      while (*ptr != 0 && codepointIndex < targetCodepointOffset) {
+        const unsigned char* cpStart = ptr;
+        utf8NextCodepoint(&ptr);
+        for (const unsigned char* it = cpStart; it < ptr; ++it) {
+          if (!std::isspace(*it)) {
+            visibleBytes++;
+          }
+        }
+        codepointIndex++;
+      }
+      return visibleBytes;
+    }
+  }
+
   size_t visibleBytes = 0;
   size_t codepointIndex = 0;
 
