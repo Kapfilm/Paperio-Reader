@@ -13,6 +13,7 @@
 #include <Logging.h>
 #include <SPI.h>
 #include <builtinFonts/all.h>
+#include <esp_ota_ops.h>
 
 #include <cstring>
 
@@ -26,10 +27,10 @@
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "components/UITheme.h"
-#include "esp_ota_ops.h"
 #include "fontIds.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
+
 
 MappedInputManager mappedInputManager(gpio);
 GfxRenderer renderer(display);
