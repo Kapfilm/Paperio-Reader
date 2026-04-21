@@ -140,20 +140,15 @@ void OtaUpdateActivity::loop() {
   // TODO @ngxson : refactor this logic later
   if (updater.getRender()) {
     requestUpdate();
+    updater.clearRender();
   }
 
   if (state == WAITING_CONFIRMATION) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
       LOG_DBG("OTA", "New update available, starting download...");
-      {
-        RenderLock lock(*this);
-        state = UPDATE_IN_PROGRESS;
-      }
-      requestUpdateAndWait();
-      const auto res = updater.installUpdate();
-
-      if (res != OtaUpdater::OK) {
-        LOG_DBG("OTA", "Update failed: %d", res);
+      const auto beginResult = updater.beginInstallUpdate();
+      if (beginResult != OtaUpdater::UPDATE_IN_PROGRESS) {
+        LOG_DBG("OTA", "Update begin failed: %d", beginResult);
         {
           RenderLock lock(*this);
           state = FAILED;
@@ -164,15 +159,55 @@ void OtaUpdateActivity::loop() {
 
       {
         RenderLock lock(*this);
-        state = FINISHED;
+        state = UPDATE_IN_PROGRESS;
       }
       requestUpdate();
+      return;
     }
 
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
       finish();
     }
 
+    return;
+  }
+
+  if (state == UPDATE_IN_PROGRESS) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+      updater.cancelUpdate();
+      finish();
+      return;
+    }
+
+    const auto res = updater.performInstallUpdateStep();
+    if (res == OtaUpdater::UPDATE_IN_PROGRESS) {
+      if (updater.getRender()) {
+        requestUpdate();
+        updater.clearRender();
+      }
+      return;
+    }
+
+    if (res == OtaUpdater::OK) {
+      {
+        RenderLock lock(*this);
+        state = FINISHED;
+      }
+      requestUpdate();
+      return;
+    }
+
+    if (res == OtaUpdater::UPDATE_CANCELLED) {
+      finish();
+      return;
+    }
+
+    LOG_DBG("OTA", "Update failed: %d", res);
+    {
+      RenderLock lock(*this);
+      state = FAILED;
+    }
+    requestUpdate();
     return;
   }
 

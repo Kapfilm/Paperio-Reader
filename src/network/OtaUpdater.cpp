@@ -28,33 +28,24 @@ esp_err_t http_client_set_header_cb(esp_http_client_handle_t http_client) {
 }
 
 esp_err_t event_handler(esp_http_client_event_t* event) {
-  /* We do interested in only HTTP_EVENT_ON_DATA event only */
+  /* We are only interested in HTTP_EVENT_ON_DATA event */
   if (event->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
 
-  if (!esp_http_client_is_chunked_response(event->client)) {
-    int content_len = esp_http_client_get_content_length(event->client);
-    int copy_len = 0;
-
-    if (local_buf == NULL) {
-      /* local_buf life span is tracked by caller checkForUpdate */
-      local_buf = static_cast<char*>(calloc(content_len + 1, sizeof(char)));
-      output_len = 0;
-      if (local_buf == NULL) {
-        LOG_ERR("OTA", "HTTP Client Out of Memory Failed, Allocation %d", content_len);
-        return ESP_ERR_NO_MEM;
-      }
-    }
-    copy_len = min(event->data_len, (content_len - output_len));
-    if (copy_len) {
-      memcpy(local_buf + output_len, event->data, copy_len);
-    }
-    output_len += copy_len;
-  } else {
-    /* Code might be hits here, It happened once (for version checking) but I need more logs to handle that */
-    int chunked_len;
-    esp_http_client_get_chunk_length(event->client, &chunked_len);
-    LOG_DBG("OTA", "esp_http_client_is_chunked_response failed, chunked_len: %d", chunked_len);
+  if (event->data == nullptr || event->data_len == 0) {
+    return ESP_OK;
   }
+
+  const int newSize = output_len + event->data_len + 1;
+  char* newBuf = static_cast<char*>(realloc(local_buf, static_cast<size_t>(newSize)));
+  if (newBuf == nullptr) {
+    LOG_ERR("OTA", "HTTP Client Out of Memory Failed, Allocation %d", newSize);
+    return ESP_ERR_NO_MEM;
+  }
+
+  local_buf = newBuf;
+  memcpy(local_buf + output_len, event->data, event->data_len);
+  output_len += event->data_len;
+  local_buf[output_len] = '\0';
 
   return ESP_OK;
 } /* event_handler */
@@ -68,6 +59,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   esp_http_client_config_t client_config = {
       .url = latestReleaseUrl,
       .event_handler = event_handler,
+      .timeout_ms = 10000,
       /* Default HTTP client buffer size 512 byte only */
       .buffer_size = 8192,
       .buffer_size_tx = 8192,
@@ -199,28 +191,38 @@ bool OtaUpdater::isUpdateNewer() const {
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
-OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate() {
+void OtaUpdater::cleanupUpdate() {
+  if (otaHandle) {
+    esp_https_ota_finish(otaHandle);
+    otaHandle = nullptr;
+  }
+  cancelRequested = false;
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+}
+
+void OtaUpdater::cancelUpdate() {
+  if (otaHandle) {
+    cleanupUpdate();
+  } else {
+    cancelRequested = true;
+  }
+}
+
+OtaUpdater::OtaUpdaterError OtaUpdater::beginInstallUpdate() {
   if (!isUpdateNewer()) {
     return UPDATE_OLDER_ERROR;
   }
 
-  esp_https_ota_handle_t ota_handle = NULL;
-  esp_err_t esp_err;
-  /* Signal for OtaUpdateActivity */
+  cleanupUpdate();
   render = false;
+  cancelRequested = false;
 
   esp_http_client_config_t client_config = {
       .url = otaUrl.c_str(),
-      .timeout_ms = 30000,
-      /* Default HTTP client buffer size 512 byte only
-       * not sufficient to handle URL redirection cases or
-       * parsing of large HTTP headers.
-       */
+      .timeout_ms = 10000,
       .max_redirection_count = 5,
       .buffer_size = 8192,
       .buffer_size_tx = 8192,
-      /* GitHub release assets redirect to objects.githubusercontent.com CDN.
-       * Without max_redirection_count, esp_https_ota downloads 0 bytes and stalls. */
       .crt_bundle_attach = esp_crt_bundle_attach,
       .keep_alive_enable = true,
   };
@@ -233,41 +235,73 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate() {
   /* For better timing and connectivity, we disable power saving for WiFi */
   esp_wifi_set_ps(WIFI_PS_NONE);
 
-  esp_err = esp_https_ota_begin(&ota_config, &ota_handle);
+  esp_err_t esp_err = esp_https_ota_begin(&ota_config, &otaHandle);
   if (esp_err != ESP_OK) {
     LOG_DBG("OTA", "HTTP OTA Begin Failed: %s", esp_err_to_name(esp_err));
+    cleanupUpdate();
     return INTERNAL_UPDATE_ERROR;
   }
 
-  do {
-    esp_err = esp_https_ota_perform(ota_handle);
-    processedSize = esp_https_ota_get_image_len_read(ota_handle);
-    /* Sent signal to  OtaUpdateActivity */
-    render = true;
-    delay(100);  // TODO: should we replace this with something better?
-  } while (esp_err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
+  return UPDATE_IN_PROGRESS;
+}
 
-  /* Return back to default power saving for WiFi in case of failing */
+OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
+  if (cancelRequested) {
+    cleanupUpdate();
+    return UPDATE_CANCELLED;
+  }
+
+  if (!otaHandle) {
+    return INTERNAL_UPDATE_ERROR;
+  }
+
+  esp_err_t esp_err = esp_https_ota_perform(otaHandle);
+  processedSize = esp_https_ota_get_image_len_read(otaHandle);
+  render = true;
+
+  if (esp_err == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+    return UPDATE_IN_PROGRESS;
+  }
+
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_https_ota_perform Failed: %s", esp_err_to_name(esp_err));
-    esp_https_ota_finish(ota_handle);
+    cleanupUpdate();
     return HTTP_ERROR;
   }
 
-  if (!esp_https_ota_is_complete_data_received(ota_handle)) {
-    LOG_ERR("OTA", "esp_https_ota_is_complete_data_received Failed: %s", esp_err_to_name(esp_err));
-    esp_https_ota_finish(ota_handle);
+  if (!esp_https_ota_is_complete_data_received(otaHandle)) {
+    LOG_ERR("OTA", "esp_https_ota_is_complete_data_received Failed");
+    cleanupUpdate();
     return INTERNAL_UPDATE_ERROR;
   }
 
-  esp_err = esp_https_ota_finish(ota_handle);
-  if (esp_err != ESP_OK) {
-    LOG_ERR("OTA", "esp_https_ota_finish Failed: %s", esp_err_to_name(esp_err));
+  esp_err_t finish_err = esp_https_ota_finish(otaHandle);
+  otaHandle = nullptr;
+  if (finish_err != ESP_OK) {
+    LOG_ERR("OTA", "esp_https_ota_finish Failed: %s", esp_err_to_name(finish_err));
+    cleanupUpdate();
     return INTERNAL_UPDATE_ERROR;
   }
 
   LOG_INF("OTA", "Update completed");
   return OK;
+}
+
+OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate() {
+  const auto beginResult = beginInstallUpdate();
+  if (beginResult != UPDATE_IN_PROGRESS) {
+    return beginResult;
+  }
+
+  OtaUpdaterError result;
+  do {
+    result = performInstallUpdateStep();
+    if (result == UPDATE_IN_PROGRESS) {
+      delay(100);
+    }
+  } while (result == UPDATE_IN_PROGRESS);
+
+  return result;
 }
