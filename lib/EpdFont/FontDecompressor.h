@@ -63,19 +63,16 @@ class FontDecompressor {
   PageSlot pageSlots[MAX_PAGE_SLOTS] = {};
   uint8_t pageSlotCount = 0;
 
-  // Measured maxima across all built-in fonts:
-  //   uncompressedSize: 50 KB (notosans_18 / bookerly_18)
-  //   glyph dataLength: 500 B (bookerly_18)
-  // Static BSS arrays eliminate per-page heap alloc/free and the fragmentation it causes.
-  static constexpr uint32_t HOT_GROUP_BUF_SIZE = 51200;  // 50 KB uncompressed group
-  static constexpr uint16_t HOT_GLYPH_BUF_SIZE = 512;   // largest packed single glyph
+  static constexpr uint16_t HOT_GLYPH_BUF_SIZE = 512;  // largest packed single glyph
 
-  // Hot group: last decompressed group (byte-aligned) for non-prewarmed fallback path.
-  // Kept in byte-aligned format; individual glyphs are compacted on demand into _hotGlyphBuf.
+  // Hot group: single heap buffer sized to the largest group of the active font.
+  // Allocated once per font (lazily in ensureHotGroupBuf) and freed in freeHotGroup().
+  // Single malloc per font session — no repeated alloc/free per page.
   const EpdFontData* hotGroupFont = nullptr;
   uint16_t hotGroupIndex = UINT16_MAX;
   uint32_t _hotGroupBufUsed = 0;
-  uint8_t _hotGroupBuf[HOT_GROUP_BUF_SIZE];
+  uint8_t* _hotGroupBuf = nullptr;
+  uint32_t _hotGroupBufSize = 0;
 
   // Scratch buffer for compacting a single glyph out of the byte-aligned hot group.
   // Valid until the next getBitmap() call.
@@ -83,6 +80,7 @@ class FontDecompressor {
 
   void freePageBuffer();
   void freeHotGroup();
+  bool ensureHotGroupBuf(const EpdFontData* fontData);
   uint16_t getGroupIndex(const EpdFontData* fontData, uint32_t glyphIndex);
   uint32_t getAlignedOffset(const EpdFontData* fontData, uint16_t groupIndex, uint32_t glyphIndex);
   bool decompressGroup(const EpdFontData* fontData, uint16_t groupIndex, uint8_t* outBuf, uint32_t outSize);
