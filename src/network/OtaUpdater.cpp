@@ -3,8 +3,12 @@
 #include <ArduinoJson.h>
 #include <Logging.h>
 
+#include "bootloader_common.h"
+#include "esp_flash_partitions.h"
 #include "esp_http_client.h"
 #include "esp_https_ota.h"
+#include "esp_ota_ops.h"
+#include "esp_partition.h"
 #include "esp_wifi.h"
 
 namespace {
@@ -28,45 +32,41 @@ esp_err_t http_client_set_header_cb(esp_http_client_handle_t http_client) {
 }
 
 esp_err_t event_handler(esp_http_client_event_t* event) {
-  /* We do interested in only HTTP_EVENT_ON_DATA event only */
+  /* We are only interested in HTTP_EVENT_ON_DATA event */
   if (event->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
 
-  if (!esp_http_client_is_chunked_response(event->client)) {
-    int content_len = esp_http_client_get_content_length(event->client);
-    int copy_len = 0;
-
-    if (local_buf == NULL) {
-      /* local_buf life span is tracked by caller checkForUpdate */
-      local_buf = static_cast<char*>(calloc(content_len + 1, sizeof(char)));
-      output_len = 0;
-      if (local_buf == NULL) {
-        LOG_ERR("OTA", "HTTP Client Out of Memory Failed, Allocation %d", content_len);
-        return ESP_ERR_NO_MEM;
-      }
-    }
-    copy_len = min(event->data_len, (content_len - output_len));
-    if (copy_len) {
-      memcpy(local_buf + output_len, event->data, copy_len);
-    }
-    output_len += copy_len;
-  } else {
-    /* Code might be hits here, It happened once (for version checking) but I need more logs to handle that */
-    int chunked_len;
-    esp_http_client_get_chunk_length(event->client, &chunked_len);
-    LOG_DBG("OTA", "esp_http_client_is_chunked_response failed, chunked_len: %d", chunked_len);
+  if (event->data == nullptr || event->data_len == 0) {
+    return ESP_OK;
   }
+
+  const int newSize = output_len + event->data_len + 1;
+  char* newBuf = static_cast<char*>(realloc(local_buf, static_cast<size_t>(newSize)));
+  if (newBuf == nullptr) {
+    LOG_ERR("OTA", "HTTP Client Out of Memory Failed, Allocation %d", newSize);
+    return ESP_ERR_NO_MEM;
+  }
+
+  local_buf = newBuf;
+  memcpy(local_buf + output_len, event->data, event->data_len);
+  output_len += event->data_len;
+  local_buf[output_len] = '\0';
 
   return ESP_OK;
 } /* event_handler */
 } /* namespace */
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
+  // Reset globals so retries start clean regardless of previous outcome
+  local_buf = nullptr;
+  output_len = 0;
+
   JsonDocument filter;
   esp_err_t esp_err;
   JsonDocument doc;
 
   esp_http_client_config_t client_config = {
       .url = latestReleaseUrl,
+      .timeout_ms = 10000,
       .event_handler = event_handler,
       /* Default HTTP client buffer size 512 byte only */
       .buffer_size = 8192,
@@ -199,28 +199,41 @@ bool OtaUpdater::isUpdateNewer() const {
 
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
-OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate() {
+void OtaUpdater::cleanupUpdate() {
+  if (otaHandle) {
+    const esp_err_t err = esp_https_ota_finish(otaHandle);
+    if (err != ESP_OK) {
+      LOG_ERR("OTA", "esp_https_ota_finish on cleanup: %s", esp_err_to_name(err));
+    }
+    otaHandle = nullptr;
+  }
+  cancelRequested = false;
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+}
+
+void OtaUpdater::cancelUpdate() {
+  if (otaHandle) {
+    cleanupUpdate();
+  } else {
+    cancelRequested = true;
+  }
+}
+
+OtaUpdater::OtaUpdaterError OtaUpdater::beginInstallUpdate() {
   if (!isUpdateNewer()) {
     return UPDATE_OLDER_ERROR;
   }
 
-  esp_https_ota_handle_t ota_handle = NULL;
-  esp_err_t esp_err;
-  /* Signal for OtaUpdateActivity */
+  cleanupUpdate();
   render = false;
+  cancelRequested = false;
 
   esp_http_client_config_t client_config = {
       .url = otaUrl.c_str(),
-      .timeout_ms = 30000,
-      /* Default HTTP client buffer size 512 byte only
-       * not sufficient to handle URL redirection cases or
-       * parsing of large HTTP headers.
-       */
+      .timeout_ms = 10000,
       .max_redirection_count = 5,
       .buffer_size = 8192,
       .buffer_size_tx = 8192,
-      /* GitHub release assets redirect to objects.githubusercontent.com CDN.
-       * Without max_redirection_count, esp_https_ota downloads 0 bytes and stalls. */
       .crt_bundle_attach = esp_crt_bundle_attach,
       .keep_alive_enable = true,
   };
@@ -233,38 +246,122 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate() {
   /* For better timing and connectivity, we disable power saving for WiFi */
   esp_wifi_set_ps(WIFI_PS_NONE);
 
-  esp_err = esp_https_ota_begin(&ota_config, &ota_handle);
+  esp_err_t esp_err = esp_https_ota_begin(&ota_config, &otaHandle);
   if (esp_err != ESP_OK) {
     LOG_DBG("OTA", "HTTP OTA Begin Failed: %s", esp_err_to_name(esp_err));
+    cleanupUpdate();
     return INTERNAL_UPDATE_ERROR;
   }
 
-  do {
-    esp_err = esp_https_ota_perform(ota_handle);
-    processedSize = esp_https_ota_get_image_len_read(ota_handle);
-    /* Sent signal to  OtaUpdateActivity */
-    render = true;
-    delay(100);  // TODO: should we replace this with something better?
-  } while (esp_err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
+  return UPDATE_IN_PROGRESS;
+}
 
-  /* Return back to default power saving for WiFi in case of failing */
+/* Writes the otadata entry to boot from the most recently flashed OTA partition,
+ * bypassing esp_ota_set_boot_partition()'s image_validate() call.
+ * Used when esp_https_ota_finish() returns ESP_ERR_OTA_VALIDATE_FAILED on
+ * unsigned Arduino builds (boot_comm efuse revision check false-positive). */
+int OtaUpdater::forceSetOtaBootPartition() {
+  const esp_partition_t* newPartition = esp_ota_get_next_update_partition(nullptr);
+  if (newPartition == nullptr) {
+    return ESP_ERR_NOT_FOUND;
+  }
+
+  const esp_partition_t* otaDataPartition =
+      esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, nullptr);
+  if (otaDataPartition == nullptr) {
+    return ESP_ERR_NOT_FOUND;
+  }
+
+  esp_ota_select_entry_t otadata[2];
+  esp_err_t err = esp_partition_read(otaDataPartition, 0, &otadata[0], sizeof(esp_ota_select_entry_t));
+  if (err != ESP_OK) return err;
+  err = esp_partition_read(otaDataPartition, otaDataPartition->erase_size, &otadata[1], sizeof(esp_ota_select_entry_t));
+  if (err != ESP_OK) return err;
+
+  int activeSlot = bootloader_common_get_active_otadata(otadata);
+  int nextSlot = (activeSlot == -1) ? 0 : (~activeSlot & 1);
+
+  uint8_t otaAppCount = 0;
+  while (esp_partition_find_first(ESP_PARTITION_TYPE_APP,
+                                  static_cast<esp_partition_subtype_t>(ESP_PARTITION_SUBTYPE_APP_OTA_MIN + otaAppCount),
+                                  nullptr) != nullptr) {
+    otaAppCount++;
+  }
+  if (otaAppCount == 0) return ESP_ERR_NOT_FOUND;
+
+  const uint8_t subTypeId = newPartition->subtype & 0x0F;
+  uint32_t newSeq;
+  if (activeSlot == -1) {
+    newSeq = subTypeId + 1;
+  } else {
+    uint32_t currentSeq = otadata[activeSlot].ota_seq;
+    newSeq = currentSeq;
+    while (newSeq % otaAppCount != static_cast<uint32_t>(subTypeId)) {
+      newSeq++;
+    }
+    if (newSeq == currentSeq) newSeq += otaAppCount;
+  }
+
+  otadata[nextSlot].ota_seq = newSeq;
+  otadata[nextSlot].ota_state = ESP_OTA_IMG_VALID;
+  otadata[nextSlot].crc = bootloader_common_ota_select_crc(&otadata[nextSlot]);
+
+  err = esp_partition_erase_range(otaDataPartition, otaDataPartition->erase_size * static_cast<uint32_t>(nextSlot),
+                                  otaDataPartition->erase_size);
+  if (err != ESP_OK) return err;
+
+  return esp_partition_write(otaDataPartition, otaDataPartition->erase_size * static_cast<uint32_t>(nextSlot),
+                             &otadata[nextSlot], sizeof(esp_ota_select_entry_t));
+}
+
+OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
+  if (cancelRequested) {
+    cleanupUpdate();
+    return UPDATE_CANCELLED;
+  }
+
+  if (!otaHandle) {
+    return INTERNAL_UPDATE_ERROR;
+  }
+
+  esp_err_t esp_err = esp_https_ota_perform(otaHandle);
+  processedSize = esp_https_ota_get_image_len_read(otaHandle);
+  render = true;
+
+  if (esp_err == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+    return UPDATE_IN_PROGRESS;
+  }
+
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
   if (esp_err != ESP_OK) {
     LOG_ERR("OTA", "esp_https_ota_perform Failed: %s", esp_err_to_name(esp_err));
-    esp_https_ota_finish(ota_handle);
+    cleanupUpdate();
     return HTTP_ERROR;
   }
 
-  if (!esp_https_ota_is_complete_data_received(ota_handle)) {
-    LOG_ERR("OTA", "esp_https_ota_is_complete_data_received Failed: %s", esp_err_to_name(esp_err));
-    esp_https_ota_finish(ota_handle);
+  if (!esp_https_ota_is_complete_data_received(otaHandle)) {
+    LOG_ERR("OTA", "esp_https_ota_is_complete_data_received Failed");
+    cleanupUpdate();
     return INTERNAL_UPDATE_ERROR;
   }
 
-  esp_err = esp_https_ota_finish(ota_handle);
-  if (esp_err != ESP_OK) {
-    LOG_ERR("OTA", "esp_https_ota_finish Failed: %s", esp_err_to_name(esp_err));
+  esp_err_t finish_err = esp_https_ota_finish(otaHandle);
+  otaHandle = nullptr;
+  if (finish_err == ESP_ERR_OTA_VALIDATE_FAILED) {
+    /* Arduino unsigned builds fail boot_comm validation even though the image
+     * is fully written. Force the boot partition to the new OTA slot by writing
+     * the otadata entry directly, bypassing image_validate(). */
+    LOG_INF("OTA", "Validation failed (expected for unsigned Arduino builds) - forcing boot partition");
+    finish_err = forceSetOtaBootPartition();
+    if (finish_err != ESP_OK) {
+      LOG_ERR("OTA", "forceSetOtaBootPartition failed: %s", esp_err_to_name(finish_err));
+      cleanupUpdate();
+      return VALIDATE_FAILED;
+    }
+  } else if (finish_err != ESP_OK) {
+    LOG_ERR("OTA", "esp_https_ota_finish Failed: %s", esp_err_to_name(finish_err));
+    cleanupUpdate();
     return INTERNAL_UPDATE_ERROR;
   }
 

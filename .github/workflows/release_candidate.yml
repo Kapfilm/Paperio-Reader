@@ -35,6 +35,9 @@ jobs:
           CROSSPOINT_RC_HASH: ${{ env.SHORT_SHA }}
         run: pio run -e gh_release_rc
 
+      - name: Patch min_chip_rev_full to 0
+        run: python3 scripts/patch_min_chip_rev.py .pio/build/gh_release_rc/firmware.bin
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:

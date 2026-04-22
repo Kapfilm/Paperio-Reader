@@ -31,6 +31,7 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
     LOG_DBG("OTA", "Update check failed: %d", res);
     {
       RenderLock lock(*this);
+      failureReason = res;
       state = FAILED;
     }
     return;
@@ -126,6 +127,35 @@ void OtaUpdateActivity::render(RenderLock&&) {
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state == FAILED) {
     renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATE_FAILED), true, EpdFontFamily::BOLD);
+    const char* reason = "";
+    switch (failureReason) {
+      case OtaUpdater::HTTP_ERROR:
+        reason = "Network error (HTTP request failed)";
+        break;
+      case OtaUpdater::JSON_PARSE_ERROR:
+        reason = "Could not parse release info";
+        break;
+      case OtaUpdater::UPDATE_OLDER_ERROR:
+        reason = "Available version is not newer";
+        break;
+      case OtaUpdater::OOM_ERROR:
+        reason = "Out of memory";
+        break;
+      case OtaUpdater::INTERNAL_UPDATE_ERROR:
+        reason = "Internal update error";
+        break;
+      case OtaUpdater::NO_UPDATE:
+        reason = "No firmware asset found";
+        break;
+      case OtaUpdater::VALIDATE_FAILED:
+        reason = "Bootloader incompatible - reflash via USB with PlatformIO";
+        break;
+      default:
+        break;
+    }
+    if (reason[0] != '\0') {
+      renderer.drawCenteredText(SMALL_FONT_ID, top + height + metrics.verticalSpacing, reason);
+    }
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state == FINISHED) {
@@ -140,22 +170,18 @@ void OtaUpdateActivity::loop() {
   // TODO @ngxson : refactor this logic later
   if (updater.getRender()) {
     requestUpdate();
+    updater.clearRender();
   }
 
   if (state == WAITING_CONFIRMATION) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
       LOG_DBG("OTA", "New update available, starting download...");
-      {
-        RenderLock lock(*this);
-        state = UPDATE_IN_PROGRESS;
-      }
-      requestUpdateAndWait();
-      const auto res = updater.installUpdate();
-
-      if (res != OtaUpdater::OK) {
-        LOG_DBG("OTA", "Update failed: %d", res);
+      const auto beginResult = updater.beginInstallUpdate();
+      if (beginResult != OtaUpdater::UPDATE_IN_PROGRESS) {
+        LOG_DBG("OTA", "Update begin failed: %d", beginResult);
         {
           RenderLock lock(*this);
+          failureReason = beginResult;
           state = FAILED;
         }
         requestUpdate();
@@ -164,15 +190,56 @@ void OtaUpdateActivity::loop() {
 
       {
         RenderLock lock(*this);
-        state = FINISHED;
+        state = UPDATE_IN_PROGRESS;
       }
       requestUpdate();
+      return;
     }
 
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
       finish();
     }
 
+    return;
+  }
+
+  if (state == UPDATE_IN_PROGRESS) {
+    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+      updater.cancelUpdate();
+      finish();
+      return;
+    }
+
+    const auto res = updater.performInstallUpdateStep();
+    if (res == OtaUpdater::UPDATE_IN_PROGRESS) {
+      if (updater.getRender()) {
+        requestUpdate();
+        updater.clearRender();
+      }
+      return;
+    }
+
+    if (res == OtaUpdater::OK) {
+      {
+        RenderLock lock(*this);
+        state = FINISHED;
+      }
+      requestUpdate();
+      return;
+    }
+
+    if (res == OtaUpdater::UPDATE_CANCELLED) {
+      finish();
+      return;
+    }
+
+    LOG_DBG("OTA", "Update failed: %d", res);
+    {
+      RenderLock lock(*this);
+      failureReason = res;
+      state = FAILED;
+    }
+    requestUpdate();
     return;
   }
 

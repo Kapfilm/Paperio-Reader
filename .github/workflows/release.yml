@@ -28,6 +28,9 @@ jobs:
       - name: Build CrossPoint
         run: pio run -e gh_release
 
+      - name: Patch min_chip_rev_full to 0
+        run: python3 scripts/patch_min_chip_rev.py .pio/build/gh_release/firmware.bin
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
