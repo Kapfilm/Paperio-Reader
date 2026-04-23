@@ -8,6 +8,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <functional>
 #include <numeric>
 
 #include "CrossPointSettings.h"
@@ -657,222 +658,220 @@ void MdReaderActivity::render(RenderLock&&) {
 void MdReaderActivity::renderPage() {
   const int lineHeight = renderer.getLineHeight(cachedFontId);
 
-  auto renderLines =
-      [&]() {
-        int y = cachedOrientedMarginTop;
-        for (const auto& line : currentPageLines) {
-          if (line.isHR) {
-            // Draw horizontal rule as a thin line
-            int hrY = y + lineHeight / 2;
-            renderer.drawLine(cachedOrientedMarginLeft + line.indent, hrY, cachedOrientedMarginLeft + viewportWidth,
-                              hrY);
-          } else {
-            if (line.isCodeBlock) {
-              const int barX = cachedOrientedMarginLeft + std::max(line.indent - 6, 0);
-              renderer.drawLine(barX, y + 2, barX, y + lineHeight - 2);
-            }
-            if (!line.spans.empty()) {
-              int x = cachedOrientedMarginLeft + line.indent;
+  std::function<void()> renderLines = [&]() {
+    int y = cachedOrientedMarginTop;
+    for (const auto& line : currentPageLines) {
+      if (line.isHR) {
+        // Draw horizontal rule as a thin line
+        int hrY = y + lineHeight / 2;
+        renderer.drawLine(cachedOrientedMarginLeft + line.indent, hrY, cachedOrientedMarginLeft + viewportWidth, hrY);
+      } else {
+        if (line.isCodeBlock) {
+          const int barX = cachedOrientedMarginLeft + std::max(line.indent - 6, 0);
+          renderer.drawLine(barX, y + 2, barX, y + lineHeight - 2);
+        }
+        if (!line.spans.empty()) {
+          int x = cachedOrientedMarginLeft + line.indent;
 
-              // Apply text alignment for non-indented lines
-              if (line.indent == 0) {
-                int contentWidth = viewportWidth;
-                switch (cachedParagraphAlignment) {
-                  case CrossPointSettings::CENTER_ALIGN: {
-                    x = cachedOrientedMarginLeft + (contentWidth - measureSpans(line.spans)) / 2;
-                    break;
-                  }
-                  case CrossPointSettings::RIGHT_ALIGN: {
-                    x = cachedOrientedMarginLeft + contentWidth - measureSpans(line.spans);
-                    break;
-                  }
-                  default:
-                    break;
-                }
+          // Apply text alignment for non-indented lines
+          if (line.indent == 0) {
+            int contentWidth = viewportWidth;
+            switch (cachedParagraphAlignment) {
+              case CrossPointSettings::CENTER_ALIGN: {
+                x = cachedOrientedMarginLeft + (contentWidth - measureSpans(line.spans)) / 2;
+                break;
               }
-
-              // Render each span
-              for (const auto& span : line.spans) {
-                if (!span.text.empty()) {
-                  renderer.drawText(cachedFontId, x, y, span.text.c_str(), true, span.style);
-                  x += renderer.getTextAdvanceX(cachedFontId, span.text.c_str(), span.style);
-                }
+              case CrossPointSettings::RIGHT_ALIGN: {
+                x = cachedOrientedMarginLeft + contentWidth - measureSpans(line.spans);
+                break;
               }
+              default:
+                break;
             }
-            y += lineHeight;
           }
-        };
 
-        // Font prewarm: scan pass accumulates text, then prewarm, then real render
-        auto* fcm = renderer.getFontCacheManager();
-        auto scope = fcm->createPrewarmScope();
-        renderLines();
-        scope.endScanAndPrewarm();
-
-        // BW rendering
-        renderLines();
-        renderStatusBar();
-
-        ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
-
-        if (SETTINGS.textAntiAliasing) {
-          ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
+          // Render each span
+          for (const auto& span : line.spans) {
+            if (!span.text.empty()) {
+              renderer.drawText(cachedFontId, x, y, span.text.c_str(), true, span.style);
+              x += renderer.getTextAdvanceX(cachedFontId, span.text.c_str(), span.style);
+            }
+          }
         }
-      }
-
-  void
-  MdReaderActivity::renderStatusBar() const {
-    const float progress = totalPages > 0 ? (currentPage + 1) * 100.0f / totalPages : 0;
-    std::string title;
-    if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
-      title = txt->getTitle();
-    }
-    GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
-  }
-
-  void MdReaderActivity::saveProgress() const {
-    FsFile f;
-    if (Storage.openFileForWrite("MDR", txt->getCachePath() + "/progress.bin", f)) {
-      uint8_t data[4];
-      data[0] = currentPage & 0xFF;
-      data[1] = (currentPage >> 8) & 0xFF;
-      data[2] = 0;
-      data[3] = 0;
-      f.write(data, 4);
-    }
-  }
-
-  void MdReaderActivity::loadProgress() {
-    FsFile f;
-    if (Storage.openFileForRead("MDR", txt->getCachePath() + "/progress.bin", f)) {
-      uint8_t data[4];
-      if (f.read(data, 4) == 4) {
-        currentPage = data[0] + (data[1] << 8);
-        if (currentPage >= totalPages) {
-          currentPage = totalPages - 1;
-        }
-        if (currentPage < 0) {
-          currentPage = 0;
-        }
-        LOG_DBG("MDR", "Loaded progress: page %d/%d", currentPage, totalPages);
+        y += lineHeight;
       }
     }
+  };
+
+  // Font prewarm: scan pass accumulates text, then prewarm, then real render
+  auto* fcm = renderer.getFontCacheManager();
+  auto scope = fcm->createPrewarmScope();
+  renderLines();
+  scope.endScanAndPrewarm();
+
+  // BW rendering
+  renderLines();
+  renderStatusBar();
+
+  ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+
+  if (SETTINGS.textAntiAliasing) {
+    ReaderUtils::renderAntiAliased(renderer, [&]() { renderLines(); });
+  }
+}
+
+void MdReaderActivity::renderStatusBar() const {
+  const float progress = totalPages > 0 ? (currentPage + 1) * 100.0f / totalPages : 0;
+  std::string title;
+  if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
+    title = txt->getTitle();
+  }
+  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
+}
+
+void MdReaderActivity::saveProgress() const {
+  FsFile f;
+  if (Storage.openFileForWrite("MDR", txt->getCachePath() + "/progress.bin", f)) {
+    uint8_t data[4];
+    data[0] = currentPage & 0xFF;
+    data[1] = (currentPage >> 8) & 0xFF;
+    data[2] = 0;
+    data[3] = 0;
+    f.write(data, 4);
+  }
+}
+
+void MdReaderActivity::loadProgress() {
+  FsFile f;
+  if (Storage.openFileForRead("MDR", txt->getCachePath() + "/progress.bin", f)) {
+    uint8_t data[4];
+    if (f.read(data, 4) == 4) {
+      currentPage = data[0] + (data[1] << 8);
+      if (currentPage >= totalPages) {
+        currentPage = totalPages - 1;
+      }
+      if (currentPage < 0) {
+        currentPage = 0;
+      }
+      LOG_DBG("MDR", "Loaded progress: page %d/%d", currentPage, totalPages);
+    }
+  }
+}
+
+bool MdReaderActivity::loadPageIndexCache() {
+  std::string cachePath = txt->getCachePath() + "/index.bin";
+  FsFile f;
+  if (!Storage.openFileForRead("MDR", cachePath, f)) {
+    LOG_DBG("MDR", "No page index cache found");
+    return false;
   }
 
-  bool MdReaderActivity::loadPageIndexCache() {
-    std::string cachePath = txt->getCachePath() + "/index.bin";
-    FsFile f;
-    if (!Storage.openFileForRead("MDR", cachePath, f)) {
-      LOG_DBG("MDR", "No page index cache found");
-      return false;
-    }
-
-    uint32_t magic;
-    serialization::readPod(f, magic);
-    if (magic != CACHE_MAGIC) {
-      LOG_DBG("MDR", "Cache magic mismatch, rebuilding");
-      return false;
-    }
-
-    uint8_t version;
-    serialization::readPod(f, version);
-    if (version != CACHE_VERSION) {
-      LOG_DBG("MDR", "Cache version mismatch (%d != %d), rebuilding", version, CACHE_VERSION);
-      return false;
-    }
-
-    uint32_t fileSize;
-    serialization::readPod(f, fileSize);
-    if (fileSize != txt->getFileSize()) {
-      LOG_DBG("MDR", "Cache file size mismatch, rebuilding");
-      return false;
-    }
-
-    int32_t cachedWidth;
-    serialization::readPod(f, cachedWidth);
-    if (cachedWidth != viewportWidth) {
-      LOG_DBG("MDR", "Cache viewport width mismatch, rebuilding");
-      return false;
-    }
-
-    int32_t cachedLines;
-    serialization::readPod(f, cachedLines);
-    if (cachedLines != linesPerPage) {
-      LOG_DBG("MDR", "Cache lines per page mismatch, rebuilding");
-      return false;
-    }
-
-    int32_t fontId;
-    serialization::readPod(f, fontId);
-    if (fontId != cachedFontId) {
-      LOG_DBG("MDR", "Cache font ID mismatch, rebuilding");
-      return false;
-    }
-
-    int32_t margin;
-    serialization::readPod(f, margin);
-    if (margin != cachedScreenMargin) {
-      LOG_DBG("MDR", "Cache screen margin mismatch, rebuilding");
-      return false;
-    }
-
-    uint8_t alignment;
-    serialization::readPod(f, alignment);
-    if (alignment != cachedParagraphAlignment) {
-      LOG_DBG("MDR", "Cache paragraph alignment mismatch, rebuilding");
-      return false;
-    }
-
-    uint32_t numPages;
-    serialization::readPod(f, numPages);
-
-    pageOffsets.clear();
-    // Sanity check: reject corrupt cache with absurd page count
-    if (numPages == 0 || numPages > 100000) {
-      LOG_DBG("MDR", "Cache page count out of range (%u), rebuilding", numPages);
-      return false;
-    }
-
-    pageOffsets.reserve(numPages);
-    pageCodeBlockState.clear();
-    pageCodeBlockState.reserve(numPages);
-
-    for (uint32_t i = 0; i < numPages; i++) {
-      uint32_t pageOffset;
-      serialization::readPod(f, pageOffset);
-      uint8_t codeState;
-      serialization::readPod(f, codeState);
-      pageOffsets.push_back(pageOffset);
-      pageCodeBlockState.push_back(codeState);
-    }
-
-    totalPages = pageOffsets.size();
-    LOG_DBG("MDR", "Loaded page index cache: %d pages", totalPages);
-    return true;
+  uint32_t magic;
+  serialization::readPod(f, magic);
+  if (magic != CACHE_MAGIC) {
+    LOG_DBG("MDR", "Cache magic mismatch, rebuilding");
+    return false;
   }
 
-  void MdReaderActivity::savePageIndexCache() const {
-    std::string cachePath = txt->getCachePath() + "/index.bin";
-    FsFile f;
-    if (!Storage.openFileForWrite("MDR", cachePath, f)) {
-      LOG_ERR("MDR", "Failed to save page index cache");
-      return;
-    }
-
-    serialization::writePod(f, CACHE_MAGIC);
-    serialization::writePod(f, CACHE_VERSION);
-    serialization::writePod(f, static_cast<uint32_t>(txt->getFileSize()));
-    serialization::writePod(f, static_cast<int32_t>(viewportWidth));
-    serialization::writePod(f, static_cast<int32_t>(linesPerPage));
-    serialization::writePod(f, static_cast<int32_t>(cachedFontId));
-    serialization::writePod(f, static_cast<int32_t>(cachedScreenMargin));
-    serialization::writePod(f, cachedParagraphAlignment);
-    serialization::writePod(f, static_cast<uint32_t>(pageOffsets.size()));
-
-    for (size_t i = 0; i < pageOffsets.size(); i++) {
-      serialization::writePod(f, static_cast<uint32_t>(pageOffsets[i]));
-      serialization::writePod(f, pageCodeBlockState[i]);
-    }
-
-    LOG_DBG("MDR", "Saved page index cache: %d pages", totalPages);
+  uint8_t version;
+  serialization::readPod(f, version);
+  if (version != CACHE_VERSION) {
+    LOG_DBG("MDR", "Cache version mismatch (%d != %d), rebuilding", version, CACHE_VERSION);
+    return false;
   }
+
+  uint32_t fileSize;
+  serialization::readPod(f, fileSize);
+  if (fileSize != txt->getFileSize()) {
+    LOG_DBG("MDR", "Cache file size mismatch, rebuilding");
+    return false;
+  }
+
+  int32_t cachedWidth;
+  serialization::readPod(f, cachedWidth);
+  if (cachedWidth != viewportWidth) {
+    LOG_DBG("MDR", "Cache viewport width mismatch, rebuilding");
+    return false;
+  }
+
+  int32_t cachedLines;
+  serialization::readPod(f, cachedLines);
+  if (cachedLines != linesPerPage) {
+    LOG_DBG("MDR", "Cache lines per page mismatch, rebuilding");
+    return false;
+  }
+
+  int32_t fontId;
+  serialization::readPod(f, fontId);
+  if (fontId != cachedFontId) {
+    LOG_DBG("MDR", "Cache font ID mismatch, rebuilding");
+    return false;
+  }
+
+  int32_t margin;
+  serialization::readPod(f, margin);
+  if (margin != cachedScreenMargin) {
+    LOG_DBG("MDR", "Cache screen margin mismatch, rebuilding");
+    return false;
+  }
+
+  uint8_t alignment;
+  serialization::readPod(f, alignment);
+  if (alignment != cachedParagraphAlignment) {
+    LOG_DBG("MDR", "Cache paragraph alignment mismatch, rebuilding");
+    return false;
+  }
+
+  uint32_t numPages;
+  serialization::readPod(f, numPages);
+
+  pageOffsets.clear();
+  // Sanity check: reject corrupt cache with absurd page count
+  if (numPages == 0 || numPages > 100000) {
+    LOG_DBG("MDR", "Cache page count out of range (%u), rebuilding", numPages);
+    return false;
+  }
+
+  pageOffsets.reserve(numPages);
+  pageCodeBlockState.clear();
+  pageCodeBlockState.reserve(numPages);
+
+  for (uint32_t i = 0; i < numPages; i++) {
+    uint32_t pageOffset;
+    serialization::readPod(f, pageOffset);
+    uint8_t codeState;
+    serialization::readPod(f, codeState);
+    pageOffsets.push_back(pageOffset);
+    pageCodeBlockState.push_back(codeState);
+  }
+
+  totalPages = pageOffsets.size();
+  LOG_DBG("MDR", "Loaded page index cache: %d pages", totalPages);
+  return true;
+}
+
+void MdReaderActivity::savePageIndexCache() const {
+  std::string cachePath = txt->getCachePath() + "/index.bin";
+  FsFile f;
+  if (!Storage.openFileForWrite("MDR", cachePath, f)) {
+    LOG_ERR("MDR", "Failed to save page index cache");
+    return;
+  }
+
+  serialization::writePod(f, CACHE_MAGIC);
+  serialization::writePod(f, CACHE_VERSION);
+  serialization::writePod(f, static_cast<uint32_t>(txt->getFileSize()));
+  serialization::writePod(f, static_cast<int32_t>(viewportWidth));
+  serialization::writePod(f, static_cast<int32_t>(linesPerPage));
+  serialization::writePod(f, static_cast<int32_t>(cachedFontId));
+  serialization::writePod(f, static_cast<int32_t>(cachedScreenMargin));
+  serialization::writePod(f, cachedParagraphAlignment);
+  serialization::writePod(f, static_cast<uint32_t>(pageOffsets.size()));
+
+  for (size_t i = 0; i < pageOffsets.size(); i++) {
+    serialization::writePod(f, static_cast<uint32_t>(pageOffsets[i]));
+    serialization::writePod(f, pageCodeBlockState[i]);
+  }
+
+  LOG_DBG("MDR", "Saved page index cache: %d pages", totalPages);
+}
