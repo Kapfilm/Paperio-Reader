@@ -335,12 +335,17 @@ bool MdReaderActivity::wordWrapParsedLine(const MdParser::ParsedLine& parsed, in
   const int availableWidth = viewportWidth - indent;
   if (availableWidth <= 0) return true;
 
-  // Build a flat list of all spans, prepending the list prefix if present
+  // Build a flat list of all spans, prepending the list prefix if present.
   std::vector<MdParser::Span> allSpans;
   if (!parsed.listPrefix.empty()) {
     allSpans.push_back({parsed.listPrefix, EpdFontFamily::REGULAR});
   }
   allSpans.insert(allSpans.end(), parsed.spans.begin(), parsed.spans.end());
+
+  const int listPrefixIndent =
+      !parsed.listPrefix.empty()
+          ? renderer.getTextAdvanceX(cachedFontId, parsed.listPrefix.c_str(), EpdFontFamily::REGULAR)
+          : 0;
 
   // Check if everything fits on one line
   int totalWidth = measureSpans(allSpans);
@@ -359,6 +364,7 @@ bool MdReaderActivity::wordWrapParsedLine(const MdParser::ParsedLine& parsed, in
   currentLine.isCodeBlock = isCodeBlock;
   int currentWidth = 0;
   bool fullyConsumed = true;
+  bool firstLine = true;
 
   for (size_t si = 0; si < allSpans.size(); si++) {
     const auto& span = allSpans[si];
@@ -415,8 +421,10 @@ bool MdReaderActivity::wordWrapParsedLine(const MdParser::ParsedLine& parsed, in
           }
         } else {
           outLines.push_back(std::move(currentLine));
+          firstLine = false;
           currentLine = RenderedLine();
-          currentLine.indent = indent;
+          currentLine.indent = indent + (firstLine ? 0 : listPrefixIndent);
+          currentLine.isCodeBlock = isCodeBlock;
           currentWidth = 0;
           continue;
         }
@@ -424,8 +432,9 @@ bool MdReaderActivity::wordWrapParsedLine(const MdParser::ParsedLine& parsed, in
 
       currentLine.spans.push_back({remaining.substr(0, breakPos), style});
       outLines.push_back(std::move(currentLine));
+      firstLine = false;
       currentLine = RenderedLine();
-      currentLine.indent = indent;
+      currentLine.indent = indent + (firstLine ? 0 : listPrefixIndent);
       currentLine.isCodeBlock = isCodeBlock;
       currentWidth = 0;
 

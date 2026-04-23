@@ -19,6 +19,15 @@ static std::string trimLeft(const std::string& s) {
   return s.substr(i);
 }
 
+static uint8_t parseListIndentLevel(size_t leadingSpaces) {
+  // Top-level list markers may be preceded by up to 3 spaces.
+  // Nested list items require at least 4 spaces before the marker.
+  if (leadingSpaces < TAB_WIDTH) {
+    return 0;
+  }
+  return static_cast<uint8_t>((leadingSpaces - TAB_WIDTH) / TAB_WIDTH + 1);
+}
+
 static bool isWordChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
 
 static bool isUnderscoreEmphasis(const std::string& text, size_t pos, size_t count) {
@@ -249,7 +258,8 @@ ParsedLine parseLine(const std::string& rawLine, bool inCodeBlock) {
     return result;
   }
 
-  // Count leading whitespace for nesting level before trimming
+  // Count leading whitespace for nesting level before trimming.
+  // Up to 3 spaces before a list marker are still top-level in CommonMark.
   size_t leadingSpaces = 0;
   for (size_t i = 0; i < rawLine.size(); i++) {
     if (rawLine[i] == ' ')
@@ -259,7 +269,7 @@ ParsedLine parseLine(const std::string& rawLine, bool inCodeBlock) {
     else
       break;
   }
-  result.indentLevel = static_cast<uint8_t>(leadingSpaces / TAB_WIDTH);
+  result.indentLevel = parseListIndentLevel(leadingSpaces);
 
   std::string trimmed = trimLeft(rawLine);
 

@@ -78,6 +78,26 @@ void testUnderscoreBoldWorks() {
   PASS();
 }
 
+void testNestedUnorderedListIndentLevel() {
+  printf("testNestedUnorderedListIndentLevel...\n");
+  auto parsed = MdParser::parseLine("    - nested item", false);
+  ASSERT_EQ(parsed.blockType, MdParser::BlockType::UnorderedList);
+  ASSERT_EQ(parsed.listPrefix, "\xe2\x80\xa2 ");
+  ASSERT_EQ(parsed.indentLevel, 1);
+  ASSERT_EQ(flattenText(parsed.spans), "nested item");
+  PASS();
+}
+
+void testNestedOrderedListIndentLevel() {
+  printf("testNestedOrderedListIndentLevel...\n");
+  auto parsed = MdParser::parseLine("        1. nested ordered", false);
+  ASSERT_EQ(parsed.blockType, MdParser::BlockType::OrderedList);
+  ASSERT_EQ(parsed.listPrefix, "1. ");
+  ASSERT_EQ(parsed.indentLevel, 2);
+  ASSERT_EQ(flattenText(parsed.spans), "nested ordered");
+  PASS();
+}
+
 int main() {
   printf("=== Markdown Parser Tests ===\n\n");
 
@@ -86,6 +106,8 @@ int main() {
   testUnderscoreEmphasisStillWorks();
   testAsteriskEmphasisStillWorks();
   testUnderscoreBoldWorks();
+  testNestedUnorderedListIndentLevel();
+  testNestedOrderedListIndentLevel();
 
   printf("\n=== Results: %d passed, %d failed ===\n", testsPassed, testsFailed);
   return testsFailed > 0 ? 1 : 0;
