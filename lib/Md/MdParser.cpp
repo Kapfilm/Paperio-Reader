@@ -11,6 +11,8 @@ static EpdFontFamily::Style combineFlags(bool bold, bool italic) {
   return EpdFontFamily::REGULAR;
 }
 
+static constexpr int TAB_WIDTH = 4;
+
 static std::string trimLeft(const std::string& s) {
   size_t i = 0;
   while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) i++;
@@ -61,6 +63,9 @@ std::vector<Span> parseInline(const std::string& text) {
     }
   };
 
+  char boldMarker = 0;
+  char italicMarker = 0;
+
   while (i < text.size()) {
     char c = text[i];
 
@@ -74,7 +79,7 @@ std::vector<Span> parseInline(const std::string& text) {
       }
     }
 
-    // *** or ___ — toggle both bold and italic
+    // *** or ___ — toggle both bold and italic when marker matches the current open markers
     if ((c == '*' || c == '_') && i + 2 < text.size() && text[i + 1] == c && text[i + 2] == c) {
       if (c == '_' && !isUnderscoreEmphasis(text, i, 3)) {
         current.append(3, c);
@@ -82,8 +87,17 @@ std::vector<Span> parseInline(const std::string& text) {
         continue;
       }
       emitSpan();
-      bold = !bold;
-      italic = !italic;
+      if (bold && italic && boldMarker == c && italicMarker == c) {
+        bold = false;
+        italic = false;
+        boldMarker = 0;
+        italicMarker = 0;
+      } else {
+        bold = true;
+        italic = true;
+        boldMarker = c;
+        italicMarker = c;
+      }
       i += 3;
       continue;
     }
@@ -96,7 +110,13 @@ std::vector<Span> parseInline(const std::string& text) {
         continue;
       }
       emitSpan();
-      bold = !bold;
+      if (bold && boldMarker == c) {
+        bold = false;
+        boldMarker = 0;
+      } else {
+        bold = true;
+        boldMarker = c;
+      }
       i += 2;
       continue;
     }
@@ -109,7 +129,13 @@ std::vector<Span> parseInline(const std::string& text) {
         continue;
       }
       emitSpan();
-      italic = !italic;
+      if (italic && italicMarker == c) {
+        italic = false;
+        italicMarker = 0;
+      } else {
+        italic = true;
+        italicMarker = c;
+      }
       i += 1;
       continue;
     }
@@ -190,9 +216,9 @@ static std::string handleTaskList(const std::string& content, std::string& listP
   if (content.size() >= 3 && content[0] == '[' && content[2] == ']') {
     char mark = content[1];
     if (mark == 'x' || mark == 'X') {
-      listPrefix = "[x] ";
+      listPrefix = "☑ ";
     } else if (mark == ' ') {
-      listPrefix = "[ ] ";
+      listPrefix = "☐ ";
     } else {
       return content;  // Not a checkbox — keep content as-is
     }
@@ -229,11 +255,11 @@ ParsedLine parseLine(const std::string& rawLine, bool inCodeBlock) {
     if (rawLine[i] == ' ')
       leadingSpaces++;
     else if (rawLine[i] == '\t')
-      leadingSpaces += 2;  // Treat tab as 2 spaces
+      leadingSpaces += TAB_WIDTH;  // Treat tab as 4 spaces to match CommonMark nesting rules
     else
       break;
   }
-  result.indentLevel = static_cast<uint8_t>(leadingSpaces / 2);
+  result.indentLevel = static_cast<uint8_t>(leadingSpaces / TAB_WIDTH);
 
   std::string trimmed = trimLeft(rawLine);
 

@@ -1,9 +1,9 @@
 #include "MdReaderTocSelectionActivity.h"
 
-#include <algorithm>
-
 #include <GfxRenderer.h>
 #include <I18n.h>
+
+#include <algorithm>
 
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -99,7 +99,8 @@ void MdReaderTocSelectionActivity::render(RenderLock&&) {
 
     const auto& heading = headings[itemIndex];
     const int indentSize = contentRect.x + 20 + (heading.level - 1) * 10;
-    const std::string title = renderer.truncatedText(UI_10_FONT_ID, heading.title.c_str(), contentRect.width - 40 - indentSize);
+    const std::string title =
+        renderer.truncatedText(UI_10_FONT_ID, heading.title.c_str(), contentRect.width - 40 - indentSize);
     renderer.drawText(UI_10_FONT_ID, indentSize, displayY, title.c_str(), !isSelected);
   }
 

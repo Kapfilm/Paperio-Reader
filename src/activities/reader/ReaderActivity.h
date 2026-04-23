@@ -16,7 +16,7 @@ class ReaderActivity final : public Activity {
   static std::unique_ptr<Txt> loadTxt(const std::string& path);
   static bool isXtcFile(const std::string& path);
   static bool isTxtFile(const std::string& path);
-  static bool isMDFile(const std::string& path);
+  static bool isMdFile(const std::string& path);
   static bool isImageFile(const std::string& path);
 
   static std::string extractFolderPath(const std::string& filePath);

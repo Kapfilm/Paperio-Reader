@@ -320,7 +320,7 @@ int MdReaderActivity::measureSpans(const std::vector<MdParser::Span>& spans) con
 }
 
 bool MdReaderActivity::wordWrapParsedLine(const MdParser::ParsedLine& parsed, int indent,
-                                          std::vector<RenderedLine>& outLines, int maxLines) {
+                                          std::vector<RenderedLine>& outLines, int maxLines, bool isCodeBlock) {
   const size_t startSize = outLines.size();
 
   if (parsed.spans.empty()) {
@@ -347,6 +347,7 @@ bool MdReaderActivity::wordWrapParsedLine(const MdParser::ParsedLine& parsed, in
     RenderedLine rl;
     rl.spans = std::move(allSpans);
     rl.indent = indent;
+    rl.isCodeBlock = isCodeBlock;
     outLines.push_back(std::move(rl));
     return true;
   }
@@ -354,6 +355,7 @@ bool MdReaderActivity::wordWrapParsedLine(const MdParser::ParsedLine& parsed, in
   // Word-wrap across spans
   RenderedLine currentLine;
   currentLine.indent = indent;
+  currentLine.isCodeBlock = isCodeBlock;
   int currentWidth = 0;
   bool fullyConsumed = true;
 
@@ -423,6 +425,7 @@ bool MdReaderActivity::wordWrapParsedLine(const MdParser::ParsedLine& parsed, in
       outLines.push_back(std::move(currentLine));
       currentLine = RenderedLine();
       currentLine.indent = indent;
+      currentLine.isCodeBlock = isCodeBlock;
       currentWidth = 0;
 
       size_t skip = breakPos;
@@ -539,7 +542,8 @@ bool MdReaderActivity::loadPageAtOffset(size_t offset, bool startInCodeBlock, st
     if (!wasFence) {
       size_t linesBefore = outLines.size();
       int remainingLines = linesPerPage - static_cast<int>(outLines.size());
-      bool fullyConsumed = wordWrapParsedLine(parsed, indent, outLines, remainingLines);
+      bool fullyConsumed = wordWrapParsedLine(parsed, indent, outLines, remainingLines,
+                                            parsed.blockType == MdParser::BlockType::CodeBlock);
 
       if (!fullyConsumed) {
         if (linesBefore > 0) {
@@ -660,7 +664,12 @@ void MdReaderActivity::renderPage() {
         // Draw horizontal rule as a thin line
         int hrY = y + lineHeight / 2;
         renderer.drawLine(cachedOrientedMarginLeft + line.indent, hrY, cachedOrientedMarginLeft + viewportWidth, hrY);
-      } else if (!line.spans.empty()) {
+      } else {
+        if (line.isCodeBlock) {
+          const int barX = cachedOrientedMarginLeft + std::max(line.indent - 6, 0);
+          renderer.drawLine(barX, y + 2, barX, y + lineHeight - 2);
+        }
+        if (!line.spans.empty()) {
         int x = cachedOrientedMarginLeft + line.indent;
 
         // Apply text alignment for non-indented lines

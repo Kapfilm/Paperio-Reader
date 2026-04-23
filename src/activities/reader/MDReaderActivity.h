@@ -27,6 +27,7 @@ class MdReaderActivity final : public Activity {
     std::vector<MdParser::Span> spans;
     int indent = 0;     // left indent in pixels
     bool isHR = false;  // draw as horizontal rule
+    bool isCodeBlock = false;
   };
 
   // Streaming reader state
@@ -71,14 +72,11 @@ class MdReaderActivity final : public Activity {
   void assignHeadingPageNumbers();
   int getHeadingIndexForOffset(size_t offset) const;
   void jumpToHeading(bool next);
-  void scanHeadings();
-  int getHeadingIndexForOffset(size_t offset) const;
-  void jumpToHeading(bool next);
 
   // Word-wrap a parsed markdown line into one or more RenderedLines.
   // Returns true if all content was emitted, false if truncated by maxLines.
   bool wordWrapParsedLine(const MdParser::ParsedLine& parsed, int indent, std::vector<RenderedLine>& outLines,
-                          int maxLines);
+                          int maxLines, bool isCodeBlock = false);
 
   // Measure total pixel width of a span list
   int measureSpans(const std::vector<MdParser::Span>& spans) const;

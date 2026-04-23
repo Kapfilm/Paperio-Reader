@@ -49,7 +49,7 @@ bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasX
 
 bool ReaderActivity::isTxtFile(const std::string& path) { return FsHelpers::hasTxtExtension(path); }
 
-bool ReaderActivity::isMDFile(const std::string& path) { return FsHelpers::hasMarkdownExtension(path); }
+bool ReaderActivity::isMdFile(const std::string& path) { return FsHelpers::hasMarkdownExtension(path); }
 
 bool ReaderActivity::isImageFile(const std::string& path) {
   return FsHelpers::hasBmpExtension(path) || FsHelpers::hasJpgExtension(path) || FsHelpers::hasPngExtension(path);
@@ -167,7 +167,7 @@ void ReaderActivity::onEnter() {
       return;
     }
     onGoToXtcReader(std::move(xtc));
-  } else if (isMDFile(initialBookPath)) {
+  } else if (isMdFile(initialBookPath)) {
     auto txt = loadTxt(initialBookPath);
     if (!txt) {
       onGoBack();
