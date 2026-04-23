@@ -4,6 +4,7 @@
 #include <JsonSettingsIO.h>
 #include <Logging.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 
@@ -16,12 +17,7 @@ namespace {
 constexpr char OPDS_FILE_JSON[] = "/.crosspoint/opds.json";
 
 bool containsWhitespace(const std::string& value) {
-  for (const unsigned char ch : value) {
-    if (std::isspace(ch)) {
-      return true;
-    }
-  }
-  return false;
+  return std::any_of(value.begin(), value.end(), [](unsigned char ch) { return std::isspace(ch); });
 }
 }  // namespace
 
