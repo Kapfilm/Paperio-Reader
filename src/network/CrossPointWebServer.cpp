@@ -11,6 +11,7 @@
 #include <algorithm>
 
 #include "CrossPointSettings.h"
+#include "OpdsServerStore.h"
 #include "SettingsList.h"
 #include "SystemStatus.h"
 #include "WebDAVHandler.h"
@@ -192,6 +193,11 @@ void CrossPointWebServer::begin() {
   server->on("/settings", HTTP_GET, [this] { handleSettingsPage(); });
   server->on("/api/settings", HTTP_GET, [this] { handleGetSettings(); });
   server->on("/api/settings", HTTP_POST, [this] { handlePostSettings(); });
+
+  // OPDS server endpoints
+  server->on("/api/opds", HTTP_GET, [this] { handleGetOpdsServers(); });
+  server->on("/api/opds", HTTP_POST, [this] { handlePostOpdsServer(); });
+  server->on("/api/opds/delete", HTTP_POST, [this] { handleDeleteOpdsServer(); });
 
   server->onNotFound([this] { handleNotFound(); });
   LOG_DBG("WEB", "[MEM] Free heap after route setup: %d bytes", ESP.getFreeHeap());
@@ -1367,6 +1373,167 @@ void CrossPointWebServer::handlePostSettings() {
 
   LOG_DBG("WEB", "Applied %d setting(s)", applied);
   server->send(200, "text/plain", String("Applied ") + String(applied) + " setting(s)");
+}
+
+// ---- OPDS Server API ----
+
+void CrossPointWebServer::handleGetOpdsServers() const {
+  const auto& servers = OPDS_STORE.getServers();
+
+  // Stream JSON array incrementally to avoid allocating the full response in memory
+  server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server->send(200, "application/json", "");
+  server->sendContent("[");
+
+  char output[512];
+  constexpr size_t outputSize = sizeof(output);
+  JsonDocument doc;
+  bool seenFirst = false;
+
+  for (size_t i = 0; i < servers.size(); i++) {
+    doc.clear();
+    doc["index"] = i;
+    doc["name"] = servers[i].name;
+    doc["url"] = servers[i].url;
+    doc["username"] = servers[i].username;
+    // Never expose passwords over the API — only indicate whether one is set
+    doc["hasPassword"] = !servers[i].password.empty();
+
+    const size_t written = serializeJson(doc, output, outputSize);
+    if (written >= outputSize) continue;
+
+    if (seenFirst) {
+      server->sendContent(",");
+    }
+    seenFirst = true;
+    server->sendContent(output);
+  }
+
+  server->sendContent("]");
+  server->sendContent("");
+  LOG_DBG("WEB", "Served OPDS servers API (%zu servers)", servers.size());
+}
+
+void CrossPointWebServer::handlePostOpdsServer() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "text/plain", "Missing JSON body");
+    return;
+  }
+
+  const String body = server->arg("plain");
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
+    return;
+  }
+
+  const std::string name = doc["name"] | std::string("");
+  const std::string rawUrl = doc["url"] | std::string("");
+  const std::string username = doc["username"] | std::string("");
+
+  // The password field is optional in the JSON payload. When absent (vs. present but empty),
+  // we preserve the existing password — the web UI omits it when the user hasn't changed it.
+  bool hasPasswordField = doc["password"].is<const char*>() || doc["password"].is<std::string>();
+  std::string password = doc["password"] | std::string("");
+
+  const auto normalizedUrl = OpdsServerValidation::normalizeUrl(rawUrl);
+  if (!normalizedUrl) {
+    server->send(400, "text/plain", "Invalid URL");
+    return;
+  }
+  if (name.size() > OpdsServerStore::MAX_NAME_LENGTH) {
+    server->send(400, "text/plain", "Server name too long");
+    return;
+  }
+  if (normalizedUrl->size() > OpdsServerStore::MAX_URL_LENGTH) {
+    server->send(400, "text/plain", "URL too long");
+    return;
+  }
+  if (username.size() > OpdsServerStore::MAX_USERNAME_LENGTH) {
+    server->send(400, "text/plain", "Username too long");
+    return;
+  }
+
+  OpdsServer opdsServer;
+  opdsServer.name = name;
+  opdsServer.url = *normalizedUrl;
+  opdsServer.username = username;
+
+  if (doc["index"].is<int>()) {
+    int idx = doc["index"].as<int>();
+    if (idx < 0 || idx >= static_cast<int>(OPDS_STORE.getCount())) {
+      server->send(400, "text/plain", "Invalid server index");
+      return;
+    }
+    // Preserve existing password if not explicitly provided
+    if (!hasPasswordField) {
+      const auto* existing = OPDS_STORE.getServer(static_cast<size_t>(idx));
+      if (existing) password = existing->password;
+    }
+    if (password.size() > OpdsServerStore::MAX_PASSWORD_LENGTH) {
+      server->send(400, "text/plain", "Password too long");
+      return;
+    }
+    opdsServer.password = password;
+    if (!OPDS_STORE.updateServer(static_cast<size_t>(idx), opdsServer)) {
+      server->send(500, "text/plain", "Failed to save server");
+      return;
+    }
+    LOG_DBG("WEB", "Updated OPDS server at index %d", idx);
+  } else {
+    if (OPDS_STORE.getCount() >= OpdsServerStore::MAX_SERVERS) {
+      server->send(400, "text/plain", "Cannot add server (limit reached)");
+      return;
+    }
+    if (password.size() > OpdsServerStore::MAX_PASSWORD_LENGTH) {
+      server->send(400, "text/plain", "Password too long");
+      return;
+    }
+    opdsServer.password = password;
+    const auto insertedIndex = OPDS_STORE.addServer(opdsServer);
+    if (!insertedIndex) {
+      server->send(500, "text/plain", "Failed to save server");
+      return;
+    }
+    LOG_DBG("WEB", "Added new OPDS server at index %zu: %s", *insertedIndex, opdsServer.name.c_str());
+  }
+
+  server->send(200, "text/plain", "OK");
+}
+
+// Uses POST (not HTTP DELETE) because ESP32 WebServer doesn't support DELETE with body.
+void CrossPointWebServer::handleDeleteOpdsServer() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "text/plain", "Missing JSON body");
+    return;
+  }
+
+  const String body = server->arg("plain");
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    server->send(400, "text/plain", String("Invalid JSON: ") + err.c_str());
+    return;
+  }
+
+  if (!doc["index"].is<int>()) {
+    server->send(400, "text/plain", "Missing index");
+    return;
+  }
+
+  int idx = doc["index"].as<int>();
+  if (idx < 0 || idx >= static_cast<int>(OPDS_STORE.getCount())) {
+    server->send(400, "text/plain", "Invalid server index");
+    return;
+  }
+
+  if (!OPDS_STORE.removeServer(static_cast<size_t>(idx))) {
+    server->send(500, "text/plain", "Failed to delete server");
+    return;
+  }
+  LOG_DBG("WEB", "Deleted OPDS server at index %d", idx);
+  server->send(200, "text/plain", "OK");
 }
 
 // WebSocket callback trampoline
