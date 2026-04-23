@@ -3,6 +3,8 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <algorithm>
+
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "OpdsSettingsActivity.h"
@@ -78,7 +80,8 @@ void OpdsServerListActivity::handleSelection() {
   auto resultHandler = [this](const ActivityResult&) {
     // Reload server list when returning from editor
     OPDS_STORE.loadFromFile();
-    selectedIndex = 0;
+    const int itemCount = getItemCount();
+    selectedIndex = itemCount > 0 ? std::min(selectedIndex, itemCount - 1) : 0;
   };
 
   if (selectedIndex < serverCount) {

@@ -70,7 +70,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
   http.setTimeout(30000);
   http.addHeader("User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
 
-  if (!username.empty() && !password.empty()) {
+  if (!username.empty() || !password.empty()) {
     std::string credentials = username + ":" + password;
     String encoded = base64::encode(credentials.c_str());
     http.addHeader("Authorization", "Basic " + encoded);
@@ -122,7 +122,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   http.setTimeout(65535);  // max uint16_t (~65s) — HTTPClient::setTimeout takes uint16_t ms
   http.addHeader("User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
 
-  if (!username.empty() && !password.empty()) {
+  if (!username.empty() || !password.empty()) {
     std::string credentials = username + ":" + password;
     String encoded = base64::encode(credentials.c_str());
     http.addHeader("Authorization", "Basic " + encoded);

@@ -207,9 +207,9 @@ CrossPoint supports saving multiple OPDS servers and switching between them when
 1. Open **Settings -> System -> OPDS Servers**.
 2. Select **Add Server** to create a new entry, or select an existing server to edit it.
 3. Configure these fields:
-  - **Server Name**: Optional display name (for example, "Home Calibre" or "Public Catalog").
-  - **OPDS Server URL**: Full catalog root URL (for Calibre Content Server, usually ends with `/opds`).
-  - **Username / Password**: Optional credentials for authenticated servers.
+   - **Server Name**: Optional display name (for example, "Home Calibre" or "Public Catalog").
+   - **OPDS Server URL**: Full catalog root URL (for Calibre Content Server, usually ends with `/opds`).
+   - **Username / Password**: Optional credentials for authenticated servers.
 4. Use **Delete Server** inside a server entry to remove it.
 
 Behavior notes:

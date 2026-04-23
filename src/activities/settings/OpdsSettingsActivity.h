@@ -30,6 +30,7 @@ class OpdsSettingsActivity final : public Activity {
   OpdsServer editServer;
   bool isNewServer = false;
   bool showSaveError = false;
+  std::string popupMessage;
 
   int getMenuItemCount() const;
   void handleSelection();

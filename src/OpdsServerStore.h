@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,10 @@ bool saveOpds(const OpdsServerStore& store, const char* path);
 bool loadOpds(OpdsServerStore& store, const char* json, bool* needsResave);
 }  // namespace JsonSettingsIO
 
+namespace OpdsServerValidation {
+std::optional<std::string> normalizeUrl(const std::string& url);
+}
+
 /**
  * Singleton class for storing OPDS server configurations on the SD card.
  * Passwords are XOR-obfuscated with the device's unique hardware MAC address
@@ -25,14 +30,18 @@ class OpdsServerStore {
   static OpdsServerStore instance;
   std::vector<OpdsServer> servers;
 
-  static constexpr size_t MAX_SERVERS = 8;
-
   OpdsServerStore() = default;
 
   friend bool JsonSettingsIO::saveOpds(const OpdsServerStore&, const char*);
   friend bool JsonSettingsIO::loadOpds(OpdsServerStore&, const char*, bool*);
 
  public:
+  static constexpr size_t MAX_SERVERS = 8;
+  static constexpr size_t MAX_NAME_LENGTH = 63;
+  static constexpr size_t MAX_URL_LENGTH = 127;
+  static constexpr size_t MAX_USERNAME_LENGTH = 63;
+  static constexpr size_t MAX_PASSWORD_LENGTH = 63;
+
   OpdsServerStore(const OpdsServerStore&) = delete;
   OpdsServerStore& operator=(const OpdsServerStore&) = delete;
 
@@ -41,7 +50,7 @@ class OpdsServerStore {
   bool saveToFile() const;
   bool loadFromFile();
 
-  bool addServer(const OpdsServer& server);
+  std::optional<size_t> addServer(const OpdsServer& server);
   bool updateServer(size_t index, const OpdsServer& server);
   bool removeServer(size_t index);
 

@@ -1388,6 +1388,7 @@ void CrossPointWebServer::handleGetOpdsServers() const {
   char output[512];
   constexpr size_t outputSize = sizeof(output);
   JsonDocument doc;
+  bool seenFirst = false;
 
   for (size_t i = 0; i < servers.size(); i++) {
     doc.clear();
@@ -1401,7 +1402,10 @@ void CrossPointWebServer::handleGetOpdsServers() const {
     const size_t written = serializeJson(doc, output, outputSize);
     if (written >= outputSize) continue;
 
-    if (i > 0) server->sendContent(",");
+    if (seenFirst) {
+      server->sendContent(",");
+    }
+    seenFirst = true;
     server->sendContent(output);
   }
 
@@ -1424,15 +1428,37 @@ void CrossPointWebServer::handlePostOpdsServer() {
     return;
   }
 
-  OpdsServer opdsServer;
-  opdsServer.name = doc["name"] | std::string("");
-  opdsServer.url = doc["url"] | std::string("");
-  opdsServer.username = doc["username"] | std::string("");
+  const std::string name = doc["name"] | std::string("");
+  const std::string rawUrl = doc["url"] | std::string("");
+  const std::string username = doc["username"] | std::string("");
 
   // The password field is optional in the JSON payload. When absent (vs. present but empty),
   // we preserve the existing password — the web UI omits it when the user hasn't changed it.
   bool hasPasswordField = doc["password"].is<const char*>() || doc["password"].is<std::string>();
   std::string password = doc["password"] | std::string("");
+
+  const auto normalizedUrl = OpdsServerValidation::normalizeUrl(rawUrl);
+  if (!normalizedUrl) {
+    server->send(400, "text/plain", "Invalid URL");
+    return;
+  }
+  if (name.size() > OpdsServerStore::MAX_NAME_LENGTH) {
+    server->send(400, "text/plain", "Server name too long");
+    return;
+  }
+  if (normalizedUrl->size() > OpdsServerStore::MAX_URL_LENGTH) {
+    server->send(400, "text/plain", "URL too long");
+    return;
+  }
+  if (username.size() > OpdsServerStore::MAX_USERNAME_LENGTH) {
+    server->send(400, "text/plain", "Username too long");
+    return;
+  }
+
+  OpdsServer opdsServer;
+  opdsServer.name = name;
+  opdsServer.url = *normalizedUrl;
+  opdsServer.username = username;
 
   if (doc["index"].is<int>()) {
     int idx = doc["index"].as<int>();
@@ -1445,16 +1471,32 @@ void CrossPointWebServer::handlePostOpdsServer() {
       const auto* existing = OPDS_STORE.getServer(static_cast<size_t>(idx));
       if (existing) password = existing->password;
     }
+    if (password.size() > OpdsServerStore::MAX_PASSWORD_LENGTH) {
+      server->send(400, "text/plain", "Password too long");
+      return;
+    }
     opdsServer.password = password;
-    OPDS_STORE.updateServer(static_cast<size_t>(idx), opdsServer);
+    if (!OPDS_STORE.updateServer(static_cast<size_t>(idx), opdsServer)) {
+      server->send(500, "text/plain", "Failed to save server");
+      return;
+    }
     LOG_DBG("WEB", "Updated OPDS server at index %d", idx);
   } else {
-    opdsServer.password = password;
-    if (!OPDS_STORE.addServer(opdsServer)) {
+    if (OPDS_STORE.getCount() >= OpdsServerStore::MAX_SERVERS) {
       server->send(400, "text/plain", "Cannot add server (limit reached)");
       return;
     }
-    LOG_DBG("WEB", "Added new OPDS server: %s", opdsServer.name.c_str());
+    if (password.size() > OpdsServerStore::MAX_PASSWORD_LENGTH) {
+      server->send(400, "text/plain", "Password too long");
+      return;
+    }
+    opdsServer.password = password;
+    const auto insertedIndex = OPDS_STORE.addServer(opdsServer);
+    if (!insertedIndex) {
+      server->send(500, "text/plain", "Failed to save server");
+      return;
+    }
+    LOG_DBG("WEB", "Added new OPDS server at index %zu: %s", *insertedIndex, opdsServer.name.c_str());
   }
 
   server->send(200, "text/plain", "OK");
@@ -1486,7 +1528,10 @@ void CrossPointWebServer::handleDeleteOpdsServer() {
     return;
   }
 
-  OPDS_STORE.removeServer(static_cast<size_t>(idx));
+  if (!OPDS_STORE.removeServer(static_cast<size_t>(idx))) {
+    server->send(500, "text/plain", "Failed to delete server");
+    return;
+  }
   LOG_DBG("WEB", "Deleted OPDS server at index %d", idx);
   server->send(200, "text/plain", "OK");
 }

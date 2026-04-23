@@ -16,6 +16,7 @@ namespace {
 // Editable fields: Name, URL, Username, Password.
 // Existing servers also show a Delete option (BASE_ITEMS + 1).
 constexpr int BASE_ITEMS = 4;
+constexpr char INVALID_OPDS_URL_MESSAGE[] = "Enter a valid OPDS URL";
 }  // namespace
 
 int OpdsSettingsActivity::getMenuItemCount() const {
@@ -28,6 +29,7 @@ void OpdsSettingsActivity::onEnter() {
   selectedIndex = 0;
   isNewServer = (serverIndex < 0);
   showSaveError = false;
+  popupMessage.clear();
 
   if (!isNewServer) {
     // Edit flow: copy the selected server into local editable state.
@@ -75,12 +77,13 @@ bool OpdsSettingsActivity::saveServer() {
 
   if (isNewServer) {
     // Create flow: first save inserts a new server record into the multi-server store.
-    success = OPDS_STORE.addServer(editServer);
+    const auto insertedIndex = OPDS_STORE.addServer(editServer);
+    success = insertedIndex.has_value();
     if (success) {
       // After the first successful save, promote to an existing server so
       // subsequent field edits update in-place rather than creating duplicates.
       isNewServer = false;
-      serverIndex = static_cast<int>(OPDS_STORE.getCount()) - 1;
+      serverIndex = static_cast<int>(*insertedIndex);
     } else {
       LOG_ERR("OPS", "Failed to add OPDS server");
     }
@@ -93,6 +96,9 @@ bool OpdsSettingsActivity::saveServer() {
   }
 
   showSaveError = !success;
+  if (success) {
+    popupMessage.clear();
+  }
   if (showSaveError) {
     requestUpdate();
   }
@@ -113,23 +119,32 @@ void OpdsSettingsActivity::handleSelection() {
         requestUpdate();
       }
     };
-    startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_SERVER_NAME),
-                                                                   editServer.name, 63, InputType::Text),
-                           handler);
+    startActivityForResult(
+        std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_SERVER_NAME), editServer.name,
+                                                OpdsServerStore::MAX_NAME_LENGTH, InputType::Text),
+        handler);
   } else if (selectedIndex == 1) {
     // Server URL
     const std::string prefillUrl = editServer.url.empty() ? "https://" : editServer.url;
     auto handler = [this](const ActivityResult& result) {
       if (!result.isCancelled) {
         const auto& kb = std::get<KeyboardResult>(result.data);
-        editServer.url = (kb.text == "https://" || kb.text == "http://") ? "" : kb.text;
+        const auto normalizedUrl = OpdsServerValidation::normalizeUrl(kb.text);
+        if (!normalizedUrl) {
+          popupMessage = INVALID_OPDS_URL_MESSAGE;
+          requestUpdate();
+          return;
+        }
+        popupMessage.clear();
+        editServer.url = *normalizedUrl;
         saveServer();
         requestUpdate();
       }
     };
-    startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_OPDS_SERVER_URL),
-                                                                   prefillUrl, 127, InputType::Url),
-                           handler);
+    startActivityForResult(
+        std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_OPDS_SERVER_URL), prefillUrl,
+                                                OpdsServerStore::MAX_URL_LENGTH, InputType::Url),
+        handler);
   } else if (selectedIndex == 2) {
     // Username
     auto handler = [this](const ActivityResult& result) {
@@ -140,9 +155,10 @@ void OpdsSettingsActivity::handleSelection() {
         requestUpdate();
       }
     };
-    startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_USERNAME),
-                                                                   editServer.username, 63, InputType::Text),
-                           handler);
+    startActivityForResult(
+        std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_USERNAME), editServer.username,
+                                                OpdsServerStore::MAX_USERNAME_LENGTH, InputType::Text),
+        handler);
   } else if (selectedIndex == 3) {
     // Password
     auto handler = [this](const ActivityResult& result) {
@@ -153,9 +169,10 @@ void OpdsSettingsActivity::handleSelection() {
         requestUpdate();
       }
     };
-    startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_PASSWORD),
-                                                                   editServer.password, 63, InputType::Password),
-                           handler);
+    startActivityForResult(
+        std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_PASSWORD), editServer.password,
+                                                OpdsServerStore::MAX_PASSWORD_LENGTH, InputType::Password),
+        handler);
   } else if (selectedIndex == 4 && !isNewServer) {
     // Delete flow is only available for existing servers.
     if (!OPDS_STORE.removeServer(static_cast<size_t>(serverIndex))) {
@@ -214,7 +231,9 @@ void OpdsSettingsActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  if (showSaveError) {
+  if (!popupMessage.empty()) {
+    GUI.drawPopup(renderer, popupMessage.c_str());
+  } else if (showSaveError) {
     GUI.drawPopup(renderer, tr(STR_ERROR_GENERAL_FAILURE));
   }
 

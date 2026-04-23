@@ -509,6 +509,7 @@
   // /api/opds REST endpoints. Password fields are never pre-filled for security;
   // the "(unchanged)" placeholder indicates an existing password is preserved on save.
   let opdsServers = [];
+  const MAX_OPDS_SERVERS = 8;
 
   function renderOpdsServer(srv, idx) {
     const isNew = idx === -1;
@@ -540,6 +541,7 @@
   function renderOpdsSection() {
     const container = document.getElementById('opds-container');
     let html = '<div class="card"><h2>OPDS Servers</h2>';
+    const canAddOpdsServer = opdsServers.length < MAX_OPDS_SERVERS;
 
     if (opdsServers.length === 0) {
       html += '<p style="color:var(--label-color);text-align:center;">No OPDS servers configured</p>';
@@ -550,7 +552,9 @@
     }
 
     html += '<div style="margin-top:12px;text-align:center;">' +
-      '<button class="btn-small btn-add" onclick="addOpdsServer()">+ Add Server</button>' +
+      (canAddOpdsServer
+        ? '<button class="btn-small btn-add" onclick="addOpdsServer()">+ Add Server</button>'
+        : '<span style="color:var(--label-color);">Maximum of 8 servers reached</span>') +
     '</div></div>';
     container.innerHTML = html;
   }
@@ -567,6 +571,7 @@
   }
 
   function addOpdsServer() {
+    if (opdsServers.length >= MAX_OPDS_SERVERS) return;
     const container = document.getElementById('opds-container');
     const card = container.querySelector('.card');
     const addBtn = card.querySelector('.btn-add').parentElement;
