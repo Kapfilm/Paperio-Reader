@@ -587,11 +587,18 @@ bool MdReaderActivity::loadPageAtOffset(size_t offset, bool startInCodeBlock, st
 void MdReaderActivity::buildPageIndex() {
   pageOffsets.clear();
   pageCodeBlockState.clear();
+
+  const size_t fileSize = txt->getFileSize();
+  if (fileSize == 0) {
+    totalPages = 0;
+    LOG_DBG("MDR", "Empty markdown file, no pages");
+    return;
+  }
+
   pageOffsets.push_back(0);
   pageCodeBlockState.push_back(0);
 
   size_t offset = 0;
-  const size_t fileSize = txt->getFileSize();
   bool inCodeBlock = false;
 
   LOG_DBG("MDR", "Building page index for %zu bytes...", fileSize);
@@ -672,6 +679,7 @@ void MdReaderActivity::renderPage() {
         // Draw horizontal rule as a thin line
         int hrY = y + lineHeight / 2;
         renderer.drawLine(cachedOrientedMarginLeft + line.indent, hrY, cachedOrientedMarginLeft + viewportWidth, hrY);
+        y += lineHeight;
       } else {
         if (line.isCodeBlock) {
           const int barX = cachedOrientedMarginLeft + std::max(line.indent - 6, 0);
@@ -739,11 +747,12 @@ void MdReaderActivity::renderStatusBar() const {
 void MdReaderActivity::saveProgress() const {
   FsFile f;
   if (Storage.openFileForWrite("MDR", txt->getCachePath() + "/progress.bin", f)) {
+    uint32_t page = static_cast<uint32_t>(currentPage < 0 ? 0 : currentPage);
     uint8_t data[4];
-    data[0] = currentPage & 0xFF;
-    data[1] = (currentPage >> 8) & 0xFF;
-    data[2] = 0;
-    data[3] = 0;
+    data[0] = page & 0xFF;
+    data[1] = (page >> 8) & 0xFF;
+    data[2] = (page >> 16) & 0xFF;
+    data[3] = (page >> 24) & 0xFF;
     f.write(data, 4);
   }
 }
@@ -753,12 +762,14 @@ void MdReaderActivity::loadProgress() {
   if (Storage.openFileForRead("MDR", txt->getCachePath() + "/progress.bin", f)) {
     uint8_t data[4];
     if (f.read(data, 4) == 4) {
-      currentPage = data[0] + (data[1] << 8);
-      if (currentPage >= totalPages) {
-        currentPage = totalPages - 1;
-      }
-      if (currentPage < 0) {
+      uint32_t loadedPage = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+                            (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
+      if (totalPages == 0) {
         currentPage = 0;
+      } else if (loadedPage >= static_cast<uint32_t>(totalPages)) {
+        currentPage = totalPages - 1;
+      } else {
+        currentPage = static_cast<int>(loadedPage);
       }
       LOG_DBG("MDR", "Loaded progress: page %d/%d", currentPage, totalPages);
     }

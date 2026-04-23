@@ -56,7 +56,7 @@ void testUnderscoreEmphasisStillWorks() {
   auto spans = MdParser::parseInline("foo _bar_ baz");
   ASSERT_EQ(flattenText(spans), "foo bar baz");
   ASSERT_EQ(spans.size(), 3);
-  ASSERT_EQ(spans[1].style == EpdFontFamily::ITALIC || spans[1].style == EpdFontFamily::BOLD_ITALIC, true);
+  ASSERT_EQ(spans[1].style, EpdFontFamily::ITALIC);
   PASS();
 }
 
@@ -65,7 +65,7 @@ void testAsteriskEmphasisStillWorks() {
   auto spans = MdParser::parseInline("foo *bar* baz");
   ASSERT_EQ(flattenText(spans), "foo bar baz");
   ASSERT_EQ(spans.size(), 3);
-  ASSERT_EQ(spans[1].style == EpdFontFamily::ITALIC || spans[1].style == EpdFontFamily::BOLD_ITALIC, true);
+  ASSERT_EQ(spans[1].style, EpdFontFamily::ITALIC);
   PASS();
 }
 
@@ -74,7 +74,7 @@ void testUnderscoreBoldWorks() {
   auto spans = MdParser::parseInline("foo __bar__ baz");
   ASSERT_EQ(flattenText(spans), "foo bar baz");
   ASSERT_EQ(spans.size(), 3);
-  ASSERT_EQ(spans[1].style == EpdFontFamily::BOLD || spans[1].style == EpdFontFamily::BOLD_ITALIC, true);
+  ASSERT_EQ(spans[1].style, EpdFontFamily::BOLD);
   PASS();
 }
 

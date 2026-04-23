@@ -98,10 +98,11 @@ void MdReaderTocSelectionActivity::render(RenderLock&&) {
     const bool isSelected = (itemIndex == selectorIndex);
 
     const auto& heading = headings[itemIndex];
-    const int indentSize = contentRect.x + 20 + (heading.level - 1) * 10;
+    const int indentRelative = 20 + (heading.level - 1) * 10;
+    const int drawX = contentRect.x + indentRelative;
     const std::string title =
-        renderer.truncatedText(UI_10_FONT_ID, heading.title.c_str(), contentRect.width - 40 - indentSize);
-    renderer.drawText(UI_10_FONT_ID, indentSize, displayY, title.c_str(), !isSelected);
+        renderer.truncatedText(UI_10_FONT_ID, heading.title.c_str(), contentRect.width - 40 - indentRelative);
+    renderer.drawText(UI_10_FONT_ID, drawX, displayY, title.c_str(), !isSelected);
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
