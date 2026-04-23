@@ -2278,9 +2278,10 @@
       if (file.isDirectory) return 0;
       const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
       if (ext === 'epub') return 1;
-      if (ext === 'xtc') return 2;
+      if (ext === 'xtc' || ext === 'xtch') return 2;
       if (ext === 'txt') return 3;
-      return 4;
+      if (ext === 'md') return 4;
+      return 5;
     }
 
     function sortFiles(files) {
@@ -2355,11 +2356,18 @@
           if (!filePath.endsWith("/")) filePath += "/";
           filePath += file.name;
 
-          fileTableContent += `<tr class="${file.isEpub ? 'epub-file' : ''}">`;
+          const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
+          const isXtc = ext === 'xtc' || ext === 'xtch';
+          const isMd = ext === 'md';
+          const fileIcon = file.isEpub ? '📗' : isXtc ? '📘' : isMd ? '📝' : '📄';
+          const fileBadge = file.isEpub ? 'EPUB' : isXtc ? 'XTC' : ext === 'txt' ? 'TXT' : isMd ? 'MD' : '';
+          const rowClass = file.isEpub ? 'epub-file' : isXtc ? 'xtc-file' : '';
+
+          fileTableContent += `<tr class="${rowClass}">`;
           fileTableContent += `<td style="text-align:center"><input type="checkbox" class="select-item" data-path="${encodeURIComponent(filePath)}" data-name="${escapeHtml(file.name)}" data-type="file"></td>`;
-          fileTableContent += `<td><span class="file-icon">${file.isEpub ? '📗' : '📄'}</span>`;
+          fileTableContent += `<td><span class="file-icon">${fileIcon}</span>`;
           fileTableContent += `<a rel="noopener noreferrer" target="_blank" href="/download?path=${encodeURIComponent(filePath)}" class="file-link">${escapeHtml(displayFileName(file.name))}</a>`;
-          if (file.isEpub) fileTableContent += '<span class="epub-badge">EPUB</span>';
+          if (fileBadge) fileTableContent += `<span class="epub-badge">${fileBadge}</span>`;
           fileTableContent += '</td>';
           fileTableContent += `<td>${file.name.includes('.') ? file.name.split('.').pop().toUpperCase() : '-'}</td>`;
           fileTableContent += `<td>${formatFileSize(file.size)}</td>`;
