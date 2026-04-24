@@ -5,6 +5,7 @@
 
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
+#include "activities/settings/SettingsSubmenuActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -202,7 +203,7 @@ EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForNameId(StrId
 }
 
 void EpubReaderMenuActivity::finishWithAction(MenuAction action) {
-  setResult(MenuResult{static_cast<int>(action), pendingOrientation, selectedPageTurnOption,
+  setResult(MenuResult{static_cast<int>(action), -1, pendingOrientation, selectedPageTurnOption,
                        pendingEmbeddedStyleOverride, pendingImageRenderingOverride, pendingFontFamilyOverride,
                        pendingFontSizeOverride, pendingTextDarkness});
   finish();
@@ -230,6 +231,7 @@ void EpubReaderMenuActivity::onBackPressed() {
   ActivityResult result;
   result.isCancelled = true;
   result.data = MenuResult{-1,
+                           -1,
                            pendingOrientation,
                            selectedPageTurnOption,
                            pendingEmbeddedStyleOverride,
@@ -255,10 +257,10 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
     return currentPageStarred ? std::string(tr(STR_STATE_ON)) : std::string(tr(STR_STATE_OFF));
   }
 
-  // Plain ACTION items (select chapter, screenshot, etc.) show no value.
-  // Submenu placeholders should still show the standard submenu indicator.
   if (item.type == SettingType::ACTION) {
-    if (item.action == SettingAction::Submenu) return MenuListActivity::getItemValueString(index);
+    if (item.action == SettingAction::Submenu) {
+      return MenuListActivity::getItemValueString(index);
+    }
     return {};
   }
 
@@ -289,6 +291,73 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
 
   // DynamicEnum items use the standard display
   return MenuListActivity::getItemValueString(index);
+}
+
+void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
+  auto it = std::find_if(submenuData.begin(), submenuData.end(),
+                         [&submenuEntry](const SettingInfo::SubmenuData& d) { return d.id == submenuEntry.nameId; });
+  if (it == submenuData.end()) return;
+
+  auto itemValueStringOverride = [this](const SettingInfo& item) -> std::string {
+    if (item.nameId == StrId::STR_EMBEDDED_STYLE && pendingEmbeddedStyleOverride < 0) {
+      const auto defaultEffective = (SETTINGS.embeddedStyle != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+    }
+    if (item.nameId == StrId::STR_IMAGES && pendingImageRenderingOverride < 0) {
+      const auto valueIndex = static_cast<size_t>(SETTINGS.imageRendering + 1);
+      if (valueIndex < item.enumValues.size()) {
+        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[valueIndex]) + ")";
+      }
+    }
+    if (item.nameId == StrId::STR_FONT_FAMILY && pendingFontFamilyOverride < 0) {
+      const auto valueIndex = static_cast<size_t>(SETTINGS.fontFamily + 1);
+      if (valueIndex < item.enumValues.size()) {
+        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[valueIndex]) + ")";
+      }
+    }
+    if (item.nameId == StrId::STR_FONT_SIZE && pendingFontSizeOverride < 0) {
+      const auto valueIndex = static_cast<size_t>(SETTINGS.fontSize + 1);
+      if (valueIndex < item.enumValues.size()) {
+        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[valueIndex]) + ")";
+      }
+    }
+    return item.getDisplayValue();
+  };
+
+  startActivityForResult(std::make_unique<SettingsSubmenuActivity>(renderer, mappedInput, submenuEntry.nameId,
+                                                                   it->items, std::move(itemValueStringOverride)),
+                         [this](const ActivityResult& result) {
+                           if (!result.isCancelled) {
+                             const auto* menuResult = std::get_if<MenuResult>(&result.data);
+                             if (menuResult && menuResult->nameId != -1) {
+                               const auto action = actionForNameId(static_cast<StrId>(menuResult->nameId));
+                               if (action != MenuAction::NONE) {
+                                 finishWithAction(action);
+                                 return;
+                               }
+                             }
+                           }
+                           requestUpdate();
+                         });
+}
+
+void EpubReaderMenuActivity::toggleCurrentItem() {
+  if (selectedIndex < 0 || selectedIndex >= static_cast<int>(menuItems.size())) return;
+  const auto& item = menuItems[selectedIndex];
+  if (item.isSeparator) return;
+
+  if (item.type == SettingType::ACTION) {
+    if (item.action == SettingAction::Submenu) {
+      openSubmenu(item);
+      return;
+    }
+    onActionSelected(selectedIndex);
+    return;
+  }
+
+  menuItems[selectedIndex].toggleValue();
+  onSettingToggled(selectedIndex);
+  requestUpdate();
 }
 
 void EpubReaderMenuActivity::onEnter() { MenuListActivity::onEnter(); }

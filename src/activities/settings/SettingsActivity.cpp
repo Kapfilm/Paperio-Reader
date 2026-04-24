@@ -213,7 +213,16 @@ void SettingsActivity::toggleCurrentSetting() {
   if (setting.isSeparator) return;
 
   if (setting.type == SettingType::ACTION) {
-    auto resultHandler = [this](const ActivityResult&) { SETTINGS.saveToFile(); };
+    auto resultHandler = [this](const ActivityResult& result) {
+      SETTINGS.saveToFile();
+      const auto* menuResult = std::get_if<MenuResult>(&result.data);
+      if (menuResult && menuResult->action != -1) {
+        auto activity = createActivityForAction(static_cast<SettingAction>(menuResult->action), renderer, mappedInput);
+        if (activity) {
+          startActivityForResult(std::move(activity), [this](const ActivityResult&) { SETTINGS.saveToFile(); });
+        }
+      }
+    };
 
     if (setting.action == SettingAction::Submenu) {
       auto it = std::find_if(submenuData.begin(), submenuData.end(),

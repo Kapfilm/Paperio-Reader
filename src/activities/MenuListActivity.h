@@ -86,7 +86,7 @@ class MenuListActivity : public Activity {
   void handleNavigation();
 
   // Toggle/cycle the currently selected item.  For ACTION items, delegates to onActionSelected().
-  void toggleCurrentItem();
+  virtual void toggleCurrentItem();
 
   // Draw the list into the given rect using GUI.drawList().
   void drawMenuList(const Rect& rect);

@@ -53,6 +53,8 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   void onActionSelected(int index) override;
   void onBackPressed() override;
   void onSettingToggled(int index) override;
+  void toggleCurrentItem() override;
+  void openSubmenu(const SettingInfo& submenuEntry);
 
   // Map from StrId to MenuAction for result passing
   static MenuAction actionForNameId(StrId nameId);
