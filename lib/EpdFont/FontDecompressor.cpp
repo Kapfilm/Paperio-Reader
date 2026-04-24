@@ -347,7 +347,11 @@ int FontDecompressor::prewarmCache(const EpdFontData* fontData, const char* utf8
     uint8_t* groupIdToPos = static_cast<uint8_t*>(malloc(fontData->groupCount));
     if (!groupIdToPos) {
       LOG_ERR("FDC", "OOM: cannot allocate %u bytes for groupIdToPos map", fontData->groupCount);
-      freePageBuffer();
+      // Roll back this slot only (other slots from prior prewarmCache calls stay valid)
+      free(slot.buffer);
+      free(slot.glyphs);
+      slot = {};
+      pageSlotCount--;
       return glyphCount;
     }
     memset(groupIdToPos, 0xFF, fontData->groupCount);
