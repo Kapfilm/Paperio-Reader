@@ -1145,6 +1145,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
   // Force special handling for pages with images when anti-aliasing is on
   bool imagePageWithAA = page->hasImages() && SETTINGS.textAntiAliasing;
+  bool forceHalfRefreshThisPage = pendingHalfRefreshAfterImagePage && SETTINGS.halfRefreshAfterImagePage;
+  pendingHalfRefreshAfterImagePage = false;
 
   logReaderMemSnapshot("before_bw_render");
   page->render(renderer, SETTINGS.getReaderFontId(), orientedMarginLeft, orientedMarginTop);
@@ -1172,6 +1174,12 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     }
     // Double FAST_REFRESH handles ghosting for image pages; don't count toward full refresh cadence
+    if (forceHalfRefreshThisPage) {
+      pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    }
+  } else if (forceHalfRefreshThisPage) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
@@ -1182,6 +1190,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   renderer.storeBwBuffer();
   const auto tBwStore = millis();
   logReaderMemSnapshot("bw_store_end");
+
+  if (page->hasImages() && SETTINGS.imageRendering != CrossPointSettings::IMAGES_SUPPRESS) {
+    pendingHalfRefreshAfterImagePage = true;
+  }
 
   // grayscale rendering
   // TODO: Only do this if font supports it
