@@ -1,8 +1,7 @@
 name: Compile Release
 on:
-  push:
-    tags:
-      - '*'
+  release:
+    types: [published]
 
 jobs:
   build-release:
@@ -11,6 +10,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+          ref: ${{ github.event.release.tag_name }}
 
       - uses: actions/setup-python@v6
         with:
@@ -31,13 +31,42 @@ jobs:
       - name: Patch min_chip_rev_full to 0
         run: python3 scripts/patch_min_chip_rev.py .pio/build/gh_release/firmware.bin
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload bootloader.bin to Release
+        uses: actions/upload-release-asset@v1
         with:
-          name: CrossPoint-${{ github.ref_name }}
-          path: |
-            .pio/build/gh_release/bootloader.bin
-            .pio/build/gh_release/firmware.bin
-            .pio/build/gh_release/firmware.elf
-            .pio/build/gh_release/firmware.map
-            .pio/build/gh_release/partitions.bin
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: .pio/build/gh_release/bootloader.bin
+          asset_name: bootloader.bin
+          asset_content_type: application/octet-stream
+
+      - name: Upload firmware.bin to Release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: .pio/build/gh_release/firmware.bin
+          asset_name: firmware.bin
+          asset_content_type: application/octet-stream
+
+      - name: Upload firmware.elf to Release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: .pio/build/gh_release/firmware.elf
+          asset_name: firmware.elf
+          asset_content_type: application/octet-stream
+
+      - name: Upload firmware.map to Release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: .pio/build/gh_release/firmware.map
+          asset_name: firmware.map
+          asset_content_type: application/octet-stream
+
+      - name: Upload partitions.bin to Release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: .pio/build/gh_release/partitions.bin
+          asset_name: partitions.bin
+          asset_content_type: application/octet-stream

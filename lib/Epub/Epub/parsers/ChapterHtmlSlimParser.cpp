@@ -170,6 +170,17 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   nextWordContinues = false;
 }
 
+// Emit the current page, keeping paragraphLutPerPage and completedPageCount in lockstep.
+// Callers must ensure currentPage is non-null and carries content; the helper resets
+// currentPage to a fresh Page and zeroes currentPageNextY so the caller can keep building.
+void ChapterHtmlSlimParser::emitPage(uint32_t xhtmlByteOffset) {
+  paragraphLutPerPage.push_back({xhtmlByteOffset, xpathParagraphIndex});
+  completePageFn(std::move(currentPage));
+  completedPageCount++;
+  currentPage.reset(new Page());
+  currentPageNextY = 0;
+}
+
 // start a new text block if needed
 void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   nextWordContinues = false;  // New block = new paragraph, no continuation
@@ -198,10 +209,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       if (!pendingAnchorId.empty()) {
         if (std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
           if (currentPage && !currentPage->elements.empty()) {
-            completePageFn(std::move(currentPage));
-            completedPageCount++;
-            currentPage.reset(new Page());
-            currentPageNextY = 0;
+            emitPage(lastBodyChildByteOffset);
           }
         }
         anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
@@ -218,10 +226,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   if (!pendingAnchorId.empty() &&
       std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
     if (currentPage && !currentPage->elements.empty()) {
-      completePageFn(std::move(currentPage));
-      completedPageCount++;
-      currentPage.reset(new Page());
-      currentPageNextY = 0;
+      emitPage(lastBodyChildByteOffset);
     }
   }
   // Record deferred anchor after previous block is flushed (and any TOC page break)
@@ -593,15 +598,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                     (self->currentPageNextY + totalImageHeightWithSpacing > self->viewportHeight)) {
                   LOG_DBG("EHP", "Image page break: currentY=%d needed=%d viewportH=%d", self->currentPageNextY,
                           totalImageHeightWithSpacing, self->viewportHeight);
-                  self->paragraphLutPerPage.push_back({self->lastBodyChildByteOffset, self->xpathParagraphIndex});
-                  self->completePageFn(std::move(self->currentPage));
-                  self->completedPageCount++;
-                  self->currentPage.reset(new Page());
+                  self->emitPage(self->lastBodyChildByteOffset);
                   if (!self->currentPage) {
                     LOG_ERR("EHP", "Failed to create new page");
                     return;
                   }
-                  self->currentPageNextY = 0;
                 } else if (!self->currentPage) {
                   self->currentPage.reset(new Page());
                   if (!self->currentPage) {
@@ -742,9 +743,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       }
       self->insideFootnoteLink = true;
       self->footnoteLinkDepth = self->depth;
-      strncpy(self->currentFootnoteLinkHref, href, sizeof(self->currentFootnoteLinkHref) - 1);
-      self->currentFootnoteLinkHref[sizeof(self->currentFootnoteLinkHref) - 1] = '\0';
-      self->currentFootnoteLinkText[0] = '\0';
+      strncpy(self->currentFootnote.href, href, sizeof(self->currentFootnote.href) - 1);
+      self->currentFootnote.href[sizeof(self->currentFootnote.href) - 1] = '\0';
+      self->currentFootnote.number[0] = '\0';
       self->currentFootnoteLinkTextLen = 0;
 
       // Apply underline style to visually indicate the link
@@ -985,11 +986,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     }
 
     // Extract footnote link text
-    for (int i = start; (self->currentFootnoteLinkTextLen < sizeof(self->currentFootnoteLinkText) - 1) && (i <= end);
+    for (int i = start; (self->currentFootnoteLinkTextLen < sizeof(self->currentFootnote.number) - 1) && (i <= end);
          ++i) {
-      self->currentFootnoteLinkText[self->currentFootnoteLinkTextLen++] = s[i];
+      self->currentFootnote.number[self->currentFootnoteLinkTextLen++] = s[i];
     }
-    self->currentFootnoteLinkText[self->currentFootnoteLinkTextLen] = '\0';
+    self->currentFootnote.number[self->currentFootnoteLinkTextLen] = '\0';
   }
 
   for (int i = 0; i < len; i++) {
@@ -1220,11 +1221,11 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
 
   // Closing a footnote link — create entry from collected text and href
   if (self->insideFootnoteLink && self->depth == self->footnoteLinkDepth) {
-    if (self->currentFootnoteLinkText[0] != '\0' && self->currentFootnoteLinkHref[0] != '\0') {
+    if (self->currentFootnote.number[0] != '\0' && self->currentFootnote.href[0] != '\0') {
       FootnoteEntry entry;
-      strncpy(entry.number, self->currentFootnoteLinkText, sizeof(entry.number) - 1);
+      strncpy(entry.number, self->currentFootnote.number, sizeof(entry.number) - 1);
       entry.number[sizeof(entry.number) - 1] = '\0';
-      strncpy(entry.href, self->currentFootnoteLinkHref, sizeof(entry.href) - 1);
+      strncpy(entry.href, self->currentFootnote.href, sizeof(entry.href) - 1);
       entry.href[sizeof(entry.href) - 1] = '\0';
       int wordIndex =
           self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
@@ -1423,9 +1424,7 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
       anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
       pendingAnchorId.clear();
     }
-    paragraphLutPerPage.push_back({0u, xpathParagraphIndex});  // post-parse: no byte offset available
-    completePageFn(std::move(currentPage));
-    completedPageCount++;
+    emitPage(0u);  // post-parse: no byte offset available
     currentPage.reset();
     currentTextBlock.reset();
   }
@@ -1444,11 +1443,7 @@ ParsedText::LineProcessResult ChapterHtmlSlimParser::addLineToPage(std::shared_p
   }
 
   if (currentPageNextY + lineHeight > viewportHeight) {
-    paragraphLutPerPage.push_back({lastBodyChildByteOffset, xpathParagraphIndex});
-    completePageFn(std::move(currentPage));
-    completedPageCount++;
-    currentPage.reset(new Page());
-    currentPageNextY = 0;
+    emitPage(lastBodyChildByteOffset);
   }
 
   const bool noRoomForAnotherLine =

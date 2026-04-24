@@ -22,6 +22,7 @@
 #include "GlobalBookmarkIndex.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
+#include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
 #include "WeatherSettingsStore.h"
 #include "activities/Activity.h"
@@ -205,6 +206,26 @@ void setup() {
 
   LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? "X3" : "X4");
 
+  // SD Card Initialization
+  // We need 6 open files concurrently when parsing a new chapter
+  if (!Storage.begin()) {
+    LOG_ERR("MAIN", "SD card initialization failed");
+    setupDisplayAndFonts();
+    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);
+    return;
+  }
+
+  HalSystem::checkPanic();
+  SETTINGS.loadFromFile();
+  HalSystem::clearPanic();  // TODO: move this to an activity when we have one to display the panic info
+  HalClock::applyTimezone(SETTINGS.timeZone);
+  I18N.loadSettings();
+  KOREADER_STORE.loadFromFile();
+  OPDS_STORE.loadFromFile();
+  WEATHER_SETTINGS.loadFromFile();
+  UITheme::getInstance().reload();
+  ButtonNavigator::setMappedInputManager(mappedInputManager);
+
   const auto wakeupReason = gpio.getWakeupReason();
   LOG_DBG("MAIN", "Wakeup reason: %d, millis=%lu, rawPowerPin=%d", static_cast<int>(wakeupReason), millis(),
           digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
@@ -232,25 +253,6 @@ void setup() {
 
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
   LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
-
-  // SD Card Initialization
-  // We need 6 open files concurrently when parsing a new chapter
-  if (!Storage.begin()) {
-    LOG_ERR("MAIN", "SD card initialization failed");
-    setupDisplayAndFonts();
-    activityManager.goToFullScreenMessage("SD card error", EpdFontFamily::BOLD);
-    return;
-  }
-
-  HalSystem::checkPanic();
-  HalSystem::clearPanic();  // TODO: move this to an activity when we have one to display the panic info
-  SETTINGS.loadFromFile();
-  HalClock::applyTimezone(SETTINGS.timeZone);
-  I18N.loadSettings();
-  KOREADER_STORE.loadFromFile();
-  WEATHER_SETTINGS.loadFromFile();
-  UITheme::getInstance().reload();
-  ButtonNavigator::setMappedInputManager(mappedInputManager);
 
   setupDisplayAndFonts();
 

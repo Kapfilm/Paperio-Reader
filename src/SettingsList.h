@@ -72,6 +72,9 @@ inline const std::vector<SettingInfo> list = {
         {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30},
         "refreshFrequency", StrId::STR_CAT_DISPLAY)
         .withSubcategory(StrId::STR_MENU_DISP_REFRESH),
+    SettingInfo::Toggle(StrId::STR_REFRESH_AFTER_IMAGE_PAGES, &CrossPointSettings::halfRefreshAfterImagePage,
+                        "halfRefreshAfterImagePage", StrId::STR_CAT_DISPLAY)
+        .withSubcategory(StrId::STR_MENU_DISP_REFRESH),
     SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                         StrId::STR_CAT_DISPLAY),
     SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,

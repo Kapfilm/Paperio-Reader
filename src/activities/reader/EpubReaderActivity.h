@@ -37,6 +37,7 @@ class EpubReaderActivity final : public Activity {
   int cachedChapterTotalPageCount = 0;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
+  bool pendingHalfRefreshAfterImagePage = false;
   // Signals that the next render should reposition within the newly loaded section
   // based on a cross-book percentage jump.
   bool pendingPercentJump = false;
@@ -52,6 +53,8 @@ class EpubReaderActivity final : public Activity {
   // -1 means use global SETTINGS value.
   int8_t bookEmbeddedStyleOverride = -1;
   int8_t bookImageRenderingOverride = -1;
+  int8_t bookFontFamilyOverride = -1;
+  int8_t bookFontSizeOverride = -1;
 
   // Bookmarks (starred pages)
   BookmarkStore bookmarkStore;
@@ -87,9 +90,11 @@ class EpubReaderActivity final : public Activity {
   void applyOrientation(uint8_t orientation);
   void applyTextDarkness(uint8_t textDarkness);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
-  void applyBookReaderOverrides(int8_t embeddedStyleOverride, int8_t imageRenderingOverride);
+  void applyBookReaderOverrides(int8_t embeddedStyleOverride, int8_t imageRenderingOverride, int8_t fontFamilyOverride,
+                                int8_t fontSizeOverride);
   bool getEffectiveEmbeddedStyle() const;
   uint8_t getEffectiveImageRendering() const;
+  int getEffectiveReaderFontId() const;
   void pageTurn(bool isForwardTurn);
 
   // Footnote navigation

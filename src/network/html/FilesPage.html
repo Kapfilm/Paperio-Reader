@@ -4,12 +4,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CrossPoint Reader - Files</title>
+  <title>Files - CrossPoint Reader</title>
   <script src="/js/jszip.min.js"></script>
   <style>
     html {
       scrollbar-gutter: stable;
     }
+
     :root {
       --font-color: #333;
       --bg: #f5f5f5;
@@ -1831,8 +1832,10 @@
     <div class="action-buttons">
       <button class="action-btn upload-action-btn" onclick="openUploadModal()">📤 Upload</button>
       <button class="action-btn folder-action-btn" onclick="openFolderModal()">📁 New Folder</button>
-      <button id="moveActionBtn" class="action-btn move-action-btn" onclick="openMoveSelectedModal()" disabled>➡️ Move</button>
-      <button id="deleteActionBtn" class="action-btn delete-action-btn" onclick="openDeleteSelectedModal()" disabled>🗑️ Delete</button>
+      <button id="moveActionBtn" class="action-btn move-action-btn" onclick="openMoveSelectedModal()" disabled>➡️
+        Move</button>
+      <button id="deleteActionBtn" class="action-btn delete-action-btn" onclick="openDeleteSelectedModal()" disabled>🗑️
+        Delete</button>
     </div>
   </div>
 
@@ -2102,7 +2105,11 @@
   <script>
     // get current path from query parameter
     const currentPath = decodeURIComponent(new URLSearchParams(window.location.search).get('path') || '/');
-
+    if (currentPath !== '/') {
+      const leaf = currentPath.split('/').filter(Boolean).pop();
+      if (leaf) document.title = leaf + ' - Files - CrossPoint Reader';
+    }
+    
     // Network status monitoring
     let isNetworkOnline = navigator.onLine;
 
@@ -2250,7 +2257,10 @@
         totalSize += file.size;
       });
 
-      document.getElementById('folder-summary').innerHTML = `${folderCount} folders, ${files.length - folderCount} files, ${formatFileSize(totalSize)}`;
+      const fileCount = files.length - folderCount;
+      const folderLabel = folderCount === 1 ? 'folder' : 'folders';
+      const fileLabel = fileCount === 1 ? 'file' : 'files';
+      document.getElementById('folder-summary').innerHTML = `${folderCount} ${folderLabel}, ${fileCount} ${fileLabel}, ${formatFileSize(totalSize)}`;
 
       if (files.length === 0) {
         fileTable.innerHTML = '<div class="no-files">This folder is empty</div>';
@@ -2268,9 +2278,10 @@
       if (file.isDirectory) return 0;
       const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
       if (ext === 'epub') return 1;
-      if (ext === 'xtc') return 2;
+      if (ext === 'xtc' || ext === 'xtch') return 2;
       if (ext === 'txt') return 3;
-      return 4;
+      if (ext === 'md') return 4;
+      return 5;
     }
 
     function sortFiles(files) {
@@ -2345,11 +2356,18 @@
           if (!filePath.endsWith("/")) filePath += "/";
           filePath += file.name;
 
-          fileTableContent += `<tr class="${file.isEpub ? 'epub-file' : ''}">`;
+          const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : '';
+          const isXtc = ext === 'xtc' || ext === 'xtch';
+          const isMd = ext === 'md';
+          const fileIcon = file.isEpub ? '📗' : isXtc ? '📘' : isMd ? '📝' : '📄';
+          const fileBadge = file.isEpub ? 'EPUB' : isXtc ? 'XTC' : ext === 'txt' ? 'TXT' : isMd ? 'MD' : '';
+          const rowClass = file.isEpub ? 'epub-file' : isXtc ? 'xtc-file' : '';
+
+          fileTableContent += `<tr class="${rowClass}">`;
           fileTableContent += `<td style="text-align:center"><input type="checkbox" class="select-item" data-path="${encodeURIComponent(filePath)}" data-name="${escapeHtml(file.name)}" data-type="file"></td>`;
-          fileTableContent += `<td><span class="file-icon">${file.isEpub ? '📗' : '📄'}</span>`;
+          fileTableContent += `<td><span class="file-icon">${fileIcon}</span>`;
           fileTableContent += `<a rel="noopener noreferrer" target="_blank" href="/download?path=${encodeURIComponent(filePath)}" class="file-link">${escapeHtml(displayFileName(file.name))}</a>`;
-          if (file.isEpub) fileTableContent += '<span class="epub-badge">EPUB</span>';
+          if (fileBadge) fileTableContent += `<span class="epub-badge">${fileBadge}</span>`;
           fileTableContent += '</td>';
           fileTableContent += `<td>${file.name.includes('.') ? file.name.split('.').pop().toUpperCase() : '-'}</td>`;
           fileTableContent += `<td>${formatFileSize(file.size)}</td>`;
@@ -2364,10 +2382,10 @@
 
       fileTableContent += '</tbody></table>';
       fileTable.innerHTML = fileTableContent;
-      document.getElementById('file-table').addEventListener('change', function(e) {
+      document.getElementById('file-table').addEventListener('change', function (e) {
         if (e.target.classList.contains('select-item')) updateToolbarState();
       });
-      document.getElementById('file-table').addEventListener('click', function(e) {
+      document.getElementById('file-table').addEventListener('click', function (e) {
         const btn = e.target.closest('button[data-action]');
         if (!btn) return;
         const name = btn.dataset.name;
@@ -5794,7 +5812,7 @@
 
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/move', true);
-        xhr.onload = function() {
+        xhr.onload = function () {
           if (xhr.status === 200) {
             successfulMoves++;
           } else {
@@ -5803,7 +5821,7 @@
           }
           moveNext(index + 1);
         };
-        xhr.onerror = function() {
+        xhr.onerror = function () {
           hasErrors = true;
           showNotification('Failed to move ' + paths[index] + ' - network error', 'error');
           moveNext(index + 1);
