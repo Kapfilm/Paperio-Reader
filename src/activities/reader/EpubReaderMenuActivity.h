@@ -58,6 +58,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
 
   // Map from StrId to MenuAction for result passing
   static MenuAction actionForNameId(StrId nameId);
+  static MenuAction actionForSettingAction(SettingAction action);
 
   // Pending state (mutated locally, returned to parent on finish)
   uint8_t pendingOrientation = 0;
