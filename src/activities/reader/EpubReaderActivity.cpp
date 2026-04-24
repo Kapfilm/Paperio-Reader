@@ -824,8 +824,7 @@ std::string EpubReaderActivity::buildRenderBenchmarkReport(const LastRenderStats
              std::to_string(endSnapshot.fontDecompressMs) + " ms, groups " +
              std::to_string(endSnapshot.fontUniqueGroups));
   appendLine("Font buffers: page " + std::to_string(endSnapshot.fontPageBufferBytes) + ", glyph table " +
-             std::to_string(endSnapshot.fontPageGlyphsBytes) + ", hot group " +
-             std::to_string(endSnapshot.fontHotGroupBytes) + ", peak temp " +
+             std::to_string(endSnapshot.fontPageGlyphsBytes) + ", peak temp " +
              std::to_string(endSnapshot.fontPeakTempBytes));
   appendLine("Glyph lookups: " + std::to_string(endSnapshot.fontGetBitmapCalls) + " calls, " +
              std::to_string(endSnapshot.fontGetBitmapTimeUs) + " us total");
@@ -1120,7 +1119,7 @@ int EpubReaderActivity::getEffectiveReaderFontId() const {
 }
 
 bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
-  if (!epub || !section || section->pageCount <= 0) {
+  if (!epub || !section || section->pageCount == 0) {
     return false;
   }
 
@@ -1566,8 +1565,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
             tEnd - t0);
   }
 
-  if (auto* cacheManager = renderer.getFontCacheManager()) {
-    if (auto* decompressor = cacheManager->getDecompressor()) {
+  if (const auto* cacheManager = renderer.getFontCacheManager()) {
+    if (const auto* decompressor = cacheManager->getDecompressor()) {
       const auto& stats = decompressor->getStats();
       lastRenderStats.fontCacheHits = stats.cacheHits;
       lastRenderStats.fontCacheMisses = stats.cacheMisses;
@@ -1575,7 +1574,6 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       lastRenderStats.fontUniqueGroups = stats.uniqueGroupsAccessed;
       lastRenderStats.fontPageBufferBytes = stats.pageBufferBytes;
       lastRenderStats.fontPageGlyphsBytes = stats.pageGlyphsBytes;
-      lastRenderStats.fontHotGroupBytes = stats.hotGroupBytes;
       lastRenderStats.fontPeakTempBytes = stats.peakTempBytes;
       lastRenderStats.fontGetBitmapTimeUs = stats.getBitmapTimeUs;
       lastRenderStats.fontGetBitmapCalls = stats.getBitmapCalls;

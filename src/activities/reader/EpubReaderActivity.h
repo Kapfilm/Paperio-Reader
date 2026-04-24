@@ -85,7 +85,6 @@ class EpubReaderActivity final : public Activity {
     uint16_t fontUniqueGroups = 0;
     uint32_t fontPageBufferBytes = 0;
     uint32_t fontPageGlyphsBytes = 0;
-    uint32_t fontHotGroupBytes = 0;
     uint32_t fontPeakTempBytes = 0;
     uint32_t fontGetBitmapTimeUs = 0;
     uint32_t fontGetBitmapCalls = 0;
