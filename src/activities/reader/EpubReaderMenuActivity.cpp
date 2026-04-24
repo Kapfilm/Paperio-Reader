@@ -270,21 +270,21 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
       return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
     }
     if (item.nameId == StrId::STR_IMAGES && pendingImageRenderingOverride < 0) {
-      const auto index = static_cast<size_t>(SETTINGS.imageRendering + 1);
-      if (index < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[index]) + ")";
+      const auto defaultIndex = static_cast<size_t>(SETTINGS.imageRendering + 1);
+      if (defaultIndex < item.enumValues.size()) {
+        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[defaultIndex]) + ")";
       }
     }
     if (item.nameId == StrId::STR_FONT_FAMILY && pendingFontFamilyOverride < 0) {
-      const auto index = static_cast<size_t>(SETTINGS.fontFamily + 1);
-      if (index < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[index]) + ")";
+      const auto defaultIndex = static_cast<size_t>(SETTINGS.fontFamily + 1);
+      if (defaultIndex < item.enumValues.size()) {
+        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[defaultIndex]) + ")";
       }
     }
     if (item.nameId == StrId::STR_FONT_SIZE && pendingFontSizeOverride < 0) {
-      const auto index = static_cast<size_t>(SETTINGS.fontSize + 1);
-      if (index < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[index]) + ")";
+      const auto defaultIndex = static_cast<size_t>(SETTINGS.fontSize + 1);
+      if (defaultIndex < item.enumValues.size()) {
+        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[defaultIndex]) + ")";
       }
     }
   }
