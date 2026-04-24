@@ -1191,7 +1191,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto tBwStore = millis();
   logReaderMemSnapshot("bw_store_end");
 
-  if (page->hasImages() && SETTINGS.imageRendering != CrossPointSettings::IMAGES_SUPPRESS) {
+  if (page->hasImages() && getEffectiveImageRendering() != CrossPointSettings::IMAGES_SUPPRESS) {
     pendingHalfRefreshAfterImagePage = true;
   }
 
