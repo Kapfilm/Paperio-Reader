@@ -237,6 +237,8 @@ class CrossPointSettings {
   uint8_t sleepTimeout = SLEEP_10_MIN;
   // E-ink refresh frequency (default 15 pages)
   uint8_t refreshFrequency = REFRESH_15;
+  // Perform a half refresh on the page immediately following an EPUB page that displayed images.
+  uint8_t halfRefreshAfterImagePage = 1;
   uint8_t hyphenationEnabled = 0;
 
   // Reader screen margin settings
