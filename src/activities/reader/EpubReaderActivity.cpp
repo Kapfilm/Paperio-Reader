@@ -824,8 +824,7 @@ std::string EpubReaderActivity::buildRenderBenchmarkReport(const LastRenderStats
              std::to_string(endSnapshot.fontDecompressMs) + " ms, groups " +
              std::to_string(endSnapshot.fontUniqueGroups));
   appendLine("Font buffers: page " + std::to_string(endSnapshot.fontPageBufferBytes) + ", glyph table " +
-             std::to_string(endSnapshot.fontPageGlyphsBytes) + ", hot group " +
-             std::to_string(endSnapshot.fontHotGroupBytes) + ", peak temp " +
+             std::to_string(endSnapshot.fontPageGlyphsBytes) + ", peak temp " +
              std::to_string(endSnapshot.fontPeakTempBytes));
   appendLine("Glyph lookups: " + std::to_string(endSnapshot.fontGetBitmapCalls) + " calls, " +
              std::to_string(endSnapshot.fontGetBitmapTimeUs) + " us total");
@@ -1575,7 +1574,6 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
       lastRenderStats.fontUniqueGroups = stats.uniqueGroupsAccessed;
       lastRenderStats.fontPageBufferBytes = stats.pageBufferBytes;
       lastRenderStats.fontPageGlyphsBytes = stats.pageGlyphsBytes;
-      lastRenderStats.fontHotGroupBytes = stats.hotGroupBytes;
       lastRenderStats.fontPeakTempBytes = stats.peakTempBytes;
       lastRenderStats.fontGetBitmapTimeUs = stats.getBitmapTimeUs;
       lastRenderStats.fontGetBitmapCalls = stats.getBitmapCalls;
