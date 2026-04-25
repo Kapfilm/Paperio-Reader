@@ -131,8 +131,7 @@ bool BmpViewerActivity::renderBmpImage(const bool showControls) {
   FsFile file;
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  GUI.fillPopupProgress(renderer, popupRect, 20);
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
 
   if (!Storage.openFileForRead("BMP", filePath, file)) {
     return false;
@@ -147,8 +146,6 @@ bool BmpViewerActivity::renderBmpImage(const bool showControls) {
   int x, y, renderWidth, renderHeight;
   computeCenteredImagePlacement(bitmap.getWidth(), bitmap.getHeight(), pageWidth, pageHeight, x, y, renderWidth,
                                 renderHeight);
-
-  GUI.fillPopupProgress(renderer, popupRect, 50);
 
   bmpHasGreyscale = bitmap.hasGreyscale();
   // Only render in grayscale when the bitmap actually carries greyscale data AND the user has it enabled.
@@ -196,8 +193,7 @@ bool BmpViewerActivity::renderDecodedImage(const bool showControls) {
   RenderLock lock(*this);
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
-  Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
-  GUI.fillPopupProgress(renderer, popupRect, 20);
+  GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
 
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(filePath);
   if (!decoder) {
@@ -211,8 +207,6 @@ bool BmpViewerActivity::renderDecodedImage(const bool showControls) {
 
   int x, y, renderWidth, renderHeight;
   computeCenteredImagePlacement(dims.width, dims.height, pageWidth, pageHeight, x, y, renderWidth, renderHeight);
-
-  GUI.fillPopupProgress(renderer, popupRect, 50);
 
   RenderConfig config{};
   config.x = x;
