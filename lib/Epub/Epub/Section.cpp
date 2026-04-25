@@ -189,6 +189,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                                 const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                                 const uint8_t imageRendering, const std::function<void(int)>& progressFn) {
+  const uint32_t phaseTotalStart = millis();
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_" + std::to_string(spineIndex) + ".html";
 
@@ -199,6 +200,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   }
 
   // Retry logic for SD card timing issues
+  const uint32_t phaseStreamStart = millis();
   bool success = false;
   uint32_t fileSize = 0;
   for (int attempt = 0; attempt < 3 && !success; attempt++) {
@@ -232,8 +234,10 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     return false;
   }
 
+  const uint32_t streamMs = millis() - phaseStreamStart;
   LOG_DBG("SCT", "Streamed temp HTML to %s (%d bytes)", tmpHtmlPath.c_str(), fileSize);
 
+  const uint32_t phaseSetupStart = millis();
   if (!Storage.openFileForWrite("SCT", filePath, file)) {
     return false;
   }
@@ -275,8 +279,12 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
       [this, &lut](std::unique_ptr<Page> page) { lut.emplace_back(this->onPageComplete(std::move(page))); },
       embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), progressFn, cssParser);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
+  const uint32_t setupMs = millis() - phaseSetupStart;
+  const uint32_t phaseParseStart = millis();
   success = visitor.parseAndBuildPages();
+  const uint32_t parseMs = millis() - phaseParseStart;
 
+  const uint32_t phaseFinalizeStart = millis();
   Storage.remove(tmpHtmlPath.c_str());
   if (!success) {
     LOG_ERR("SCT", "Failed to parse XML and build pages");
@@ -353,6 +361,10 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     return false;
   }
   this->lut = std::move(lut);
+  const uint32_t finalizeMs = millis() - phaseFinalizeStart;
+  const uint32_t totalMs = millis() - phaseTotalStart;
+  LOG_DBG("SCT", "createSectionFile spine=%d total=%ums (stream=%u setup=%u parse=%u finalize=%u) pages=%u bytes=%u",
+          spineIndex, totalMs, streamMs, setupMs, parseMs, finalizeMs, pageCount, fileSize);
   return true;
 }
 

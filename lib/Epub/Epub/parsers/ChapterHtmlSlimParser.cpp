@@ -1373,10 +1373,11 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
     const size_t len = file.read(buf, PARSE_BUFFER_SIZE);
     bytesRead += len;
 
-    // Report progress in 5% increments to limit e-ink refreshes.
+    // Report progress in 25% increments. Each progressFn callback triggers a full e-ink
+    // refresh (~650ms); 4 updates total adds ~2.6s, vs ~13s at the previous 5% granularity.
     if (progressFn && totalFileSize >= MIN_SIZE_FOR_POPUP) {
       const int progress = static_cast<int>(bytesRead * 100 / totalFileSize);
-      if (progress / 5 > lastReportedProgress / 5) {
+      if (progress / 25 > lastReportedProgress / 25) {
         lastReportedProgress = progress;
         progressFn(progress);
       }
