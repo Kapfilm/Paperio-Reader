@@ -1,9 +1,9 @@
 {
   "action": "published",
   "release": {
-    "tag_name": "1.38"
+    "tag_name": "1.40"
   },
   "repository": {
-    "full_name": "jgoguen/crosspoint-reader"
+    "full_name": "jpirnay/crosspoint-reader"
   }
 }
