@@ -12,6 +12,8 @@
 #include <HalStorage.h>
 #include <I18n.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
@@ -462,12 +464,11 @@ void XtcReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION a
     case BA::BTN_NEXT_SECTION:
       if (xtc->hasChapters()) {
         const auto& chapters = xtc->getChapters();
-        for (const auto& ch : chapters) {
-          if (ch.startPage > currentPage) {
-            currentPage = ch.startPage;
-            requestUpdate();
-            break;
-          }
+        const auto it = std::find_if(chapters.begin(), chapters.end(),
+                                     [this](const auto& ch) { return ch.startPage > currentPage; });
+        if (it != chapters.end()) {
+          currentPage = it->startPage;
+          requestUpdate();
         }
       }
       break;
