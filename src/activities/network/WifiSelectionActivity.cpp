@@ -430,8 +430,8 @@ void WifiSelectionActivity::checkConnectionStatus() {
     return;
   }
 
-  const bool isAutoPhase = state == WifiSelectionState::AUTO_CONNECTING || state == WifiSelectionState::AUTO_CYCLING;
-  const unsigned long timeout = isAutoPhase ? AUTO_CYCLE_TIMEOUT_MS : CONNECTION_TIMEOUT_MS;
+  const unsigned long timeout =
+      state == WifiSelectionState::AUTO_CYCLING ? AUTO_CYCLE_TIMEOUT_MS : CONNECTION_TIMEOUT_MS;
 
   if (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL) {
     if (state == WifiSelectionState::AUTO_CONNECTING) {
