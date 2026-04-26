@@ -21,6 +21,7 @@ struct WifiNetworkInfo {
 // WiFi selection states
 enum class WifiSelectionState {
   AUTO_CONNECTING,    // Trying to connect to the last known network
+  AUTO_CYCLING,       // Cycling through remaining saved credentials after AUTO_CONNECTING failed
   SCANNING,           // Scanning for networks
   NETWORK_LIST,       // Displaying available networks
   PASSWORD_ENTRY,     // Entering password for selected network
@@ -73,12 +74,18 @@ class WifiSelectionActivity final : public Activity {
   // Whether we are attempting to auto-connect
   bool autoConnecting = false;
 
+  // Saved-credential candidates for auto-cycling (SSIDs visible in scan, sorted by RSSI desc)
+  std::vector<std::string> autoCycleCandidates;
+  size_t autoCycleCandidateIndex = 0;
+  bool autoCycleAfterScan = false;  // Scan was triggered to build cycle candidates
+
   // Save/forget prompt selection (0 = Yes, 1 = No)
   int savePromptSelection = 0;
   int forgetPromptSelection = 0;
 
-  // Connection timeout
+  // Connection timeouts
   static constexpr unsigned long CONNECTION_TIMEOUT_MS = 15000;
+  static constexpr unsigned long AUTO_CYCLE_TIMEOUT_MS = 5000;
   unsigned long connectionStartTime = 0;
 
   void renderNetworkList() const;
@@ -92,6 +99,8 @@ class WifiSelectionActivity final : public Activity {
 
   void startWifiScan();
   void processWifiScanResults();
+  void buildAutoCycleCandidates();
+  void tryNextAutoCycleCandidate();
   void selectNetwork(int index);
   void attemptConnection();
   void checkConnectionStatus();

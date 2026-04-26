@@ -70,6 +70,9 @@ void WifiSelectionActivity::onEnter() {
   savePromptSelection = 0;
   forgetPromptSelection = 0;
   autoConnecting = false;
+  autoCycleCandidates.clear();
+  autoCycleCandidateIndex = 0;
+  autoCycleAfterScan = false;
 
   const std::string persistedMac = formatMacDashed(mac);
   if (WIFI_STORE.getLastKnownMacAddress() != persistedMac) {
@@ -122,6 +125,7 @@ void WifiSelectionActivity::onExit() {
 
 void WifiSelectionActivity::startWifiScan() {
   autoConnecting = false;
+  // autoCycleAfterScan intentionally preserved when set by the auto-cycle flow
   state = WifiSelectionState::SCANNING;
   networks.clear();
   requestUpdate();
@@ -135,6 +139,82 @@ void WifiSelectionActivity::startWifiScan() {
   WiFi.scanNetworks(true);  // true = async scan
 }
 
+void WifiSelectionActivity::buildAutoCycleCandidates() {
+  autoCycleCandidates.clear();
+  autoCycleCandidateIndex = 0;
+
+  const std::string& skipSsid = WIFI_STORE.getLastConnectedSsid();  // already tried
+
+  struct Candidate {
+    std::string ssid;
+    int32_t rssi;
+  };
+  std::vector<Candidate> candidates;
+
+  for (const auto& net : networks) {
+    if (net.ssid == skipSsid) continue;
+    if (!WIFI_STORE.hasSavedCredential(net.ssid)) continue;
+    candidates.push_back({net.ssid, net.rssi});
+  }
+
+  std::sort(candidates.begin(), candidates.end(),
+            [](const Candidate& a, const Candidate& b) { return a.rssi > b.rssi; });
+
+  for (const auto& c : candidates) {
+    autoCycleCandidates.push_back(c.ssid);
+  }
+
+  LOG_DBG("WIFI", "Auto-cycle candidates: %zu", autoCycleCandidates.size());
+}
+
+void WifiSelectionActivity::tryNextAutoCycleCandidate() {
+  if (autoCycleCandidateIndex >= autoCycleCandidates.size()) {
+    // All candidates exhausted — fall through to manual selection
+    LOG_DBG("WIFI", "Auto-cycle exhausted, falling through to network list");
+    state = WifiSelectionState::NETWORK_LIST;
+    selectedNetworkIndex = 0;
+    requestUpdate();
+    return;
+  }
+
+  const std::string& ssid = autoCycleCandidates[autoCycleCandidateIndex++];
+  const auto* cred = WIFI_STORE.findCredential(ssid);
+  if (!cred) {
+    tryNextAutoCycleCandidate();  // Credential disappeared, skip
+    return;
+  }
+
+  LOG_DBG("WIFI", "Auto-cycle trying %s (%zu/%zu)", ssid.c_str(), autoCycleCandidateIndex, autoCycleCandidates.size());
+
+  selectedSSID = cred->ssid;
+  enteredPassword = cred->password;
+  selectedRequiresPassword = !cred->password.empty();
+  usedSavedPassword = true;
+  autoConnecting = false;
+
+  state = WifiSelectionState::AUTO_CYCLING;
+  connectionStartTime = millis();
+  connectedIP.clear();
+  connectionError.clear();
+  requestUpdate();
+
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true, true);
+  delay(100);
+
+  uint8_t baseMac[6];
+  readDeviceBaseMac(baseMac);
+  String hostname = "CrossPoint-Reader-" + formatMacCompact(baseMac);
+  WiFi.setHostname(hostname.c_str());
+
+  if (selectedRequiresPassword && !enteredPassword.empty()) {
+    WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());
+  } else {
+    WiFi.begin(selectedSSID.c_str());
+  }
+}
+
 void WifiSelectionActivity::processWifiScanResults() {
   const int16_t scanResult = WiFi.scanComplete();
 
@@ -144,6 +224,7 @@ void WifiSelectionActivity::processWifiScanResults() {
   }
 
   if (scanResult == WIFI_SCAN_FAILED) {
+    autoCycleAfterScan = false;
     state = WifiSelectionState::NETWORK_LIST;
     requestUpdate();
     return;
@@ -191,6 +272,14 @@ void WifiSelectionActivity::processWifiScanResults() {
   });
 
   WiFi.scanDelete();
+
+  if (autoCycleAfterScan) {
+    autoCycleAfterScan = false;
+    buildAutoCycleCandidates();
+    tryNextAutoCycleCandidate();
+    return;
+  }
+
   state = WifiSelectionState::NETWORK_LIST;
   selectedNetworkIndex = 0;
   requestUpdate();
@@ -296,7 +385,8 @@ bool WifiSelectionActivity::checkCaptivePortal() {
 }
 
 void WifiSelectionActivity::checkConnectionStatus() {
-  if (state != WifiSelectionState::CONNECTING && state != WifiSelectionState::AUTO_CONNECTING) {
+  if (state != WifiSelectionState::CONNECTING && state != WifiSelectionState::AUTO_CONNECTING &&
+      state != WifiSelectionState::AUTO_CYCLING) {
     return;
   }
 
@@ -340,7 +430,20 @@ void WifiSelectionActivity::checkConnectionStatus() {
     return;
   }
 
+  const bool isAutoPhase = state == WifiSelectionState::AUTO_CONNECTING || state == WifiSelectionState::AUTO_CYCLING;
+  const unsigned long timeout = isAutoPhase ? AUTO_CYCLE_TIMEOUT_MS : CONNECTION_TIMEOUT_MS;
+
   if (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL) {
+    if (state == WifiSelectionState::AUTO_CONNECTING) {
+      // Primary SSID failed — scan and try remaining saved credentials
+      autoCycleAfterScan = true;
+      startWifiScan();
+      return;
+    }
+    if (state == WifiSelectionState::AUTO_CYCLING) {
+      tryNextAutoCycleCandidate();
+      return;
+    }
     connectionError = tr(STR_ERROR_GENERAL_FAILURE);
     if (status == WL_NO_SSID_AVAIL) {
       connectionError = tr(STR_ERROR_NETWORK_NOT_FOUND);
@@ -351,8 +454,17 @@ void WifiSelectionActivity::checkConnectionStatus() {
   }
 
   // Check for timeout
-  if (millis() - connectionStartTime > CONNECTION_TIMEOUT_MS) {
+  if (millis() - connectionStartTime > timeout) {
     WiFi.disconnect();
+    if (state == WifiSelectionState::AUTO_CONNECTING) {
+      autoCycleAfterScan = true;
+      startWifiScan();
+      return;
+    }
+    if (state == WifiSelectionState::AUTO_CYCLING) {
+      tryNextAutoCycleCandidate();
+      return;
+    }
     connectionError = tr(STR_ERROR_CONNECTION_TIMEOUT);
     state = WifiSelectionState::CONNECTION_FAILED;
     requestUpdate();
@@ -368,7 +480,8 @@ void WifiSelectionActivity::loop() {
   }
 
   // Check connection progress
-  if (state == WifiSelectionState::CONNECTING || state == WifiSelectionState::AUTO_CONNECTING) {
+  if (state == WifiSelectionState::CONNECTING || state == WifiSelectionState::AUTO_CONNECTING ||
+      state == WifiSelectionState::AUTO_CYCLING) {
     checkConnectionStatus();
     return;
   }
@@ -573,6 +686,7 @@ void WifiSelectionActivity::render(RenderLock&&) {
 
   switch (state) {
     case WifiSelectionState::AUTO_CONNECTING:
+    case WifiSelectionState::AUTO_CYCLING:
       renderConnecting();
       break;
     case WifiSelectionState::SCANNING:
