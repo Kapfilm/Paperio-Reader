@@ -947,6 +947,10 @@ void MdReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION ac
             });
       }
       break;
+    case BA::BTN_EXIT_READER:
+      ReaderUtils::enforceExitFullRefresh(renderer);
+      finish();
+      break;
     default:
       break;
   }

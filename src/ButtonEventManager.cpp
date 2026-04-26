@@ -2,11 +2,16 @@
 
 #include "CrossPointSettings.h"
 
-// Required for constexpr array definition in .cpp
+// Required for constexpr array out-of-class definition (C++14).
 constexpr ButtonEventManager::Button ButtonEventManager::ALL_BUTTONS[ButtonEventManager::NUM_BUTTONS];
 
 bool ButtonEventManager::hasDoubleAction(const Button button) {
   using BA = CrossPointSettings::BUTTON_ACTION;
+  // Up/Down share physical pins with PageBack/PageForward via sideButtonLayout.
+  // Their double-action settings must be consulted when checking the PageBack/PageForward FSMs
+  // so that the disambiguation delay is applied when either role has a double action.
+  const bool prevNext = static_cast<CrossPointSettings::SIDE_BUTTON_LAYOUT>(SETTINGS.sideButtonLayout) ==
+                        CrossPointSettings::SIDE_BUTTON_LAYOUT::PREV_NEXT;
   switch (button) {
     case Button::Back:
       return SETTINGS.btnDoubleBack != BA::BTN_DEFAULT;
@@ -17,13 +22,16 @@ bool ButtonEventManager::hasDoubleAction(const Button button) {
     case Button::Right:
       return SETTINGS.btnDoubleRight != BA::BTN_DEFAULT;
     case Button::Up:
-      return SETTINGS.btnDoubleUp != BA::BTN_DEFAULT;
     case Button::Down:
-      return SETTINGS.btnDoubleDown != BA::BTN_DEFAULT;
+      return false;  // Up/Down have no dedicated FSM; handled via PageBack/PageForward
     case Button::PageBack:
-      return SETTINGS.btnDoublePageBack != BA::BTN_DEFAULT;
+      // PREV_NEXT: BTN_UP = PageBack; NEXT_PREV: BTN_DOWN = PageBack
+      return SETTINGS.btnDoublePageBack != BA::BTN_DEFAULT ||
+             (prevNext ? SETTINGS.btnDoubleUp : SETTINGS.btnDoubleDown) != BA::BTN_DEFAULT;
     case Button::PageForward:
-      return SETTINGS.btnDoublePageForward != BA::BTN_DEFAULT;
+      // PREV_NEXT: BTN_DOWN = PageForward; NEXT_PREV: BTN_UP = PageForward
+      return SETTINGS.btnDoublePageForward != BA::BTN_DEFAULT ||
+             (prevNext ? SETTINGS.btnDoubleDown : SETTINGS.btnDoubleUp) != BA::BTN_DEFAULT;
     case Button::Power:
       return SETTINGS.btnDoublePower != BA::BTN_DEFAULT;
   }

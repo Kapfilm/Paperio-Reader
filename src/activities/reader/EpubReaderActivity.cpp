@@ -295,37 +295,6 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const bool screenshotChordReleased = gpio.wasReleased(HalGPIO::BTN_POWER) && gpio.wasReleased(HalGPIO::BTN_DOWN);
-
-  // Handle short power button press for footnotes
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FOOTNOTES &&
-      mappedInput.wasReleased(MappedInputManager::Button::Power) && !screenshotChordReleased) {
-    if (currentPageFootnotes.size() == 1) {
-      navigateToHref(currentPageFootnotes[0].href, true);
-    } else if (currentPageFootnotes.size() > 1) {
-      ReaderUtils::enforceExitFullRefresh(renderer);
-      startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
-                             [this](const ActivityResult& result) {
-                               if (!result.isCancelled) {
-                                 const auto& footnoteResult = std::get<FootnoteResult>(result.data);
-                                 navigateToHref(footnoteResult.href, true);
-                               }
-                               requestUpdate();
-                             });
-    }
-    return;
-  }
-
-  // Star page toggle via short power button press
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::STAR_PAGE &&
-      mappedInput.wasReleased(MappedInputManager::Button::Power)) {
-    if (section && section->currentPage >= 0 && section->currentPage < section->pageCount) {
-      bookmarkStore.toggle(static_cast<uint16_t>(currentSpineIndex), static_cast<uint16_t>(section->currentPage));
-      requestUpdate();
-    }
-    return;
-  }
-
   auto [prevTriggered, nextTriggered] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
     return;
@@ -1905,6 +1874,46 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
       requestUpdate();
       break;
     }
+    case BA::BTN_EXIT_READER:
+      ReaderUtils::enforceExitFullRefresh(renderer);
+      finish();
+      break;
+    case BA::BTN_READER_MENU:
+      if (epub) {
+        const int currentPage = section ? section->currentPage + 1 : 0;
+        const int totalPages = section ? section->pageCount : 0;
+        float bookProgress = 0.0f;
+        if (epub->getBookSize() > 0 && section && section->pageCount > 0) {
+          const float chapterProgress =
+              static_cast<float>(section->currentPage) / static_cast<float>(section->pageCount);
+          bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
+        }
+        const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
+        const bool isCurrentPageStarred = section && bookmarkStore.has(static_cast<uint16_t>(currentSpineIndex),
+                                                                       static_cast<uint16_t>(section->currentPage));
+        ReaderUtils::enforceExitFullRefresh(renderer);
+        startActivityForResult(
+            std::make_unique<EpubReaderMenuActivity>(
+                renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
+                SETTINGS.orientation, !currentPageFootnotes.empty(), bookEmbeddedStyleOverride,
+                bookImageRenderingOverride, bookFontFamilyOverride, bookFontSizeOverride, SETTINGS.textDarkness,
+                !bookmarkStore.isEmpty(), isCurrentPageStarred),
+            [this](const ActivityResult& result) {
+              const auto& menu = std::get<MenuResult>(result.data);
+              applyOrientation(menu.orientation);
+              applyTextDarkness(menu.textDarkness);
+              toggleAutoPageTurn(menu.pageTurnOption);
+              applyBookReaderOverrides(menu.embeddedStyleOverride, menu.imageRenderingOverride, menu.fontFamilyOverride,
+                                       menu.fontSizeOverride);
+              if (!result.isCancelled) {
+                onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
+              }
+            });
+      }
+      break;
+    case BA::BTN_KOREADER_SYNC:
+      launchKOReaderSync(SyncLaunchMode::COMPARE);
+      break;
     default:
       break;
   }

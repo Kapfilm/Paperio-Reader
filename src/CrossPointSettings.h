@@ -127,17 +127,6 @@ class CrossPointSettings {
     REFRESH_FREQUENCY_COUNT
   };
 
-  // Short power button press actions
-  enum SHORT_PWRBTN {
-    IGNORE = 0,
-    SLEEP = 1,
-    PAGE_TURN = 2,
-    FORCE_REFRESH = 3,
-    FOOTNOTES = 4,
-    STAR_PAGE = 5,
-    SHORT_PWRBTN_COUNT
-  };
-
   // Hide battery percentage
   enum HIDE_BATTERY_PERCENTAGE { HIDE_NEVER = 0, HIDE_READER = 1, HIDE_ALWAYS = 2, HIDE_BATTERY_PERCENTAGE_COUNT };
 
@@ -214,8 +203,6 @@ class CrossPointSettings {
   // Text darkness (0 = normal, 1 = dark, 2 = extra dark). Default 1 preserves
   // historical AA rendering (both grayscale shades drawn in the MSB pass).
   uint8_t textDarkness = DARKNESS_DARK;
-  // Short power button click behaviour
-  uint8_t shortPwrBtn = IGNORE;
   // EPUB reading orientation settings
   // 0 = portrait (default), 1 = landscape clockwise, 2 = inverted, 3 = landscape counter-clockwise
   uint8_t orientation = PORTRAIT;
@@ -294,6 +281,9 @@ class CrossPointSettings {
     BTN_FOOTNOTES,
     BTN_NEXT_SECTION,
     BTN_PREV_SECTION,
+    BTN_EXIT_READER,
+    BTN_READER_MENU,
+    BTN_KOREADER_SYNC,
     BUTTON_ACTION_COUNT
   };
 
@@ -335,9 +325,7 @@ class CrossPointSettings {
   // Get singleton instance
   static CrossPointSettings& getInstance() { return instance; }
 
-  uint16_t getPowerButtonDuration() const {
-    return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
-  }
+  uint16_t getPowerButtonDuration() const { return 400; }
   int getReaderFontId() const;
 
   // If count_only is true, returns the number of settings items that would be written.

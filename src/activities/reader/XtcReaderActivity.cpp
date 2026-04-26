@@ -94,9 +94,7 @@ void XtcReaderActivity::loop() {
 
   const bool prevTriggered = mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
                              mappedInput.wasReleased(MappedInputManager::Button::Left);
-  const bool powerPageTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
-                             mappedInput.wasReleased(MappedInputManager::Button::Power);
-  const bool nextTriggered = mappedInput.wasReleased(MappedInputManager::Button::PageForward) || powerPageTurn ||
+  const bool nextTriggered = mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
                              mappedInput.wasReleased(MappedInputManager::Button::Right);
 
   if (!prevTriggered && !nextTriggered) {
@@ -468,6 +466,10 @@ void XtcReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION a
     case BA::BTN_PREV_SECTION:
       currentPage = (currentPage >= 10) ? currentPage - 10 : 0;
       requestUpdate();
+      break;
+    case BA::BTN_EXIT_READER:
+      ReaderUtils::enforceExitFullRefresh(renderer);
+      finish();
       break;
     default:
       break;

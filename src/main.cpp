@@ -370,14 +370,6 @@ void loop() {
     }
   }
 
-  // Refresh screen when power button is short-pressed with FORCE_REFRESH setting.
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
-      mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
-    LOG_DBG("MAIN", "Manual screen refresh triggered");
-    RenderLock lock;
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-  }
-
   if (!gpio.isPressed(HalGPIO::BTN_POWER)) {
     powerHoldStart = 0;
   }
@@ -395,6 +387,13 @@ void loop() {
     using B = MappedInputManager::Button;
     ButtonEventManager::ButtonEvent ev;
     while (buttonEventManager.consumeEvent(ev)) {
+      // Up/Down share physical pins with PageBack/PageForward via sideButtonLayout.
+      // ButtonEventManager only runs FSMs for PageBack/PageForward (not Up/Down) to avoid
+      // double-firing. Here we resolve Up/Down settings as aliases of the side-button events:
+      // with PREV_NEXT layout, PageBack = BTN_UP and PageForward = BTN_DOWN, so the
+      // btnShort/Double/LongUp/Down settings apply when PageBack/PageForward fires.
+      const bool prevNext = static_cast<CrossPointSettings::SIDE_BUTTON_LAYOUT>(SETTINGS.sideButtonLayout) ==
+                            CrossPointSettings::SIDE_BUTTON_LAYOUT::PREV_NEXT;
       auto actionFor = [&](B btn) -> uint8_t {
         switch (ev.type) {
           case ButtonEventManager::PressType::Short:
@@ -408,13 +407,15 @@ void loop() {
               case B::Right:
                 return SETTINGS.btnShortRight;
               case B::Up:
-                return SETTINGS.btnShortUp;
+                return BA::BTN_DEFAULT;  // no dedicated FSM
               case B::Down:
-                return SETTINGS.btnShortDown;
+                return BA::BTN_DEFAULT;  // no dedicated FSM
               case B::PageBack:
-                return SETTINGS.btnShortPageBack;
+                if (SETTINGS.btnShortPageBack != BA::BTN_DEFAULT) return SETTINGS.btnShortPageBack;
+                return prevNext ? SETTINGS.btnShortUp : SETTINGS.btnShortDown;
               case B::PageForward:
-                return SETTINGS.btnShortPageForward;
+                if (SETTINGS.btnShortPageForward != BA::BTN_DEFAULT) return SETTINGS.btnShortPageForward;
+                return prevNext ? SETTINGS.btnShortDown : SETTINGS.btnShortUp;
               case B::Power:
                 return SETTINGS.btnShortPower;
             }
@@ -430,13 +431,15 @@ void loop() {
               case B::Right:
                 return SETTINGS.btnDoubleRight;
               case B::Up:
-                return SETTINGS.btnDoubleUp;
+                return BA::BTN_DEFAULT;  // no dedicated FSM
               case B::Down:
-                return SETTINGS.btnDoubleDown;
+                return BA::BTN_DEFAULT;  // no dedicated FSM
               case B::PageBack:
-                return SETTINGS.btnDoublePageBack;
+                if (SETTINGS.btnDoublePageBack != BA::BTN_DEFAULT) return SETTINGS.btnDoublePageBack;
+                return prevNext ? SETTINGS.btnDoubleUp : SETTINGS.btnDoubleDown;
               case B::PageForward:
-                return SETTINGS.btnDoublePageForward;
+                if (SETTINGS.btnDoublePageForward != BA::BTN_DEFAULT) return SETTINGS.btnDoublePageForward;
+                return prevNext ? SETTINGS.btnDoubleDown : SETTINGS.btnDoubleUp;
               case B::Power:
                 return SETTINGS.btnDoublePower;
             }
@@ -452,13 +455,15 @@ void loop() {
               case B::Right:
                 return SETTINGS.btnLongRight;
               case B::Up:
-                return SETTINGS.btnLongUp;
+                return BA::BTN_DEFAULT;  // no dedicated FSM
               case B::Down:
-                return SETTINGS.btnLongDown;
+                return BA::BTN_DEFAULT;  // no dedicated FSM
               case B::PageBack:
-                return SETTINGS.btnLongPageBack;
+                if (SETTINGS.btnLongPageBack != BA::BTN_DEFAULT) return SETTINGS.btnLongPageBack;
+                return prevNext ? SETTINGS.btnLongUp : SETTINGS.btnLongDown;
               case B::PageForward:
-                return SETTINGS.btnLongPageForward;
+                if (SETTINGS.btnLongPageForward != BA::BTN_DEFAULT) return SETTINGS.btnLongPageForward;
+                return prevNext ? SETTINGS.btnLongDown : SETTINGS.btnLongUp;
               case B::Power:
                 return SETTINGS.btnLongPower;
             }
@@ -505,6 +510,21 @@ void loop() {
           break;
         case BA::BTN_FOOTNOTES:
           activityManager.dispatchButtonAction(BA::BTN_FOOTNOTES);
+          break;
+        case BA::BTN_NEXT_SECTION:
+          activityManager.dispatchButtonAction(BA::BTN_NEXT_SECTION);
+          break;
+        case BA::BTN_PREV_SECTION:
+          activityManager.dispatchButtonAction(BA::BTN_PREV_SECTION);
+          break;
+        case BA::BTN_EXIT_READER:
+          activityManager.dispatchButtonAction(BA::BTN_EXIT_READER);
+          break;
+        case BA::BTN_READER_MENU:
+          activityManager.dispatchButtonAction(BA::BTN_READER_MENU);
+          break;
+        case BA::BTN_KOREADER_SYNC:
+          activityManager.dispatchButtonAction(BA::BTN_KOREADER_SYNC);
           break;
         default:
           break;

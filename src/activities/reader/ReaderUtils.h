@@ -64,9 +64,7 @@ struct PageTurnResult {
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool prev =
       input.wasReleased(MappedInputManager::Button::PageBack) || input.wasReleased(MappedInputManager::Button::Left);
-  const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
-                         input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = input.wasReleased(MappedInputManager::Button::PageForward) || powerTurn ||
+  const bool next = input.wasReleased(MappedInputManager::Button::PageForward) ||
                     input.wasReleased(MappedInputManager::Button::Right);
   return {prev, next};
 }

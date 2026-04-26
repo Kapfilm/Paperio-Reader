@@ -155,16 +155,6 @@ void TxtReaderActivity::loop() {
     return;
   }
 
-  // Star page toggle via short power button press
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::STAR_PAGE &&
-      mappedInput.wasReleased(MappedInputManager::Button::Power)) {
-    if (currentPage >= 0) {
-      bookmarkStore.toggle(0, static_cast<uint16_t>(currentPage));
-    }
-    requestUpdate();
-    return;
-  }
-
   // Open starred pages list via Confirm button
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !bookmarkStore.isEmpty()) {
     ReaderUtils::enforceExitFullRefresh(renderer);
@@ -825,6 +815,10 @@ void TxtReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION a
       currentPage -= 10;
       clampPage();
       requestUpdate();
+      break;
+    case BA::BTN_EXIT_READER:
+      ReaderUtils::enforceExitFullRefresh(renderer);
+      finish();
       break;
     default:
       break;
