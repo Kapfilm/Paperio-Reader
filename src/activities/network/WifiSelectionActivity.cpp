@@ -160,9 +160,8 @@ void WifiSelectionActivity::buildAutoCycleCandidates() {
   std::sort(candidates.begin(), candidates.end(),
             [](const Candidate& a, const Candidate& b) { return a.rssi > b.rssi; });
 
-  for (const auto& c : candidates) {
-    autoCycleCandidates.push_back(c.ssid);
-  }
+  std::transform(candidates.begin(), candidates.end(), std::back_inserter(autoCycleCandidates),
+                 [](const Candidate& c) { return c.ssid; });
 
   LOG_DBG("WIFI", "Auto-cycle candidates: %zu", autoCycleCandidates.size());
 }
