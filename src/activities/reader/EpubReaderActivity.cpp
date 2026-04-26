@@ -1385,16 +1385,23 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
 void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
   FsFile f;
   if (Storage.openFileForWrite("ERS", epub->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[6];
+    uint8_t overallPercent = 0;
+    if (epub->getBookSize() > 0 && pageCount > 0) {
+      const float chapterProgress = static_cast<float>(currentPage) / static_cast<float>(pageCount);
+      overallPercent = static_cast<uint8_t>(
+          clampPercent(static_cast<int>(epub->calculateProgress(spineIndex, chapterProgress) * 100.0f + 0.5f)));
+    }
+    uint8_t data[7];
     data[0] = spineIndex & 0xFF;
     data[1] = (spineIndex >> 8) & 0xFF;
     data[2] = currentPage & 0xFF;
     data[3] = (currentPage >> 8) & 0xFF;
     data[4] = pageCount & 0xFF;
     data[5] = (pageCount >> 8) & 0xFF;
-    f.write(data, 6);
+    data[6] = overallPercent;
+    f.write(data, 7);
     f.close();
-    LOG_DBG("ERS", "Progress saved: Chapter %d, Page %d", spineIndex, currentPage);
+    LOG_DBG("ERS", "Progress saved: Chapter %d, Page %d (%d%%)", spineIndex, currentPage, overallPercent);
   } else {
     LOG_ERR("ERS", "Could not save progress!");
   }

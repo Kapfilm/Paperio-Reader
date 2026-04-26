@@ -747,29 +747,40 @@ void MdReaderActivity::renderStatusBar() const {
 void MdReaderActivity::saveProgress() const {
   FsFile f;
   if (Storage.openFileForWrite("MDR", txt->getCachePath() + "/progress.bin", f)) {
-    uint32_t page = static_cast<uint32_t>(currentPage < 0 ? 0 : currentPage);
-    uint8_t data[4];
-    data[0] = page & 0xFF;
-    data[1] = (page >> 8) & 0xFF;
-    data[2] = (page >> 16) & 0xFF;
-    data[3] = (page >> 24) & 0xFF;
-    f.write(data, 4);
+    // 7-byte format matching TxtReaderActivity: page(2 bytes LE) + file offset(4 bytes LE) + overallPercent(1 byte)
+    const size_t offset =
+        (currentPage >= 0 && currentPage < static_cast<int>(pageOffsets.size())) ? pageOffsets[currentPage] : 0;
+    const uint8_t overallPercent = (totalPages > 0) ? static_cast<uint8_t>((currentPage + 1) * 100 / totalPages) : 0;
+    uint8_t data[7];
+    data[0] = currentPage & 0xFF;
+    data[1] = (currentPage >> 8) & 0xFF;
+    data[2] = offset & 0xFF;
+    data[3] = (offset >> 8) & 0xFF;
+    data[4] = (offset >> 16) & 0xFF;
+    data[5] = (offset >> 24) & 0xFF;
+    data[6] = overallPercent;
+    f.write(data, 7);
   }
 }
 
 void MdReaderActivity::loadProgress() {
   FsFile f;
   if (Storage.openFileForRead("MDR", txt->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[4];
-    if (f.read(data, 4) == 4) {
-      uint32_t loadedPage = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
-                            (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
+    uint8_t data[7];
+    const int dataSize = f.read(data, 7);
+    f.close();
+    if (dataSize >= 4) {
+      // Old 4-byte format: uint32 page — detect by checking if bytes 2-3 are non-zero
+      // (new format stores page in bytes 0-1 only, bytes 2-3 are offset low bytes).
+      // Since page counts are small (< 65536), bytes 2-3 of the old uint32 page are always 0.
+      // We can safely read bytes 0-1 as the page number in both formats.
+      int loadedPage = data[0] + (data[1] << 8);
       if (totalPages == 0) {
         currentPage = 0;
-      } else if (loadedPage >= static_cast<uint32_t>(totalPages)) {
+      } else if (loadedPage >= totalPages) {
         currentPage = totalPages - 1;
       } else {
-        currentPage = static_cast<int>(loadedPage);
+        currentPage = loadedPage;
       }
       LOG_DBG("MDR", "Loaded progress: page %d/%d", currentPage, totalPages);
     }
