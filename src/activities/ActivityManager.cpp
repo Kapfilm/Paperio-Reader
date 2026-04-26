@@ -390,7 +390,7 @@ bool ActivityManager::isReaderActivity() const { return currentActivity && curre
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
 
 void ActivityManager::dispatchButtonAction(const CrossPointSettings::BUTTON_ACTION action) {
-  if (currentActivity) {
+  if (currentActivity && currentActivity->isReaderActivity()) {
     currentActivity->onButtonAction(action);
   }
 }

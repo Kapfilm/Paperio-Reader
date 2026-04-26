@@ -460,12 +460,28 @@ void XtcReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION a
       requestUpdate();
       break;
     case BA::BTN_NEXT_SECTION:
-      currentPage = (currentPage + 10 < pageCount) ? currentPage + 10 : pageCount - 1;
-      requestUpdate();
+      if (xtc->hasChapters()) {
+        const auto& chapters = xtc->getChapters();
+        for (const auto& ch : chapters) {
+          if (ch.startPage > currentPage) {
+            currentPage = ch.startPage;
+            requestUpdate();
+            break;
+          }
+        }
+      }
       break;
     case BA::BTN_PREV_SECTION:
-      currentPage = (currentPage >= 10) ? currentPage - 10 : 0;
-      requestUpdate();
+      if (xtc->hasChapters()) {
+        const auto& chapters = xtc->getChapters();
+        for (int i = static_cast<int>(chapters.size()) - 1; i >= 0; i--) {
+          if (chapters[i].startPage < currentPage) {
+            currentPage = chapters[i].startPage;
+            requestUpdate();
+            break;
+          }
+        }
+      }
       break;
     case BA::BTN_EXIT_READER:
       ReaderUtils::enforceExitFullRefresh(renderer);

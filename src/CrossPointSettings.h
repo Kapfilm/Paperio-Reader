@@ -313,7 +313,7 @@ class CrossPointSettings {
   // Get singleton instance
   static CrossPointSettings& getInstance() { return instance; }
 
-  uint16_t getPowerButtonDuration() const { return 400; }
+  static constexpr uint16_t getPowerButtonDuration() { return 400; }
   int getReaderFontId() const;
 
   // If count_only is true, returns the number of settings items that would be written.

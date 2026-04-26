@@ -1813,6 +1813,7 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
         const int spineIdx = currentSpineIndex;
         const int tocIdx = section ? section->getTocIndexForPage(section->currentPage)
                                    : epub->getTocIndexForSpineIndex(currentSpineIndex);
+        ReaderUtils::enforceExitFullRefresh(renderer);
         startActivityForResult(std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub,
                                                                                     epub->getPath(), spineIdx, tocIdx),
                                [this](const ActivityResult& result) {
@@ -1837,39 +1838,41 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
     case BA::BTN_NEXT_SECTION:
     case BA::BTN_PREV_SECTION: {
       const bool forward = (action == BA::BTN_NEXT_SECTION);
-      RenderLock lock(*this);
-      if (section && section->pageCount > 0) {
-        const int curTocIndex = section->getTocIndexForPage(section->currentPage);
-        const int nextTocIndex = forward ? curTocIndex + 1 : curTocIndex - 1;
-        if (curTocIndex < 0) {
+      {
+        RenderLock lock(*this);
+        if (section && section->pageCount > 0) {
+          const int curTocIndex = section->getTocIndexForPage(section->currentPage);
+          const int nextTocIndex = forward ? curTocIndex + 1 : curTocIndex - 1;
+          if (curTocIndex < 0) {
+            nextPageNumber = 0;
+            currentSpineIndex = forward ? currentSpineIndex + 1 : currentSpineIndex - 1;
+            section.reset();
+          } else if (nextTocIndex >= 0 && nextTocIndex < epub->getTocItemsCount()) {
+            const int newSpineIndex = epub->getSpineIndexForTocIndex(nextTocIndex);
+            if (newSpineIndex == currentSpineIndex) {
+              if (const auto resolvedPage = section->getPageForTocIndex(nextTocIndex)) {
+                section->currentPage = *resolvedPage;
+              }
+            } else {
+              pendingTocIndex = nextTocIndex;
+              nextPageNumber = 0;
+              currentSpineIndex = newSpineIndex;
+              section.reset();
+            }
+          } else if (forward) {
+            nextPageNumber = 0;
+            currentSpineIndex = epub->getSpineItemsCount();
+            section.reset();
+          } else {
+            nextPageNumber = 0;
+            currentSpineIndex = epub->getTocItem(curTocIndex).spineIndex - 1;
+            section.reset();
+          }
+        } else {
           nextPageNumber = 0;
           currentSpineIndex = forward ? currentSpineIndex + 1 : currentSpineIndex - 1;
           section.reset();
-        } else if (nextTocIndex >= 0 && nextTocIndex < epub->getTocItemsCount()) {
-          const int newSpineIndex = epub->getSpineIndexForTocIndex(nextTocIndex);
-          if (newSpineIndex == currentSpineIndex) {
-            if (const auto resolvedPage = section->getPageForTocIndex(nextTocIndex)) {
-              section->currentPage = *resolvedPage;
-            }
-          } else {
-            pendingTocIndex = nextTocIndex;
-            nextPageNumber = 0;
-            currentSpineIndex = newSpineIndex;
-            section.reset();
-          }
-        } else if (forward) {
-          nextPageNumber = 0;
-          currentSpineIndex = epub->getSpineItemsCount();
-          section.reset();
-        } else {
-          nextPageNumber = 0;
-          currentSpineIndex = epub->getTocItem(curTocIndex).spineIndex - 1;
-          section.reset();
         }
-      } else {
-        nextPageNumber = 0;
-        currentSpineIndex = forward ? currentSpineIndex + 1 : currentSpineIndex - 1;
-        section.reset();
       }
       requestUpdate();
       break;

@@ -897,6 +897,10 @@ void MdReaderActivity::savePageIndexCache() const {
 void MdReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION action) {
   using BA = CrossPointSettings::BUTTON_ACTION;
   auto clampPage = [this]() {
+    if (totalPages == 0) {
+      currentPage = 0;
+      return;
+    }
     if (currentPage < 0) currentPage = 0;
     if (currentPage >= totalPages) currentPage = totalPages - 1;
   };

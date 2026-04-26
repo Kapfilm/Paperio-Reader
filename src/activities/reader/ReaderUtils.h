@@ -62,10 +62,16 @@ struct PageTurnResult {
 };
 
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
+  // Only treat wasReleased as a page turn when the button's short-press action is default.
+  // Non-default short-press actions are dispatched by the global dispatcher in main.cpp;
+  // counting wasReleased as well would double-fire the action.
+  using BA = CrossPointSettings::BUTTON_ACTION;
   const bool prev =
-      input.wasReleased(MappedInputManager::Button::PageBack) || input.wasReleased(MappedInputManager::Button::Left);
-  const bool next = input.wasReleased(MappedInputManager::Button::PageForward) ||
-                    input.wasReleased(MappedInputManager::Button::Right);
+      (SETTINGS.btnShortPageBack == BA::BTN_DEFAULT && input.wasReleased(MappedInputManager::Button::PageBack)) ||
+      (SETTINGS.btnShortLeft == BA::BTN_DEFAULT && input.wasReleased(MappedInputManager::Button::Left));
+  const bool next =
+      (SETTINGS.btnShortPageForward == BA::BTN_DEFAULT && input.wasReleased(MappedInputManager::Button::PageForward)) ||
+      (SETTINGS.btnShortRight == BA::BTN_DEFAULT && input.wasReleased(MappedInputManager::Button::Right));
   return {prev, next};
 }
 

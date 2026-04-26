@@ -806,15 +806,22 @@ void TxtReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION a
       bookmarkStore.toggle(0, static_cast<uint16_t>(currentPage));
       requestUpdate();
       break;
-    case BA::BTN_NEXT_SECTION:
-      currentPage += 10;
-      clampPage();
-      requestUpdate();
+    case BA::BTN_OPEN_BOOKMARKS:
+      if (!bookmarkStore.isEmpty()) {
+        ReaderUtils::enforceExitFullRefresh(renderer);
+        startActivityForResult(std::make_unique<StarredPagesActivity>(renderer, mappedInput, bookmarkStore),
+                               [this](const ActivityResult& result) {
+                                 if (!result.isCancelled) {
+                                   const auto& starred = std::get<StarredPageResult>(result.data);
+                                   currentPage = starred.pageNumber;
+                                   requestUpdate();
+                                 }
+                               });
+      }
       break;
+    case BA::BTN_NEXT_SECTION:
     case BA::BTN_PREV_SECTION:
-      currentPage -= 10;
-      clampPage();
-      requestUpdate();
+      // TXT files have no headings/chapters; treat as unsupported (no-op).
       break;
     case BA::BTN_EXIT_READER:
       ReaderUtils::enforceExitFullRefresh(renderer);

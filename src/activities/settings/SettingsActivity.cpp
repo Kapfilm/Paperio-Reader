@@ -82,7 +82,6 @@ void SettingsActivity::onEnter() {
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   controlsSettings.insert(controlsSettings.begin(), SettingInfo::Separator(StrId::STR_MENU_BTN_PHYSICAL));
-  lastControlsSub = StrId::STR_MENU_BTN_PHYSICAL;
 
   addToMoved(readerSettings, lastReaderSub,
              SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));

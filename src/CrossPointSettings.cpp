@@ -184,8 +184,8 @@ bool CrossPointSettings::loadFromBinaryFile() {
     readAndValidate(inputFile, hideBatteryPercentage, HIDE_BATTERY_PERCENTAGE_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
     {
-      uint8_t _unused;
-      serialization::readPod(inputFile, _unused);
+      uint8_t ignored;
+      serialization::readPod(inputFile, ignored);
     }  // was longPressChapterSkip
     if (++settingsRead >= fileSettingsCount) break;
     serialization::readPod(inputFile, hyphenationEnabled);
