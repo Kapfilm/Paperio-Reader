@@ -249,8 +249,6 @@ class CrossPointSettings {
   char opdsPassword[64] = "";
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
-  // Long-press chapter skip on side buttons
-  uint8_t longPressChapterSkip = 1;
   // UI Theme
   uint8_t uiTheme = LYRA;
   // Sunlight fading compensation
@@ -278,6 +276,59 @@ class CrossPointSettings {
   uint8_t useClock = 0;
   // Show the Weather home screen menu item (1 = enabled, 0 = hidden)
   uint8_t useWeather = 1;
+
+  // Configurable actions for short / double / long press on each logical button.
+  // BTN_DEFAULT means "use the button's normal built-in behaviour".
+  enum BUTTON_ACTION {
+    BTN_DEFAULT = 0,
+    BTN_PAGE_FORWARD,
+    BTN_PAGE_BACK,
+    BTN_PAGE_FORWARD_10,
+    BTN_PAGE_BACK_10,
+    BTN_GO_HOME,
+    BTN_SLEEP,
+    BTN_FORCE_REFRESH,
+    BTN_OPEN_TOC,
+    BTN_OPEN_BOOKMARKS,
+    BTN_STAR_PAGE,
+    BTN_FOOTNOTES,
+    BTN_NEXT_SECTION,
+    BTN_PREV_SECTION,
+    BUTTON_ACTION_COUNT
+  };
+
+  // Short-press actions (default: built-in)
+  uint8_t btnShortBack = BTN_DEFAULT;
+  uint8_t btnShortConfirm = BTN_DEFAULT;
+  uint8_t btnShortLeft = BTN_DEFAULT;
+  uint8_t btnShortRight = BTN_DEFAULT;
+  uint8_t btnShortUp = BTN_DEFAULT;
+  uint8_t btnShortDown = BTN_DEFAULT;
+  uint8_t btnShortPageBack = BTN_DEFAULT;
+  uint8_t btnShortPageForward = BTN_DEFAULT;
+  uint8_t btnShortPower = BTN_DEFAULT;
+
+  // Double-press actions (default: BTN_DEFAULT = disabled, no disambiguation wait)
+  uint8_t btnDoubleBack = BTN_DEFAULT;
+  uint8_t btnDoubleConfirm = BTN_DEFAULT;
+  uint8_t btnDoubleLeft = BTN_DEFAULT;
+  uint8_t btnDoubleRight = BTN_DEFAULT;
+  uint8_t btnDoubleUp = BTN_DEFAULT;
+  uint8_t btnDoubleDown = BTN_DEFAULT;
+  uint8_t btnDoublePageBack = BTN_DEFAULT;
+  uint8_t btnDoublePageForward = BTN_DEFAULT;
+  uint8_t btnDoublePower = BTN_DEFAULT;
+
+  // Long-press actions (default: built-in)
+  uint8_t btnLongBack = BTN_DEFAULT;
+  uint8_t btnLongConfirm = BTN_DEFAULT;
+  uint8_t btnLongLeft = BTN_DEFAULT;
+  uint8_t btnLongRight = BTN_DEFAULT;
+  uint8_t btnLongUp = BTN_DEFAULT;
+  uint8_t btnLongDown = BTN_DEFAULT;
+  uint8_t btnLongPageBack = BTN_DEFAULT;
+  uint8_t btnLongPageForward = BTN_DEFAULT;
+  uint8_t btnLongPower = BTN_DEFAULT;
 
   ~CrossPointSettings() = default;
 

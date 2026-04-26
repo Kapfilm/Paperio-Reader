@@ -782,3 +782,51 @@ bool TxtReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gfx
   }
   return true;
 }
+
+void TxtReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION action) {
+  using BA = CrossPointSettings::BUTTON_ACTION;
+  auto clampPage = [this]() {
+    if (currentPage < 0) currentPage = 0;
+    if (currentPage >= totalPages) currentPage = totalPages - 1;
+  };
+  switch (action) {
+    case BA::BTN_PAGE_FORWARD:
+      if (currentPage < totalPages - 1) {
+        currentPage++;
+        requestUpdate();
+      }
+      break;
+    case BA::BTN_PAGE_BACK:
+      if (currentPage > 0) {
+        currentPage--;
+        requestUpdate();
+      }
+      break;
+    case BA::BTN_PAGE_FORWARD_10:
+      currentPage += 10;
+      clampPage();
+      requestUpdate();
+      break;
+    case BA::BTN_PAGE_BACK_10:
+      currentPage -= 10;
+      clampPage();
+      requestUpdate();
+      break;
+    case BA::BTN_STAR_PAGE:
+      bookmarkStore.toggle(0, static_cast<uint16_t>(currentPage));
+      requestUpdate();
+      break;
+    case BA::BTN_NEXT_SECTION:
+      currentPage += 10;
+      clampPage();
+      requestUpdate();
+      break;
+    case BA::BTN_PREV_SECTION:
+      currentPage -= 10;
+      clampPage();
+      requestUpdate();
+      break;
+    default:
+      break;
+  }
+}

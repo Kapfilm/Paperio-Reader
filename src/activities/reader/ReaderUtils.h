@@ -31,8 +31,8 @@ inline void applyOrientation(GfxRenderer& renderer, const uint8_t orientation) {
 
 // Suppresses input processing on activity entry until the user has released all buttons and a
 // clean frame (no pending press/release events) has been observed. Without this, the power-button
-// hold used to wake the device leaks into detectPageTurn() and triggers a page turn or, with
-// longPressChapterSkip enabled, a chapter skip (the wake-hold easily exceeds skipChapterMs).
+// hold used to wake the device leaks into detectPageTurn() and triggers a page turn or chapter
+// skip (the wake-hold easily exceeds skipChapterMs).
 // Each reader holds an instance, calls arm() in onEnter(), and calls shouldDrain() at the top
 // of loop() — returning early when it returns true.
 struct InputDrainGuard {
@@ -62,17 +62,12 @@ struct PageTurnResult {
 };
 
 inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
-  const bool usePress = !SETTINGS.longPressChapterSkip;
-  const bool prev = usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) ||
-                                input.wasPressed(MappedInputManager::Button::Left))
-                             : (input.wasReleased(MappedInputManager::Button::PageBack) ||
-                                input.wasReleased(MappedInputManager::Button::Left));
+  const bool prev =
+      input.wasReleased(MappedInputManager::Button::PageBack) || input.wasReleased(MappedInputManager::Button::Left);
   const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                          input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = usePress ? (input.wasPressed(MappedInputManager::Button::PageForward) || powerTurn ||
-                                input.wasPressed(MappedInputManager::Button::Right))
-                             : (input.wasReleased(MappedInputManager::Button::PageForward) || powerTurn ||
-                                input.wasReleased(MappedInputManager::Button::Right));
+  const bool next = input.wasReleased(MappedInputManager::Button::PageForward) || powerTurn ||
+                    input.wasReleased(MappedInputManager::Button::Right);
   return {prev, next};
 }
 

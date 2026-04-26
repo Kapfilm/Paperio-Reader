@@ -343,7 +343,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  const bool skipChapter = SETTINGS.longPressChapterSkip && mappedInput.getHeldTime() > skipChapterMs;
+  const bool skipChapter = mappedInput.getHeldTime() > skipChapterMs;
 
   // Chapter skip navigates by TOC entries, not spine boundaries.
   // Spine items without their own TOC entry inherit the previous spine's tocIndex
@@ -1794,4 +1794,118 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
   page->render(renderer, getEffectiveFontId(effectiveFontFamily, effectiveFontSize), marginLeft, marginTop);
   // No displayBuffer call — caller (SleepActivity) handles that after compositing the overlay
   return true;
+}
+
+void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION action) {
+  using BA = CrossPointSettings::BUTTON_ACTION;
+  switch (action) {
+    case BA::BTN_PAGE_FORWARD:
+      pageTurn(true);
+      break;
+    case BA::BTN_PAGE_BACK:
+      pageTurn(false);
+      break;
+    case BA::BTN_PAGE_FORWARD_10:
+      for (int i = 0; i < 10; i++) {
+        if (!stepPageState(true)) break;
+      }
+      requestUpdate();
+      break;
+    case BA::BTN_PAGE_BACK_10:
+      for (int i = 0; i < 10; i++) {
+        if (!stepPageState(false)) break;
+      }
+      requestUpdate();
+      break;
+    case BA::BTN_STAR_PAGE:
+      if (section) {
+        bookmarkStore.toggle(static_cast<uint16_t>(currentSpineIndex), static_cast<uint16_t>(section->currentPage));
+        requestUpdate();
+      }
+      break;
+    case BA::BTN_FOOTNOTES:
+      if (!currentPageFootnotes.empty()) {
+        if (currentPageFootnotes.size() == 1) {
+          navigateToHref(currentPageFootnotes[0].href, true);
+        } else {
+          startActivityForResult(
+              std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
+              [this](const ActivityResult& result) {
+                if (!result.isCancelled) {
+                  const auto& footnoteResult = std::get<FootnoteResult>(result.data);
+                  navigateToHref(footnoteResult.href, true);
+                }
+              });
+        }
+      }
+      break;
+    case BA::BTN_OPEN_TOC:
+      if (epub) {
+        const int spineIdx = currentSpineIndex;
+        const int tocIdx = section ? section->getTocIndexForPage(section->currentPage)
+                                   : epub->getTocIndexForSpineIndex(currentSpineIndex);
+        startActivityForResult(std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub,
+                                                                                    epub->getPath(), spineIdx, tocIdx),
+                               [this](const ActivityResult& result) {
+                                 if (result.isCancelled) return;
+                                 RenderLock lock(*this);
+                                 const auto& chapter = std::get<ChapterResult>(result.data);
+                                 auto resolvedPage =
+                                     (chapter.tocIndex && chapter.spineIndex == currentSpineIndex && section)
+                                         ? section->getPageForTocIndex(*chapter.tocIndex)
+                                         : std::nullopt;
+                                 if (resolvedPage) {
+                                   section->currentPage = *resolvedPage;
+                                 } else {
+                                   pendingTocIndex = chapter.tocIndex;
+                                   currentSpineIndex = chapter.spineIndex;
+                                   nextPageNumber = 0;
+                                   section.reset();
+                                 }
+                               });
+      }
+      break;
+    case BA::BTN_NEXT_SECTION:
+    case BA::BTN_PREV_SECTION: {
+      const bool forward = (action == BA::BTN_NEXT_SECTION);
+      RenderLock lock(*this);
+      if (section && section->pageCount > 0) {
+        const int curTocIndex = section->getTocIndexForPage(section->currentPage);
+        const int nextTocIndex = forward ? curTocIndex + 1 : curTocIndex - 1;
+        if (curTocIndex < 0) {
+          nextPageNumber = 0;
+          currentSpineIndex = forward ? currentSpineIndex + 1 : currentSpineIndex - 1;
+          section.reset();
+        } else if (nextTocIndex >= 0 && nextTocIndex < epub->getTocItemsCount()) {
+          const int newSpineIndex = epub->getSpineIndexForTocIndex(nextTocIndex);
+          if (newSpineIndex == currentSpineIndex) {
+            if (const auto resolvedPage = section->getPageForTocIndex(nextTocIndex)) {
+              section->currentPage = *resolvedPage;
+            }
+          } else {
+            pendingTocIndex = nextTocIndex;
+            nextPageNumber = 0;
+            currentSpineIndex = newSpineIndex;
+            section.reset();
+          }
+        } else if (forward) {
+          nextPageNumber = 0;
+          currentSpineIndex = epub->getSpineItemsCount();
+          section.reset();
+        } else {
+          nextPageNumber = 0;
+          currentSpineIndex = epub->getTocItem(curTocIndex).spineIndex - 1;
+          section.reset();
+        }
+      } else {
+        nextPageNumber = 0;
+        currentSpineIndex = forward ? currentSpineIndex + 1 : currentSpineIndex - 1;
+        section.reset();
+      }
+      requestUpdate();
+      break;
+    }
+    default:
+      break;
+  }
 }

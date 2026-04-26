@@ -17,6 +17,7 @@
 
 #include <cstring>
 
+#include "ButtonEventManager.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "GlobalBookmarkIndex.h"
@@ -33,6 +34,8 @@
 #include "util/ScreenshotUtil.h"
 
 MappedInputManager mappedInputManager(gpio);
+ButtonEventManager buttonEventManager(mappedInputManager);
+ButtonEventManager& globalButtonEvents() { return buttonEventManager; }
 GfxRenderer renderer(display);
 ActivityManager activityManager(renderer, mappedInputManager);
 FontDecompressor fontDecompressor;
@@ -284,6 +287,7 @@ void loop() {
   static unsigned long lastMemPrint = 0;
 
   gpio.update();
+  buttonEventManager.update();
   HalClock::updatePeriodic();
 
   renderer.setFadingFix(SETTINGS.fadingFix);
@@ -382,6 +386,130 @@ void loop() {
   // Placed after sleep guards so we never queue a render that won't be processed.
   if (gpio.wasUsbStateChanged()) {
     activityManager.requestUpdate();
+  }
+
+  // Dispatch globally-configured button actions before handing control to the activity.
+  // Only non-Default actions are intercepted here; Default falls through to the activity.
+  {
+    using BA = CrossPointSettings::BUTTON_ACTION;
+    using B = MappedInputManager::Button;
+    ButtonEventManager::ButtonEvent ev;
+    while (buttonEventManager.consumeEvent(ev)) {
+      auto actionFor = [&](B btn) -> uint8_t {
+        switch (ev.type) {
+          case ButtonEventManager::PressType::Short:
+            switch (btn) {
+              case B::Back:
+                return SETTINGS.btnShortBack;
+              case B::Confirm:
+                return SETTINGS.btnShortConfirm;
+              case B::Left:
+                return SETTINGS.btnShortLeft;
+              case B::Right:
+                return SETTINGS.btnShortRight;
+              case B::Up:
+                return SETTINGS.btnShortUp;
+              case B::Down:
+                return SETTINGS.btnShortDown;
+              case B::PageBack:
+                return SETTINGS.btnShortPageBack;
+              case B::PageForward:
+                return SETTINGS.btnShortPageForward;
+              case B::Power:
+                return SETTINGS.btnShortPower;
+            }
+            break;
+          case ButtonEventManager::PressType::Double:
+            switch (btn) {
+              case B::Back:
+                return SETTINGS.btnDoubleBack;
+              case B::Confirm:
+                return SETTINGS.btnDoubleConfirm;
+              case B::Left:
+                return SETTINGS.btnDoubleLeft;
+              case B::Right:
+                return SETTINGS.btnDoubleRight;
+              case B::Up:
+                return SETTINGS.btnDoubleUp;
+              case B::Down:
+                return SETTINGS.btnDoubleDown;
+              case B::PageBack:
+                return SETTINGS.btnDoublePageBack;
+              case B::PageForward:
+                return SETTINGS.btnDoublePageForward;
+              case B::Power:
+                return SETTINGS.btnDoublePower;
+            }
+            break;
+          case ButtonEventManager::PressType::Long:
+            switch (btn) {
+              case B::Back:
+                return SETTINGS.btnLongBack;
+              case B::Confirm:
+                return SETTINGS.btnLongConfirm;
+              case B::Left:
+                return SETTINGS.btnLongLeft;
+              case B::Right:
+                return SETTINGS.btnLongRight;
+              case B::Up:
+                return SETTINGS.btnLongUp;
+              case B::Down:
+                return SETTINGS.btnLongDown;
+              case B::PageBack:
+                return SETTINGS.btnLongPageBack;
+              case B::PageForward:
+                return SETTINGS.btnLongPageForward;
+              case B::Power:
+                return SETTINGS.btnLongPower;
+            }
+            break;
+        }
+        return BA::BTN_DEFAULT;
+      };
+
+      const uint8_t action = actionFor(ev.button);
+      if (action == BA::BTN_DEFAULT) continue;
+
+      switch (static_cast<BA>(action)) {
+        case BA::BTN_PAGE_FORWARD:
+          activityManager.dispatchButtonAction(BA::BTN_PAGE_FORWARD);
+          break;
+        case BA::BTN_PAGE_BACK:
+          activityManager.dispatchButtonAction(BA::BTN_PAGE_BACK);
+          break;
+        case BA::BTN_PAGE_FORWARD_10:
+          activityManager.dispatchButtonAction(BA::BTN_PAGE_FORWARD_10);
+          break;
+        case BA::BTN_PAGE_BACK_10:
+          activityManager.dispatchButtonAction(BA::BTN_PAGE_BACK_10);
+          break;
+        case BA::BTN_GO_HOME:
+          activityManager.goHome();
+          break;
+        case BA::BTN_SLEEP:
+          activityManager.goToSleep();
+          break;
+        case BA::BTN_FORCE_REFRESH: {
+          RenderLock lock;
+          renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+          break;
+        }
+        case BA::BTN_OPEN_TOC:
+          activityManager.dispatchButtonAction(BA::BTN_OPEN_TOC);
+          break;
+        case BA::BTN_OPEN_BOOKMARKS:
+          activityManager.goToGlobalBookmarks();
+          break;
+        case BA::BTN_STAR_PAGE:
+          activityManager.dispatchButtonAction(BA::BTN_STAR_PAGE);
+          break;
+        case BA::BTN_FOOTNOTES:
+          activityManager.dispatchButtonAction(BA::BTN_FOOTNOTES);
+          break;
+        default:
+          break;
+      }
+    }
   }
 
   const unsigned long activityStartTime = millis();

@@ -133,12 +133,122 @@ inline const std::vector<SettingInfo> list = {
     // --- Controls ---
     SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
                       {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV}, "sideButtonLayout", StrId::STR_CAT_CONTROLS),
-    SettingInfo::Toggle(StrId::STR_LONG_PRESS_SKIP, &CrossPointSettings::longPressChapterSkip, "longPressChapterSkip",
-                        StrId::STR_CAT_CONTROLS),
     SettingInfo::Enum(StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
                       {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH,
                        StrId::STR_FOOTNOTES, StrId::STR_STAR_PAGE},
                       "shortPwrBtn", StrId::STR_CAT_CONTROLS),
+
+// --- Button Actions (short / double / long press per logical button) ---
+// All entries share the same ordered action-label list; the submenu groups them behind
+// a single placeholder row in the device UI.
+#define BTN_ACTION_ENUM_VALUES                                                                         \
+  {StrId::STR_BTN_ACT_DEFAULT,         StrId::STR_BTN_ACT_PAGE_FORWARD,  StrId::STR_BTN_ACT_PAGE_BACK, \
+   StrId::STR_BTN_ACT_PAGE_FORWARD_10, StrId::STR_BTN_ACT_PAGE_BACK_10,  StrId::STR_BTN_ACT_GO_HOME,   \
+   StrId::STR_BTN_ACT_SLEEP,           StrId::STR_BTN_ACT_FORCE_REFRESH, StrId::STR_BTN_ACT_OPEN_TOC,  \
+   StrId::STR_BTN_ACT_OPEN_BOOKMARKS,  StrId::STR_BTN_ACT_STAR_PAGE,     StrId::STR_BTN_ACT_FOOTNOTES, \
+   StrId::STR_BTN_ACT_NEXT_SECTION,    StrId::STR_BTN_ACT_PREV_SECTION}
+
+    // Back button
+    SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortBack, BTN_ACTION_ENUM_VALUES,
+                      "btnShortBack", StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_BTN_BACK)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleBack, BTN_ACTION_ENUM_VALUES,
+                      "btnDoubleBack", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongBack, BTN_ACTION_ENUM_VALUES,
+                      "btnLongBack", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    // Confirm button
+    SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortConfirm, BTN_ACTION_ENUM_VALUES,
+                      "btnShortConfirm", StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_BTN_CONFIRM)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleConfirm, BTN_ACTION_ENUM_VALUES,
+                      "btnDoubleConfirm", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongConfirm, BTN_ACTION_ENUM_VALUES,
+                      "btnLongConfirm", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    // Left button
+    SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortLeft, BTN_ACTION_ENUM_VALUES,
+                      "btnShortLeft", StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_BTN_LEFT)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleLeft, BTN_ACTION_ENUM_VALUES,
+                      "btnDoubleLeft", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongLeft, BTN_ACTION_ENUM_VALUES,
+                      "btnLongLeft", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    // Right button
+    SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortRight, BTN_ACTION_ENUM_VALUES,
+                      "btnShortRight", StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_BTN_RIGHT)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleRight, BTN_ACTION_ENUM_VALUES,
+                      "btnDoubleRight", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongRight, BTN_ACTION_ENUM_VALUES,
+                      "btnLongRight", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    // Up button
+    SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortUp, BTN_ACTION_ENUM_VALUES, "btnShortUp",
+                      StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_BTN_UP)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleUp, BTN_ACTION_ENUM_VALUES,
+                      "btnDoubleUp", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongUp, BTN_ACTION_ENUM_VALUES, "btnLongUp",
+                      StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    // Down button
+    SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortDown, BTN_ACTION_ENUM_VALUES,
+                      "btnShortDown", StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_BTN_DOWN)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleDown, BTN_ACTION_ENUM_VALUES,
+                      "btnDoubleDown", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongDown, BTN_ACTION_ENUM_VALUES,
+                      "btnLongDown", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    // Page Back button
+    SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPageBack, BTN_ACTION_ENUM_VALUES,
+                      "btnShortPageBack", StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_BTN_PAGE_BACK)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePageBack, BTN_ACTION_ENUM_VALUES,
+                      "btnDoublePageBack", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPageBack, BTN_ACTION_ENUM_VALUES,
+                      "btnLongPageBack", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    // Page Forward button
+    SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPageForward, BTN_ACTION_ENUM_VALUES,
+                      "btnShortPageForward", StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_BTN_PAGE_FORWARD)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePageForward, BTN_ACTION_ENUM_VALUES,
+                      "btnDoublePageForward", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPageForward, BTN_ACTION_ENUM_VALUES,
+                      "btnLongPageForward", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    // Power button
+    SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPower, BTN_ACTION_ENUM_VALUES,
+                      "btnShortPower", StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_BTN_POWER)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePower, BTN_ACTION_ENUM_VALUES,
+                      "btnDoublePower", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+    SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPower, BTN_ACTION_ENUM_VALUES,
+                      "btnLongPower", StrId::STR_CAT_CONTROLS)
+        .withSubmenu(StrId::STR_MENU_BTN_ACTIONS),
+
+#undef BTN_ACTION_ENUM_VALUES
 
     // --- System ---
     SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
