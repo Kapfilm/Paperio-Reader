@@ -23,6 +23,7 @@ bool SettingsActivity::isListItemSelectable(int settingIdx) const {
 
 void SettingsActivity::onEnter() {
   Activity::onEnter();
+  needsHalfRefresh = true;
 
   // Build per-category vectors from the shared settings list.
   // addTo tracks the last subcategory per vector and automatically inserts a separator
@@ -80,6 +81,8 @@ void SettingsActivity::onEnter() {
   // Device-only ACTION items — subcategory drives separator insertion automatically.
   controlsSettings.insert(controlsSettings.begin(),
                           SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
+  controlsSettings.insert(controlsSettings.begin(), SettingInfo::Separator(StrId::STR_MENU_BTN_PHYSICAL));
+  lastControlsSub = StrId::STR_MENU_BTN_PHYSICAL;
 
   addToMoved(readerSettings, lastReaderSub,
              SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
@@ -217,11 +220,15 @@ void SettingsActivity::toggleCurrentSetting() {
   if (setting.type == SettingType::ACTION) {
     auto resultHandler = [this](const ActivityResult& result) {
       SETTINGS.saveToFile();
+      needsHalfRefresh = true;
       const auto* menuResult = std::get_if<MenuResult>(&result.data);
       if (menuResult && menuResult->action != -1) {
         auto activity = createActivityForAction(static_cast<SettingAction>(menuResult->action), renderer, mappedInput);
         if (activity) {
-          startActivityForResult(std::move(activity), [this](const ActivityResult&) { SETTINGS.saveToFile(); });
+          startActivityForResult(std::move(activity), [this](const ActivityResult&) {
+            SETTINGS.saveToFile();
+            needsHalfRefresh = true;
+          });
         }
       }
     };
@@ -279,5 +286,7 @@ void SettingsActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer(gpio.deviceIsX3() ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+  const bool halfRefresh = gpio.deviceIsX3() && needsHalfRefresh;
+  needsHalfRefresh = false;
+  renderer.displayBuffer(halfRefresh ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
 }

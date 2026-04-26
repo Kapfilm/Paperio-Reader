@@ -130,9 +130,7 @@ inline const std::vector<SettingInfo> list = {
                         "syntheticTocFallback", StrId::STR_CAT_READER)
         .withSubcategory(StrId::STR_MENU_READER_TWEAKS),
 
-    // --- Controls ---
-    SettingInfo::Separator(StrId::STR_MENU_BTN_PHYSICAL),
-
+// --- Controls ---
 // --- Button Actions (short / double / long press per logical button) ---
 // All entries share the same ordered action-label list; the submenu groups them behind
 // a single placeholder row in the device UI.
@@ -145,10 +143,10 @@ inline const std::vector<SettingInfo> list = {
       StrId::STR_BTN_ACT_PREV_SECTION, StrId::STR_BTN_ACT_EXIT_READER, StrId::STR_BTN_ACT_READER_MENU,  \
       StrId::STR_BTN_ACT_KOREADER_SYNC
 
-    SettingInfo::Separator(StrId::STR_MENU_BTN_ACTIONS),
     // Back button: short=exit reader, double=ignore, long=go home
     SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortBack,
                       {StrId::STR_BTN_DEF_EXIT_READER, BTN_ACT_OPTIONS}, "btnShortBack", StrId::STR_CAT_CONTROLS)
+        .withSubcategory(StrId::STR_MENU_BTN_ACTIONS)
         .withSubmenu(StrId::STR_BTN_BACK),
     SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleBack,
                       {StrId::STR_BTN_DEF_IGNORE, BTN_ACT_OPTIONS}, "btnDoubleBack", StrId::STR_CAT_CONTROLS)
