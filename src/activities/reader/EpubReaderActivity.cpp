@@ -155,6 +155,15 @@ void EpubReaderActivity::onEnter() {
   }
   // We may want a better condition to detect if we are opening for the first time.
   // This will trigger if the book is re-opened at Chapter 0.
+  if (currentSpineIndex < 0 || currentSpineIndex >= epub->getSpineItemsCount()) {
+    LOG_ERR("ERS", "Invalid saved spine index %d (valid 0..%d), resetting to start", currentSpineIndex,
+            epub->getSpineItemsCount() > 0 ? epub->getSpineItemsCount() - 1 : 0);
+    currentSpineIndex = 0;
+    nextPageNumber = 0;
+    cachedSpineIndex = 0;
+    cachedChapterTotalPageCount = 0;
+  }
+
   if (currentSpineIndex == 0) {
     int textSpineIndex = epub->getSpineIndexForTextReference();
     if (textSpineIndex != 0) {
@@ -836,6 +845,14 @@ void EpubReaderActivity::applyPendingSyncSession() {
   pendingParagraphLookup = sync.hasParagraphIndex;
   pendingParagraphIndex = sync.paragraphIndex;
 
+  if (restoreSpineIndex < 0 || restoreSpineIndex >= epub->getSpineItemsCount()) {
+    LOG_ERR("ERS", "Invalid sync restore spine index %d, resetting to 0", restoreSpineIndex);
+    restoreSpineIndex = 0;
+    restorePage = 0;
+    pendingParagraphLookup = false;
+    pendingParagraphIndex = 0;
+  }
+
   if (sync.outcome == KOReaderSyncOutcomeState::APPLIED_REMOTE) {
     restoreSpineIndex = sync.resultSpineIndex;
     restorePage = sync.resultPage;
@@ -881,6 +898,11 @@ void EpubReaderActivity::applyPendingBookmarkJump() {
     return;
   }
   LOG_DBG("ERS", "Applying pending bookmark jump: spine=%u page=%u", jump.spineIndex, jump.pageNumber);
+  if (jump.spineIndex >= static_cast<uint16_t>(epub->getSpineItemsCount())) {
+    LOG_ERR("ERS", "Invalid bookmark jump spine index %u, resetting to 0", jump.spineIndex);
+    jump.spineIndex = 0;
+    jump.pageNumber = 0;
+  }
   // Transient write before initializeReader; saveProgress() overwrites with the real percent.
   if (writeReaderProgressCache(epub->getCachePath(), jump.spineIndex, jump.pageNumber, 0, 0)) {
     cachedSpineIndex = jump.spineIndex;
