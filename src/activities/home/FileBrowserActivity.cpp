@@ -12,6 +12,8 @@
 #include "../util/ConfirmationActivity.h"
 #include "BookInfoActivity.h"
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
+#include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -162,13 +164,17 @@ void FileBrowserActivity::loop() {
       }
     }
 
-    if (ev.button == MappedInputManager::Button::Confirm && ev.type == ButtonEventManager::PressType::Short) {
+    if (ev.button == MappedInputManager::Button::Confirm &&
+        (ev.type == ButtonEventManager::PressType::Short || ev.type == ButtonEventManager::PressType::Long)) {
       if (files.empty()) return;
 
       const std::string& entry = files[selectorIndex];
       const bool isDirectory = (entry.back() == '/');
+      const bool longPress = (ev.type == ButtonEventManager::PressType::Long);
 
       if (isDirectory) {
+        // Long press on a directory has no useful sync action; ignore.
+        if (longPress) return;
         if (basepath.back() != '/') basepath += "/";
         basepath += entry.substr(0, entry.length() - 1);
         loadFiles();
@@ -178,6 +184,14 @@ void FileBrowserActivity::loop() {
         std::string fullPath = basepath;
         if (fullPath.back() != '/') fullPath += "/";
         fullPath += entry;
+        // Long-press on an EPUB arms an AUTO_PULL before the reader renders its first page.
+        // Restricted to EPUB so long-pressing a non-EPUB cannot leak the flag to the reader.
+        if (longPress && KOREADER_STORE.hasCredentials() && FsHelpers::hasEpubExtension(fullPath)) {
+          auto& sync = APP_STATE.koReaderSyncSession;
+          sync.autoPullEpubPath = fullPath;
+          sync.exitToHomeAfterSync = false;
+          APP_STATE.saveToFile();
+        }
         ReturnHint hint;
         hint.target = ReturnTo::FileBrowser;
         hint.path = basepath;

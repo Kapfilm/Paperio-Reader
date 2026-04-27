@@ -279,6 +279,7 @@ void EpubReaderActivity::loop() {
     if (ev.button == MappedInputManager::Button::Back) {
       if (ev.type == ButtonEventManager::PressType::Long) {
         ReaderUtils::enforceExitFullRefresh(renderer);
+        if (tryAutoPushOnClose()) return;
         onGoHome();
         return;
       }
@@ -288,6 +289,7 @@ void EpubReaderActivity::loop() {
           return;
         }
         ReaderUtils::enforceExitFullRefresh(renderer);
+        if (tryAutoPushOnClose()) return;
         finish();
         return;
       }
@@ -326,6 +328,7 @@ void EpubReaderActivity::loop() {
   // At end of the book, forward button returns to caller and back button returns to last page
   if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
     if (nextTriggered) {
+      if (tryAutoPushOnClose()) return;
       finish();
     } else {
       currentSpineIndex = epub->getSpineItemsCount() - 1;
@@ -517,6 +520,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_HOME: {
+      if (tryAutoPushOnClose()) return;
       onGoHome();
       return;
     }
@@ -780,6 +784,8 @@ void EpubReaderActivity::launchKOReaderSync(const SyncLaunchMode mode) {
     syncIntent = KOReaderSyncIntentState::PULL_REMOTE;
   } else if (mode == SyncLaunchMode::PUSH_LOCAL) {
     syncIntent = KOReaderSyncIntentState::PUSH_LOCAL;
+  } else if (mode == SyncLaunchMode::AUTO_PUSH) {
+    syncIntent = KOReaderSyncIntentState::AUTO_PUSH;
   }
 
   auto& sync = APP_STATE.koReaderSyncSession;
@@ -814,11 +820,44 @@ void EpubReaderActivity::launchKOReaderSync(const SyncLaunchMode mode) {
   sync.resultPage = 0;
   sync.resultParagraphIndex = 0;
   sync.resultHasParagraphIndex = false;
+  // Only auto-push-on-close should bypass the reader on resume; explicit syncs from the
+  // reader menu always come back to the reader. Reset here so a stale flag from a prior
+  // run cannot steal the user back to home.
+  sync.exitToHomeAfterSync = (mode == SyncLaunchMode::AUTO_PUSH);
   APP_STATE.saveToFile();
 
   LOG_DBG("ERS", "Standalone sync handoff: spine=%d page=%d/%d", currentSpineIndex, currentPage, totalPages);
   logReaderMemSnapshot("before_replace_with_sync");
   activityManager.goToKOReaderSync();
+}
+
+bool EpubReaderActivity::tryAutoPushOnClose() {
+  // Three-page minimum filters out brief inspections — opening to check the cover or
+  // skim the TOC shouldn't burn a network round-trip. Counter is per-activity-instance.
+  constexpr int MIN_SESSION_PAGES = 3;
+  if (!SETTINGS.koSyncOnBookClose) {
+    return false;
+  }
+  if (!KOREADER_STORE.hasCredentials()) {
+    return false;
+  }
+  if (sessionPagesAdvanced < MIN_SESSION_PAGES) {
+    return false;
+  }
+  if (!epub) {
+    return false;
+  }
+
+  const int spineCount = epub->getSpineItemsCount();
+  if (spineCount == 0 || currentSpineIndex >= spineCount || !section) {
+    LOG_DBG("ERS", "Skipping AUTO_PUSH on end-of-book sentinel: spine=%d section=%s", currentSpineIndex,
+            section ? "present" : "null");
+    return false;
+  }
+
+  // exitToHomeAfterSync flag is set inside launchKOReaderSync for AUTO_PUSH mode.
+  launchKOReaderSync(SyncLaunchMode::AUTO_PUSH);
+  return true;
 }
 
 void EpubReaderActivity::applyPendingSyncSession() {
@@ -834,6 +873,17 @@ void EpubReaderActivity::applyPendingSyncSession() {
   // before sync launched, so there is no need to rewrite progress.bin here.
   if (sync.outcome == KOReaderSyncOutcomeState::UPLOAD_COMPLETE) {
     LOG_DBG("ERS", "Upload-complete resume keeps existing local progress.bin unchanged");
+    sync.clear();
+    APP_STATE.saveToFile();
+    logReaderMemSnapshot("after_apply_pending_sync_session");
+    return;
+  }
+
+  // AUTO_PULL handed off zeroed local state (the reader was not yet running when sync started),
+  // so on cancel/fail we must NOT restore those zeros to progress.bin — they would clobber the
+  // user's real local progress. Just clear the session and let the normal startup load progress.bin.
+  if (sync.intent == KOReaderSyncIntentState::AUTO_PULL && sync.outcome != KOReaderSyncOutcomeState::APPLIED_REMOTE) {
+    LOG_DBG("ERS", "AUTO_PULL non-success outcome=%d: leaving progress.bin untouched", static_cast<int>(sync.outcome));
     sync.clear();
     APP_STATE.saveToFile();
     logReaderMemSnapshot("after_apply_pending_sync_session");
@@ -1104,6 +1154,9 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   if (!stepPageState(isForwardTurn)) {
     return;
   }
+  // Track real progress within this session so auto-push-on-close can ignore brief
+  // book inspections. Counts both directions — the user is engaging with the book either way.
+  sessionPagesAdvanced++;
   requestUpdate();
 }
 
@@ -1880,6 +1933,7 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
     }
     case BA::BTN_EXIT_READER:
       ReaderUtils::enforceExitFullRefresh(renderer);
+      if (tryAutoPushOnClose()) break;
       finish();
       break;
     case BA::BTN_READER_MENU:

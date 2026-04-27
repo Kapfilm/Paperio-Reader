@@ -268,6 +268,8 @@ inline const std::vector<SettingInfo> list = {
           KOREADER_STORE.saveToFile();
         },
         "koMatchMethod", StrId::STR_KOREADER_SYNC),
+    SettingInfo::Toggle(StrId::STR_KO_SYNC_ON_BOOK_CLOSE, &CrossPointSettings::koSyncOnBookClose, "koSyncOnBookClose",
+                        StrId::STR_KOREADER_SYNC),
 
     // --- OPDS Browser (web-only, uses CrossPointSettings char arrays) ---
     SettingInfo::String(StrId::STR_OPDS_SERVER_URL, SETTINGS.opdsServerUrl, sizeof(SETTINGS.opdsServerUrl),
