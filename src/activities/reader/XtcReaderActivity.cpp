@@ -14,8 +14,6 @@
 
 #include <algorithm>
 
-#include <algorithm>
-
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
