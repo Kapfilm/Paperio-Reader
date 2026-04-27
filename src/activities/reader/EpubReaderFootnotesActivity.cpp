@@ -18,30 +18,65 @@ void EpubReaderFootnotesActivity::onEnter() {
 void EpubReaderFootnotesActivity::onExit() { Activity::onExit(); }
 
 void EpubReaderFootnotesActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-    return;
-  }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectedIndex >= 0 && selectedIndex < static_cast<int>(footnotes.size())) {
-      setResult(FootnoteResult{footnotes[selectedIndex].href});
+  ButtonEventManager::ButtonEvent ev;
+  while (buttonEvents.consumeEvent(ev)) {
+    if (ev.button == MappedInputManager::Button::Back && ev.type == ButtonEventManager::PressType::Short) {
+      ActivityResult result;
+      result.isCancelled = true;
+      setResult(std::move(result));
       finish();
+      return;
     }
-    return;
+
+    if (ev.button == MappedInputManager::Button::Confirm && ev.type == ButtonEventManager::PressType::Short) {
+      if (selectedIndex >= 0 && selectedIndex < static_cast<int>(footnotes.size())) {
+        setResult(FootnoteResult{footnotes[selectedIndex].href});
+        finish();
+      }
+      return;
+    }
+
+    if ((ev.button == MappedInputManager::Button::PageBack || ev.button == MappedInputManager::Button::Left) &&
+        ev.type == ButtonEventManager::PressType::Short) {
+      if (!footnotes.empty()) {
+        selectedIndex = (selectedIndex - 1 + footnotes.size()) % footnotes.size();
+        requestUpdate();
+      }
+      return;
+    }
+
+    if ((ev.button == MappedInputManager::Button::PageForward || ev.button == MappedInputManager::Button::Right) &&
+        ev.type == ButtonEventManager::PressType::Short) {
+      if (!footnotes.empty()) {
+        selectedIndex = (selectedIndex + 1) % footnotes.size();
+        requestUpdate();
+      }
+      return;
+    }
   }
 
-  buttonNavigator.onNext([this] {
+  buttonNavigator.onNextRelease([this] {
     if (!footnotes.empty()) {
       selectedIndex = (selectedIndex + 1) % footnotes.size();
       requestUpdate();
     }
   });
 
-  buttonNavigator.onPrevious([this] {
+  buttonNavigator.onPreviousRelease([this] {
+    if (!footnotes.empty()) {
+      selectedIndex = (selectedIndex - 1 + footnotes.size()) % footnotes.size();
+      requestUpdate();
+    }
+  });
+
+  buttonNavigator.onNextContinuous([this] {
+    if (!footnotes.empty()) {
+      selectedIndex = (selectedIndex + 1) % footnotes.size();
+      requestUpdate();
+    }
+  });
+
+  buttonNavigator.onPreviousContinuous([this] {
     if (!footnotes.empty()) {
       selectedIndex = (selectedIndex - 1 + footnotes.size()) % footnotes.size();
       requestUpdate();

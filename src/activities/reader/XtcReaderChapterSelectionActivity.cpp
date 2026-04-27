@@ -50,17 +50,35 @@ void XtcReaderChapterSelectionActivity::loop() {
   const int pageItems = getPageItems();
   const int totalItems = static_cast<int>(xtc->getChapters().size());
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    const auto& chapters = xtc->getChapters();
-    if (!chapters.empty() && selectorIndex >= 0 && selectorIndex < static_cast<int>(chapters.size())) {
-      setResult(PageResult{chapters[selectorIndex].startPage});
-      finish();
+  ButtonEventManager::ButtonEvent ev;
+  while (buttonEvents.consumeEvent(ev)) {
+    if (ev.button == MappedInputManager::Button::Confirm && ev.type == ButtonEventManager::PressType::Short) {
+      const auto& chapters = xtc->getChapters();
+      if (!chapters.empty() && selectorIndex >= 0 && selectorIndex < static_cast<int>(chapters.size())) {
+        setResult(PageResult{chapters[selectorIndex].startPage});
+        finish();
+      }
+      return;
     }
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
+    if (ev.button == MappedInputManager::Button::Back && ev.type == ButtonEventManager::PressType::Short) {
+      ActivityResult result;
+      result.isCancelled = true;
+      setResult(std::move(result));
+      finish();
+      return;
+    }
+    if ((ev.button == MappedInputManager::Button::PageBack || ev.button == MappedInputManager::Button::Left) &&
+        ev.type == ButtonEventManager::PressType::Short) {
+      selectorIndex = ButtonNavigator::previousIndex(selectorIndex, totalItems);
+      requestUpdate();
+      return;
+    }
+    if ((ev.button == MappedInputManager::Button::PageForward || ev.button == MappedInputManager::Button::Right) &&
+        ev.type == ButtonEventManager::PressType::Short) {
+      selectorIndex = ButtonNavigator::nextIndex(selectorIndex, totalItems);
+      requestUpdate();
+      return;
+    }
   }
 
   buttonNavigator.onNextRelease([this, totalItems] {

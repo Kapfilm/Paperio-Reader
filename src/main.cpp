@@ -16,6 +16,7 @@
 #include <esp_ota_ops.h>
 
 #include <cstring>
+#include <vector>
 
 #include "ButtonEventManager.h"
 #include "CrossPointSettings.h"
@@ -388,6 +389,8 @@ void loop() {
     using BA = CrossPointSettings::BUTTON_ACTION;
     using B = MappedInputManager::Button;
     ButtonEventManager::ButtonEvent ev;
+    std::vector<ButtonEventManager::ButtonEvent> defaultEvents;
+    defaultEvents.reserve(8);
     while (buttonEventManager.consumeEvent(ev)) {
       auto actionFor = [&](B btn) -> uint8_t {
         switch (btn) {
@@ -468,7 +471,10 @@ void loop() {
       };
 
       const uint8_t action = actionFor(ev.button);
-      if (action == BA::BTN_DEFAULT) continue;
+      if (action == BA::BTN_DEFAULT) {
+        defaultEvents.push_back(ev);
+        continue;
+      }
 
       switch (static_cast<BA>(action)) {
         case BA::BTN_PAGE_FORWARD:
@@ -524,6 +530,10 @@ void loop() {
         default:
           break;
       }
+    }
+
+    for (auto it = defaultEvents.rbegin(); it != defaultEvents.rend(); ++it) {
+      buttonEventManager.pushEventFront(it->button, it->type);
     }
   }
 
