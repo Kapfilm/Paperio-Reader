@@ -14,13 +14,14 @@
 
 #include <algorithm>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
-#include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
@@ -477,12 +478,12 @@ void XtcReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION a
     case BA::BTN_PREV_SECTION:
       if (xtc->hasChapters()) {
         const auto& chapters = xtc->getChapters();
-        for (int i = static_cast<int>(chapters.size()) - 1; i >= 0; i--) {
-          if (chapters[i].startPage < currentPage) {
-            currentPage = chapters[i].startPage;
-            requestUpdate();
-            break;
-          }
+        const auto prevChapter = std::find_if(chapters.rbegin(), chapters.rend(),
+                                              [this](const auto& ch) { return ch.startPage < currentPage; });
+
+        if (prevChapter != chapters.rend()) {
+          currentPage = prevChapter->startPage;
+          requestUpdate();
         }
       }
       break;
