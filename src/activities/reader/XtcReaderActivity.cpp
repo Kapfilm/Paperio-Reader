@@ -12,13 +12,14 @@
 #include <HalStorage.h>
 #include <I18n.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
-#include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
@@ -92,19 +93,10 @@ void XtcReaderActivity::loop() {
     return;
   }
 
-  // When long-press chapter skip is disabled, turn pages on press instead of release.
-  const bool usePressForPageTurn = !SETTINGS.longPressChapterSkip;
-  const bool prevTriggered = usePressForPageTurn ? (mappedInput.wasPressed(MappedInputManager::Button::PageBack) ||
-                                                    mappedInput.wasPressed(MappedInputManager::Button::Left))
-                                                 : (mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
-                                                    mappedInput.wasReleased(MappedInputManager::Button::Left));
-  const bool powerPageTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
-                             mappedInput.wasReleased(MappedInputManager::Button::Power);
-  const bool nextTriggered = usePressForPageTurn
-                                 ? (mappedInput.wasPressed(MappedInputManager::Button::PageForward) || powerPageTurn ||
-                                    mappedInput.wasPressed(MappedInputManager::Button::Right))
-                                 : (mappedInput.wasReleased(MappedInputManager::Button::PageForward) || powerPageTurn ||
-                                    mappedInput.wasReleased(MappedInputManager::Button::Right));
+  const bool prevTriggered = mappedInput.wasReleased(MappedInputManager::Button::PageBack) ||
+                             mappedInput.wasReleased(MappedInputManager::Button::Left);
+  const bool nextTriggered = mappedInput.wasReleased(MappedInputManager::Button::PageForward) ||
+                             mappedInput.wasReleased(MappedInputManager::Button::Right);
 
   if (!prevTriggered && !nextTriggered) {
     return;
@@ -121,7 +113,7 @@ void XtcReaderActivity::loop() {
     return;
   }
 
-  const bool skipPages = SETTINGS.longPressChapterSkip && mappedInput.getHeldTime() > skipPageMs;
+  const bool skipPages = mappedInput.getHeldTime() > skipPageMs;
   const int skipAmount = skipPages ? 10 : 1;
 
   if (prevTriggered) {
@@ -341,12 +333,14 @@ void XtcReaderActivity::renderPage() {
 void XtcReaderActivity::saveProgress() const {
   FsFile f;
   if (Storage.openFileForWrite("XTR", xtc->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[4];
+    uint8_t data[5];
     data[0] = currentPage & 0xFF;
     data[1] = (currentPage >> 8) & 0xFF;
     data[2] = (currentPage >> 16) & 0xFF;
     data[3] = (currentPage >> 24) & 0xFF;
-    f.write(data, 4);
+    data[4] =
+        ReaderUtils::pageProgressPercentByte(static_cast<int>(currentPage), static_cast<int>(xtc->getPageCount()));
+    f.write(data, 5);
     f.close();
   }
 }
@@ -441,4 +435,61 @@ bool XtcReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gfx
 
   free(pageBuffer);
   return true;
+}
+
+void XtcReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION action) {
+  using BA = CrossPointSettings::BUTTON_ACTION;
+  if (!xtc) return;
+  const uint32_t pageCount = xtc->getPageCount();
+  switch (action) {
+    case BA::BTN_PAGE_FORWARD:
+      if (currentPage + 1 < pageCount) {
+        currentPage++;
+        requestUpdate();
+      }
+      break;
+    case BA::BTN_PAGE_BACK:
+      if (currentPage > 0) {
+        currentPage--;
+        requestUpdate();
+      }
+      break;
+    case BA::BTN_PAGE_FORWARD_10:
+      currentPage = (currentPage + 10 < pageCount) ? currentPage + 10 : pageCount - 1;
+      requestUpdate();
+      break;
+    case BA::BTN_PAGE_BACK_10:
+      currentPage = (currentPage >= 10) ? currentPage - 10 : 0;
+      requestUpdate();
+      break;
+    case BA::BTN_NEXT_SECTION:
+      if (xtc->hasChapters()) {
+        const auto& chapters = xtc->getChapters();
+        const auto it = std::find_if(chapters.begin(), chapters.end(),
+                                     [this](const auto& ch) { return ch.startPage > currentPage; });
+        if (it != chapters.end()) {
+          currentPage = it->startPage;
+          requestUpdate();
+        }
+      }
+      break;
+    case BA::BTN_PREV_SECTION:
+      if (xtc->hasChapters()) {
+        const auto& chapters = xtc->getChapters();
+        const auto prevChapter = std::find_if(chapters.rbegin(), chapters.rend(),
+                                              [this](const auto& ch) { return ch.startPage < currentPage; });
+
+        if (prevChapter != chapters.rend()) {
+          currentPage = prevChapter->startPage;
+          requestUpdate();
+        }
+      }
+      break;
+    case BA::BTN_EXIT_READER:
+      ReaderUtils::enforceExitFullRefresh(renderer);
+      finish();
+      break;
+    default:
+      break;
+  }
 }

@@ -155,16 +155,6 @@ void TxtReaderActivity::loop() {
     return;
   }
 
-  // Star page toggle via short power button press
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::STAR_PAGE &&
-      mappedInput.wasReleased(MappedInputManager::Button::Power)) {
-    if (currentPage >= 0) {
-      bookmarkStore.toggle(0, static_cast<uint16_t>(currentPage));
-    }
-    requestUpdate();
-    return;
-  }
-
   // Open starred pages list via Confirm button
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !bookmarkStore.isEmpty()) {
     ReaderUtils::enforceExitFullRefresh(renderer);
@@ -418,17 +408,18 @@ void TxtReaderActivity::renderStatusBar() const {
 void TxtReaderActivity::saveProgress() const {
   FsFile f;
   if (Storage.openFileForWrite("TRS", txt->getCachePath() + "/progress.bin", f)) {
-    // 6-byte format: page(2 bytes LE) + file offset(4 bytes LE)
+    // 7-byte format: page(2 bytes LE) + file offset(4 bytes LE) + overallPercent(1 byte)
     // The offset lets drawCurrentPageToBuffer render without requiring index.bin.
     const size_t offset = (currentPage < static_cast<int>(pageOffsets.size())) ? pageOffsets[currentPage] : 0;
-    uint8_t data[6];
+    uint8_t data[7];
     data[0] = currentPage & 0xFF;
     data[1] = (currentPage >> 8) & 0xFF;
     data[2] = offset & 0xFF;
     data[3] = (offset >> 8) & 0xFF;
     data[4] = (offset >> 16) & 0xFF;
     data[5] = (offset >> 24) & 0xFF;
-    f.write(data, 6);
+    data[6] = ReaderUtils::pageProgressPercentByte(currentPage, totalPages);
+    f.write(data, 7);
     f.close();
   }
 }
@@ -781,4 +772,63 @@ bool TxtReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gfx
     y += lineHeight;
   }
   return true;
+}
+
+void TxtReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION action) {
+  using BA = CrossPointSettings::BUTTON_ACTION;
+  auto clampPage = [this]() {
+    if (currentPage < 0) currentPage = 0;
+    if (currentPage >= totalPages) currentPage = totalPages - 1;
+  };
+  switch (action) {
+    case BA::BTN_PAGE_FORWARD:
+      if (currentPage < totalPages - 1) {
+        currentPage++;
+        requestUpdate();
+      }
+      break;
+    case BA::BTN_PAGE_BACK:
+      if (currentPage > 0) {
+        currentPage--;
+        requestUpdate();
+      }
+      break;
+    case BA::BTN_PAGE_FORWARD_10:
+      currentPage += 10;
+      clampPage();
+      requestUpdate();
+      break;
+    case BA::BTN_PAGE_BACK_10:
+      currentPage -= 10;
+      clampPage();
+      requestUpdate();
+      break;
+    case BA::BTN_STAR_PAGE:
+      bookmarkStore.toggle(0, static_cast<uint16_t>(currentPage));
+      requestUpdate();
+      break;
+    case BA::BTN_OPEN_BOOKMARKS:
+      if (!bookmarkStore.isEmpty()) {
+        ReaderUtils::enforceExitFullRefresh(renderer);
+        startActivityForResult(std::make_unique<StarredPagesActivity>(renderer, mappedInput, bookmarkStore),
+                               [this](const ActivityResult& result) {
+                                 if (!result.isCancelled) {
+                                   const auto& starred = std::get<StarredPageResult>(result.data);
+                                   currentPage = starred.pageNumber;
+                                   requestUpdate();
+                                 }
+                               });
+      }
+      break;
+    case BA::BTN_NEXT_SECTION:
+    case BA::BTN_PREV_SECTION:
+      // TXT files have no headings/chapters; treat as unsupported (no-op).
+      break;
+    case BA::BTN_EXIT_READER:
+      ReaderUtils::enforceExitFullRefresh(renderer);
+      finish();
+      break;
+    default:
+      break;
+  }
 }
