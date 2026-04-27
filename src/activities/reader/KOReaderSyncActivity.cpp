@@ -115,8 +115,8 @@ void KOReaderSyncActivity::performSync() {
   LOG_DBG("KOSync", "Document hash: %s", documentHash.c_str());
 
   // Local mapping is only needed for compare/upload paths.
-  // Pull-only mode can skip this expensive step and go straight to remote fetch.
-  if (syncIntent != KOReaderSyncIntentState::PULL_REMOTE) {
+  // Pull-only modes can skip this expensive step and go straight to remote fetch.
+  if (syncIntent != KOReaderSyncIntentState::PULL_REMOTE && syncIntent != KOReaderSyncIntentState::AUTO_PULL) {
     // Precompute local mapping before first network request so the expensive
     // inflate/index work happens before TLS. This avoids a second local mapping
     // pass later and keeps the upload path lightweight.
@@ -141,7 +141,7 @@ void KOReaderSyncActivity::performSync() {
 
   // Push intent skips comparison UI but still warms an HTTP/TLS session first
   // so PUT can reuse the connection instead of forcing a fresh handshake.
-  if (syncIntent == KOReaderSyncIntentState::PUSH_LOCAL) {
+  if (syncIntent == KOReaderSyncIntentState::PUSH_LOCAL || syncIntent == KOReaderSyncIntentState::AUTO_PUSH) {
     // Direct push previously started with no reusable HTTP/TLS session, forcing
     // a fresh handshake in updateProgress. Compare flow often succeeds because
     // upload reuses the GET session. Warm the session here so push can take the
@@ -162,6 +162,22 @@ void KOReaderSyncActivity::performSync() {
         }
       }
       requestUpdate(true);
+      return;
+    }
+    // Auto-push must not overwrite progress that is already further along on the server.
+    // Compare percentages from the warmup GET; users opted into automatic sync, so a
+    // remote-ahead state is treated as "nothing to do" and falls straight back to home.
+    if (syncIntent == KOReaderSyncIntentState::AUTO_PUSH && warmupResult == KOReaderSyncClient::OK &&
+        warmupProgress.percentage > localProgress.percentage) {
+      LOG_DBG("KOSync", "AUTO_PUSH skipped: remote %.4f >= local %.4f", warmupProgress.percentage,
+              localProgress.percentage);
+      KOReaderSyncClient::endPersistentSession();
+      HalClock::wifiOff(true);
+      // Reuse UPLOAD_COMPLETE outcome so the resume path is identical to a successful push;
+      // there is nothing to apply to the reader and progress.bin already reflects local state.
+      APP_STATE.koReaderSyncSession.outcome = KOReaderSyncOutcomeState::UPLOAD_COMPLETE;
+      APP_STATE.saveToFile();
+      resumeReader(KOReaderSyncOutcomeState::UPLOAD_COMPLETE);
       return;
     }
     performUpload();
@@ -192,6 +208,15 @@ void KOReaderSyncActivity::performSync() {
         statusMessage = tr(STR_NO_REMOTE_MSG);
       }
       requestUpdate(true);
+      return;
+    }
+
+    if (syncIntent == KOReaderSyncIntentState::AUTO_PULL) {
+      // Auto-pull at book open: nothing to apply, just open the book with local progress.
+      // No user-visible failure since the user opted into "open with sync, if available".
+      KOReaderSyncClient::endPersistentSession();
+      HalClock::wifiOff(true);
+      resumeReader(KOReaderSyncOutcomeState::CANCELLED);
       return;
     }
 
@@ -234,10 +259,16 @@ void KOReaderSyncActivity::performSync() {
   remotePosition.hasParagraphIndex = false;
   remoteChapterLabel.clear();
 
-  if (syncIntent == KOReaderSyncIntentState::PULL_REMOTE) {
+  if (syncIntent == KOReaderSyncIntentState::PULL_REMOTE || syncIntent == KOReaderSyncIntentState::AUTO_PULL) {
     // Pull intent applies immediately and exits. We bypass chooser UI to keep
     // reader menu actions deterministic ("pull" always means apply remote).
     if (!ensureRemotePositionMapped()) {
+      if (syncIntent == KOReaderSyncIntentState::AUTO_PULL) {
+        // Auto-pull was best-effort. Fail silently and just open the book.
+        HalClock::wifiOff(true);
+        resumeReader(KOReaderSyncOutcomeState::CANCELLED);
+        return;
+      }
       {
         RenderLock lock(*this);
         state = SYNC_FAILED;
@@ -256,6 +287,14 @@ void KOReaderSyncActivity::performSync() {
     sync.resultParagraphIndex = remotePosition.paragraphIndex;
     sync.resultHasParagraphIndex = remotePosition.hasParagraphIndex;
     APP_STATE.saveToFile();
+
+    if (syncIntent == KOReaderSyncIntentState::AUTO_PULL) {
+      // Auto-pull skips the success-screen dwell — the reader will render the new
+      // position immediately, which is the only visible feedback the user needs.
+      HalClock::wifiOff(true);
+      resumeReader(KOReaderSyncOutcomeState::APPLIED_REMOTE);
+      return;
+    }
     {
       RenderLock lock(*this);
       state = APPLY_COMPLETE;
@@ -390,6 +429,12 @@ void KOReaderSyncActivity::performUpload() {
   HalClock::wifiOff(true);
   APP_STATE.koReaderSyncSession.outcome = KOReaderSyncOutcomeState::UPLOAD_COMPLETE;
   APP_STATE.saveToFile();
+  if (syncIntent == KOReaderSyncIntentState::AUTO_PUSH) {
+    // Auto-push doesn't need user acknowledgement on success; resume immediately
+    // back to the calling activity (RecentBooks / FileBrowser via reader).
+    resumeReader(KOReaderSyncOutcomeState::UPLOAD_COMPLETE);
+    return;
+  }
   {
     RenderLock lock(*this);
     state = UPLOAD_COMPLETE;
@@ -464,8 +509,19 @@ void KOReaderSyncActivity::resumeReader(const KOReaderSyncOutcomeState outcome, 
     sync.resultParagraphIndex = 0;
     sync.resultHasParagraphIndex = false;
   }
+  // Honor exit-to-home flag set by reader-close auto-sync — bouncing back into the reader
+  // the user just left would be jarring. The session state is consumed and cleared by the
+  // home destination's normal flow (no reader to apply it to in this case).
+  const bool exitToHome = sync.exitToHomeAfterSync;
+  if (exitToHome) {
+    sync.clear();
+  }
   APP_STATE.saveToFile();
   logSyncMemSnapshot("before_resume_reader");
+  if (exitToHome) {
+    activityManager.goHome();
+    return;
+  }
   activityManager.goToReader(epubPath);
 }
 

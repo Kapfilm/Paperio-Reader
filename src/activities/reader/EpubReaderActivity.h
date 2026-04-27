@@ -11,15 +11,17 @@
 #include "activities/Activity.h"
 
 class EpubReaderActivity final : public Activity {
-  // Reader can launch sync in three UX modes:
+  // Reader can launch sync in several UX modes:
   // - COMPARE: legacy chooser (apply/upload) for power users.
   // - PULL_REMOTE / PUSH_LOCAL: direct one-step actions from menu entries.
+  // - AUTO_PUSH: silent push on reader exit; skips when remote is already ahead.
   // Keeping this split in the caller avoids branching on menu semantics deep
   // inside generic reader state handling.
   enum class SyncLaunchMode {
     COMPARE,
     PULL_REMOTE,
     PUSH_LOCAL,
+    AUTO_PUSH,
   };
 
   std::shared_ptr<Epub> epub;
@@ -124,6 +126,10 @@ class EpubReaderActivity final : public Activity {
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   ReaderUtils::InputDrainGuard inputDrainGuard;
   bool automaticPageTurnActive = false;
+  // Pages turned in the current reader session. Used to gate auto-push-on-close: a brief
+  // inspection of a book should not trigger a network round-trip. Reset on every reader
+  // entry; not persisted, since "session" means the lifetime of this activity instance.
+  int sessionPagesAdvanced = 0;
   // -1 means use global SETTINGS value.
   int8_t bookEmbeddedStyleOverride = -1;
   int8_t bookImageRenderingOverride = -1;
@@ -152,6 +158,11 @@ class EpubReaderActivity final : public Activity {
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   void launchKOReaderSync(SyncLaunchMode mode = SyncLaunchMode::COMPARE);
+  // Reader-close auto-push gate. Returns true if AUTO_PUSH was launched (the caller
+  // must not perform its own exit — the sync activity will route to home on completion).
+  // Returns false when any of the gates fails (setting off, no credentials, < 3 pages),
+  // letting the caller take its normal exit path.
+  bool tryAutoPushOnClose();
   // Consume a persisted standalone KOReader sync session for this EPUB. Remote
   // apply writes the mapped reopen position into progress.bin before the normal
   // reader startup path reads it. Upload-complete leaves the existing local

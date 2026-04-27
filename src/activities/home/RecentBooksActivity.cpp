@@ -8,8 +8,11 @@
 #include <algorithm>
 
 #include "../ActivityManager.h"
+#include "../reader/ReaderUtils.h"
 #include "../util/ConfirmationActivity.h"
 #include "BookInfoActivity.h"
+#include "CrossPointState.h"
+#include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
@@ -53,7 +56,16 @@ void RecentBooksActivity::loop() {
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !recentBooks.empty() &&
       selectorIndex < static_cast<int>(recentBooks.size())) {
-    LOG_DBG("RBA", "Selected recent book: %s", recentBooks[selectorIndex].path.c_str());
+    // Long-press Confirm signals "open with KOReader sync": the reader will perform an
+    // AUTO_PULL before rendering its first page. Short-press is the unchanged direct open.
+    const bool longPress = mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS && KOREADER_STORE.hasCredentials();
+    LOG_DBG("RBA", "Selected recent book: %s (sync=%d)", recentBooks[selectorIndex].path.c_str(), longPress ? 1 : 0);
+    if (longPress) {
+      auto& sync = APP_STATE.koReaderSyncSession;
+      sync.autoPullOnOpen = true;
+      sync.exitToHomeAfterSync = false;
+      APP_STATE.saveToFile();
+    }
     ReturnHint hint;
     hint.target = ReturnTo::RecentBooks;
     hint.selectIndex = static_cast<int>(selectorIndex);

@@ -12,6 +12,8 @@
 #include "../util/ConfirmationActivity.h"
 #include "BookInfoActivity.h"
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
+#include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -165,14 +167,17 @@ void FileBrowserActivity::loop() {
     return;
   }
 
-  // Confirm short press opens selected entry; long press does nothing
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() < GO_HOME_MS) {
+  // Confirm short press opens selected entry; long press on a file opens it with KOReader sync.
+  // Long press on a directory is ignored (no useful directory-level sync action).
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (files.empty()) return;
 
     const std::string& entry = files[selectorIndex];
     const bool isDirectory = (entry.back() == '/');
+    const bool longPress = mappedInput.getHeldTime() >= GO_HOME_MS;
 
     if (isDirectory) {
+      if (longPress) return;
       if (basepath.back() != '/') basepath += "/";
       basepath += entry.substr(0, entry.length() - 1);
       loadFiles();
@@ -182,6 +187,12 @@ void FileBrowserActivity::loop() {
       std::string fullPath = basepath;
       if (fullPath.back() != '/') fullPath += "/";
       fullPath += entry;
+      if (longPress && KOREADER_STORE.hasCredentials()) {
+        auto& sync = APP_STATE.koReaderSyncSession;
+        sync.autoPullOnOpen = true;
+        sync.exitToHomeAfterSync = false;
+        APP_STATE.saveToFile();
+      }
       ReturnHint hint;
       hint.target = ReturnTo::FileBrowser;
       hint.path = basepath;

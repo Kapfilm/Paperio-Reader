@@ -7,6 +7,11 @@ enum class KOReaderSyncIntentState : uint8_t {
   COMPARE = 0,
   PULL_REMOTE = 1,
   PUSH_LOCAL = 2,
+  // Auto variants compare progress before writing and skip silently when the other side
+  // is already ahead. AUTO_PUSH fires from the reader-close auto-sync path; AUTO_PULL fires
+  // when the user opens a book with long-press Confirm. Neither prompts the user.
+  AUTO_PUSH = 3,
+  AUTO_PULL = 4,
 };
 
 enum class KOReaderSyncOutcomeState : uint8_t {
@@ -47,6 +52,13 @@ struct KOReaderSyncSessionState {
   int resultPage = 0;
   uint16_t resultParagraphIndex = 0;
   bool resultHasParagraphIndex = false;
+  // When true (auto-push-on-close), the sync activity goes to home instead of the reader on
+  // completion. Without this, AUTO_PUSH would bounce back into the reader the user just left.
+  bool exitToHomeAfterSync = false;
+  // Set by RecentBooks / FileBrowser long-press to ask the reader to perform an AUTO_PULL
+  // before rendering its first page. Consumed once on reader entry. Stored separately from
+  // `intent` because the long-press path bypasses `launchKOReaderSync`'s reader-state capture.
+  bool autoPullOnOpen = false;
 
   void clear() {
     active = false;
@@ -63,6 +75,8 @@ struct KOReaderSyncSessionState {
     resultPage = 0;
     resultParagraphIndex = 0;
     resultHasParagraphIndex = false;
+    exitToHomeAfterSync = false;
+    autoPullOnOpen = false;
   }
 };
 

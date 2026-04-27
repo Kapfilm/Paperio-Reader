@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include "CrossPointSettings.h"
 #include "KOReaderAuthActivity.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
@@ -16,7 +17,7 @@ KOReaderSettingsActivity::KOReaderSettingsActivity(GfxRenderer& renderer, Mapped
 }
 
 void KOReaderSettingsActivity::buildMenuItems() {
-  menuItems.reserve(6);
+  menuItems.reserve(7);
   // Username, Password, Server URL: ACTION items with custom value display
   menuItems.push_back(SettingInfo::Action(StrId::STR_SYNC_SERVER_URL, SettingAction::None)
                           .withSubcategory(StrId::STR_MENU_KOSYNC_SERVER));
@@ -24,14 +25,16 @@ void KOReaderSettingsActivity::buildMenuItems() {
   menuItems.push_back(SettingInfo::Action(StrId::STR_PASSWORD, SettingAction::None));
 
   // Document matching: DynamicEnum toggling between Filename and Binary
-  menuItems.push_back(SettingInfo::DynamicEnum(StrId::STR_DOCUMENT_MATCHING, {StrId::STR_FILENAME, StrId::STR_BINARY},
-                                               static_cast<SettingInfo::ValueGetterFn>([](const void*) -> uint8_t {
-                                                 return static_cast<uint8_t>(KOREADER_STORE.getMatchMethod());
-                                               }),
-                                               [](void*, uint8_t v) {
-                                                 KOREADER_STORE.setMatchMethod(static_cast<DocumentMatchMethod>(v));
-                                                 KOREADER_STORE.saveToFile();
-                                               }));
+  menuItems.push_back(SettingInfo::DynamicEnum(
+                          StrId::STR_DOCUMENT_MATCHING, {StrId::STR_FILENAME, StrId::STR_BINARY},
+                          [](const void*) -> uint8_t { return static_cast<uint8_t>(KOREADER_STORE.getMatchMethod()); },
+                          [](void*, uint8_t v) {
+                            KOREADER_STORE.setMatchMethod(static_cast<DocumentMatchMethod>(v));
+                            KOREADER_STORE.saveToFile();
+                          })
+                          .withSubcategory(StrId::STR_MENU_KOSYNC_BEHAVIOR));
+  menuItems.push_back(SettingInfo::Toggle(StrId::STR_KO_SYNC_ON_BOOK_CLOSE, &CrossPointSettings::koSyncOnBookClose,
+                                          "koSyncOnBookClose"));
 
   // Authenticate and Register: ACTION items
   menuItems.push_back(

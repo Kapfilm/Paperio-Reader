@@ -90,6 +90,8 @@ bool JsonSettingsIO::saveState(const CrossPointState& s, const char* path) {
   sync["resultPage"] = s.koReaderSyncSession.resultPage;
   sync["resultParagraphIndex"] = s.koReaderSyncSession.resultParagraphIndex;
   sync["resultHasParagraphIndex"] = s.koReaderSyncSession.resultHasParagraphIndex;
+  sync["exitToHomeAfterSync"] = s.koReaderSyncSession.exitToHomeAfterSync;
+  sync["autoPullOnOpen"] = s.koReaderSyncSession.autoPullOnOpen;
   // Information about a pending bookmark jump
   JsonObject jump = doc["pendingBookmarkJump"].to<JsonObject>();
   jump["active"] = s.pendingBookmarkJump.active;
@@ -145,6 +147,8 @@ bool JsonSettingsIO::loadState(CrossPointState& s, const char* json) {
   s.koReaderSyncSession.resultPage = sync["resultPage"] | 0;
   s.koReaderSyncSession.resultParagraphIndex = sync["resultParagraphIndex"] | (uint16_t)0;
   s.koReaderSyncSession.resultHasParagraphIndex = sync["resultHasParagraphIndex"] | false;
+  s.koReaderSyncSession.exitToHomeAfterSync = sync["exitToHomeAfterSync"] | false;
+  s.koReaderSyncSession.autoPullOnOpen = sync["autoPullOnOpen"] | false;
 
   JsonObject jump = doc["pendingBookmarkJump"].as<JsonObject>();
   s.pendingBookmarkJump.active = jump["active"] | false;
