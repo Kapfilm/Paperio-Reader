@@ -18,10 +18,6 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-namespace {
-constexpr unsigned long GO_HOME_MS = 1000;
-}  // namespace
-
 void sortFileList(std::vector<std::string>& strs) {
   std::sort(begin(strs), end(strs), [](const std::string& str1, const std::string& str2) {
     // Directories first
@@ -143,119 +139,121 @@ void FileBrowserActivity::clearFileMetadata(const std::string& fullPath) {
 void FileBrowserActivity::loop() {
   const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, false);
 
-  // Long press BACK always navigates to home
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS) {
-    onGoHome();
-    return;
-  }
-
-  // Short press BACK goes up one directory (if not root) or home (at root)
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < GO_HOME_MS) {
-    if (basepath != "/") {
-      const std::string oldPath = basepath;
-      basepath.replace(basepath.find_last_of('/'), std::string::npos, "");
-      if (basepath.empty()) basepath = "/";
-      loadFiles();
-      const auto pos = oldPath.find_last_of('/');
-      const std::string dirName = oldPath.substr(pos + 1) + "/";
-      const size_t idx = findEntry(dirName);
-      selectorIndex = (idx < files.size()) ? idx : 0;
-      requestUpdate();
-    } else {
-      onGoHome();
-    }
-    return;
-  }
-
-  // Confirm short press opens selected entry; long press on a file opens it with KOReader sync.
-  // Long press on a directory is ignored (no useful directory-level sync action).
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (files.empty()) return;
-
-    const std::string& entry = files[selectorIndex];
-    const bool isDirectory = (entry.back() == '/');
-    const bool longPress = mappedInput.getHeldTime() >= GO_HOME_MS;
-
-    if (isDirectory) {
-      if (longPress) return;
-      if (basepath.back() != '/') basepath += "/";
-      basepath += entry.substr(0, entry.length() - 1);
-      loadFiles();
-      selectorIndex = 0;
-      requestUpdate();
-    } else {
-      std::string fullPath = basepath;
-      if (fullPath.back() != '/') fullPath += "/";
-      fullPath += entry;
-      if (longPress && KOREADER_STORE.hasCredentials() && FsHelpers::hasEpubExtension(fullPath)) {
-        auto& sync = APP_STATE.koReaderSyncSession;
-        sync.autoPullEpubPath = fullPath;
-        sync.exitToHomeAfterSync = false;
-        APP_STATE.saveToFile();
+  ButtonEventManager::ButtonEvent ev;
+  while (buttonEvents.consumeEvent(ev)) {
+    if (ev.button == MappedInputManager::Button::Back) {
+      if (ev.type == ButtonEventManager::PressType::Long) {
+        onGoHome();
+        return;
       }
-      ReturnHint hint;
-      hint.target = ReturnTo::FileBrowser;
-      hint.path = basepath;
-      hint.selectName = entry;
-      activityManager.replaceWithReader(std::move(fullPath), std::move(hint));
-    }
-    return;
-  }
-
-  // Left short press does nothing; long press deletes selected file after confirmation
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-    if (mappedInput.getHeldTime() < GO_HOME_MS || files.empty()) {
-      return;
-    }
-
-    const std::string& entry = files[selectorIndex];
-    const bool isDirectory = (entry.back() == '/');
-    if (isDirectory) {
-      return;
-    }
-
-    std::string cleanBase = basepath;
-    if (cleanBase.back() != '/') cleanBase += "/";
-    const std::string fullPath = cleanBase + entry;
-
-    auto handler = [this, fullPath](const ActivityResult& res) {
-      if (!res.isCancelled) {
-        LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
-        clearFileMetadata(fullPath);
-        if (Storage.remove(fullPath.c_str())) {
-          LOG_DBG("FileBrowser", "Deleted successfully");
+      if (ev.type == ButtonEventManager::PressType::Short) {
+        if (basepath != "/") {
+          const std::string oldPath = basepath;
+          basepath.replace(basepath.find_last_of('/'), std::string::npos, "");
+          if (basepath.empty()) basepath = "/";
           loadFiles();
-          if (files.empty()) {
-            selectorIndex = 0;
-          } else if (selectorIndex >= files.size()) {
-            selectorIndex = files.size() - 1;
-          }
-          requestUpdate(true);
+          const auto pos = oldPath.find_last_of('/');
+          const std::string dirName = oldPath.substr(pos + 1) + "/";
+          const size_t idx = findEntry(dirName);
+          selectorIndex = (idx < files.size()) ? idx : 0;
+          requestUpdate();
         } else {
-          LOG_ERR("FileBrowser", "Failed to delete file: %s", fullPath.c_str());
+          onGoHome();
         }
-      } else {
-        LOG_DBG("FileBrowser", "Delete cancelled by user");
+        return;
       }
-    };
+    }
 
-    startActivityForResult(
-        std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE) + std::string("? "), entry),
-        handler);
-    return;
-  }
+    if (ev.button == MappedInputManager::Button::Confirm &&
+        (ev.type == ButtonEventManager::PressType::Short || ev.type == ButtonEventManager::PressType::Long)) {
+      if (files.empty()) return;
 
-  // Right opens the info page for epub files
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    if (files.empty()) return;
-    const std::string& entry = files[selectorIndex];
-    if (entry.back() != '/' && (FsHelpers::hasEpubExtension(entry) || FsHelpers::hasXtcExtension(entry))) {
+      const std::string& entry = files[selectorIndex];
+      const bool isDirectory = (entry.back() == '/');
+      const bool longPress = (ev.type == ButtonEventManager::PressType::Long);
+
+      if (isDirectory) {
+        // Long press on a directory has no useful sync action; ignore.
+        if (longPress) return;
+        if (basepath.back() != '/') basepath += "/";
+        basepath += entry.substr(0, entry.length() - 1);
+        loadFiles();
+        selectorIndex = 0;
+        requestUpdate();
+      } else {
+        std::string fullPath = basepath;
+        if (fullPath.back() != '/') fullPath += "/";
+        fullPath += entry;
+        // Long-press on an EPUB arms an AUTO_PULL before the reader renders its first page.
+        // Restricted to EPUB so long-pressing a non-EPUB cannot leak the flag to the reader.
+        if (longPress && KOREADER_STORE.hasCredentials() && FsHelpers::hasEpubExtension(fullPath)) {
+          auto& sync = APP_STATE.koReaderSyncSession;
+          sync.autoPullEpubPath = fullPath;
+          sync.exitToHomeAfterSync = false;
+          APP_STATE.saveToFile();
+        }
+        ReturnHint hint;
+        hint.target = ReturnTo::FileBrowser;
+        hint.path = basepath;
+        hint.selectName = entry;
+        activityManager.replaceWithReader(std::move(fullPath), std::move(hint));
+      }
+      return;
+    }
+
+    if (ev.button == MappedInputManager::Button::Left && ev.type == ButtonEventManager::PressType::Long) {
+      if (files.empty()) {
+        return;
+      }
+
+      const std::string& entry = files[selectorIndex];
+      const bool isDirectory = (entry.back() == '/');
+      if (isDirectory) {
+        return;
+      }
+
       std::string cleanBase = basepath;
       if (cleanBase.back() != '/') cleanBase += "/";
-      startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, cleanBase + entry),
-                             [this](const ActivityResult&) { requestUpdate(); });
+      const std::string fullPath = cleanBase + entry;
+
+      auto handler = [this, fullPath](const ActivityResult& res) {
+        if (!res.isCancelled) {
+          LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
+          clearFileMetadata(fullPath);
+          if (Storage.remove(fullPath.c_str())) {
+            LOG_DBG("FileBrowser", "Deleted successfully");
+            loadFiles();
+            if (files.empty()) {
+              selectorIndex = 0;
+            } else if (selectorIndex >= files.size()) {
+              selectorIndex = files.size() - 1;
+            }
+            requestUpdate(true);
+          } else {
+            LOG_ERR("FileBrowser", "Failed to delete file: %s", fullPath.c_str());
+          }
+        } else {
+          LOG_DBG("FileBrowser", "Delete cancelled by user");
+        }
+      };
+
+      startActivityForResult(
+          std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE) + std::string("? "), entry),
+          handler);
+      return;
     }
-    return;
+
+    if (ev.button == MappedInputManager::Button::Right && ev.type == ButtonEventManager::PressType::Short) {
+      if (files.empty()) return;
+      const std::string& entry = files[selectorIndex];
+      if (entry.back() != '/' && (FsHelpers::hasEpubExtension(entry) || FsHelpers::hasXtcExtension(entry))) {
+        std::string cleanBase = basepath;
+        if (cleanBase.back() != '/') cleanBase += "/";
+        startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, cleanBase + entry),
+                               [this](const ActivityResult&) { requestUpdate(); });
+      }
+      return;
+    }
   }
 
   // Up/Down side buttons navigate the list
