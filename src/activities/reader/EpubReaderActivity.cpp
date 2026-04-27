@@ -248,6 +248,10 @@ void EpubReaderActivity::loop() {
     }
   }
 
+  bool delayedPrevTurn = false;
+  bool delayedNextTurn = false;
+  using BA = CrossPointSettings::BUTTON_ACTION;
+
   ButtonEventManager::ButtonEvent ev;
   while (buttonEvents.consumeEvent(ev)) {
     if (ev.button == MappedInputManager::Button::Confirm) {
@@ -306,9 +310,33 @@ void EpubReaderActivity::loop() {
         return;
       }
     }
+
+    if (ev.type == ButtonEventManager::PressType::Short) {
+      if ((ev.button == MappedInputManager::Button::PageBack && SETTINGS.btnShortPageBack == BA::BTN_DEFAULT &&
+           ButtonEventManager::hasDoubleAction(MappedInputManager::Button::PageBack)) ||
+          (ev.button == MappedInputManager::Button::Left && SETTINGS.btnShortLeft == BA::BTN_DEFAULT &&
+           ButtonEventManager::hasDoubleAction(MappedInputManager::Button::Left))) {
+        delayedPrevTurn = true;
+        continue;
+      }
+      if ((ev.button == MappedInputManager::Button::PageForward && SETTINGS.btnShortPageForward == BA::BTN_DEFAULT &&
+           ButtonEventManager::hasDoubleAction(MappedInputManager::Button::PageForward)) ||
+          (ev.button == MappedInputManager::Button::Right && SETTINGS.btnShortRight == BA::BTN_DEFAULT &&
+           ButtonEventManager::hasDoubleAction(MappedInputManager::Button::Right))) {
+        delayedNextTurn = true;
+        continue;
+      }
+    }
   }
 
   auto [prevTriggered, nextTriggered] = ReaderUtils::detectPageTurn(mappedInput);
+  if (!prevTriggered && !nextTriggered) {
+    if (!delayedPrevTurn && !delayedNextTurn) {
+      return;
+    }
+    prevTriggered = delayedPrevTurn;
+    nextTriggered = delayedNextTurn;
+  }
   if (!prevTriggered && !nextTriggered) {
     return;
   }
