@@ -8,7 +8,6 @@
 #include <algorithm>
 
 #include "../ActivityManager.h"
-#include "../reader/ReaderUtils.h"
 #include "../util/ConfirmationActivity.h"
 #include "BookInfoActivity.h"
 #include "CrossPointState.h"
@@ -54,66 +53,73 @@ void RecentBooksActivity::onExit() {
 void RecentBooksActivity::loop() {
   const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true);
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !recentBooks.empty() &&
-      selectorIndex < static_cast<int>(recentBooks.size())) {
-    // Long-press Confirm signals "open with KOReader sync" only for EPUBs.
-    // Short-press is unchanged direct open.
-    const bool longPress = mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS && KOREADER_STORE.hasCredentials();
-    const std::string& selectedPath = recentBooks[selectorIndex].path;
-    const bool isEpubBook = FsHelpers::hasEpubExtension(selectedPath);
-    LOG_DBG("RBA", "Selected recent book: %s (sync=%d epub=%d)", selectedPath.c_str(), longPress ? 1 : 0,
-            isEpubBook ? 1 : 0);
-    if (longPress && isEpubBook) {
-      auto& sync = APP_STATE.koReaderSyncSession;
-      sync.autoPullEpubPath = selectedPath;
-      sync.exitToHomeAfterSync = false;
-      APP_STATE.saveToFile();
-    }
-    ReturnHint hint;
-    hint.target = ReturnTo::RecentBooks;
-    hint.selectIndex = static_cast<int>(selectorIndex);
-    activityManager.replaceWithReader(recentBooks[selectorIndex].path, std::move(hint));
-    return;
-  }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    onGoHome();
-  }
-
-  // Left button: remove selected book from recent list
-  if (!recentBooks.empty() && selectorIndex < recentBooks.size() &&
-      mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-    const std::string bookPath = recentBooks[selectorIndex].path;
-    const std::string bookTitle = recentBooks[selectorIndex].title;
-
-    auto handler = [this, bookPath](const ActivityResult& res) {
-      if (!res.isCancelled) {
-        LOG_DBG("RBA", "Removing from recent books: %s", bookPath.c_str());
-        RECENT_BOOKS.removeBook(bookPath);
-        loadRecentBooks();
-        if (recentBooks.empty()) {
-          selectorIndex = 0;
-        } else if (selectorIndex >= recentBooks.size()) {
-          selectorIndex = recentBooks.size() - 1;
-        }
-        requestUpdate(true);
-      } else {
-        LOG_DBG("RBA", "Remove cancelled by user");
+  ButtonEventManager::ButtonEvent ev;
+  while (buttonEvents.consumeEvent(ev)) {
+    if (ev.button == MappedInputManager::Button::Confirm &&
+        (ev.type == ButtonEventManager::PressType::Short || ev.type == ButtonEventManager::PressType::Long)) {
+      if (recentBooks.empty() || selectorIndex >= recentBooks.size()) {
+        return;
       }
-    };
-
-    std::string heading = tr(STR_REMOVE) + std::string("? ");
-    startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, bookTitle), handler);
-    return;
-  }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right) && !recentBooks.empty() &&
-      selectorIndex < static_cast<int>(recentBooks.size())) {
-    const std::string& path = recentBooks[selectorIndex].path;
-    if (FsHelpers::hasEpubExtension(path) || FsHelpers::hasXtcExtension(path)) {
-      startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, path),
-                             [this](const ActivityResult&) { requestUpdate(); });
+      // Long-press Confirm signals "open with KOReader sync" only for EPUBs.
+      // Short-press is unchanged direct open.
+      const bool longPress = (ev.type == ButtonEventManager::PressType::Long) && KOREADER_STORE.hasCredentials();
+      const std::string& selectedPath = recentBooks[selectorIndex].path;
+      const bool isEpubBook = FsHelpers::hasEpubExtension(selectedPath);
+      LOG_DBG("RBA", "Selected recent book: %s (sync=%d epub=%d)", selectedPath.c_str(), longPress ? 1 : 0,
+              isEpubBook ? 1 : 0);
+      if (longPress && isEpubBook) {
+        auto& sync = APP_STATE.koReaderSyncSession;
+        sync.autoPullEpubPath = selectedPath;
+        sync.exitToHomeAfterSync = false;
+        APP_STATE.saveToFile();
+      }
+      ReturnHint hint;
+      hint.target = ReturnTo::RecentBooks;
+      hint.selectIndex = static_cast<int>(selectorIndex);
+      activityManager.replaceWithReader(recentBooks[selectorIndex].path, std::move(hint));
       return;
+    }
+
+    if (ev.button == MappedInputManager::Button::Back && ev.type == ButtonEventManager::PressType::Short) {
+      onGoHome();
+      return;
+    }
+
+    if (ev.button == MappedInputManager::Button::Left && ev.type == ButtonEventManager::PressType::Short) {
+      if (recentBooks.empty() || selectorIndex >= recentBooks.size()) return;
+      const std::string bookPath = recentBooks[selectorIndex].path;
+      const std::string bookTitle = recentBooks[selectorIndex].title;
+
+      auto handler = [this, bookPath](const ActivityResult& res) {
+        if (!res.isCancelled) {
+          LOG_DBG("RBA", "Removing from recent books: %s", bookPath.c_str());
+          RECENT_BOOKS.removeBook(bookPath);
+          loadRecentBooks();
+          if (recentBooks.empty()) {
+            selectorIndex = 0;
+          } else if (selectorIndex >= recentBooks.size()) {
+            selectorIndex = recentBooks.size() - 1;
+          }
+          requestUpdate(true);
+        } else {
+          LOG_DBG("RBA", "Remove cancelled by user");
+        }
+      };
+
+      std::string heading = tr(STR_REMOVE) + std::string("? ");
+      startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, bookTitle),
+                             handler);
+      return;
+    }
+
+    if (ev.button == MappedInputManager::Button::Right && ev.type == ButtonEventManager::PressType::Short) {
+      if (recentBooks.empty() || selectorIndex >= recentBooks.size()) return;
+      const std::string& path = recentBooks[selectorIndex].path;
+      if (FsHelpers::hasEpubExtension(path) || FsHelpers::hasXtcExtension(path)) {
+        startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, path),
+                               [this](const ActivityResult&) { requestUpdate(); });
+        return;
+      }
     }
   }
 
