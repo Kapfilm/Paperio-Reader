@@ -136,7 +136,7 @@ int LyraTheme::getRecentBookProgressPercent(const RecentBook& book) {
   }
 
   std::string cachePath;
-  int percentByteOffset;  // byte index of the percent field in progress.bin
+  int percentByteOffset = 0;  // byte index of the percent field in progress.bin
 
   if (FsHelpers::hasEpubExtension(book.path)) {
     cachePath = Epub(book.path, "/.crosspoint").getCachePath();
@@ -160,8 +160,8 @@ int LyraTheme::getRecentBookProgressPercent(const RecentBook& book) {
   const int dataSize = progressFile.read(data, 7);
   progressFile.close();
 
-  if (dataSize <= percentByteOffset) {
-    return -1;  // old format without percent byte — not yet read by new firmware
+  if (dataSize < percentByteOffset + 1) {
+    return -1;  // old format (or pre-render placeholder) without the percent byte
   }
 
   return clampProgressPercent(static_cast<int>(data[percentByteOffset]));

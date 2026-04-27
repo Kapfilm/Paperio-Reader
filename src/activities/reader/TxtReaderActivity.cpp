@@ -411,7 +411,6 @@ void TxtReaderActivity::saveProgress() const {
     // 7-byte format: page(2 bytes LE) + file offset(4 bytes LE) + overallPercent(1 byte)
     // The offset lets drawCurrentPageToBuffer render without requiring index.bin.
     const size_t offset = (currentPage < static_cast<int>(pageOffsets.size())) ? pageOffsets[currentPage] : 0;
-    const uint8_t overallPercent = (totalPages > 0) ? static_cast<uint8_t>((currentPage + 1) * 100 / totalPages) : 0;
     uint8_t data[7];
     data[0] = currentPage & 0xFF;
     data[1] = (currentPage >> 8) & 0xFF;
@@ -419,7 +418,7 @@ void TxtReaderActivity::saveProgress() const {
     data[3] = (offset >> 8) & 0xFF;
     data[4] = (offset >> 16) & 0xFF;
     data[5] = (offset >> 24) & 0xFF;
-    data[6] = overallPercent;
+    data[6] = ReaderUtils::pageProgressPercentByte(currentPage, totalPages);
     f.write(data, 7);
     f.close();
   }

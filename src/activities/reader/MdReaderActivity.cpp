@@ -750,7 +750,6 @@ void MdReaderActivity::saveProgress() const {
     // 7-byte format matching TxtReaderActivity: page(2 bytes LE) + file offset(4 bytes LE) + overallPercent(1 byte)
     const size_t offset =
         (currentPage >= 0 && currentPage < static_cast<int>(pageOffsets.size())) ? pageOffsets[currentPage] : 0;
-    const uint8_t overallPercent = (totalPages > 0) ? static_cast<uint8_t>((currentPage + 1) * 100 / totalPages) : 0;
     uint8_t data[7];
     data[0] = currentPage & 0xFF;
     data[1] = (currentPage >> 8) & 0xFF;
@@ -758,7 +757,7 @@ void MdReaderActivity::saveProgress() const {
     data[3] = (offset >> 8) & 0xFF;
     data[4] = (offset >> 16) & 0xFF;
     data[5] = (offset >> 24) & 0xFF;
-    data[6] = overallPercent;
+    data[6] = ReaderUtils::pageProgressPercentByte(currentPage, totalPages);
     f.write(data, 7);
   }
 }
@@ -770,10 +769,8 @@ void MdReaderActivity::loadProgress() {
     const int dataSize = f.read(data, 7);
     f.close();
     if (dataSize >= 4) {
-      // Old 4-byte format: uint32 page — detect by checking if bytes 2-3 are non-zero
-      // (new format stores page in bytes 0-1 only, bytes 2-3 are offset low bytes).
-      // Since page counts are small (< 65536), bytes 2-3 of the old uint32 page are always 0.
-      // We can safely read bytes 0-1 as the page number in both formats.
+      // Page sits in bytes 0-1 in both the old 4-byte uint32 format and the new 7-byte format
+      // (page counts stay well under 65536, so the upper bytes were always zero).
       int loadedPage = data[0] + (data[1] << 8);
       if (totalPages == 0) {
         currentPage = 0;

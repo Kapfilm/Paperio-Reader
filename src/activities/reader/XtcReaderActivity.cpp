@@ -334,14 +334,13 @@ void XtcReaderActivity::renderPage() {
 void XtcReaderActivity::saveProgress() const {
   FsFile f;
   if (Storage.openFileForWrite("XTR", xtc->getCachePath() + "/progress.bin", f)) {
-    const uint32_t pageCount = xtc->getPageCount();
-    const uint8_t overallPercent = (pageCount > 0) ? static_cast<uint8_t>((currentPage + 1) * 100 / pageCount) : 0;
     uint8_t data[5];
     data[0] = currentPage & 0xFF;
     data[1] = (currentPage >> 8) & 0xFF;
     data[2] = (currentPage >> 16) & 0xFF;
     data[3] = (currentPage >> 24) & 0xFF;
-    data[4] = overallPercent;
+    data[4] =
+        ReaderUtils::pageProgressPercentByte(static_cast<int>(currentPage), static_cast<int>(xtc->getPageCount()));
     f.write(data, 5);
     f.close();
   }
