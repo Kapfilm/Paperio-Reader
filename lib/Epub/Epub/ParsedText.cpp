@@ -156,7 +156,7 @@ void ParsedText::layoutAndExtractLines(
   // (advanceX only, no bitmaps) for all unique codepoints in this paragraph so
   // that calculateWordWidths() can measure text without on-demand SD I/O.
   if (renderer.isSdCardFont(fontId)) {
-    size_t totalSize = hyphenationEnabled ? 1 : 0;
+    size_t totalSize = 1;                               // reserve room for a possible hyphen fallback
     if (!words.empty()) totalSize += words.size() - 1;  // inter-word spaces
     for (const auto& w : words) totalSize += w.size();
     std::string allText;
@@ -165,7 +165,7 @@ void ParsedText::layoutAndExtractLines(
       if (i > 0) allText += ' ';
       allText += words[i];
     }
-    if (hyphenationEnabled) allText += '-';
+    allText += '-';
     renderer.ensureSdCardFontReady(fontId, allText.c_str());
   }
 
