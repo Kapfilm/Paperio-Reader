@@ -503,15 +503,21 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
             # Build 4-bit greyscale bitmap (same logic as fontconvert.py)
             pixels4g = []
             px = 0
-            for i, v in enumerate(bitmap.buffer):
-                x = i % bitmap.width
-                if x % 2 == 0:
-                    px = (v >> 4)
+            abs_pitch = abs(bitmap.pitch)
+            for y in range(bitmap.rows):
+                if bitmap.pitch >= 0:
+                    row_offset = y * abs_pitch
                 else:
-                    px = px | (v & 0xF0)
-                    pixels4g.append(px)
-                    px = 0
-                if x == bitmap.width - 1 and bitmap.width % 2 > 0:
+                    row_offset = (bitmap.rows - 1 - y) * abs_pitch
+                for x in range(bitmap.width):
+                    v = bitmap.buffer[row_offset + x]
+                    if x % 2 == 0:
+                        px = (v >> 4)
+                    else:
+                        px = px | (v & 0xF0)
+                        pixels4g.append(px)
+                        px = 0
+                if bitmap.width % 2 > 0:
                     pixels4g.append(px)
                     px = 0
 
@@ -536,7 +542,7 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
                         pixels2b.append(px)
                         px = 0
             if (bitmap.width * bitmap.rows) % 4 != 0:
-                px = px << (4 - (bitmap.width * bitmap.rows) % 4) * 2
+                px = px << ((4 - (bitmap.width * bitmap.rows) % 4) * 2)
                 pixels2b.append(px)
 
             packed = bytes(pixels2b)
