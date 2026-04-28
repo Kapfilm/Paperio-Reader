@@ -38,7 +38,9 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .keyboardBottomKeySpacing = 5,
                                  .keyboardBottomAligned = true,
                                  .keyboardCenteredText = false,
-                                 .keyboardVerticalOffset = -7};
+                                 .keyboardVerticalOffset = -7,
+                                 .keyboardTextFieldWidthPercent = 85,
+                                 .keyboardWidthPercent = 90};
 }
 
 class LyraTheme : public BaseTheme {

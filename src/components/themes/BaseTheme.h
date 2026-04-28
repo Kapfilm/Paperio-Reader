@@ -65,11 +65,13 @@ struct ThemeMetrics {
   bool keyboardBottomAligned;
   bool keyboardCenteredText;
   int keyboardVerticalOffset;
+  int keyboardTextFieldWidthPercent;
+  int keyboardWidthPercent;
 };
 
 enum UIIcon { Folder, Text, Image, Book, File, Recent, Settings, Transfer, Library, Wifi, Hotspot, Weather };
 
-enum class KeyboardKeyType { Normal, Shift, Mode, Reveal, Space, Del, Ok };
+enum class KeyboardKeyType { Normal, Shift, Mode, Reveal, Space, Del, Ok, Disabled };
 
 // Default theme implementation (Classic Theme)
 // Additional themes can inherit from this and override methods as needed
@@ -107,7 +109,9 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .keyboardBottomKeySpacing = 5,
                                  .keyboardBottomAligned = true,
                                  .keyboardCenteredText = false,
-                                 .keyboardVerticalOffset = -13};
+                                 .keyboardVerticalOffset = -13,
+                                 .keyboardTextFieldWidthPercent = 85,
+                                 .keyboardWidthPercent = 90};
 }
 
 class BaseTheme {

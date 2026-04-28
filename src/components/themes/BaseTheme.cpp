@@ -907,15 +907,18 @@ void BaseTheme::drawKeyboardKey(const GfxRenderer& renderer, Rect rect, const ch
   if (isSelected) {
     if (inactiveSelection) {
       renderer.drawRect(rect.x, rect.y, rect.width, rect.height, 2, true);
+    } else if (keyType == KeyboardKeyType::Disabled) {
+      renderer.fillRectDither(rect.x, rect.y, rect.width, rect.height, Color::LightGray);
     } else {
       renderer.fillRect(rect.x, rect.y, rect.width, rect.height, true);
     }
   } else if (keyType == KeyboardKeyType::Shift || keyType == KeyboardKeyType::Mode || keyType == KeyboardKeyType::Del ||
-             keyType == KeyboardKeyType::Space || keyType == KeyboardKeyType::Ok) {
+             keyType == KeyboardKeyType::Space || keyType == KeyboardKeyType::Ok ||
+             keyType == KeyboardKeyType::Disabled) {
     renderer.drawRect(rect.x, rect.y, rect.width, rect.height);
   }
 
-  const bool invert = isSelected && !inactiveSelection;
+  const bool invert = isSelected && !inactiveSelection && keyType != KeyboardKeyType::Disabled;
 
   if (keyType == KeyboardKeyType::Space) {
     const int lineHalfWidth = rect.width * 3 / 10;
