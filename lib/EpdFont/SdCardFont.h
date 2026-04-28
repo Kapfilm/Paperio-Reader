@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <new>
 
 #include "EpdFont.h"
 #include "EpdFontData.h"

@@ -1785,14 +1785,44 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
     }
   };
 
+  const int effectiveFontId = getEffectiveFontId(effectiveFontFamily, effectiveFontSize);
+  const auto getEffectiveLineCompression = [&](int fontId) {
+    const int notosansId = CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::NOTOSANS, effectiveFontSize);
+    const int opendyslexicId =
+        CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::OPENDYSLEXIC, effectiveFontSize);
+
+    if (fontId == notosansId || fontId == opendyslexicId) {
+      switch (SETTINGS.lineSpacing) {
+        case CrossPointSettings::TIGHT:
+          return 0.90f;
+        case CrossPointSettings::NORMAL:
+        default:
+          return 0.95f;
+        case CrossPointSettings::WIDE:
+          return 1.0f;
+      }
+    }
+
+    switch (SETTINGS.lineSpacing) {
+      case CrossPointSettings::TIGHT:
+        return 0.95f;
+      case CrossPointSettings::NORMAL:
+      default:
+        return 1.0f;
+      case CrossPointSettings::WIDE:
+        return 1.1f;
+    }
+  };
+
+  const float effectiveLineCompression = getEffectiveLineCompression(effectiveFontId);
   auto section = std::make_unique<Section>(epub, spineIndex, renderer);
-  if (!section->loadSectionFile(getEffectiveFontId(effectiveFontFamily, effectiveFontSize),
-                                getEffectiveReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-                                SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-                                SETTINGS.embeddedStyle, SETTINGS.imageRendering)) {
+  if (!section->loadSectionFile(getEffectiveFontId(effectiveFontFamily, effectiveFontSize), effectiveLineCompression,
+                                SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
+                                viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
+                                SETTINGS.imageRendering)) {
     LOG_DBG("SLP", "EPUB: section cache not found for spine %d, rebuilding", spineIndex);
     if (!section->createSectionFile(getEffectiveFontId(effectiveFontFamily, effectiveFontSize),
-                                    getEffectiveReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+                                    effectiveLineCompression, SETTINGS.extraParagraphSpacing,
                                     SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
                                     SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering)) {
       LOG_ERR("SLP", "EPUB: failed to rebuild section cache for spine %d", spineIndex);
