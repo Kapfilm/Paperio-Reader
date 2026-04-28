@@ -15,6 +15,10 @@ void FontCacheManager::setFontDecompressor(FontDecompressor* d) { fontDecompress
 void FontCacheManager::clearCache() {
   if (fontDecompressor_) fontDecompressor_->clearCache();
   for (auto& [id, font] : sdCardFonts_) {
+    if (!font) {
+      LOG_ERR("FCM", "clearCache: null SdCardFont pointer for fontId=%d", id);
+      continue;
+    }
     font->clearCache();
   }
 }
@@ -23,8 +27,15 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
   // SD card font prewarm path: prewarm all requested styles in one call
   auto sdIt = sdCardFonts_.find(fontId);
   if (sdIt != sdCardFonts_.end()) {
-    int missed = sdIt->second->prewarm(utf8Text, styleMask);
-    if (missed > 0) {
+    SdCardFont* sdFont = sdIt->second;
+    if (!sdFont) {
+      LOG_ERR("FCM", "prewarmCache(SD): null SdCardFont pointer for fontId=%d", fontId);
+      return;
+    }
+    int missed = sdFont->prewarm(utf8Text, styleMask);
+    if (missed < 0) {
+      LOG_ERR("FCM", "prewarmCache(SD): prewarm failed for fontId=%d (styleMask=0x%02X)", fontId, styleMask);
+    } else if (missed > 0) {
       LOG_DBG("FCM", "prewarmCache(SD): %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
     }
     return;
@@ -48,14 +59,14 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
 void FontCacheManager::logStats(const char* label) {
   if (fontDecompressor_) fontDecompressor_->logStats(label);
   for (auto& [id, font] : sdCardFonts_) {
-    font->logStats(label);
+    if (font) font->logStats(label);
   }
 }
 
 void FontCacheManager::resetStats() {
   if (fontDecompressor_) fontDecompressor_->resetStats();
   for (auto& [id, font] : sdCardFonts_) {
-    font->resetStats();
+    if (font) font->resetStats();
   }
 }
 
