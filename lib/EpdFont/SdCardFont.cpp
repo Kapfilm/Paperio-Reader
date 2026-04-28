@@ -800,7 +800,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
         freeStyleMiniData(s);
         // Recurse with rebuild semantics by clearing tryMerge state and trying
         // again — implemented as inline reset below.
-        return prewarmStyle(styleIdx, codepoints, cpCount, metadataOnly);
+        return prewarmStyle(styleIdx, codepoints, cpCount, metadataOnly, loadKernLigatureData);
       }
       mappings[validCount].codepoint = cp;
       mappings[validCount].globalIndex = idx;
