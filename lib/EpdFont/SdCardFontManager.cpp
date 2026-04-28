@@ -9,8 +9,13 @@
 #include <cstdlib>
 
 SdCardFontManager::~SdCardFontManager() {
-  for (auto& lf : loaded_) {
-    delete lf.font;
+  if (renderer_) {
+    unloadAll(*renderer_);
+  } else {
+    for (auto& lf : loaded_) {
+      delete lf.font;
+    }
+    loaded_.clear();
   }
 }
 
@@ -31,6 +36,9 @@ int SdCardFontManager::computeFontId(uint32_t contentHash, const char* familyNam
 }
 
 bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t targetPtSize) {
+  if (!renderer_) {
+    renderer_ = &renderer;
+  }
   // Unload any previously loaded family first
   if (!loadedFamilyName_.empty()) {
     unloadAll(renderer);
@@ -80,6 +88,9 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
+  if (!renderer_) {
+    renderer_ = &renderer;
+  }
   renderer.clearSdCardFonts();
   for (auto& lf : loaded_) {
     renderer.removeFont(lf.fontId);

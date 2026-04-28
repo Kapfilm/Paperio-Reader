@@ -44,6 +44,7 @@ class SdCardFontManager {
   };
   static int computeFontId(uint32_t contentHash, const char* familyName, uint8_t pointSize);
 
+  GfxRenderer* renderer_ = nullptr;
   std::string loadedFamilyName_;
   uint8_t loadedPointSize_ = 0;
   std::vector<LoadedFont> loaded_;
