@@ -5,9 +5,30 @@
 
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
+#include "SdCardFontGlobals.h"
 #include "activities/settings/SettingsSubmenuActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+// Returns the localized name of the family currently used as the global default
+// for the reader. When the user has selected an SD card font globally, the
+// override menu's "Default" label should reflect that family by name even
+// though the per-book override list itself is built-in only.
+std::string defaultFontFamilyLabel(const SettingInfo& item) {
+  if (SETTINGS.sdFontFamilyName[0] != '\0') {
+    return std::string(SETTINGS.sdFontFamilyName);
+  }
+  // Built-in: enumValues[0] is STR_DEFAULT_VALUE, [1..3] are the three families
+  // in the same order as CrossPointSettings::FONT_FAMILY (BOOKERLY, NOTOSANS,
+  // OPENDYSLEXIC).
+  const auto idx = static_cast<size_t>(SETTINGS.fontFamily + 1);
+  if (idx < item.enumValues.size()) {
+    return I18N.get(item.enumValues[idx]);
+  }
+  return {};
+}
+}  // namespace
 
 EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                const std::string& title, const int currentPage, const int totalPages,
@@ -290,9 +311,9 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
       }
     }
     if (item.nameId == StrId::STR_FONT_FAMILY && pendingFontFamilyOverride < 0) {
-      const auto defaultIndex = static_cast<size_t>(SETTINGS.fontFamily + 1);
-      if (defaultIndex < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[defaultIndex]) + ")";
+      const auto label = defaultFontFamilyLabel(item);
+      if (!label.empty()) {
+        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + label + ")";
       }
     }
     if (item.nameId == StrId::STR_FONT_SIZE && pendingFontSizeOverride < 0) {
@@ -324,9 +345,9 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
       }
     }
     if (item.nameId == StrId::STR_FONT_FAMILY && pendingFontFamilyOverride < 0) {
-      const auto valueIndex = static_cast<size_t>(SETTINGS.fontFamily + 1);
-      if (valueIndex < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[valueIndex]) + ")";
+      const auto label = defaultFontFamilyLabel(item);
+      if (!label.empty()) {
+        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + label + ")";
       }
     }
     if (item.nameId == StrId::STR_FONT_SIZE && pendingFontSizeOverride < 0) {

@@ -30,6 +30,7 @@
 #include "QrDisplayActivity.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontGlobals.h"
 #include "StarredPagesActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -1072,49 +1073,68 @@ uint8_t EpubReaderActivity::getEffectiveImageRendering() const {
   return SETTINGS.imageRendering;
 }
 
-int EpubReaderActivity::getEffectiveReaderFontId() const {
-  const uint8_t fontFamily =
-      (bookFontFamilyOverride >= 0) ? static_cast<uint8_t>(bookFontFamilyOverride) : SETTINGS.fontFamily;
+float EpubReaderActivity::getEffectiveReaderLineCompression() const {
   const uint8_t fontSize = (bookFontSizeOverride >= 0) ? static_cast<uint8_t>(bookFontSizeOverride) : SETTINGS.fontSize;
-  switch (fontFamily) {
-    case CrossPointSettings::NOTOSANS:
-      switch (fontSize) {
-        case CrossPointSettings::SMALL:
-          return NOTOSANS_12_FONT_ID;
-        case CrossPointSettings::MEDIUM:
-        default:
-          return NOTOSANS_14_FONT_ID;
-        case CrossPointSettings::LARGE:
-          return NOTOSANS_16_FONT_ID;
-        case CrossPointSettings::EXTRA_LARGE:
-          return NOTOSANS_18_FONT_ID;
-      }
-    case CrossPointSettings::OPENDYSLEXIC:
-      switch (fontSize) {
-        case CrossPointSettings::SMALL:
-          return OPENDYSLEXIC_8_FONT_ID;
-        case CrossPointSettings::MEDIUM:
-        default:
-          return OPENDYSLEXIC_10_FONT_ID;
-        case CrossPointSettings::LARGE:
-          return OPENDYSLEXIC_12_FONT_ID;
-        case CrossPointSettings::EXTRA_LARGE:
-          return OPENDYSLEXIC_14_FONT_ID;
-      }
-    case CrossPointSettings::BOOKERLY:
-    default:
-      switch (fontSize) {
-        case CrossPointSettings::SMALL:
-          return BOOKERLY_12_FONT_ID;
-        case CrossPointSettings::MEDIUM:
-        default:
-          return BOOKERLY_14_FONT_ID;
-        case CrossPointSettings::LARGE:
-          return BOOKERLY_16_FONT_ID;
-        case CrossPointSettings::EXTRA_LARGE:
-          return BOOKERLY_18_FONT_ID;
-      }
+  const int effectiveFontId = getEffectiveReaderFontId();
+  const int bookerlyId = CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::BOOKERLY, fontSize);
+  const int notosansId = CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::NOTOSANS, fontSize);
+  const int opendyslexicId = CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::OPENDYSLEXIC, fontSize);
+
+  if (effectiveFontId == notosansId) {
+    switch (SETTINGS.lineSpacing) {
+      case CrossPointSettings::TIGHT:
+        return 0.90f;
+      case CrossPointSettings::NORMAL:
+      default:
+        return 0.95f;
+      case CrossPointSettings::WIDE:
+        return 1.0f;
+    }
   }
+
+  if (effectiveFontId == opendyslexicId) {
+    switch (SETTINGS.lineSpacing) {
+      case CrossPointSettings::TIGHT:
+        return 0.90f;
+      case CrossPointSettings::NORMAL:
+      default:
+        return 0.95f;
+      case CrossPointSettings::WIDE:
+        return 1.0f;
+    }
+  }
+
+  switch (SETTINGS.lineSpacing) {
+    case CrossPointSettings::TIGHT:
+      return 0.95f;
+    case CrossPointSettings::NORMAL:
+    default:
+      return 1.0f;
+    case CrossPointSettings::WIDE:
+      return 1.1f;
+  }
+}
+
+int EpubReaderActivity::getEffectiveReaderFontId() const {
+  // Per-book font override: when set, force a specific BUILT-IN family even if
+  // an SD card font is the global default. This makes the override predictable
+  // ("override forces back to a known built-in") and avoids surprising users
+  // who set the override before they had any SD fonts.
+  const uint8_t fontSize = (bookFontSizeOverride >= 0) ? static_cast<uint8_t>(bookFontSizeOverride) : SETTINGS.fontSize;
+  if (bookFontFamilyOverride >= 0) {
+    return CrossPointSettings::getBuiltinReaderFontId(static_cast<uint8_t>(bookFontFamilyOverride), fontSize);
+  }
+  // No override: defer to global resolution (which honors SD card font selection).
+  // We synthesize a temporary lookup using the override fontSize if it's set; otherwise
+  // SETTINGS.getReaderFontId() is the canonical answer.
+  if (bookFontSizeOverride >= 0) {
+    if (SETTINGS.sdFontFamilyName[0] != '\0') {
+      const int id = resolveSdCardFontId(SETTINGS.sdFontFamilyName, fontSize);
+      if (id != 0) return id;
+    }
+    return CrossPointSettings::getBuiltinReaderFontId(SETTINGS.fontFamily, fontSize);
+  }
+  return SETTINGS.getReaderFontId();
 }
 
 bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
@@ -1229,7 +1249,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     section = std::make_unique<Section>(epub, currentSpineIndex, renderer);
     const unsigned long sectionStart = millis();
 
-    if (!section->loadSectionFile(getEffectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
+    if (!section->loadSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                   viewportHeight, SETTINGS.hyphenationEnabled, embeddedStyle, imageRendering)) {
       LOG_DBG("ERS", "Cache not found, building...");
@@ -1246,7 +1266,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         GUI.fillPopupProgress(renderer, popupRect, progress);
       };
 
-      if (!section->createSectionFile(getEffectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
+      // Reset cumulative SD font metadata cache so this section starts fresh.
+      // Pagination will rebuild only the cps it actually encounters, bounded
+      // by MAX_PAGE_GLYPHS per style.
+      renderer.clearSdCardFontAccumulation();
+      if (!section->createSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                       viewportHeight, SETTINGS.hyphenationEnabled, embeddedStyle, imageRendering,
                                       progressFn)) {
@@ -1401,14 +1425,16 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   const uint8_t imageRendering = getEffectiveImageRendering();
 
   Section nextSection(epub, nextSpineIndex, renderer);
-  if (nextSection.loadSectionFile(getEffectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
+  if (nextSection.loadSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                   viewportHeight, SETTINGS.hyphenationEnabled, embeddedStyle, imageRendering)) {
     return;
   }
 
   LOG_DBG("ERS", "Silently indexing next chapter: %d", nextSpineIndex);
-  if (!nextSection.createSectionFile(getEffectiveReaderFontId(), SETTINGS.getReaderLineCompression(),
+  // Reset cumulative SD font metadata cache for the new section.
+  renderer.clearSdCardFontAccumulation();
+  if (!nextSection.createSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
                                      SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                      viewportHeight, SETTINGS.hyphenationEnabled, embeddedStyle, imageRendering)) {
     LOG_ERR("ERS", "Failed silent indexing for chapter: %d", nextSpineIndex);
@@ -1759,14 +1785,44 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
     }
   };
 
+  const int effectiveFontId = getEffectiveFontId(effectiveFontFamily, effectiveFontSize);
+  const auto getEffectiveLineCompression = [&](int fontId) {
+    const int notosansId = CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::NOTOSANS, effectiveFontSize);
+    const int opendyslexicId =
+        CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::OPENDYSLEXIC, effectiveFontSize);
+
+    if (fontId == notosansId || fontId == opendyslexicId) {
+      switch (SETTINGS.lineSpacing) {
+        case CrossPointSettings::TIGHT:
+          return 0.90f;
+        case CrossPointSettings::NORMAL:
+        default:
+          return 0.95f;
+        case CrossPointSettings::WIDE:
+          return 1.0f;
+      }
+    }
+
+    switch (SETTINGS.lineSpacing) {
+      case CrossPointSettings::TIGHT:
+        return 0.95f;
+      case CrossPointSettings::NORMAL:
+      default:
+        return 1.0f;
+      case CrossPointSettings::WIDE:
+        return 1.1f;
+    }
+  };
+
+  const float effectiveLineCompression = getEffectiveLineCompression(effectiveFontId);
   auto section = std::make_unique<Section>(epub, spineIndex, renderer);
-  if (!section->loadSectionFile(getEffectiveFontId(effectiveFontFamily, effectiveFontSize),
-                                SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-                                SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-                                SETTINGS.embeddedStyle, SETTINGS.imageRendering)) {
+  if (!section->loadSectionFile(getEffectiveFontId(effectiveFontFamily, effectiveFontSize), effectiveLineCompression,
+                                SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
+                                viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
+                                SETTINGS.imageRendering)) {
     LOG_DBG("SLP", "EPUB: section cache not found for spine %d, rebuilding", spineIndex);
     if (!section->createSectionFile(getEffectiveFontId(effectiveFontFamily, effectiveFontSize),
-                                    SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+                                    effectiveLineCompression, SETTINGS.extraParagraphSpacing,
                                     SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
                                     SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle, SETTINGS.imageRendering)) {
       LOG_ERR("SLP", "EPUB: failed to rebuild section cache for spine %d", spineIndex);

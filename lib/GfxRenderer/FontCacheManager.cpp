@@ -2,18 +2,46 @@
 
 #include <FontDecompressor.h>
 #include <Logging.h>
+#include <SdCardFont.h>
 
 #include <cstring>
 
-FontCacheManager::FontCacheManager(const std::map<int, EpdFontFamily>& fontMap) : fontMap_(fontMap) {}
+FontCacheManager::FontCacheManager(const std::map<int, EpdFontFamily>& fontMap,
+                                   const std::map<int, SdCardFont*>& sdCardFonts)
+    : fontMap_(fontMap), sdCardFonts_(sdCardFonts) {}
 
 void FontCacheManager::setFontDecompressor(FontDecompressor* d) { fontDecompressor_ = d; }
 
 void FontCacheManager::clearCache() {
   if (fontDecompressor_) fontDecompressor_->clearCache();
+  for (auto& [id, font] : sdCardFonts_) {
+    if (!font) {
+      LOG_ERR("FCM", "clearCache: null SdCardFont pointer for fontId=%d", id);
+      continue;
+    }
+    font->clearCache();
+  }
 }
 
 void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
+  // SD card font prewarm path: prewarm all requested styles in one call
+  auto sdIt = sdCardFonts_.find(fontId);
+  if (sdIt != sdCardFonts_.end()) {
+    SdCardFont* sdFont = sdIt->second;
+    if (!sdFont) {
+      LOG_ERR("FCM", "prewarmCache(SD): null SdCardFont pointer for fontId=%d", fontId);
+      return;
+    }
+    int missed = sdFont->prewarm(utf8Text, styleMask);
+    if (missed < 0) {
+      LOG_ERR("FCM", "prewarmCache(SD): prewarm failed for fontId=%d (styleMask=0x%02X)", fontId, styleMask);
+    } else if (missed > 0) {
+      LOG_DBG("FCM", "prewarmCache(SD): %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
+    }
+    return;
+  }
+
+  // Standard compressed font prewarm path: loop over all requested styles
   if (!fontDecompressor_ || fontMap_.count(fontId) == 0) return;
 
   for (uint8_t i = 0; i < 4; i++) {
@@ -30,10 +58,16 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
 
 void FontCacheManager::logStats(const char* label) {
   if (fontDecompressor_) fontDecompressor_->logStats(label);
+  for (auto& [id, font] : sdCardFonts_) {
+    if (font) font->logStats(label);
+  }
 }
 
 void FontCacheManager::resetStats() {
   if (fontDecompressor_) fontDecompressor_->resetStats();
+  for (auto& [id, font] : sdCardFonts_) {
+    if (font) font->resetStats();
+  }
 }
 
 bool FontCacheManager::isScanning() const { return scanMode_ == ScanMode::Scanning; }
