@@ -39,15 +39,7 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
   // Pick the single file whose size is closest to targetPtSize. Loading
   // only one size bounds resident memory (intervals + kern/ligature tables
   // per style) to one file's worth, vs. N_sizes × per-file overhead.
-  const SdCardFontFileInfo* selected = nullptr;
-  int bestDiff = INT32_MAX;
-  for (const auto& fileInfo : family.files) {
-    int diff = std::abs(static_cast<int>(fileInfo.pointSize) - static_cast<int>(targetPtSize));
-    if (diff < bestDiff) {
-      bestDiff = diff;
-      selected = &fileInfo;
-    }
-  }
+  const SdCardFontFileInfo* selected = family.pickClosestSize(targetPtSize);
   if (!selected) {
     LOG_ERR("SDMGR", "Family %s has no files to load", family.name.c_str());
     return false;

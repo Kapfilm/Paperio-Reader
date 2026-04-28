@@ -451,6 +451,12 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     style_label = style_names.get(style_id, str(style_id))
 
     face = freetype.Face(fontfile)
+    # Set font size at 150 DPI (matching fontconvert.py) BEFORE any glyph load
+    # — load_glyph() with FT_LOAD_RENDER renders at the active size, so calling
+    # it before set_char_size() would waste work at the default size and risk
+    # Invalid_Size_Handle on some fonts.
+    face.set_char_size(size << 6, size << 6, 150, 150)
+
     load_flags = freetype.FT_LOAD_RENDER
     if force_autohint:
         load_flags |= freetype.FT_LOAD_FORCE_AUTOHINT
@@ -479,9 +485,6 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
     intervals = validated_intervals
     total_glyphs = sum(end - start + 1 for start, end in intervals)
     print(f"  [{style_label}] Validated: {len(intervals)} intervals, {total_glyphs} glyphs", file=sys.stderr)
-
-    # Set font size at 150 DPI (matching fontconvert.py)
-    face.set_char_size(size << 6, size << 6, 150, 150)
 
     # Rasterize all glyphs
     total_bitmap_size = 0

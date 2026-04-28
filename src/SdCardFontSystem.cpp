@@ -120,15 +120,8 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
       SETTINGS.sdFontFamilyName[0] = '\0';
       return;
     }
-    uint8_t bestPt = 0;
-    int bestDiff = INT32_MAX;
-    for (const auto& f : family->files) {
-      int diff = abs(static_cast<int>(f.pointSize) - static_cast<int>(targetPt));
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        bestPt = f.pointSize;
-      }
-    }
+    const auto* best = family->pickClosestSize(targetPt);
+    const uint8_t bestPt = best ? best->pointSize : 0;
     if (bestPt == manager_.currentPointSize()) return;  // already loaded with the right size
     LOG_DBG("SDFS", "Reloading %s: size %u -> %u (target %u)", wantedFamily, manager_.currentPointSize(), bestPt,
             targetPt);

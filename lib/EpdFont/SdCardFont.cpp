@@ -432,7 +432,14 @@ bool SdCardFont::load(const char* path) {
     return false;
   }
 
-  // Begin content hash: accumulate global header
+  // Begin content hash: accumulate global header.
+  // KNOWN LIMITATION: hash covers global header + per-style TOC only, not the
+  // payload sections (intervals / glyph metrics / kern / ligature / bitmap). A
+  // font edit that alters payload bytes without changing any TOC count would
+  // produce the same contentHash and could leave stale EPUB section caches.
+  // Acceptable in practice because generate-sd-fonts.sh regeneration almost
+  // always changes interval/glyph/kern counts; revisit if we see real-world
+  // mismatches.
   uint32_t hash = fnv1a(headerBuf, HEADER_SIZE);
 
   bool is2Bit = (readU16(headerBuf + 10) & 1) != 0;
@@ -1214,7 +1221,12 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
 
   EpdGlyph tempGlyph;
   uint32_t glyphFileOff = s.glyphsFileOffset + static_cast<uint32_t>(globalIdx) * sizeof(EpdGlyph);
-  file.seekSet(glyphFileOff);
+  if (!file.seekSet(glyphFileOff)) {
+    LOG_ERR("SDCF", "Overflow: seek failed for glyph metadata U+%04X style %u", codepoint, styleIdx);
+    file.close();
+    if (!wasAtCapacity) self->overflowCount_--;
+    return nullptr;
+  }
   if (file.read(reinterpret_cast<uint8_t*>(&tempGlyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
     LOG_ERR("SDCF", "Overflow: failed to read glyph metadata for U+%04X style %u", codepoint, styleIdx);
     file.close();
@@ -1232,7 +1244,13 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
       if (!wasAtCapacity) self->overflowCount_--;
       return nullptr;
     }
-    file.seekSet(s.bitmapFileOffset + tempGlyph.dataOffset);
+    if (!file.seekSet(s.bitmapFileOffset + tempGlyph.dataOffset)) {
+      LOG_ERR("SDCF", "Overflow: seek failed for bitmap U+%04X style %u", codepoint, styleIdx);
+      delete[] tempBitmap;
+      file.close();
+      if (!wasAtCapacity) self->overflowCount_--;
+      return nullptr;
+    }
     if (file.read(tempBitmap, tempGlyph.dataLength) != static_cast<int>(tempGlyph.dataLength)) {
       LOG_ERR("SDCF", "Overflow: failed to read bitmap for U+%04X", codepoint);
       delete[] tempBitmap;

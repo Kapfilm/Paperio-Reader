@@ -38,6 +38,21 @@ std::vector<uint8_t> SdCardFontFamilyInfo::availableSizes() const {
   return sizes;
 }
 
+const SdCardFontFileInfo* SdCardFontFamilyInfo::pickClosestSize(uint8_t targetPtSize) const {
+  const SdCardFontFileInfo* selected = nullptr;
+  int bestDiff = INT32_MAX;
+  for (const auto& f : files) {
+    int diff = std::abs(static_cast<int>(f.pointSize) - static_cast<int>(targetPtSize));
+    // Strict < ensures the first scan wins on ties; then tie-break by smaller
+    // pointSize to make the choice independent of filesystem enumeration order.
+    if (diff < bestDiff || (diff == bestDiff && selected && f.pointSize < selected->pointSize)) {
+      bestDiff = diff;
+      selected = &f;
+    }
+  }
+  return selected;
+}
+
 // --- SdCardFontRegistry ---
 
 bool SdCardFontRegistry::parseFilename(const char* filename, uint8_t& size, uint8_t& style) {
