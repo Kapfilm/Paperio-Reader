@@ -206,7 +206,7 @@ class SdCardFont {
   void freeStyleMiniKern(PerStyle& s);
   bool loadStyleKernLigatureData(PerStyle& s);
   bool buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, uint32_t cpCount);
-  void applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const;
+  void applyKernLigaturePointers(const PerStyle& s, EpdFontData& data) const;
   void applyGlyphMissCallback(uint8_t styleIdx);
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;
   int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly,

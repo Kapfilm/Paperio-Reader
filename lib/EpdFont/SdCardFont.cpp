@@ -52,7 +52,12 @@ void SdCardFont::freeStyleMiniData(PerStyle& s) {
   s.miniIntervalCount = 0;
   s.miniGlyphCount = 0;
   s.miniMode = PerStyle::MiniMode::NONE;
-  s.reportedMissCount = 0;
+  // NOTE: reportedMissCount is intentionally NOT reset here. The merge path
+  // calls freeStyleMiniData() to swap mini buffers, and resetting the miss
+  // tracker every paragraph would re-spam the log for the same 4 missing cps.
+  // It IS reset by freeStyleAll() (font teardown) and clearAccumulation()
+  // (section boundary), which are the right granularity for "forget what
+  // we've reported".
   freeStyleMiniKern(s);
   memset(&s.miniData, 0, sizeof(s.miniData));
   s.epdFont.data = &s.stubData;
@@ -83,6 +88,7 @@ void SdCardFont::freeStyleMiniKern(PerStyle& s) {
 
 void SdCardFont::freeStyleAll(PerStyle& s) {
   freeStyleMiniData(s);
+  s.reportedMissCount = 0;
   delete[] s.fullIntervals;
   s.fullIntervals = nullptr;
   freeStyleKernLigatureData(s);
@@ -113,7 +119,7 @@ void SdCardFont::clearOverflow() {
 
 // --- Per-style kern/ligature ---
 
-void SdCardFont::applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const {
+void SdCardFont::applyKernLigaturePointers(const PerStyle& s, EpdFontData& data) const {
   // Kern data uses the per-page mini tables (renumbered class IDs). The full
   // kern matrix is never resident — see PerStyle::miniKernMatrix comment.
   data.kernLeftClasses = s.miniKernLeftClasses;
@@ -242,22 +248,35 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
     return true;  // font has no kern classes — nothing to build
   }
 
-  // Step 1: mark used left/right classes via a 256-wide bitmap (class IDs are uint8_t).
-  bool usedLeft[256] = {};
-  bool usedRight[256] = {};
+  // 4× 256-byte scratch arrays: heap-allocated as one block to avoid blowing
+  // the activity task's 8 KB stack when this runs deep in the parser → layout
+  // → prewarm call chain (especially when invoked 4× per paragraph, once per
+  // style).
+  // Layout: [usedLeft 256][usedRight 256][leftRenumber 256][rightRenumber 256]
+  //         [newToOldLeft 256][newToOldRight 256] = 1536 bytes total
+  std::unique_ptr<uint8_t[]> scratch(new (std::nothrow) uint8_t[6 * 256]());
+  if (!scratch) {
+    LOG_ERR("SDCF", "Failed to allocate kern scratch (1536 bytes)");
+    return false;
+  }
+  uint8_t* const base = scratch.get();
+  uint8_t* usedLeft = base + 0 * 256;
+  uint8_t* usedRight = base + 1 * 256;
+  uint8_t* leftRenumber = base + 2 * 256;
+  uint8_t* rightRenumber = base + 3 * 256;
+  uint8_t* newToOldLeft = base + 4 * 256;
+  uint8_t* newToOldRight = base + 5 * 256;
+
+  // Step 1: mark used left/right classes (class IDs are uint8_t — 0 means none).
   for (uint32_t i = 0; i < cpCount; i++) {
     uint8_t lc = miniLookupKernClass(s.kernLeftClasses, s.header.kernLeftEntryCount, codepoints[i]);
-    if (lc) usedLeft[lc] = true;
+    if (lc) usedLeft[lc] = 1;
     uint8_t rc = miniLookupKernClass(s.kernRightClasses, s.header.kernRightEntryCount, codepoints[i]);
-    if (rc) usedRight[rc] = true;
+    if (rc) usedRight[rc] = 1;
   }
 
   // Step 2: build renumber maps (oldClassId -> newClassId, 1-based) and
   // reverse maps (newClassId -> oldClassId) for the SD read step.
-  uint8_t leftRenumber[256] = {};
-  uint8_t rightRenumber[256] = {};
-  uint8_t newToOldLeft[256] = {};
-  uint8_t newToOldRight[256] = {};
   uint8_t numLeft = 0, numRight = 0;
   for (int i = 1; i < 256; i++) {
     if (usedLeft[i]) {
@@ -445,15 +464,17 @@ bool SdCardFont::load(const char* path) {
 
   bool is2Bit = (readU16(headerBuf + 10) & 1) != 0;
 
-  uint8_t styleCount = headerBuf[12];
-  if (styleCount == 0 || styleCount > MAX_STYLES) {
-    LOG_ERR("SDCF", "Invalid style count: %u", styleCount);
+  // Local name `numStyles` instead of `styleCount` to avoid shadowing the
+  // member function styleCount() (cppcheck shadowFunction warning).
+  uint8_t numStyles = headerBuf[12];
+  if (numStyles == 0 || numStyles > MAX_STYLES) {
+    LOG_ERR("SDCF", "Invalid style count: %u", numStyles);
     file.close();
     return false;
   }
 
   // Read style TOC
-  for (uint8_t i = 0; i < styleCount; i++) {
+  for (uint8_t i = 0; i < numStyles; i++) {
     uint8_t tocBuf[STYLE_TOC_ENTRY_SIZE];
     if (file.read(tocBuf, STYLE_TOC_ENTRY_SIZE) != STYLE_TOC_ENTRY_SIZE) {
       LOG_ERR("SDCF", "Failed to read style TOC entry %u", i);
@@ -499,7 +520,7 @@ bool SdCardFont::load(const char* path) {
     computeStyleFileOffsets(s, dataOffset);
   }
 
-  styleCount_ = styleCount;
+  styleCount_ = numStyles;
   contentHash_ = hash;
 
   // Load full intervals into RAM for each present style
@@ -663,13 +684,14 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
   }
 
   // Sort codepoints for ordered interval building
-  std::sort(codepoints.get(), codepoints.get() + cpCount);
+  uint32_t* const cpBase = codepoints.get();
+  std::sort(cpBase, cpBase + cpCount);
 
   // Prewarm each requested style
   int totalMissed = 0;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    totalMissed += prewarmStyle(si, codepoints.get(), cpCount, metadataOnly, loadKernLigatureData);
+    totalMissed += prewarmStyle(si, cpBase, cpCount, metadataOnly, loadKernLigatureData);
   }
 
   stats_.prewarmTotalMs = millis() - startMs;
@@ -1102,16 +1124,28 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   if (file) file.close();
   delete[] mappings;
 
-  // Full render prewarm: load the persistent kern classes + ligatures (one-time
-  // per style, small — the big matrix is NOT loaded here) and then build the
-  // per-page mini kern matrix restricted to class pairs reachable from this
-  // page's codepoints. Also do this during layout-only metadata prewarm when
-  // kern/ligature metadata is explicitly requested.
+  // Kern/ligature wiring strategy:
+  //   - Full render prewarm (!metadataOnly): load persistent kern classes +
+  //     ligatures AND build the per-page mini kern matrix. The matrix is
+  //     page-scoped — built once per render, amortized over the page draw.
+  //   - Layout-only prewarm with loadKernLigatureData: load only the persistent
+  //     kern classes + ligature pairs (cheap, idempotent) and skip the mini
+  //     kern matrix. Ligatures are needed for correct word-width measurement
+  //     (e.g. "fi" must measure as one glyph). Per-pair kern tweaks would be
+  //     <1px adjustments and are too expensive to rebuild per paragraph
+  //     (each rebuild does N seeks + reads against SD; observed cost ~24ms
+  //     per style per call). EpdFont::getKerning() returns 0 cleanly when
+  //     kernMatrix is null, so layout uses ligatures + zero-kern (small layout
+  //     drift acceptable; full kerning is applied at page-render time).
   bool kernLigOk = false;
-  if (!metadataOnly || loadKernLigatureData) {
+  if (!metadataOnly) {
     if (loadStyleKernLigatureData(s)) {
       kernLigOk = buildMiniKernMatrix(s, codepoints, cpCount);
     }
+  } else if (loadKernLigatureData) {
+    loadStyleKernLigatureData(s);
+    // Don't set kernLigOk → mini kern matrix stays null on miniData, but
+    // ligatures are still resident on stubData (set in loadStyleKernLigatureData).
   }
 
   // Populate miniData and swap
@@ -1125,7 +1159,14 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   s.miniData.descender = s.header.descender;
   s.miniData.is2Bit = s.header.is2Bit;
   if (kernLigOk) {
+    // Full prewarm: wire mini kern matrix + class tables + ligatures.
     applyKernLigaturePointers(s, s.miniData);
+  } else if (loadKernLigatureData && s.kernLigLoaded) {
+    // Layout-only prewarm: wire ligatures so applyLigatures() works (e.g. "fi"
+    // measures correctly). Skip the kern matrix — getKerning() returns 0
+    // cleanly when kernMatrix is null. Per-pair kern is applied at render time.
+    s.miniData.ligaturePairs = s.ligaturePairs;
+    s.miniData.ligaturePairCount = s.header.ligaturePairCount;
   }
   s.miniData.glyphMissHandler = &SdCardFont::onGlyphMiss;
   s.miniData.glyphMissCtx = &overflowCtx_[styleIdx];
@@ -1149,16 +1190,19 @@ void SdCardFont::clearCache() {
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     if (!styles_[i].present) continue;
     freeStyleMiniData(styles_[i]);
+    styles_[i].reportedMissCount = 0;
     applyGlyphMissCallback(i);
   }
 }
 
 void SdCardFont::clearAccumulation() {
   // Same as clearCache() but skips the overflow ring buffer (per-glyph on-demand
-  // loads are independent of the cumulative metadata cache).
+  // loads are independent of the cumulative metadata cache). Also resets the
+  // miss-report tracker so each section can re-report its missing cps once.
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     if (!styles_[i].present) continue;
     freeStyleMiniData(styles_[i]);
+    styles_[i].reportedMissCount = 0;
     applyGlyphMissCallback(i);
   }
 }
