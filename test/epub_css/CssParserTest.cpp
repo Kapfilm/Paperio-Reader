@@ -15,13 +15,13 @@ static int testsFailed = 0;
     }                                                                           \
   } while (0)
 
-#define ASSERT_TRUE(cond)                                                       \
-  do {                                                                         \
-    if (!(cond)) {                                                             \
+#define ASSERT_TRUE(cond)                                                         \
+  do {                                                                            \
+    if (!(cond)) {                                                                \
       fprintf(stderr, "  FAIL: %s:%d: %s is false\n", __FILE__, __LINE__, #cond); \
-      testsFailed++;                                                           \
-      return;                                                                  \
-    }                                                                          \
+      testsFailed++;                                                              \
+      return;                                                                     \
+    }                                                                             \
   } while (0)
 
 #define PASS() testsPassed++
@@ -42,6 +42,14 @@ void testInlineUnderlineLineThrough() {
   PASS();
 }
 
+void testInlineLineThroughUnderlineOrderInsensitive() {
+  printf("testInlineLineThroughUnderlineOrderInsensitive...\n");
+  const CssStyle style = CssParser::parseInlineStyle("text-decoration: line-through underline");
+  ASSERT_TRUE(style.hasTextDecoration());
+  ASSERT_EQ(style.textDecoration, CssTextDecoration::UnderlineLineThrough);
+  PASS();
+}
+
 void testInlineTextDecorationNormalization() {
   printf("testInlineTextDecorationNormalization...\n");
   const CssStyle style = CssParser::parseInlineStyle("TEXT-DECORATION : LINE-THROUGH ;");
@@ -55,6 +63,7 @@ int main() {
 
   testInlineLineThrough();
   testInlineUnderlineLineThrough();
+  testInlineLineThroughUnderlineOrderInsensitive();
   testInlineTextDecorationNormalization();
 
   printf("\n=== Results: %d passed, %d failed ===\n", testsPassed, testsFailed);

@@ -7,6 +7,16 @@ BINARY="$BUILD_DIR/CssParserTest"
 PLATFORMIO_DIR="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}"
 ARDUINO_FRAMEWORK_DIR="$PLATFORMIO_DIR/packages/framework-arduinoespressif32"
 
+if [ ! -d "$PLATFORMIO_DIR" ]; then
+  echo "ERROR: PLATFORMIO_DIR does not exist: $PLATFORMIO_DIR" >&2
+  exit 1
+fi
+
+if [ ! -d "$ARDUINO_FRAMEWORK_DIR" ]; then
+  echo "ERROR: ARDUINO_FRAMEWORK_DIR does not exist: $ARDUINO_FRAMEWORK_DIR" >&2
+  exit 1
+fi
+
 mkdir -p "$BUILD_DIR"
 
 SOURCES=(

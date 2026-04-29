@@ -894,6 +894,19 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       entry.hasStrikethrough = true;
       entry.strikethrough = true;
     }
+    if (cssStyle.hasTextDecoration()) {
+      const uint8_t dec = static_cast<uint8_t>(cssStyle.textDecoration);
+      if (dec & static_cast<uint8_t>(CssTextDecoration::Underline)) {
+        entry.hasUnderline = true;
+        entry.underline = true;
+        self->underlineUntilDepth = std::min(self->underlineUntilDepth, self->depth);
+      }
+      if (dec & static_cast<uint8_t>(CssTextDecoration::LineThrough)) {
+        entry.hasStrikethrough = true;
+        entry.strikethrough = true;
+        self->strikethroughUntilDepth = std::min(self->strikethroughUntilDepth, self->depth);
+      }
+    }
     if (cssStyle.hasFontWeight()) {
       entry.hasBold = true;
       entry.bold = cssStyle.fontWeight == CssFontWeight::Bold;

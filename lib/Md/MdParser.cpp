@@ -93,7 +93,7 @@ std::vector<Span> parseInline(const std::string& text) {
     // Escaped character
     if (c == '\\' && i + 1 < text.size()) {
       char next = text[i + 1];
-      if (next == '*' || next == '_' || next == '`' || next == '[' || next == '!' || next == '\\') {
+      if (next == '*' || next == '_' || next == '`' || next == '[' || next == '!' || next == '~' || next == '\\') {
         current += next;
         i += 2;
         continue;
@@ -329,12 +329,10 @@ ParsedLine parseLine(const std::string& rawLine, bool inCodeBlock) {
         result.blockType = BlockType::Header3;
 
       result.spans = parseInline(content);
-      // Force bold on all header spans
+      // Force bold on all header spans while preserving any existing decoration bits.
       for (auto& span : result.spans) {
-        if (span.style == EpdFontFamily::REGULAR)
-          span.style = EpdFontFamily::BOLD;
-        else if (span.style == EpdFontFamily::ITALIC)
-          span.style = EpdFontFamily::BOLD_ITALIC;
+        span.style = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(span.style) |
+                                                       static_cast<uint8_t>(EpdFontFamily::BOLD));
       }
       return result;
     }

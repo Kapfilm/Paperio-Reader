@@ -18,17 +18,22 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     renderer.drawText(fontId, wordX, y, words[i].c_str(), true, currentStyle);
 
     const std::string& w = words[i];
-    const int fullWordWidth = renderer.getTextWidth(fontId, w.c_str(), currentStyle);
-    int startX = wordX;
-    int lineWidth = fullWordWidth;
     const bool hasEmSpacePrefix = w.size() >= 3 && static_cast<uint8_t>(w[0]) == 0xE2 &&
                                   static_cast<uint8_t>(w[1]) == 0x80 && static_cast<uint8_t>(w[2]) == 0x83;
-    if (hasEmSpacePrefix) {
-      const char* visiblePtr = w.c_str() + 3;
-      const int prefixWidth = renderer.getTextAdvanceX(fontId, "\xe2\x80\x83", currentStyle);
-      const int visibleWidth = renderer.getTextWidth(fontId, visiblePtr, currentStyle);
-      startX = wordX + prefixWidth;
-      lineWidth = visibleWidth;
+    const bool hasDecoration = (currentStyle & (EpdFontFamily::UNDERLINE | EpdFontFamily::STRIKETHROUGH)) != 0;
+    int startX = wordX;
+    int lineWidth = 0;
+
+    if (hasEmSpacePrefix || hasDecoration) {
+      const int fullWordWidth = renderer.getTextWidth(fontId, w.c_str(), currentStyle);
+      lineWidth = fullWordWidth;
+      if (hasEmSpacePrefix) {
+        const char* visiblePtr = w.c_str() + 3;
+        const int prefixWidth = renderer.getTextAdvanceX(fontId, "\xe2\x80\x83", currentStyle);
+        const int visibleWidth = renderer.getTextWidth(fontId, visiblePtr, currentStyle);
+        startX = wordX + prefixWidth;
+        lineWidth = visibleWidth;
+      }
     }
 
     if ((currentStyle & EpdFontFamily::UNDERLINE) != 0) {
