@@ -555,6 +555,19 @@ bool MdReaderActivity::loadPageAtOffset(size_t offset, bool startInCodeBlock, st
 
     // Word-wrap and add to output (skip fence lines)
     if (!wasFence) {
+      if (renderer.isSdCardFont(cachedFontId)) {
+        std::string lineText;
+        if (!parsed.listPrefix.empty()) {
+          lineText += parsed.listPrefix;
+        }
+        for (const auto& span : parsed.spans) {
+          lineText += span.text;
+        }
+        if (!lineText.empty()) {
+          renderer.ensureSdCardFontReady(cachedFontId, lineText.c_str());
+        }
+      }
+
       size_t linesBefore = outLines.size();
       int remainingLines = linesPerPage - static_cast<int>(outLines.size());
       bool fullyConsumed = wordWrapParsedLine(parsed, indent, outLines, remainingLines,
