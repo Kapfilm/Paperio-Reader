@@ -42,7 +42,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     }
 
     if ((currentStyle & EpdFontFamily::STRIKETHROUGH) != 0) {
-      // Arbitrary vertical offset of 4px from the font midline to avoid colliding with typical diacritics; adjust as needed
+      // Arbitrary vertical offset of 4px from the font midline to avoid colliding with typical diacritics; adjust as
+      // needed
       const int strikeY = y + renderer.getFontAscenderSize(fontId) / 2 + 4;
       renderer.drawLine(startX, strikeY, startX + lineWidth, strikeY, 2, true);
     }
