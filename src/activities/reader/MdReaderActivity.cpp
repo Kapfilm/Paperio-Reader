@@ -735,7 +735,8 @@ void MdReaderActivity::renderPage() {
                 renderer.drawLine(x, underlineY, x + spanWidth, underlineY, 2, true);
               }
               if ((span.style & EpdFontFamily::STRIKETHROUGH) != 0) {
-                const int strikeY = y + renderer.getFontAscenderSize(cachedFontId) / 2 + 2;
+                // Arbitrary vertical offset of 4px from the font midline to avoid colliding with typical diacritics; adjust as needed  
+                const int strikeY = y + renderer.getFontAscenderSize(cachedFontId) / 2 + 4;
                 renderer.drawLine(x, strikeY, x + spanWidth, strikeY, 2, true);
               }
               x += spanWidth;
