@@ -37,13 +37,13 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     }
 
     if ((currentStyle & EpdFontFamily::UNDERLINE) != 0) {
-      const int underlineY = y + renderer.getFontAscenderSize(fontId) + 2;
-      renderer.drawLine(startX, underlineY, startX + lineWidth, underlineY, true);
+      const int underlineY = y + renderer.getFontAscenderSize(fontId) + 3;
+      renderer.drawLine(startX, underlineY, startX + lineWidth, underlineY, 2, true);
     }
 
     if ((currentStyle & EpdFontFamily::STRIKETHROUGH) != 0) {
-      const int strikeY = y + renderer.getFontAscenderSize(fontId) / 2 + 1;
-      renderer.drawLine(startX, strikeY, startX + lineWidth, strikeY, true);
+      const int strikeY = y + renderer.getFontAscenderSize(fontId) / 2 + 2;
+      renderer.drawLine(startX, strikeY, startX + lineWidth, strikeY, 2, true);
     }
   }
 }

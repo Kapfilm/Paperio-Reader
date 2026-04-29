@@ -728,8 +728,17 @@ void MdReaderActivity::renderPage() {
           // Render each span
           for (const auto& span : line.spans) {
             if (!span.text.empty()) {
+              const int spanWidth = renderer.getTextAdvanceX(cachedFontId, span.text.c_str(), span.style);
               renderer.drawText(cachedFontId, x, y, span.text.c_str(), true, span.style);
-              x += renderer.getTextAdvanceX(cachedFontId, span.text.c_str(), span.style);
+              if ((span.style & EpdFontFamily::UNDERLINE) != 0) {
+                const int underlineY = y + renderer.getFontAscenderSize(cachedFontId) + 3;
+                renderer.drawLine(x, underlineY, x + spanWidth, underlineY, 2, true);
+              }
+              if ((span.style & EpdFontFamily::STRIKETHROUGH) != 0) {
+                const int strikeY = y + renderer.getFontAscenderSize(cachedFontId) / 2 + 2;
+                renderer.drawLine(x, strikeY, x + spanWidth, strikeY, 2, true);
+              }
+              x += spanWidth;
             }
           }
         }
