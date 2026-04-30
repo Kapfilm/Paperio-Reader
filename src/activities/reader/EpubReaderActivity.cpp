@@ -2007,6 +2007,13 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
         openReaderMenu();
       }
       break;
+    case BA::BTN_TOGGLE_BIONIC_READING:
+      if (epub) {
+        applyBookReaderOverrides(bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
+                                 bookFontSizeOverride, !bookBionicReadingOverride);
+        requestUpdate();
+      }
+      break;
     case BA::BTN_KOREADER_SYNC:
       launchKOReaderSync(SyncLaunchMode::COMPARE);
       break;
