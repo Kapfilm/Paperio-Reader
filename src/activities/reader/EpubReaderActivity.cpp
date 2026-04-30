@@ -191,6 +191,7 @@ void EpubReaderActivity::onEnter() {
   bookImageRenderingOverride = currentBook.imageRenderingOverride;
   bookFontFamilyOverride = currentBook.fontFamilyOverride;
   bookFontSizeOverride = currentBook.fontSizeOverride;
+  bookBionicReadingOverride = currentBook.bionicReadingOverride;
   logReaderMemSnapshot("onEnter_after_recent_books");
 
   // Trigger first update
@@ -1033,13 +1034,14 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
 
 void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOverride,
                                                   const int8_t imageRenderingOverride, const int8_t fontFamilyOverride,
-                                                  const int8_t fontSizeOverride) {
+                                                  const int8_t fontSizeOverride, const bool bionicReadingOverride) {
   if (!epub) {
     return;
   }
 
   if (bookEmbeddedStyleOverride == embeddedStyleOverride && bookImageRenderingOverride == imageRenderingOverride &&
-      bookFontFamilyOverride == fontFamilyOverride && bookFontSizeOverride == fontSizeOverride) {
+      bookFontFamilyOverride == fontFamilyOverride && bookFontSizeOverride == fontSizeOverride &&
+      bookBionicReadingOverride == bionicReadingOverride) {
     return;
   }
 
@@ -1047,8 +1049,9 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
   bookImageRenderingOverride = imageRenderingOverride;
   bookFontFamilyOverride = fontFamilyOverride;
   bookFontSizeOverride = fontSizeOverride;
+  bookBionicReadingOverride = bionicReadingOverride;
   RECENT_BOOKS.setReaderOverrides(epub->getPath(), bookEmbeddedStyleOverride, bookImageRenderingOverride,
-                                  bookFontFamilyOverride, bookFontSizeOverride);
+                                  bookFontFamilyOverride, bookFontSizeOverride, bookBionicReadingOverride);
 
   RenderLock lock(*this);
   if (section) {
@@ -1861,14 +1864,15 @@ void EpubReaderActivity::openReaderMenu() {
       std::make_unique<EpubReaderMenuActivity>(
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !currentPageFootnotes.empty(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
-          bookFontSizeOverride, SETTINGS.textDarkness, !bookmarkStore.isEmpty(), isCurrentPageStarred),
+          bookFontSizeOverride, SETTINGS.textDarkness, bookBionicReadingOverride, !bookmarkStore.isEmpty(),
+          isCurrentPageStarred),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);
         applyTextDarkness(menu.textDarkness);
         toggleAutoPageTurn(menu.pageTurnOption);
         applyBookReaderOverrides(menu.embeddedStyleOverride, menu.imageRenderingOverride, menu.fontFamilyOverride,
-                                 menu.fontSizeOverride);
+                                 menu.fontSizeOverride, static_cast<bool>(menu.bionicReadingOverride));
         if (!result.isCancelled) {
           onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
         }
