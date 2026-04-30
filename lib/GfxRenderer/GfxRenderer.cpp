@@ -872,6 +872,11 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
     return 0;
   }
 
+  if (fontCacheManager_ && fontCacheManager_->isScanning()) {
+    fontCacheManager_->recordText(text, fontId, style);
+    return 0;
+  }
+
   int w = 0, h = 0;
   fontIt->second.getTextDimensions(text, &w, &h, style);
   return w;
