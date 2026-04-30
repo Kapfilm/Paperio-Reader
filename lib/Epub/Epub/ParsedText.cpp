@@ -11,6 +11,7 @@
 #include <set>
 #include <vector>
 
+#include "hyphenation/HyphenationCommon.h"
 #include "hyphenation/Hyphenator.h"
 
 constexpr int MAX_COST = std::numeric_limits<int>::max();
@@ -128,10 +129,64 @@ constexpr int kBionicReadingMinBoldPrefix = 1;
 constexpr int kBionicReadingBoldPrefixNumerator = 1;
 constexpr int kBionicReadingBoldPrefixDenominator = 2;
 
+struct TokenSpan {
+  size_t start;
+  size_t end;
+  bool isWord;
+};
+
 static int computeBionicBoldPrefixCount(const int codepointCount) {
   return std::max(kBionicReadingMinBoldPrefix,
                   (codepointCount * kBionicReadingBoldPrefixNumerator + kBionicReadingBoldPrefixDenominator - 1) /
                       kBionicReadingBoldPrefixDenominator);
+}
+
+static bool isBionicWordCodepoint(const uint32_t cp) {
+  if (cp == 0) {
+    return false;
+  }
+  if (utf8IsCombiningMark(cp)) {
+    return true;
+  }
+  return isAlphabetic(cp) || isAsciiDigit(cp) || isApostrophe(cp);
+}
+
+// Split a word token into contiguous spans of "word-like" characters and non-word characters.
+// This avoids applying bionic bolding to punctuation, digits-only runs, or other separators.
+// Only spans marked as word-like are eligible for the bionic prefix transform.
+static std::vector<TokenSpan> tokenizeBionicWord(const std::string& word) {
+  std::vector<TokenSpan> spans;
+  spans.reserve(2);
+
+  const unsigned char* base = reinterpret_cast<const unsigned char*>(word.c_str());
+  const unsigned char* ptr = base;
+  const unsigned char* segmentStart = ptr;
+  bool currentIsWord = false;
+  bool haveCurrent = false;
+
+  while (true) {
+    const unsigned char* cpStart = ptr;
+    uint32_t cp = utf8NextCodepoint(&ptr);
+    if (cp == 0) {
+      break;
+    }
+
+    bool cpIsWord = isBionicWordCodepoint(cp);
+    if (!haveCurrent) {
+      currentIsWord = cpIsWord;
+      haveCurrent = true;
+    } else if (!utf8IsCombiningMark(cp) && cpIsWord != currentIsWord) {
+      spans.push_back({static_cast<size_t>(segmentStart - base), static_cast<size_t>(cpStart - base), currentIsWord});
+      segmentStart = cpStart;
+      currentIsWord = cpIsWord;
+    }
+  }
+
+  if (haveCurrent) {
+    spans.push_back({static_cast<size_t>(segmentStart - base), word.size(), currentIsWord});
+  }
+
+  return spans;
 }
 
 }  // namespace
@@ -533,49 +588,65 @@ void ParsedText::applyBionicReadingTransform() {
   transformedContinues.reserve(wordContinues.size() * 2);
 
   for (size_t i = 0; i < words.size(); ++i) {
-    const std::string& word = words[i];
+    std::string source = std::move(words[i]);
     const auto originalStyle = wordStyles[i];
-    const bool attachToPrevious = wordContinues[i];
+    const bool originalAttachToPrevious = wordContinues[i];
+    const char* raw = source.c_str();
 
-    const unsigned char* ptr = reinterpret_cast<const unsigned char*>(word.c_str());
-    int codepointCount = 0;
-    while (utf8NextCodepoint(&ptr)) {
-      codepointCount++;
-    }
-
-    if (codepointCount < kBionicReadingMinCodepoints) {
-      transformedWords.push_back(word);
-      transformedStyles.push_back(originalStyle);
-      transformedContinues.push_back(attachToPrevious);
+    const auto spans = tokenizeBionicWord(source);
+    if (spans.empty()) {
       continue;
     }
 
-    const int boldPrefixCount = computeBionicBoldPrefixCount(codepointCount);
-    ptr = reinterpret_cast<const unsigned char*>(word.c_str());
-    const unsigned char* prefixEnd = ptr;
-    for (int j = 0; j < boldPrefixCount && *prefixEnd; ++j) {
-      utf8NextCodepoint(&prefixEnd);
-    }
-    const size_t prefixByteCount =
-        static_cast<size_t>(prefixEnd - reinterpret_cast<const unsigned char*>(word.c_str()));
-    if (prefixByteCount >= word.size()) {
-      transformedWords.push_back(word);
+    bool attachToPrevious = originalAttachToPrevious;
+    for (size_t spanIndex = 0; spanIndex < spans.size(); ++spanIndex) {
+      const TokenSpan span = spans[spanIndex];
+      const size_t spanLength = span.end - span.start;
+      std::string token;
+      if (spans.size() == 1 && spanIndex == 0) {
+        token = std::move(source);
+      } else {
+        token.assign(raw + span.start, spanLength);
+      }
+
+      if (span.isWord) {
+        const unsigned char* ptr = reinterpret_cast<const unsigned char*>(token.c_str());
+        int codepointCount = 0;
+        while (utf8NextCodepoint(&ptr)) {
+          codepointCount++;
+        }
+
+        if (codepointCount >= kBionicReadingMinCodepoints) {
+          const int boldPrefixCount = computeBionicBoldPrefixCount(codepointCount);
+          ptr = reinterpret_cast<const unsigned char*>(token.c_str());
+          const unsigned char* prefixEnd = ptr;
+          for (int j = 0; j < boldPrefixCount && *prefixEnd; ++j) {
+            utf8NextCodepoint(&prefixEnd);
+          }
+          const size_t prefixByteCount =
+              static_cast<size_t>(prefixEnd - reinterpret_cast<const unsigned char*>(token.c_str()));
+          if (prefixByteCount < token.size()) {
+            std::string suffix(reinterpret_cast<const char*>(prefixEnd), token.size() - prefixByteCount);
+            token.resize(prefixByteCount);
+            const auto boldStyle = static_cast<EpdFontFamily::Style>(originalStyle | EpdFontFamily::BOLD);
+            transformedWords.push_back(std::move(token));
+            transformedStyles.push_back(boldStyle);
+            transformedContinues.push_back(attachToPrevious);
+
+            transformedWords.push_back(std::move(suffix));
+            transformedStyles.push_back(originalStyle);
+            transformedContinues.push_back(true);
+            attachToPrevious = true;
+            continue;
+          }
+        }
+      }
+
+      transformedWords.push_back(std::move(token));
       transformedStyles.push_back(originalStyle);
       transformedContinues.push_back(attachToPrevious);
-      continue;
+      attachToPrevious = true;
     }
-
-    const std::string prefix(word.data(), prefixByteCount);
-    const std::string suffix(word.data() + prefixByteCount, word.size() - prefixByteCount);
-    const auto boldStyle = static_cast<EpdFontFamily::Style>(originalStyle | EpdFontFamily::BOLD);
-
-    transformedWords.push_back(prefix);
-    transformedStyles.push_back(boldStyle);
-    transformedContinues.push_back(attachToPrevious);
-
-    transformedWords.push_back(suffix);
-    transformedStyles.push_back(originalStyle);
-    transformedContinues.push_back(true);
   }
 
   words = std::move(transformedWords);
