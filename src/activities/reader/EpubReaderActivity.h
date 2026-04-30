@@ -135,6 +135,7 @@ class EpubReaderActivity final : public Activity {
   int8_t bookImageRenderingOverride = -1;
   int8_t bookFontFamilyOverride = -1;
   int8_t bookFontSizeOverride = -1;
+  bool bookBionicReadingOverride = false;
 
   // Bookmarks (starred pages)
   BookmarkStore bookmarkStore;

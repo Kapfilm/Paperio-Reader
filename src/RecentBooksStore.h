@@ -17,6 +17,7 @@ struct RecentBook {
   int8_t fontFamilyOverride = -1;
   // -1 = use global setting, otherwise CrossPointSettings::FONT_SIZE value.
   int8_t fontSizeOverride = -1;
+  bool bionicReadingOverride = false;
 
   bool operator==(const RecentBook& other) const { return path == other.path; }
 };
