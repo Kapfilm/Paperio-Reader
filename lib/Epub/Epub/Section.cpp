@@ -97,8 +97,8 @@ struct SectionVariant {
 };
 
 void Section::evictOldVariants() const {
-  // We keep up to 3 most recently accessed/modified variants to prevent SD card bloat
-  constexpr size_t MAX_VARIANTS = 3;
+  // We keep up to 5 most recently accessed/modified variants to prevent SD card bloat
+  constexpr size_t MAX_VARIANTS = 5;
 
   std::string sectionsDir = epub->getCachePath() + "/sections";
   auto files = Storage.listFiles(sectionsDir.c_str(), 100);
