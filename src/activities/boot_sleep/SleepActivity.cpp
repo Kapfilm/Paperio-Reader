@@ -875,7 +875,6 @@ void SleepActivity::renderOverlaySleepScreen() const {
       return false;
     }
     auto png = std::make_unique<PNG>();
-    if (!png) return false;
 
     int rc = png->open(filename.c_str(), pngSleepOpen, pngSleepClose, pngSleepRead, pngSleepSeek, pngOverlayDraw);
     if (rc != PNG_SUCCESS) {
