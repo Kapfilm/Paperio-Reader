@@ -278,6 +278,7 @@ class CrossPointSettings {
     BTN_GO_HOME,
     BTN_SLEEP,
     BTN_FORCE_REFRESH,
+    BTN_FORCE_FAST_REFRESH,
     BTN_OPEN_TOC,
     BTN_OPEN_BOOKMARKS,
     BTN_STAR_PAGE,
