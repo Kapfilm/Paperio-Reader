@@ -27,7 +27,6 @@
 #include "html/WelcomePageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 
-
 namespace {
 // Folders/files to hide from the web interface file browser
 // Note: Items starting with "." are automatically hidden
