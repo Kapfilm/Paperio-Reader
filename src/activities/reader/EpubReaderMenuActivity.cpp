@@ -127,7 +127,7 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
     values.insert(values.end(), families.size(), StrId::STR_NONE_OPT);
 
     auto familySetting = SettingInfo::DynamicEnumCtx(
-                             StrId::STR_FONT_FAMILY, std::move(values), self,
+                             StrId::STR_FONT_FAMILY, values, self,
                              [](const void* ctx) -> uint8_t {
                                const auto* s = static_cast<const EpubReaderMenuActivity*>(ctx);
                                if (s->pendingFontFamilyOverride >= 0) {
