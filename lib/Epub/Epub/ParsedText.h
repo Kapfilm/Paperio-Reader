@@ -27,7 +27,8 @@ class ParsedText {
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
   bool bionicReadingEnabled;
-  bool isContinuation_ = false;  ///< true after an intermediate flush; suppresses re-applying indent/transforms
+  bool isContinuation_ = false;        ///< true after an intermediate flush; suppresses re-applying paragraph indent
+  size_t bionicTransformedUpTo_ = 0;  ///< words[0..bionicTransformedUpTo_) have already been bionic-transformed
 
   void applyParagraphIndent();
   void applyBionicReadingTransform();

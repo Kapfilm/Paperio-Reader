@@ -215,13 +215,16 @@ void ParsedText::layoutAndExtractLines(
   }
 
   // Apply fixed transforms before any per-line layout work.
-  // Skip on continuation flushes: the words are mid-paragraph and have
-  // already been transformed by the initial layoutAndExtractLines call.
+  // Paragraph indent only applies to the first layout pass; skip on continuations.
   if (!isContinuation_) {
     applyParagraphIndent();
-    if (bionicReadingEnabled) {
-      applyBionicReadingTransform();
-    }
+  }
+  // Bionic transform is incremental: applyBionicReadingTransform() is a no-op
+  // for already-transformed words (bionicTransformedUpTo_ == words.size()) and
+  // only processes raw words appended since the last flush, so it is always safe
+  // to call regardless of isContinuation_.
+  if (bionicReadingEnabled) {
+    applyBionicReadingTransform();
   }
 
   // Ensure SD card font glyph metrics are loaded before measuring word widths.
@@ -382,6 +385,9 @@ void ParsedText::layoutAndExtractLines(
     wordStyles.shrink_to_fit();
     wordContinues.shrink_to_fit();
     isContinuation_ = !includeLastLine;
+    // All remaining words were already transformed before the flush; reset the
+    // watermark so that words appended by addWord() are processed next time.
+    bionicTransformedUpTo_ = words.size();
   }
 }
 
@@ -585,18 +591,23 @@ void ParsedText::applyParagraphIndent() {
 }
 
 void ParsedText::applyBionicReadingTransform() {
-  if (words.empty()) {
+  // Only transform words that haven't been processed yet.  On a fresh block
+  // bionicTransformedUpTo_ == 0 so all words are processed.  After an
+  // intermediate flush, only the new raw words appended since the last flush
+  // (indices bionicTransformedUpTo_..words.size()-1) need transformation.
+  if (words.empty() || bionicTransformedUpTo_ >= words.size()) {
     return;
   }
 
-  std::vector<std::string> transformedWords;
-  std::vector<EpdFontFamily::Style> transformedStyles;
-  std::vector<bool> transformedContinues;
-  transformedWords.reserve(words.size() * 2);
-  transformedStyles.reserve(wordStyles.size() * 2);
-  transformedContinues.reserve(wordContinues.size() * 2);
+  const size_t suffixStart = bionicTransformedUpTo_;
+  std::vector<std::string> transformedSuffix;
+  std::vector<EpdFontFamily::Style> transformedSuffixStyles;
+  std::vector<bool> transformedSuffixContinues;
+  transformedSuffix.reserve((words.size() - suffixStart) * 2);
+  transformedSuffixStyles.reserve(transformedSuffix.capacity());
+  transformedSuffixContinues.reserve(transformedSuffix.capacity());
 
-  for (size_t i = 0; i < words.size(); ++i) {
+  for (size_t i = suffixStart; i < words.size(); ++i) {
     std::string source = std::move(words[i]);
     const auto originalStyle = wordStyles[i];
     const bool originalAttachToPrevious = wordContinues[i];
@@ -638,29 +649,35 @@ void ParsedText::applyBionicReadingTransform() {
             std::string suffix(reinterpret_cast<const char*>(prefixEnd), token.size() - prefixByteCount);
             token.resize(prefixByteCount);
             const auto boldStyle = static_cast<EpdFontFamily::Style>(originalStyle | EpdFontFamily::BOLD);
-            transformedWords.push_back(std::move(token));
-            transformedStyles.push_back(boldStyle);
-            transformedContinues.push_back(attachToPrevious);
+            transformedSuffix.push_back(std::move(token));
+            transformedSuffixStyles.push_back(boldStyle);
+            transformedSuffixContinues.push_back(attachToPrevious);
 
-            transformedWords.push_back(std::move(suffix));
-            transformedStyles.push_back(originalStyle);
-            transformedContinues.push_back(true);
+            transformedSuffix.push_back(std::move(suffix));
+            transformedSuffixStyles.push_back(originalStyle);
+            transformedSuffixContinues.push_back(true);
             attachToPrevious = true;
             continue;
           }
         }
       }
 
-      transformedWords.push_back(std::move(token));
-      transformedStyles.push_back(originalStyle);
-      transformedContinues.push_back(attachToPrevious);
+      transformedSuffix.push_back(std::move(token));
+      transformedSuffixStyles.push_back(originalStyle);
+      transformedSuffixContinues.push_back(attachToPrevious);
       attachToPrevious = true;
     }
   }
 
-  words = std::move(transformedWords);
-  wordStyles = std::move(transformedStyles);
-  wordContinues = std::move(transformedContinues);
+  // Replace the (now move-emptied) suffix with the transformed version.
+  words.resize(suffixStart);
+  wordStyles.resize(suffixStart);
+  wordContinues.resize(suffixStart);
+  words.insert(words.end(), std::make_move_iterator(transformedSuffix.begin()),
+               std::make_move_iterator(transformedSuffix.end()));
+  wordStyles.insert(wordStyles.end(), transformedSuffixStyles.begin(), transformedSuffixStyles.end());
+  wordContinues.insert(wordContinues.end(), transformedSuffixContinues.begin(), transformedSuffixContinues.end());
+  bionicTransformedUpTo_ = words.size();
 }
 
 // Builds break indices while opportunistically splitting the word that would overflow the current line.
