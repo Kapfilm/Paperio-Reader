@@ -372,7 +372,6 @@ STR_CAPTIVE_PORTAL_DETECTED: "Anmeldung erforderlich"
 STR_CAPTIVE_PORTAL_HINT_1: "Netzwerk erfordert Anmeldung. Authorisieren Sie dieses Gerät,"
 STR_CAPTIVE_PORTAL_HINT_2: "indem Sie die URL auf einem anderen Gerät öffnen und fahren dann fort."
 STR_CAPTIVE_PORTAL_DONE: "Erledigt"
-
 STR_READER_TOOLS: "Werkzeuge"
 STR_READER_NAVIGATION: "Navigation"
 STR_READER_APPEARANCE: "Darstellung"
