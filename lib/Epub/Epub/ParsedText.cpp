@@ -246,6 +246,15 @@ void ParsedText::layoutAndExtractLines(
   }
 
   const int pageWidth = viewportWidth;
+
+  // Compute firstLineIndent once here so all layout helpers use the same value.
+  // On a continuation flush the remaining words are mid-paragraph, so no indent.
+  const int firstLineIndent =
+      !isContinuation_ && blockStyle.textIndentDefined &&
+              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
+          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
+          : 0;
+
   auto wordWidths = calculateWordWidths(renderer, fontId);
 
   std::vector<size_t> lineBreakIndices;
@@ -256,9 +265,9 @@ void ParsedText::layoutAndExtractLines(
     // Use greedy layout that can split words mid-loop when a hyphenated prefix fits.
     lineBreakIndices =
         computeHyphenatedLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, lineEndsWithHyphenatedWord,
-                                    splitPrefixWordIndexes, splitInsertedHyphen);
+                                    splitPrefixWordIndexes, splitInsertedHyphen, firstLineIndent);
   } else {
-    lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues);
+    lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, firstLineIndent);
     lineEndsWithHyphenatedWord.assign(lineBreakIndices.size(), false);
     splitPrefixWordIndexes.assign(lineBreakIndices.size(), -1);
     splitInsertedHyphen.assign(lineBreakIndices.size(), false);
@@ -268,7 +277,7 @@ void ParsedText::layoutAndExtractLines(
   for (size_t i = 0; i < lineCount; ++i) {
     const bool lineEndedWithHyphenation = i < lineEndsWithHyphenatedWord.size() ? lineEndsWithHyphenatedWord[i] : false;
     const auto result = extractLine(i, pageWidth, wordWidths, wordContinues, lineBreakIndices, processLine, renderer,
-                                    fontId, lineEndedWithHyphenation, false);
+                                    fontId, lineEndedWithHyphenation, false, firstLineIndent);
 
     if (result == LineProcessResult::RetryWithoutHyphenation && lineEndedWithHyphenation) {
       const size_t lineStart = i > 0 ? lineBreakIndices[i - 1] : 0;
@@ -314,7 +323,8 @@ void ParsedText::layoutAndExtractLines(
       // Keep previous lines fixed; recompute only this specific line without hyphenation.
       // Suppression is intentionally line-local.
       const size_t retryBreak =
-          computeSingleLineBreakNoHyphen(renderer, fontId, pageWidth, wordWidths, wordContinues, lineStart);
+          computeSingleLineBreakNoHyphen(renderer, fontId, pageWidth, wordWidths, wordContinues, lineStart,
+                                         firstLineIndent);
 
       lineBreakIndices.resize(i + 1);
       lineEndsWithHyphenatedWord.resize(i + 1);
@@ -334,7 +344,7 @@ void ParsedText::layoutAndExtractLines(
         LOG_DBG("PTX", "Rerendering line %u with hyphenation suppressed, retry attempt: %s", static_cast<unsigned>(i),
                 retryPreview.c_str());
         extractLine(i, pageWidth, wordWidths, wordContinues, lineBreakIndices, processLine, renderer, fontId, false,
-                    true);
+                    true, firstLineIndent);
 
         // Resume regular hyphenation from the first word after the retried line.
         const size_t resumeIndex = lineBreakIndices[i];
@@ -387,19 +397,11 @@ std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& rendere
 }
 
 std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, const int fontId, const int pageWidth,
-                                                  std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec) {
+                                                  std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
+                                                  const int firstLineIndent) {
   if (words.empty()) {
     return {};
   }
-
-  // Calculate first line indent (only for left/justified text).
-  // Explicit CSS text-indent always applies — author intent overrides the extraParagraphSpacing
-  // toggle. Only the implicit EmSpace fallback in applyParagraphIndent() is gated on it.
-  const int firstLineIndent =
-      blockStyle.textIndentDefined &&
-              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
-          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
-          : 0;
 
   // Ensure any word that would overflow even as the first entry on a line is split using fallback hyphenation.
   for (size_t i = 0; i < wordWidths.size(); ++i) {
@@ -522,18 +524,13 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
 size_t ParsedText::computeSingleLineBreakNoHyphen(const GfxRenderer& renderer, const int fontId, const int pageWidth,
                                                   const std::vector<uint16_t>& wordWidths,
                                                   const std::vector<bool>& continuesVec,
-                                                  const size_t lineStartIndex) const {
+                                                  const size_t lineStartIndex, const int firstLineIndent) const {
   // One-line non-hyphenating breaker used by the page-boundary retry path.
   if (lineStartIndex >= wordWidths.size()) {
     return lineStartIndex;
   }
 
-  const int firstLineIndent =
-      lineStartIndex == 0 && blockStyle.textIndentDefined &&
-              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
-          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
-          : 0;
-  const int effectivePageWidth = pageWidth - firstLineIndent;
+  const int effectivePageWidth = pageWidth - (lineStartIndex == 0 ? firstLineIndent : 0);
 
   size_t currentIndex = lineStartIndex;
   int lineWidth = 0;
@@ -672,15 +669,8 @@ std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& r
                                                             std::vector<bool>& continuesVec,
                                                             std::vector<bool>& lineEndsWithHyphenatedWord,
                                                             std::vector<int>& splitPrefixWordIndexes,
-                                                            std::vector<bool>& splitInsertedHyphen) {
-  // Calculate first line indent (only for left/justified text).
-  // Explicit CSS text-indent always applies — author intent overrides the extraParagraphSpacing
-  // toggle. Only the implicit EmSpace fallback in applyParagraphIndent() is gated on it.
-  const int firstLineIndent =
-      blockStyle.textIndentDefined &&
-              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
-          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
-          : 0;
+                                                            std::vector<bool>& splitInsertedHyphen,
+                                                            const int firstLineIndent) {
 
   // Pre-compute inter-word gaps to avoid repeated codepoint scanning and renderer
   // calls in the inner loop. When hyphenateWordAtIndex inserts a new word, we insert
@@ -960,20 +950,14 @@ ParsedText::LineProcessResult ParsedText::extractLine(
     const std::vector<bool>& continuesVec, const std::vector<size_t>& lineBreakIndices,
     const std::function<LineProcessResult(std::shared_ptr<TextBlock>, bool, bool)>& processLine,
     const GfxRenderer& renderer, const int fontId, const bool lineEndsWithHyphenatedWord,
-    const bool suppressHyphenationRetry) {
+    const bool suppressHyphenationRetry, const int firstLineIndent) {
   const size_t lineBreak = lineBreakIndices[breakIndex];
   const size_t lastBreakAt = breakIndex > 0 ? lineBreakIndices[breakIndex - 1] : 0;
   const size_t lineWordCount = lineBreak - lastBreakAt;
 
-  // Calculate first line indent (only for left/justified text).
-  // Explicit CSS text-indent always applies — author intent overrides the extraParagraphSpacing
-  // toggle. Only the implicit EmSpace fallback in applyParagraphIndent() is gated on it.
-  const bool isFirstLine = breakIndex == 0;
-  const int firstLineIndent =
-      isFirstLine && blockStyle.textIndentDefined &&
-              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
-          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
-          : 0;
+  // Apply indent only to line 0 of the layout pass; firstLineIndent is already
+  // 0 for continuation flushes (computed once in layoutAndExtractLines).
+  const int lineIndent = (breakIndex == 0) ? firstLineIndent : 0;
 
   // Calculate total word width for this line, count actual word gaps,
   // and accumulate total natural gap widths (including space kerning adjustments).
@@ -1000,7 +984,7 @@ ParsedText::LineProcessResult ParsedText::extractLine(
   }
 
   // Calculate spacing (account for indent reducing effective page width on first line)
-  const int effectivePageWidth = pageWidth - firstLineIndent;
+  const int effectivePageWidth = pageWidth - lineIndent;
   // A line is only truly last when it consumes all paragraph words.
   // During single-line retry we may temporarily pass a truncated break vector,
   // so relying only on breakIndex would incorrectly disable justification.
@@ -1014,7 +998,7 @@ ParsedText::LineProcessResult ParsedText::extractLine(
 
   // Calculate initial x position (first line starts at indent for left/justified text;
   // may be negative for hanging indents, e.g. margin-left:3em; text-indent:-1em).
-  auto xpos = static_cast<int16_t>(firstLineIndent);
+  auto xpos = static_cast<int16_t>(lineIndent);
   if (blockStyle.alignment == CssTextAlign::Right) {
     xpos = effectivePageWidth - lineWordWidthSum - totalNaturalGaps;
   } else if (blockStyle.alignment == CssTextAlign::Center) {
