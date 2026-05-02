@@ -383,11 +383,11 @@ void ParsedText::layoutAndExtractLines(
     words.shrink_to_fit();
     wordStyles.shrink_to_fit();
     wordContinues.shrink_to_fit();
-    isContinuation_ = !includeLastLine;
     // All remaining words were already transformed before the flush; reset the
     // watermark so that words appended by addWord() are processed next time.
     bionicTransformedUpTo_ = words.size();
   }
+  isContinuation_ = !includeLastLine;
 }
 
 std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& renderer, const int fontId) {
@@ -610,7 +610,6 @@ void ParsedText::applyBionicReadingTransform() {
     std::string source = std::move(words[i]);
     const auto originalStyle = wordStyles[i];
     const bool originalAttachToPrevious = wordContinues[i];
-    const char* raw = source.c_str();
 
     const auto spans = tokenizeBionicWord(source);
     if (spans.empty()) {
@@ -621,12 +620,7 @@ void ParsedText::applyBionicReadingTransform() {
     for (size_t spanIndex = 0; spanIndex < spans.size(); ++spanIndex) {
       const TokenSpan span = spans[spanIndex];
       const size_t spanLength = span.end - span.start;
-      std::string token;
-      if (spans.size() == 1 && spanIndex == 0) {
-        token = std::move(source);
-      } else {
-        token.assign(raw + span.start, spanLength);
-      }
+      std::string token = source.substr(span.start, spanLength);
 
       if (span.isWord) {
         const unsigned char* ptr = reinterpret_cast<const unsigned char*>(token.c_str());
