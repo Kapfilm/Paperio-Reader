@@ -1501,8 +1501,7 @@ bool fetchRemoteFontManifest(FontInstaller& installer, std::vector<RemoteManifes
       file.name = fileObj["name"] | "";
       file.size = static_cast<size_t>(fileObj["size"] | 0);
       if (!isValidFontFileName(file.name)) {
-        LOG_ERR("WEB", "Manifest entry rejected, invalid file name in %s: %s", family.name.c_str(),
-                file.name.c_str());
+        LOG_ERR("WEB", "Manifest entry rejected, invalid file name in %s: %s", family.name.c_str(), file.name.c_str());
         fileNamesOk = false;
         break;
       }
