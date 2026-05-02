@@ -49,10 +49,22 @@ std::string cellValue(StrId submenu, StrId pressKind) {
 
 void ButtonActionsOverviewActivity::onEnter() {
   Activity::onEnter();
+
+  // Force landscape so the four-column table has room for full action labels.
+  {
+    RenderLock lock(*this);
+    renderer.setOrientation(GfxRenderer::Orientation::LandscapeClockwise);
+  }
+
   requestUpdate();
 }
 
-void ButtonActionsOverviewActivity::onExit() { Activity::onExit(); }
+void ButtonActionsOverviewActivity::onExit() {
+  // Restore portrait — matches the rest of the settings UI.
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+
+  Activity::onExit();
+}
 
 void ButtonActionsOverviewActivity::loop() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Back) ||
