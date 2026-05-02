@@ -767,6 +767,18 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     // For metadata-only calls, METADATA or FULL cache both satisfy layout queries.
     // For full (bitmap) calls, only FULL satisfies — METADATA lacks bitmap data.
     if (metadataOnly || s.miniMode == PerStyle::MiniMode::FULL) {
+      // Ensure ligature metadata is wired if requested but not yet wired.
+      if (loadKernLigatureData && !s.ligLoaded) {
+        loadStyleKernLigatureData(s, /*ligatureOnly=*/true);
+      }
+      if (loadKernLigatureData && s.ligLoaded && s.miniData.ligaturePairs == nullptr) {
+        if (s.miniMode == PerStyle::MiniMode::FULL) {
+          applyKernLigaturePointers(s, s.miniData);
+        } else {
+          s.miniData.ligaturePairs = s.ligaturePairs;
+          s.miniData.ligaturePairCount = s.header.ligaturePairCount;
+        }
+      }
       // Already wired into miniData; nothing else to do.
       return 0;
     }
