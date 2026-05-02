@@ -215,7 +215,14 @@ void ParsedText::layoutAndExtractLines(
   }
 
   // Apply fixed transforms before any per-line layout work.
-  applyParagraphIndent();
+  // Paragraph indent only applies to the first layout pass; skip on continuations.
+  if (!isContinuation_) {
+    applyParagraphIndent();
+  }
+  // Bionic transform is incremental: applyBionicReadingTransform() is a no-op
+  // for already-transformed words (bionicTransformedUpTo_ == words.size()) and
+  // only processes raw words appended since the last flush, so it is always safe
+  // to call regardless of isContinuation_.
   if (bionicReadingEnabled) {
     applyBionicReadingTransform();
   }
@@ -242,6 +249,15 @@ void ParsedText::layoutAndExtractLines(
   }
 
   const int pageWidth = viewportWidth;
+
+  // Compute firstLineIndent once here so all layout helpers use the same value.
+  // On a continuation flush the remaining words are mid-paragraph, so no indent.
+  const int firstLineIndent =
+      !isContinuation_ && blockStyle.textIndentDefined &&
+              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
+          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
+          : 0;
+
   auto wordWidths = calculateWordWidths(renderer, fontId);
 
   std::vector<size_t> lineBreakIndices;
@@ -252,9 +268,9 @@ void ParsedText::layoutAndExtractLines(
     // Use greedy layout that can split words mid-loop when a hyphenated prefix fits.
     lineBreakIndices =
         computeHyphenatedLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, lineEndsWithHyphenatedWord,
-                                    splitPrefixWordIndexes, splitInsertedHyphen);
+                                    splitPrefixWordIndexes, splitInsertedHyphen, firstLineIndent);
   } else {
-    lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues);
+    lineBreakIndices = computeLineBreaks(renderer, fontId, pageWidth, wordWidths, wordContinues, firstLineIndent);
     lineEndsWithHyphenatedWord.assign(lineBreakIndices.size(), false);
     splitPrefixWordIndexes.assign(lineBreakIndices.size(), -1);
     splitInsertedHyphen.assign(lineBreakIndices.size(), false);
@@ -264,7 +280,7 @@ void ParsedText::layoutAndExtractLines(
   for (size_t i = 0; i < lineCount; ++i) {
     const bool lineEndedWithHyphenation = i < lineEndsWithHyphenatedWord.size() ? lineEndsWithHyphenatedWord[i] : false;
     const auto result = extractLine(i, pageWidth, wordWidths, wordContinues, lineBreakIndices, processLine, renderer,
-                                    fontId, lineEndedWithHyphenation, false);
+                                    fontId, lineEndedWithHyphenation, false, firstLineIndent);
 
     if (result == LineProcessResult::RetryWithoutHyphenation && lineEndedWithHyphenation) {
       const size_t lineStart = i > 0 ? lineBreakIndices[i - 1] : 0;
@@ -309,8 +325,8 @@ void ParsedText::layoutAndExtractLines(
 
       // Keep previous lines fixed; recompute only this specific line without hyphenation.
       // Suppression is intentionally line-local.
-      const size_t retryBreak =
-          computeSingleLineBreakNoHyphen(renderer, fontId, pageWidth, wordWidths, wordContinues, lineStart);
+      const size_t retryBreak = computeSingleLineBreakNoHyphen(renderer, fontId, pageWidth, wordWidths, wordContinues,
+                                                               lineStart, firstLineIndent);
 
       lineBreakIndices.resize(i + 1);
       lineEndsWithHyphenatedWord.resize(i + 1);
@@ -330,7 +346,7 @@ void ParsedText::layoutAndExtractLines(
         LOG_DBG("PTX", "Rerendering line %u with hyphenation suppressed, retry attempt: %s", static_cast<unsigned>(i),
                 retryPreview.c_str());
         extractLine(i, pageWidth, wordWidths, wordContinues, lineBreakIndices, processLine, renderer, fontId, false,
-                    true);
+                    true, firstLineIndent);
 
         // Resume regular hyphenation from the first word after the retried line.
         const size_t resumeIndex = lineBreakIndices[i];
@@ -355,13 +371,23 @@ void ParsedText::layoutAndExtractLines(
     }
   }
 
-  // Remove consumed words so size() reflects only remaining words
+  // Remove consumed words so size() reflects only remaining words, then
+  // release excess capacity.  Without shrink_to_fit the vector retains a
+  // large allocation from before the flush; the next paragraph fills it
+  // back up and eventually needs an even larger contiguous realloc.
   if (lineCount > 0) {
     const size_t consumed = lineBreakIndices[lineCount - 1];
     words.erase(words.begin(), words.begin() + consumed);
     wordStyles.erase(wordStyles.begin(), wordStyles.begin() + consumed);
     wordContinues.erase(wordContinues.begin(), wordContinues.begin() + consumed);
+    words.shrink_to_fit();
+    wordStyles.shrink_to_fit();
+    wordContinues.shrink_to_fit();
+    // All remaining words were already transformed before the flush; reset the
+    // watermark so that words appended by addWord() are processed next time.
+    bionicTransformedUpTo_ = words.size();
   }
+  isContinuation_ = !includeLastLine;
 }
 
 std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& renderer, const int fontId) {
@@ -376,19 +402,11 @@ std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& rendere
 }
 
 std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, const int fontId, const int pageWidth,
-                                                  std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec) {
+                                                  std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
+                                                  const int firstLineIndent) {
   if (words.empty()) {
     return {};
   }
-
-  // Calculate first line indent (only for left/justified text).
-  // Explicit CSS text-indent always applies — author intent overrides the extraParagraphSpacing
-  // toggle. Only the implicit EmSpace fallback in applyParagraphIndent() is gated on it.
-  const int firstLineIndent =
-      blockStyle.textIndentDefined &&
-              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
-          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
-          : 0;
 
   // Ensure any word that would overflow even as the first entry on a line is split using fallback hyphenation.
   for (size_t i = 0; i < wordWidths.size(); ++i) {
@@ -510,19 +528,14 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
 
 size_t ParsedText::computeSingleLineBreakNoHyphen(const GfxRenderer& renderer, const int fontId, const int pageWidth,
                                                   const std::vector<uint16_t>& wordWidths,
-                                                  const std::vector<bool>& continuesVec,
-                                                  const size_t lineStartIndex) const {
+                                                  const std::vector<bool>& continuesVec, const size_t lineStartIndex,
+                                                  const int firstLineIndent) const {
   // One-line non-hyphenating breaker used by the page-boundary retry path.
   if (lineStartIndex >= wordWidths.size()) {
     return lineStartIndex;
   }
 
-  const int firstLineIndent =
-      lineStartIndex == 0 && blockStyle.textIndentDefined &&
-              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
-          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
-          : 0;
-  const int effectivePageWidth = pageWidth - firstLineIndent;
+  const int effectivePageWidth = pageWidth - (lineStartIndex == 0 ? firstLineIndent : 0);
 
   size_t currentIndex = lineStartIndex;
   int lineWidth = 0;
@@ -577,22 +590,26 @@ void ParsedText::applyParagraphIndent() {
 }
 
 void ParsedText::applyBionicReadingTransform() {
-  if (words.empty()) {
+  // Only transform words that haven't been processed yet.  On a fresh block
+  // bionicTransformedUpTo_ == 0 so all words are processed.  After an
+  // intermediate flush, only the new raw words appended since the last flush
+  // (indices bionicTransformedUpTo_..words.size()-1) need transformation.
+  if (words.empty() || bionicTransformedUpTo_ >= words.size()) {
     return;
   }
 
-  std::vector<std::string> transformedWords;
-  std::vector<EpdFontFamily::Style> transformedStyles;
-  std::vector<bool> transformedContinues;
-  transformedWords.reserve(words.size() * 2);
-  transformedStyles.reserve(wordStyles.size() * 2);
-  transformedContinues.reserve(wordContinues.size() * 2);
+  const size_t suffixStart = bionicTransformedUpTo_;
+  std::vector<std::string> transformedSuffix;
+  std::vector<EpdFontFamily::Style> transformedSuffixStyles;
+  std::vector<bool> transformedSuffixContinues;
+  transformedSuffix.reserve((words.size() - suffixStart) * 2);
+  transformedSuffixStyles.reserve(transformedSuffix.capacity());
+  transformedSuffixContinues.reserve(transformedSuffix.capacity());
 
-  for (size_t i = 0; i < words.size(); ++i) {
+  for (size_t i = suffixStart; i < words.size(); ++i) {
     std::string source = std::move(words[i]);
     const auto originalStyle = wordStyles[i];
     const bool originalAttachToPrevious = wordContinues[i];
-    const char* raw = source.c_str();
 
     const auto spans = tokenizeBionicWord(source);
     if (spans.empty()) {
@@ -603,12 +620,7 @@ void ParsedText::applyBionicReadingTransform() {
     for (size_t spanIndex = 0; spanIndex < spans.size(); ++spanIndex) {
       const TokenSpan span = spans[spanIndex];
       const size_t spanLength = span.end - span.start;
-      std::string token;
-      if (spans.size() == 1 && spanIndex == 0) {
-        token = std::move(source);
-      } else {
-        token.assign(raw + span.start, spanLength);
-      }
+      std::string token = source.substr(span.start, spanLength);
 
       if (span.isWord) {
         const unsigned char* ptr = reinterpret_cast<const unsigned char*>(token.c_str());
@@ -630,47 +642,42 @@ void ParsedText::applyBionicReadingTransform() {
             std::string suffix(reinterpret_cast<const char*>(prefixEnd), token.size() - prefixByteCount);
             token.resize(prefixByteCount);
             const auto boldStyle = static_cast<EpdFontFamily::Style>(originalStyle | EpdFontFamily::BOLD);
-            transformedWords.push_back(std::move(token));
-            transformedStyles.push_back(boldStyle);
-            transformedContinues.push_back(attachToPrevious);
+            transformedSuffix.push_back(std::move(token));
+            transformedSuffixStyles.push_back(boldStyle);
+            transformedSuffixContinues.push_back(attachToPrevious);
 
-            transformedWords.push_back(std::move(suffix));
-            transformedStyles.push_back(originalStyle);
-            transformedContinues.push_back(true);
+            transformedSuffix.push_back(std::move(suffix));
+            transformedSuffixStyles.push_back(originalStyle);
+            transformedSuffixContinues.push_back(true);
             attachToPrevious = true;
             continue;
           }
         }
       }
 
-      transformedWords.push_back(std::move(token));
-      transformedStyles.push_back(originalStyle);
-      transformedContinues.push_back(attachToPrevious);
+      transformedSuffix.push_back(std::move(token));
+      transformedSuffixStyles.push_back(originalStyle);
+      transformedSuffixContinues.push_back(attachToPrevious);
       attachToPrevious = true;
     }
   }
 
-  words = std::move(transformedWords);
-  wordStyles = std::move(transformedStyles);
-  wordContinues = std::move(transformedContinues);
+  // Replace the (now move-emptied) suffix with the transformed version.
+  words.resize(suffixStart);
+  wordStyles.resize(suffixStart);
+  wordContinues.resize(suffixStart);
+  words.insert(words.end(), std::make_move_iterator(transformedSuffix.begin()),
+               std::make_move_iterator(transformedSuffix.end()));
+  wordStyles.insert(wordStyles.end(), transformedSuffixStyles.begin(), transformedSuffixStyles.end());
+  wordContinues.insert(wordContinues.end(), transformedSuffixContinues.begin(), transformedSuffixContinues.end());
+  bionicTransformedUpTo_ = words.size();
 }
 
 // Builds break indices while opportunistically splitting the word that would overflow the current line.
-std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(const GfxRenderer& renderer, const int fontId,
-                                                            const int pageWidth, std::vector<uint16_t>& wordWidths,
-                                                            std::vector<bool>& continuesVec,
-                                                            std::vector<bool>& lineEndsWithHyphenatedWord,
-                                                            std::vector<int>& splitPrefixWordIndexes,
-                                                            std::vector<bool>& splitInsertedHyphen) {
-  // Calculate first line indent (only for left/justified text).
-  // Explicit CSS text-indent always applies — author intent overrides the extraParagraphSpacing
-  // toggle. Only the implicit EmSpace fallback in applyParagraphIndent() is gated on it.
-  const int firstLineIndent =
-      blockStyle.textIndentDefined &&
-              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
-          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
-          : 0;
-
+std::vector<size_t> ParsedText::computeHyphenatedLineBreaks(
+    const GfxRenderer& renderer, const int fontId, const int pageWidth, std::vector<uint16_t>& wordWidths,
+    std::vector<bool>& continuesVec, std::vector<bool>& lineEndsWithHyphenatedWord,
+    std::vector<int>& splitPrefixWordIndexes, std::vector<bool>& splitInsertedHyphen, const int firstLineIndent) {
   // Pre-compute inter-word gaps to avoid repeated codepoint scanning and renderer
   // calls in the inner loop. When hyphenateWordAtIndex inserts a new word, we insert
   // a placeholder gap (0) at that position to keep the vector in sync; the remainder
@@ -949,20 +956,14 @@ ParsedText::LineProcessResult ParsedText::extractLine(
     const std::vector<bool>& continuesVec, const std::vector<size_t>& lineBreakIndices,
     const std::function<LineProcessResult(std::shared_ptr<TextBlock>, bool, bool)>& processLine,
     const GfxRenderer& renderer, const int fontId, const bool lineEndsWithHyphenatedWord,
-    const bool suppressHyphenationRetry) {
+    const bool suppressHyphenationRetry, const int firstLineIndent) {
   const size_t lineBreak = lineBreakIndices[breakIndex];
   const size_t lastBreakAt = breakIndex > 0 ? lineBreakIndices[breakIndex - 1] : 0;
   const size_t lineWordCount = lineBreak - lastBreakAt;
 
-  // Calculate first line indent (only for left/justified text).
-  // Explicit CSS text-indent always applies — author intent overrides the extraParagraphSpacing
-  // toggle. Only the implicit EmSpace fallback in applyParagraphIndent() is gated on it.
-  const bool isFirstLine = breakIndex == 0;
-  const int firstLineIndent =
-      isFirstLine && blockStyle.textIndentDefined &&
-              (blockStyle.alignment == CssTextAlign::Justify || blockStyle.alignment == CssTextAlign::Left)
-          ? std::min(std::max<int>(static_cast<int>(blockStyle.textIndent), -(pageWidth - 1)), pageWidth - 1)
-          : 0;
+  // Apply indent only to line 0 of the layout pass; firstLineIndent is already
+  // 0 for continuation flushes (computed once in layoutAndExtractLines).
+  const int lineIndent = (breakIndex == 0) ? firstLineIndent : 0;
 
   // Calculate total word width for this line, count actual word gaps,
   // and accumulate total natural gap widths (including space kerning adjustments).
@@ -989,7 +990,7 @@ ParsedText::LineProcessResult ParsedText::extractLine(
   }
 
   // Calculate spacing (account for indent reducing effective page width on first line)
-  const int effectivePageWidth = pageWidth - firstLineIndent;
+  const int effectivePageWidth = pageWidth - lineIndent;
   // A line is only truly last when it consumes all paragraph words.
   // During single-line retry we may temporarily pass a truncated break vector,
   // so relying only on breakIndex would incorrectly disable justification.
@@ -1003,7 +1004,7 @@ ParsedText::LineProcessResult ParsedText::extractLine(
 
   // Calculate initial x position (first line starts at indent for left/justified text;
   // may be negative for hanging indents, e.g. margin-left:3em; text-indent:-1em).
-  auto xpos = static_cast<int16_t>(firstLineIndent);
+  auto xpos = static_cast<int16_t>(lineIndent);
   if (blockStyle.alignment == CssTextAlign::Right) {
     xpos = effectivePageWidth - lineWordWidthSum - totalNaturalGaps;
   } else if (blockStyle.alignment == CssTextAlign::Center) {
