@@ -219,8 +219,7 @@ bool SdCardFont::loadStyleKernLigatureData(PerStyle& s, bool ligatureOnly) {
   file.close();
   LOG_DBG("SDCF", "Kern/lig loaded: kernL=%u kernR=%u ligs=%u ligOnly=%d",
           s.kernClassesLoaded ? s.header.kernLeftEntryCount : 0u,
-          s.kernClassesLoaded ? s.header.kernRightEntryCount : 0u,
-          s.ligLoaded ? s.header.ligaturePairCount : 0u,
+          s.kernClassesLoaded ? s.header.kernRightEntryCount : 0u, s.ligLoaded ? s.header.ligaturePairCount : 0u,
           ligatureOnly);
   return true;
 }
@@ -1180,8 +1179,8 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
 
   s.epdFont.data = &s.miniData;
   s.miniMode = metadataOnly ? PerStyle::MiniMode::METADATA : PerStyle::MiniMode::FULL;
-  LOG_DBG("SDCF", "prewarmStyle %u: mode→%s glyphs=%u bitmap=%p",
-          styleIdx, metadataOnly ? "METADATA" : "FULL", validCount, s.miniBitmap);
+  LOG_DBG("SDCF", "prewarmStyle %u: mode→%s glyphs=%u bitmap=%p", styleIdx, metadataOnly ? "METADATA" : "FULL",
+          validCount, s.miniBitmap);
 
   // Accumulate stats
   stats_.sdReadTimeMs += sdTime;
@@ -1246,8 +1245,8 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   if (!s.fullIntervals) return nullptr;
 
   // Diagnostic: log first miss per codepoint+style to show why it bypassed prewarm
-  LOG_DBG("SDCF", "onGlyphMiss: U+%04X style %u miniMode=%u miniIntervals=%u bitmap=%p",
-          codepoint, styleIdx, (uint8_t)s.miniMode, s.miniIntervalCount, s.miniBitmap);
+  LOG_DBG("SDCF", "onGlyphMiss: U+%04X style %u miniMode=%u miniIntervals=%u bitmap=%p", codepoint, styleIdx,
+          (uint8_t)s.miniMode, s.miniIntervalCount, s.miniBitmap);
 
   // Check overflow cache first (matching both codepoint and style)
   for (uint32_t i = 0; i < self->overflowCount_; i++) {
@@ -1322,8 +1321,8 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
 
   // All reads succeeded — commit to slot (evict old entry if at capacity)
   if (wasAtCapacity) {
-    LOG_DBG("SDCF", "Overflow: evicting U+%04X style %u from slot %u",
-            self->overflow_[slot].codepoint, self->overflow_[slot].styleIdx, slot);
+    LOG_DBG("SDCF", "Overflow: evicting U+%04X style %u from slot %u", self->overflow_[slot].codepoint,
+            self->overflow_[slot].styleIdx, slot);
     delete[] self->overflow_[slot].bitmap;
   }
   self->overflow_[slot].glyph = tempGlyph;

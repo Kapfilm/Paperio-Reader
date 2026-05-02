@@ -118,8 +118,8 @@ class SdCardFont {
     EpdKernClassEntry* kernLeftClasses = nullptr;
     EpdKernClassEntry* kernRightClasses = nullptr;
     EpdLigaturePair* ligaturePairs = nullptr;
-    bool ligLoaded = false;        ///< ligaturePairs resident
-    bool kernClassesLoaded = false; ///< kernLeft/RightClasses resident (skipped during metadata-only prewarm)
+    bool ligLoaded = false;          ///< ligaturePairs resident
+    bool kernClassesLoaded = false;  ///< kernLeft/RightClasses resident (skipped during metadata-only prewarm)
 
     // Stub EpdFontData returned when not prewarmed
     EpdFontData stubData{};
