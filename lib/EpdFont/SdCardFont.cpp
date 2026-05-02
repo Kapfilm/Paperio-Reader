@@ -72,6 +72,11 @@ void SdCardFont::freeStyleKernLigatureData(PerStyle& s) {
   delete[] s.ligaturePairs;
   s.ligaturePairs = nullptr;
   s.ligLoaded = false;
+  // Clear dangling pointers in EpdFontData structs
+  s.stubData.ligaturePairs = nullptr;
+  s.stubData.ligaturePairCount = 0;
+  s.miniData.ligaturePairs = nullptr;
+  s.miniData.ligaturePairCount = 0;
 }
 
 void SdCardFont::freeStyleMiniKern(PerStyle& s) {
@@ -157,56 +162,61 @@ bool SdCardFont::loadStyleKernLigatureData(PerStyle& s, bool ligatureOnly) {
     // Load only the small class-lookup tables (~3KB each). The full matrix
     // (~36KB contiguous for Literata) is built per-page from SD in
     // buildMiniKernMatrix().
-    s.kernLeftClasses = new (std::nothrow) EpdKernClassEntry[s.header.kernLeftEntryCount];
-    s.kernRightClasses = new (std::nothrow) EpdKernClassEntry[s.header.kernRightEntryCount];
+    EpdKernClassEntry* newLeft = new (std::nothrow) EpdKernClassEntry[s.header.kernLeftEntryCount];
+    EpdKernClassEntry* newRight = new (std::nothrow) EpdKernClassEntry[s.header.kernRightEntryCount];
 
-    if (!s.kernLeftClasses || !s.kernRightClasses) {
+    if (!newLeft || !newRight) {
+      delete[] newLeft;
+      delete[] newRight;
       LOG_ERR("SDCF", "Failed to allocate kern classes (%u+%u bytes)", s.header.kernLeftEntryCount * 3u,
               s.header.kernRightEntryCount * 3u);
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
 
     if (!file.seekSet(s.kernLeftFileOffset)) {
+      delete[] newLeft;
+      delete[] newRight;
       LOG_ERR("SDCF", "Failed to seek to kern data");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
     size_t leftSz = s.header.kernLeftEntryCount * sizeof(EpdKernClassEntry);
     size_t rightSz = s.header.kernRightEntryCount * sizeof(EpdKernClassEntry);
-    if (file.read(reinterpret_cast<uint8_t*>(s.kernLeftClasses), leftSz) != static_cast<int>(leftSz) ||
-        file.read(reinterpret_cast<uint8_t*>(s.kernRightClasses), rightSz) != static_cast<int>(rightSz)) {
+    if (file.read(reinterpret_cast<uint8_t*>(newLeft), leftSz) != static_cast<int>(leftSz) ||
+        file.read(reinterpret_cast<uint8_t*>(newRight), rightSz) != static_cast<int>(rightSz)) {
+      delete[] newLeft;
+      delete[] newRight;
       LOG_ERR("SDCF", "Failed to read kern classes");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
+    s.kernLeftClasses = newLeft;
+    s.kernRightClasses = newRight;
     s.kernClassesLoaded = true;
   }
 
   if (wantLig && !s.ligLoaded) {
-    s.ligaturePairs = new (std::nothrow) EpdLigaturePair[s.header.ligaturePairCount];
-    if (!s.ligaturePairs) {
+    EpdLigaturePair* newLig = new (std::nothrow) EpdLigaturePair[s.header.ligaturePairCount];
+    if (!newLig) {
       LOG_ERR("SDCF", "Failed to allocate ligature pairs");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
     if (!file.seekSet(s.ligatureFileOffset)) {
+      delete[] newLig;
       LOG_ERR("SDCF", "Failed to seek to ligature data");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
     size_t sz = s.header.ligaturePairCount * sizeof(EpdLigaturePair);
-    if (file.read(reinterpret_cast<uint8_t*>(s.ligaturePairs), sz) != static_cast<int>(sz)) {
+    if (file.read(reinterpret_cast<uint8_t*>(newLig), sz) != static_cast<int>(sz)) {
+      delete[] newLig;
       LOG_ERR("SDCF", "Failed to read ligature pairs");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
+    s.ligaturePairs = newLig;
     s.ligLoaded = true;
 
     // Make ligatures visible to the stub (used when no mini data built yet).
