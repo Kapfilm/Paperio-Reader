@@ -140,13 +140,13 @@ inline const std::vector<SettingInfo> list = {
 // All entries share the same ordered action-label list; the submenu groups them behind
 // a single placeholder row in the device UI.
 // Shared action options (everything except the first "default" entry).
-#define BTN_ACT_OPTIONS                                                                                 \
-  StrId::STR_BTN_ACT_PAGE_FORWARD, StrId::STR_BTN_ACT_PAGE_BACK, StrId::STR_BTN_ACT_PAGE_FORWARD_10,    \
-      StrId::STR_BTN_ACT_PAGE_BACK_10, StrId::STR_BTN_ACT_GO_HOME, StrId::STR_BTN_ACT_SLEEP,            \
-      StrId::STR_BTN_ACT_FORCE_REFRESH, StrId::STR_BTN_ACT_OPEN_TOC, StrId::STR_BTN_ACT_OPEN_BOOKMARKS, \
-      StrId::STR_BTN_ACT_STAR_PAGE, StrId::STR_BTN_ACT_FOOTNOTES, StrId::STR_BTN_ACT_NEXT_SECTION,      \
-      StrId::STR_BTN_ACT_PREV_SECTION, StrId::STR_BTN_ACT_EXIT_READER, StrId::STR_BTN_ACT_READER_MENU,  \
-      StrId::STR_BTN_ACT_TOGGLE_BIONIC_READING, StrId::STR_BTN_ACT_KOREADER_SYNC
+#define BTN_ACT_OPTIONS                                                                                     \
+  StrId::STR_BTN_ACT_PAGE_FORWARD, StrId::STR_BTN_ACT_PAGE_BACK, StrId::STR_BTN_ACT_PAGE_FORWARD_10,        \
+      StrId::STR_BTN_ACT_PAGE_BACK_10, StrId::STR_BTN_ACT_GO_HOME, StrId::STR_BTN_ACT_SLEEP,                \
+      StrId::STR_BTN_ACT_FORCE_REFRESH, StrId::STR_BTN_ACT_FORCE_FAST_REFRESH, StrId::STR_BTN_ACT_OPEN_TOC, \
+      StrId::STR_BTN_ACT_OPEN_BOOKMARKS, StrId::STR_BTN_ACT_STAR_PAGE, StrId::STR_BTN_ACT_FOOTNOTES,        \
+      StrId::STR_BTN_ACT_NEXT_SECTION, StrId::STR_BTN_ACT_PREV_SECTION, StrId::STR_BTN_ACT_EXIT_READER,     \
+      StrId::STR_BTN_ACT_READER_MENU, StrId::STR_BTN_ACT_TOGGLE_BIONIC_READING, StrId::STR_BTN_ACT_KOREADER_SYNC
 
     // Back button: short=exit reader, double=ignore, long=go home
     SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortBack, {StrId::STR_BTN_DEF_EXIT_READER},
@@ -275,15 +275,6 @@ inline const std::vector<SettingInfo> list = {
         "koMatchMethod", StrId::STR_KOREADER_SYNC),
     SettingInfo::Toggle(StrId::STR_KO_SYNC_ON_BOOK_CLOSE, &CrossPointSettings::koSyncOnBookClose, "koSyncOnBookClose",
                         StrId::STR_KOREADER_SYNC),
-
-    // --- OPDS Browser (web-only, uses CrossPointSettings char arrays) ---
-    SettingInfo::String(StrId::STR_OPDS_SERVER_URL, SETTINGS.opdsServerUrl, sizeof(SETTINGS.opdsServerUrl),
-                        "opdsServerUrl", StrId::STR_OPDS_BROWSER),
-    SettingInfo::String(StrId::STR_USERNAME, SETTINGS.opdsUsername, sizeof(SETTINGS.opdsUsername), "opdsUsername",
-                        StrId::STR_OPDS_BROWSER),
-    SettingInfo::String(StrId::STR_PASSWORD, SETTINGS.opdsPassword, sizeof(SETTINGS.opdsPassword), "opdsPassword",
-                        StrId::STR_OPDS_BROWSER)
-        .withObfuscated(),
 
     // --- Status Bar Settings (web-only, uses StatusBarSettingsActivity) ---
     SettingInfo::Toggle(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount,

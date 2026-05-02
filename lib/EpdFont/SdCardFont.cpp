@@ -52,6 +52,21 @@ void SdCardFont::freeStyleMiniData(PerStyle& s) {
   s.miniIntervalCount = 0;
   s.miniGlyphCount = 0;
   s.miniMode = PerStyle::MiniMode::NONE;
+  // Clear dangling pointers in miniData and stubData (kern data points to freed mini arrays)
+  s.miniData.kernLeftClasses = nullptr;
+  s.miniData.kernRightClasses = nullptr;
+  s.miniData.kernMatrix = nullptr;
+  s.miniData.kernLeftEntryCount = 0;
+  s.miniData.kernRightEntryCount = 0;
+  s.miniData.kernLeftClassCount = 0;
+  s.miniData.kernRightClassCount = 0;
+  s.stubData.kernLeftClasses = nullptr;
+  s.stubData.kernRightClasses = nullptr;
+  s.stubData.kernMatrix = nullptr;
+  s.stubData.kernLeftEntryCount = 0;
+  s.stubData.kernRightEntryCount = 0;
+  s.stubData.kernLeftClassCount = 0;
+  s.stubData.kernRightClassCount = 0;
   // NOTE: reportedMissCount is intentionally NOT reset here. The merge path
   // calls freeStyleMiniData() to swap mini buffers, and resetting the miss
   // tracker every paragraph would re-spam the log for the same 4 missing cps.
@@ -66,11 +81,17 @@ void SdCardFont::freeStyleMiniData(PerStyle& s) {
 void SdCardFont::freeStyleKernLigatureData(PerStyle& s) {
   delete[] s.kernLeftClasses;
   s.kernLeftClasses = nullptr;
+  s.kernClassesLoaded = false;
   delete[] s.kernRightClasses;
   s.kernRightClasses = nullptr;
   delete[] s.ligaturePairs;
   s.ligaturePairs = nullptr;
-  s.kernLigLoaded = false;
+  s.ligLoaded = false;
+  // Clear dangling pointers in EpdFontData structs
+  s.stubData.ligaturePairs = nullptr;
+  s.stubData.ligaturePairCount = 0;
+  s.miniData.ligaturePairs = nullptr;
+  s.miniData.ligaturePairCount = 0;
 }
 
 void SdCardFont::freeStyleMiniKern(PerStyle& s) {
@@ -134,14 +155,17 @@ void SdCardFont::applyKernLigaturePointers(const PerStyle& s, EpdFontData& data)
   data.ligaturePairCount = s.header.ligaturePairCount;
 }
 
-bool SdCardFont::loadStyleKernLigatureData(PerStyle& s) {
-  if (s.kernLigLoaded) return true;
-  bool hasKern = s.header.kernLeftEntryCount > 0;
-  bool hasLig = s.header.ligaturePairCount > 0;
-  if (!hasKern && !hasLig) {
-    s.kernLigLoaded = true;
-    return true;
-  }
+bool SdCardFont::loadStyleKernLigatureData(PerStyle& s, bool ligatureOnly) {
+  // During metadata-only (layout) prewarms, skip the kern class tables: the kern
+  // matrix is never built at layout time so getKerning() returns 0 regardless.
+  // Skipping them saves ~4KB per style (~17KB total for 4 styles), preventing OOM
+  // on low-heap devices when long paragraphs try to grow their word vector.
+  const bool wantKern = !ligatureOnly && s.header.kernLeftEntryCount > 0;
+  const bool wantLig = s.header.ligaturePairCount > 0;
+
+  const bool kernDone = !wantKern || s.kernClassesLoaded;
+  const bool ligDone = !wantLig || s.ligLoaded;
+  if (kernDone && ligDone) return true;
 
   FsFile file;
   if (!Storage.openFileForRead("SDCF", filePath_, file)) {
@@ -149,72 +173,79 @@ bool SdCardFont::loadStyleKernLigatureData(PerStyle& s) {
     return false;
   }
 
-  if (hasKern) {
+  if (wantKern && !s.kernClassesLoaded) {
     // Load only the small class-lookup tables (~3KB each). The full matrix
     // (~36KB contiguous for Literata) is built per-page from SD in
     // buildMiniKernMatrix().
-    s.kernLeftClasses = new (std::nothrow) EpdKernClassEntry[s.header.kernLeftEntryCount];
-    s.kernRightClasses = new (std::nothrow) EpdKernClassEntry[s.header.kernRightEntryCount];
+    EpdKernClassEntry* newLeft = new (std::nothrow) EpdKernClassEntry[s.header.kernLeftEntryCount];
+    EpdKernClassEntry* newRight = new (std::nothrow) EpdKernClassEntry[s.header.kernRightEntryCount];
 
-    if (!s.kernLeftClasses || !s.kernRightClasses) {
+    if (!newLeft || !newRight) {
+      delete[] newLeft;
+      delete[] newRight;
       LOG_ERR("SDCF", "Failed to allocate kern classes (%u+%u bytes)", s.header.kernLeftEntryCount * 3u,
               s.header.kernRightEntryCount * 3u);
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
 
     if (!file.seekSet(s.kernLeftFileOffset)) {
+      delete[] newLeft;
+      delete[] newRight;
       LOG_ERR("SDCF", "Failed to seek to kern data");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
     size_t leftSz = s.header.kernLeftEntryCount * sizeof(EpdKernClassEntry);
     size_t rightSz = s.header.kernRightEntryCount * sizeof(EpdKernClassEntry);
-    if (file.read(reinterpret_cast<uint8_t*>(s.kernLeftClasses), leftSz) != static_cast<int>(leftSz) ||
-        file.read(reinterpret_cast<uint8_t*>(s.kernRightClasses), rightSz) != static_cast<int>(rightSz)) {
+    if (file.read(reinterpret_cast<uint8_t*>(newLeft), leftSz) != static_cast<int>(leftSz) ||
+        file.read(reinterpret_cast<uint8_t*>(newRight), rightSz) != static_cast<int>(rightSz)) {
+      delete[] newLeft;
+      delete[] newRight;
       LOG_ERR("SDCF", "Failed to read kern classes");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
+    s.kernLeftClasses = newLeft;
+    s.kernRightClasses = newRight;
+    s.kernClassesLoaded = true;
   }
 
-  if (hasLig) {
-    s.ligaturePairs = new (std::nothrow) EpdLigaturePair[s.header.ligaturePairCount];
-    if (!s.ligaturePairs) {
+  if (wantLig && !s.ligLoaded) {
+    EpdLigaturePair* newLig = new (std::nothrow) EpdLigaturePair[s.header.ligaturePairCount];
+    if (!newLig) {
       LOG_ERR("SDCF", "Failed to allocate ligature pairs");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
     if (!file.seekSet(s.ligatureFileOffset)) {
+      delete[] newLig;
       LOG_ERR("SDCF", "Failed to seek to ligature data");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
     size_t sz = s.header.ligaturePairCount * sizeof(EpdLigaturePair);
-    if (file.read(reinterpret_cast<uint8_t*>(s.ligaturePairs), sz) != static_cast<int>(sz)) {
+    if (file.read(reinterpret_cast<uint8_t*>(newLig), sz) != static_cast<int>(sz)) {
+      delete[] newLig;
       LOG_ERR("SDCF", "Failed to read ligature pairs");
-      freeStyleKernLigatureData(s);
       file.close();
       return false;
     }
+    s.ligaturePairs = newLig;
+    s.ligLoaded = true;
+
+    // Make ligatures visible to the stub (used when no mini data built yet).
+    // Kern stays nullptr on the stub — it is only wired in miniData via
+    // applyKernLigaturePointers() after buildMiniKernMatrix() runs.
+    s.stubData.ligaturePairs = s.ligaturePairs;
+    s.stubData.ligaturePairCount = s.header.ligaturePairCount;
   }
 
   file.close();
-  s.kernLigLoaded = true;
-
-  // Make ligatures visible to the stub (used when no mini data built yet).
-  // Kern stays nullptr on the stub — it is only wired in miniData via
-  // applyKernLigaturePointers() after buildMiniKernMatrix() runs.
-  s.stubData.ligaturePairs = s.ligaturePairs;
-  s.stubData.ligaturePairCount = s.header.ligaturePairCount;
-
-  LOG_DBG("SDCF", "Kern classes + lig loaded: kernL=%u, kernR=%u, ligs=%u", s.header.kernLeftEntryCount,
-          s.header.kernRightEntryCount, s.header.ligaturePairCount);
+  LOG_DBG("SDCF", "Kern/lig loaded: kernL=%u kernR=%u ligs=%u ligOnly=%d",
+          s.kernClassesLoaded ? s.header.kernLeftEntryCount : 0u,
+          s.kernClassesLoaded ? s.header.kernRightEntryCount : 0u, s.ligLoaded ? s.header.ligaturePairCount : 0u,
+          ligatureOnly);
   return true;
 }
 
@@ -653,7 +684,7 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
       if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
       auto& s = styles_[si];
 
-      loadStyleKernLigatureData(s);
+      loadStyleKernLigatureData(s, /*ligatureOnly=*/true);
       if (s.ligaturePairs && s.header.ligaturePairCount > 0) {
         for (uint8_t li = 0; li < s.header.ligaturePairCount && cpCount < MAX_PAGE_GLYPHS; li++) {
           uint32_t leftCp = s.ligaturePairs[li].pair >> 16;
@@ -736,6 +767,18 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     // For metadata-only calls, METADATA or FULL cache both satisfy layout queries.
     // For full (bitmap) calls, only FULL satisfies — METADATA lacks bitmap data.
     if (metadataOnly || s.miniMode == PerStyle::MiniMode::FULL) {
+      // Ensure ligature metadata is wired if requested but not yet wired.
+      if (loadKernLigatureData && !s.ligLoaded) {
+        loadStyleKernLigatureData(s, /*ligatureOnly=*/true);
+      }
+      if (loadKernLigatureData && s.ligLoaded && s.miniData.ligaturePairs == nullptr) {
+        if (s.miniMode == PerStyle::MiniMode::FULL) {
+          applyKernLigaturePointers(s, s.miniData);
+        } else {
+          s.miniData.ligaturePairs = s.ligaturePairs;
+          s.miniData.ligaturePairCount = s.header.ligaturePairCount;
+        }
+      }
       // Already wired into miniData; nothing else to do.
       return 0;
     }
@@ -1143,7 +1186,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       kernLigOk = buildMiniKernMatrix(s, codepoints, cpCount);
     }
   } else if (loadKernLigatureData) {
-    loadStyleKernLigatureData(s);
+    loadStyleKernLigatureData(s, /*ligatureOnly=*/true);
     // Don't set kernLigOk → mini kern matrix stays null on miniData, but
     // ligatures are still resident on stubData (set in loadStyleKernLigatureData).
   }
@@ -1161,7 +1204,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   if (kernLigOk) {
     // Full prewarm: wire mini kern matrix + class tables + ligatures.
     applyKernLigaturePointers(s, s.miniData);
-  } else if (loadKernLigatureData && s.kernLigLoaded) {
+  } else if (loadKernLigatureData && s.ligLoaded) {
     // Layout-only prewarm: wire ligatures so applyLigatures() works (e.g. "fi"
     // measures correctly). Skip the kern matrix — getKerning() returns 0
     // cleanly when kernMatrix is null. Per-pair kern is applied at render time.
@@ -1173,6 +1216,8 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
 
   s.epdFont.data = &s.miniData;
   s.miniMode = metadataOnly ? PerStyle::MiniMode::METADATA : PerStyle::MiniMode::FULL;
+  LOG_DBG("SDCF", "prewarmStyle %u: mode→%s glyphs=%u bitmap=%p", styleIdx, metadataOnly ? "METADATA" : "FULL",
+          validCount, s.miniBitmap);
 
   // Accumulate stats
   stats_.sdReadTimeMs += sdTime;
@@ -1235,6 +1280,10 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   if (!self->loaded_ || styleIdx >= MAX_STYLES || !self->styles_[styleIdx].present) return nullptr;
   const auto& s = self->styles_[styleIdx];
   if (!s.fullIntervals) return nullptr;
+
+  // Diagnostic: log first miss per codepoint+style to show why it bypassed prewarm
+  LOG_DBG("SDCF", "onGlyphMiss: U+%04X style %u miniMode=%u miniIntervals=%u bitmap=%p", codepoint, styleIdx,
+          (uint8_t)s.miniMode, s.miniIntervalCount, s.miniBitmap);
 
   // Check overflow cache first (matching both codepoint and style)
   for (uint32_t i = 0; i < self->overflowCount_; i++) {
@@ -1309,6 +1358,8 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
 
   // All reads succeeded — commit to slot (evict old entry if at capacity)
   if (wasAtCapacity) {
+    LOG_DBG("SDCF", "Overflow: evicting U+%04X style %u from slot %u", self->overflow_[slot].codepoint,
+            self->overflow_[slot].styleIdx, slot);
     delete[] self->overflow_[slot].bitmap;
   }
   self->overflow_[slot].glyph = tempGlyph;

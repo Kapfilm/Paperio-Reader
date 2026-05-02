@@ -189,6 +189,20 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
   partWordBufferIndex = 0;
   nextWordContinues = false;
+
+  if (currentTextBlock->size() > 96) {
+    LOG_DBG("EHP", "Text block too long, splitting into multiple pages");
+    const int horizontalInset = currentTextBlock->getBlockStyle().totalHorizontalInset();
+    const uint16_t effectiveWidth =
+        (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
+    currentTextBlock->layoutAndExtractLines(
+        renderer, fontId, effectiveWidth,
+        [this](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
+               const bool suppressHyphenationRetry) {
+          return addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry);
+        },
+        false);
+  }
 }
 
 // Emit the current page, keeping paragraphLutPerPage and completedPageCount in lockstep.
@@ -1206,25 +1220,6 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 
     self->partWordBuffer[self->partWordBufferIndex++] = s[i];
   }
-
-  // If we have > 750 words buffered up, perform the layout and consume out all but the last line
-  // There should be enough here to build out 1-2 full pages and doing this will free up a lot of
-  // memory.
-  // Spotted when reading Intermezzo, there are some really long text blocks in there.
-  if (self->currentTextBlock->size() > 750) {
-    LOG_DBG("EHP", "Text block too long, splitting into multiple pages");
-    const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
-    const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
-                                        ? static_cast<uint16_t>(self->viewportWidth - horizontalInset)
-                                        : self->viewportWidth;
-    self->currentTextBlock->layoutAndExtractLines(
-        self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
-               const bool suppressHyphenationRetry) {
-          return self->addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry);
-        },
-        false);
-  }
 }
 
 void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const XML_Char* s, const int len) {
@@ -1591,13 +1586,17 @@ void ChapterHtmlSlimParser::makePages() {
 
   const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
 
-  // Apply top spacing before the paragraph (stored in pixels)
+  // Apply top spacing before the paragraph — skip for continuation fragments
+  // (words left over after an intermediate flush): the top margin was already
+  // applied before the first set of lines from this logical paragraph.
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
-  if (blockStyle.marginTop > 0) {
-    currentPageNextY += blockStyle.marginTop;
-  }
-  if (blockStyle.paddingTop > 0) {
-    currentPageNextY += blockStyle.paddingTop;
+  if (!currentTextBlock->isContinuation()) {
+    if (blockStyle.marginTop > 0) {
+      currentPageNextY += blockStyle.marginTop;
+    }
+    if (blockStyle.paddingTop > 0) {
+      currentPageNextY += blockStyle.paddingTop;
+    }
   }
 
   // Calculate effective width accounting for horizontal margins/padding

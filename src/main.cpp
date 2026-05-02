@@ -323,6 +323,11 @@ void loop() {
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
 
+  // Power-hold timer for sleep. Hoisted above the screenshot block so the
+  // screenshot path can clear it and avoid a stale POWER press triggering sleep
+  // after the screenshot completes.
+  static unsigned long powerHoldStart = 0;
+
   static bool screenshotButtonsReleased = true;
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
     if (screenshotButtonsReleased) {
@@ -331,6 +336,10 @@ void loop() {
         RenderLock lock;
         ScreenshotUtil::takeScreenshot(renderer);
       }
+      // Discard the POWER+DOWN presses so they don't fire Short/Long events
+      // (e.g. page turn, sleep) once the user releases the combo.
+      buttonEventManager.drain();
+      powerHoldStart = 0;
     }
     return;
   } else {
@@ -350,7 +359,6 @@ void loop() {
   // (wake-up press) is never misinterpreted as a "go to sleep" press.
   // The power button long-press is not user-remappable, so this path always owns it.
   // Sleep mapped to other buttons is handled by the dispatcher's BTN_SLEEP case below.
-  static unsigned long powerHoldStart = 0;
   if (gpio.wasPressed(HalGPIO::BTN_POWER)) {
     powerHoldStart = millis();
     LOG_DBG("MAIN", "loop: power button press detected (fresh edge)");
@@ -497,6 +505,11 @@ void loop() {
         case BA::BTN_FORCE_REFRESH: {
           RenderLock lock;
           renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+          break;
+        }
+        case BA::BTN_FORCE_FAST_REFRESH: {
+          RenderLock lock;
+          renderer.displayBuffer(HalDisplay::FAST_REFRESH);
           break;
         }
         case BA::BTN_OPEN_TOC:
