@@ -274,6 +274,7 @@
         setStatus('status', 'Delete error: ' + err.message, false);
       }
       await loadFonts();
+      await loadRemoteManifest();
     }
 
     async function loadRemoteManifest() {

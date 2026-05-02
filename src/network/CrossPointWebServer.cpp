@@ -1433,6 +1433,19 @@ struct RemoteManifestFamily {
   bool hasUpdate = false;
 };
 
+// Cap chosen so that FONTS_DIR + "/" + family + "__staging/" + filename stays
+// well under the 128-byte path buffers used below. snprintf truncation checks
+// are the actual guard; this just rejects obviously-bogus entries early.
+static constexpr size_t MAX_FONT_FILE_NAME_LEN = 60;
+
+bool isValidFontFileName(const std::string& name) {
+  if (name.empty() || name.size() > MAX_FONT_FILE_NAME_LEN) return false;
+  if (name.find('/') != std::string::npos) return false;
+  if (name.find('\\') != std::string::npos) return false;
+  if (name.find("..") != std::string::npos) return false;
+  return true;
+}
+
 bool fetchRemoteFontManifest(FontInstaller& installer, std::vector<RemoteManifestFamily>& outFamilies,
                              std::string& outBaseUrl, std::string& outError) {
   static constexpr const char* MANIFEST_TMP = "/fonts_manifest_web.tmp";
@@ -1477,13 +1490,26 @@ bool fetchRemoteFontManifest(FontInstaller& installer, std::vector<RemoteManifes
     family.name = fObj["name"] | "";
     family.description = fObj["description"] | "";
 
+    if (!FontInstaller::isValidFamilyName(family.name.c_str())) {
+      LOG_ERR("WEB", "Manifest entry rejected, invalid family name: %s", family.name.c_str());
+      continue;
+    }
+
+    bool fileNamesOk = true;
     for (JsonObject fileObj : fObj["files"].as<JsonArray>()) {
       RemoteManifestFile file;
       file.name = fileObj["name"] | "";
       file.size = static_cast<size_t>(fileObj["size"] | 0);
+      if (!isValidFontFileName(file.name)) {
+        LOG_ERR("WEB", "Manifest entry rejected, invalid file name in %s: %s", family.name.c_str(),
+                file.name.c_str());
+        fileNamesOk = false;
+        break;
+      }
       family.totalSize += file.size;
       family.files.push_back(std::move(file));
     }
+    if (!fileNamesOk) continue;
 
     family.installed = installer.isFamilyInstalled(family.name.c_str());
     family.hasUpdate = false;
@@ -1514,12 +1540,36 @@ bool fetchRemoteFontManifest(FontInstaller& installer, std::vector<RemoteManifes
 
 bool installRemoteFamily(const RemoteManifestFamily& family, const std::string& baseUrl, FontInstaller& installer,
                          std::string& outError) {
+  if (!FontInstaller::isValidFamilyName(family.name.c_str())) {
+    outError = "Invalid family name";
+    return false;
+  }
+  for (const auto& file : family.files) {
+    if (!isValidFontFileName(file.name)) {
+      outError = std::string("Invalid file name: ") + file.name;
+      return false;
+    }
+  }
+
   char liveDir[128];
   char stagingDir[128];
   char backupDir[128];
-  snprintf(liveDir, sizeof(liveDir), "%s/%s", SdCardFontRegistry::FONTS_DIR, family.name.c_str());
-  snprintf(stagingDir, sizeof(stagingDir), "%s/%s__staging", SdCardFontRegistry::FONTS_DIR, family.name.c_str());
-  snprintf(backupDir, sizeof(backupDir), "%s/%s__backup", SdCardFontRegistry::FONTS_DIR, family.name.c_str());
+  int n;
+  n = snprintf(liveDir, sizeof(liveDir), "%s/%s", SdCardFontRegistry::FONTS_DIR, family.name.c_str());
+  if (n < 0 || static_cast<size_t>(n) >= sizeof(liveDir)) {
+    outError = "Family path too long";
+    return false;
+  }
+  n = snprintf(stagingDir, sizeof(stagingDir), "%s/%s__staging", SdCardFontRegistry::FONTS_DIR, family.name.c_str());
+  if (n < 0 || static_cast<size_t>(n) >= sizeof(stagingDir)) {
+    outError = "Family path too long";
+    return false;
+  }
+  n = snprintf(backupDir, sizeof(backupDir), "%s/%s__backup", SdCardFontRegistry::FONTS_DIR, family.name.c_str());
+  if (n < 0 || static_cast<size_t>(n) >= sizeof(backupDir)) {
+    outError = "Family path too long";
+    return false;
+  }
 
   if (Storage.exists(stagingDir) && !Storage.removeDir(stagingDir)) {
     outError = "Failed to prepare staging area";
@@ -1534,7 +1584,12 @@ bool installRemoteFamily(const RemoteManifestFamily& family, const std::string& 
     esp_task_wdt_reset();
 
     char stagedPath[128];
-    snprintf(stagedPath, sizeof(stagedPath), "%s/%s", stagingDir, file.name.c_str());
+    int sn = snprintf(stagedPath, sizeof(stagedPath), "%s/%s", stagingDir, file.name.c_str());
+    if (sn < 0 || static_cast<size_t>(sn) >= sizeof(stagedPath)) {
+      Storage.removeDir(stagingDir);
+      outError = std::string("File path too long: ") + file.name;
+      return false;
+    }
     const std::string url = baseUrl + file.name;
 
     auto result = HttpDownloader::downloadToFile(url, stagedPath, nullptr);
