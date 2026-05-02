@@ -19,7 +19,8 @@ class FontInstaller {
 
   explicit FontInstaller(SdCardFontRegistry& registry);
 
-  static constexpr size_t MAX_FAMILY_NAME_LEN = 64;
+  // Must fit CrossPointSettings::sdFontFamilyName[32] including NUL.
+  static constexpr size_t MAX_FAMILY_NAME_LEN = 31;
 
   /// Validate a family name: alphanumeric + hyphen + underscore only, no path traversal.
   static bool isValidFamilyName(const char* name);

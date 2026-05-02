@@ -278,7 +278,12 @@
         info.textContent = 'Pick one or more .cpfont files.';
         return;
       }
-      const family = sanitizeFamily(familyFromFilename(files[0].name));
+      const families = new Set(files.map(f => sanitizeFamily(familyFromFilename(f.name))));
+      if (families.size > 1) {
+        info.textContent = 'Picked files contain multiple families — please select files from a single family.';
+        return;
+      }
+      const family = families.values().next().value;
       info.textContent = files.length + ' file' + (files.length === 1 ? '' : 's') +
         ' → family "' + family + '"';
     });

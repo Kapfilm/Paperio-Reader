@@ -1464,6 +1464,7 @@ void CrossPointWebServer::handleFontUploadData() {
       String family = server->arg("family");
       fontUpload.valid = false;
       fontUpload.magicChecked = false;
+      fontUpload.headerBytesReceived = 0;
       fontUpload.bytesWritten = 0;
       fontUpload.bufferPos = 0;
 
@@ -1475,6 +1476,10 @@ void CrossPointWebServer::handleFontUploadData() {
       String filename = up.filename;
       if (!filename.endsWith(".cpfont")) {
         LOG_ERR("WEB", "Not a .cpfont file: %s", filename.c_str());
+        break;
+      }
+      if (filename.indexOf('/') >= 0 || filename.indexOf('\\') >= 0 || filename.indexOf("..") >= 0) {
+        LOG_ERR("WEB", "Invalid font filename: %s", filename.c_str());
         break;
       }
 
@@ -1504,13 +1509,22 @@ void CrossPointWebServer::handleFontUploadData() {
       if (!fontUpload.valid) break;
       esp_task_wdt_reset();
 
-      if (!fontUpload.magicChecked && up.currentSize >= 8) {
-        if (memcmp(up.buf, "CPFONT\0\0", 8) != 0) {
-          LOG_ERR("WEB", "Invalid .cpfont magic bytes");
-          fontUpload.valid = false;
-          break;
+      if (!fontUpload.magicChecked) {
+        size_t needed = 8 - fontUpload.headerBytesReceived;
+        size_t take = (up.currentSize < needed) ? up.currentSize : needed;
+        if (take > 0) {
+          memcpy(fontUpload.header + fontUpload.headerBytesReceived, up.buf, take);
+          fontUpload.headerBytesReceived += take;
         }
-        fontUpload.magicChecked = true;
+        if (fontUpload.headerBytesReceived == 8) {
+          if (memcmp(fontUpload.header, "CPFONT\0\0", 8) != 0) {
+            LOG_ERR("WEB", "Invalid .cpfont magic bytes");
+            fontUpload.valid = false;
+            fontUpload.file.close();
+            return;
+          }
+          fontUpload.magicChecked = true;
+        }
       }
 
       size_t remaining = up.currentSize;
@@ -1524,8 +1538,16 @@ void CrossPointWebServer::handleFontUploadData() {
         remaining -= chunk;
 
         if (fontUpload.bufferPos >= FontUploadState::BUFFER_SIZE) {
-          fontUpload.file.write(fontUpload.buffer.data(), fontUpload.bufferPos);
-          fontUpload.bytesWritten += fontUpload.bufferPos;
+          const size_t expected = fontUpload.bufferPos;
+          const size_t written = fontUpload.file.write(fontUpload.buffer.data(), expected);
+          fontUpload.bytesWritten += written;
+          if (written != expected) {
+            LOG_ERR("WEB", "Failed writing uploaded font chunk (%u/%u bytes)", static_cast<unsigned>(written),
+                    static_cast<unsigned>(expected));
+            fontUpload.valid = false;
+            fontUpload.file.close();
+            return;
+          }
           fontUpload.bufferPos = 0;
           esp_task_wdt_reset();
         }
@@ -1534,9 +1556,19 @@ void CrossPointWebServer::handleFontUploadData() {
     }
 
     case UPLOAD_FILE_END: {
+      if (fontUpload.valid && !fontUpload.magicChecked) {
+        LOG_ERR("WEB", "Invalid .cpfont upload: header not fully received");
+        fontUpload.valid = false;
+      }
       if (fontUpload.valid && fontUpload.bufferPos > 0) {
-        fontUpload.file.write(fontUpload.buffer.data(), fontUpload.bufferPos);
-        fontUpload.bytesWritten += fontUpload.bufferPos;
+        const size_t expected = fontUpload.bufferPos;
+        const size_t written = fontUpload.file.write(fontUpload.buffer.data(), expected);
+        fontUpload.bytesWritten += written;
+        if (written != expected) {
+          LOG_ERR("WEB", "Failed flushing uploaded font chunk (%u/%u bytes)", static_cast<unsigned>(written),
+                  static_cast<unsigned>(expected));
+          fontUpload.valid = false;
+        }
         fontUpload.bufferPos = 0;
       }
       fontUpload.file.close();

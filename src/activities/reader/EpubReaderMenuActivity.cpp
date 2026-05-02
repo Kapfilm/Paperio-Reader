@@ -17,7 +17,12 @@ namespace {
 // though the per-book override list itself is built-in only.
 std::string defaultFontFamilyLabel(const SettingInfo& item) {
   if (SETTINGS.sdFontFamilyName[0] != '\0') {
-    return std::string(SETTINGS.sdFontFamilyName);
+    const auto& families = sdFontSystem.registry().getFamilies();
+    const auto it = std::find_if(families.begin(), families.end(),
+                                 [](const auto& family) { return family.name == SETTINGS.sdFontFamilyName; });
+    if (it != families.end()) {
+      return std::string(SETTINGS.sdFontFamilyName);
+    }
   }
   // Built-in: enumValues[0] is STR_DEFAULT_VALUE, [1..] are built-in families
   // in CrossPointSettings::FONT_FAMILY order.

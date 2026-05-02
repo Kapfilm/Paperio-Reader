@@ -8,6 +8,7 @@
 #include <Logging.h>
 
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <new>
 
@@ -234,6 +235,17 @@ bool readJpegDimensionsFromHeader(const std::string& imagePath, ImageDimensions&
         LOG_ERR("JPG", "Invalid JPEG dimensions %ux%u: %s", width, height, imagePath.c_str());
         return false;
       }
+
+      constexpr int MAX_SOURCE_PIXELS = 3145728;  // Keep in sync with ImageToFramebufferDecoder contract.
+      const int widthInt = static_cast<int>(width);
+      const int heightInt = static_cast<int>(height);
+      if (width > static_cast<uint16_t>(std::numeric_limits<int16_t>::max()) ||
+          height > static_cast<uint16_t>(std::numeric_limits<int16_t>::max()) ||
+          widthInt * heightInt > MAX_SOURCE_PIXELS) {
+        LOG_ERR("JPG", "JPEG dimensions out of supported range %ux%u: %s", width, height, imagePath.c_str());
+        return false;
+      }
+
       out.width = static_cast<int16_t>(width);
       out.height = static_cast<int16_t>(height);
       return true;

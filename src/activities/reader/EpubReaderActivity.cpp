@@ -1043,16 +1043,26 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
     return;
   }
 
+  // Built-in and SD font overrides are mutually exclusive; explicit built-in wins.
+  int8_t normalizedFontFamilyOverride = fontFamilyOverride;
+  std::string normalizedSdFontFamilyOverride = sdFontFamilyOverride;
+  if (normalizedFontFamilyOverride >= 0) {
+    normalizedSdFontFamilyOverride.clear();
+  } else if (!normalizedSdFontFamilyOverride.empty()) {
+    normalizedFontFamilyOverride = -1;
+  }
+
   if (bookEmbeddedStyleOverride == embeddedStyleOverride && bookImageRenderingOverride == imageRenderingOverride &&
-      bookFontFamilyOverride == fontFamilyOverride && bookSdFontFamilyOverride == sdFontFamilyOverride &&
-      bookFontSizeOverride == fontSizeOverride && bookBionicReadingOverride == bionicReadingOverride) {
+      bookFontFamilyOverride == normalizedFontFamilyOverride &&
+      bookSdFontFamilyOverride == normalizedSdFontFamilyOverride && bookFontSizeOverride == fontSizeOverride &&
+      bookBionicReadingOverride == bionicReadingOverride) {
     return;
   }
 
   bookEmbeddedStyleOverride = embeddedStyleOverride;
   bookImageRenderingOverride = imageRenderingOverride;
-  bookFontFamilyOverride = fontFamilyOverride;
-  bookSdFontFamilyOverride = sdFontFamilyOverride;
+  bookFontFamilyOverride = normalizedFontFamilyOverride;
+  bookSdFontFamilyOverride = normalizedSdFontFamilyOverride;
   bookFontSizeOverride = fontSizeOverride;
   bookBionicReadingOverride = bionicReadingOverride;
   RECENT_BOOKS.setReaderOverrides(epub->getPath(), bookEmbeddedStyleOverride, bookImageRenderingOverride,
@@ -1752,6 +1762,12 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
   }
   if (effectiveFontId == 0 && currentBook.fontFamilyOverride >= 0) {
     effectiveFontId = CrossPointSettings::getBuiltinReaderFontId(effectiveFontFamily, effectiveFontSize);
+  }
+  if (effectiveFontId == 0 && currentBook.fontSizeOverride >= 0 && SETTINGS.sdFontFamilyName[0] != '\0') {
+    effectiveFontId = resolveSdCardFontId(SETTINGS.sdFontFamilyName, effectiveFontSize);
+  }
+  if (effectiveFontId == 0 && currentBook.fontSizeOverride >= 0) {
+    effectiveFontId = CrossPointSettings::getBuiltinReaderFontId(SETTINGS.fontFamily, effectiveFontSize);
   }
   if (effectiveFontId == 0) {
     effectiveFontId = SETTINGS.getReaderFontId();

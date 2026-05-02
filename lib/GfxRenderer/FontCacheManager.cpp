@@ -109,8 +109,16 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
 
   manager_->prewarmCache(manager_->scanFontId_, manager_->scanText_.c_str(), styleMask);
 
-  // Keep reserved capacity to avoid repeated alloc/free churn between pages.
+  constexpr size_t BASE_SCAN_TEXT_CAP = 2048;
+  constexpr size_t MAX_SCAN_TEXT_CAP = 16384;
+
+  // Keep reserved capacity for typical pages, but trim pathological outliers.
   manager_->scanText_.clear();
+  if (manager_->scanText_.capacity() > MAX_SCAN_TEXT_CAP) {
+    std::string trimmed;
+    trimmed.reserve(BASE_SCAN_TEXT_CAP);
+    manager_->scanText_.swap(trimmed);
+  }
 }
 
 FontCacheManager::PrewarmScope::~PrewarmScope() {

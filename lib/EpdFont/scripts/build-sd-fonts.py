@@ -126,6 +126,8 @@ def build_family(family: dict, output_base: Path) -> tuple[str, bool, str]:
     """Build a single font family. Returns (name, success, message)."""
     name = family["name"]
     output_dir = output_base / name
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     styles = family.get("styles", {})
@@ -258,7 +260,7 @@ def main():
 
     # Filter if --only specified
     if args.only:
-        only_names = set(args.only.split(","))
+        only_names = {token.strip() for token in args.only.split(",") if token.strip()}
         families = [f for f in families if f["name"] in only_names]
         missing = only_names - {f["name"] for f in families}
         if missing:
