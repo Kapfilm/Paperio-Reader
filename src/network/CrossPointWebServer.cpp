@@ -28,7 +28,6 @@
 #include "html/js/jszip_minJs.generated.h"
 #include "network/HttpDownloader.h"
 
-
 namespace {
 // Folders/files to hide from the web interface file browser
 // Note: Items starting with "." are automatically hidden
