@@ -225,6 +225,7 @@ def main():
     parser.add_argument(
         "--output-dir", default=str(DEFAULT_OUTPUT), help="Output directory for .cpfont files"
     )
+    parser.add_argument("--skip", action="store_true", help="Skip font generation completely (for testing manifest generation)")
     parser.add_argument("--only", help="Comma-separated family names to build (default: all)")
     parser.add_argument("--manifest", action="store_true", help="Also generate fonts.json manifest")
     parser.add_argument("--base-url", default="", help="Base URL for manifest (required with --manifest)")
@@ -250,6 +251,7 @@ def main():
         print(f"ERROR: Config not found: {config_path}", file=sys.stderr)
         sys.exit(1)
 
+    output_base = Path(args.output_dir)
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
@@ -258,73 +260,73 @@ def main():
         print("ERROR: No families defined in config", file=sys.stderr)
         sys.exit(1)
 
-    # Filter if --only specified
-    if args.only:
-        only_names = {token.strip() for token in args.only.split(",") if token.strip()}
-        families = [f for f in families if f["name"] in only_names]
-        missing = only_names - {f["name"] for f in families}
-        if missing:
-            print(f"WARNING: families not found in config: {', '.join(missing)}", file=sys.stderr)
-        if not families:
-            print("ERROR: no matching families after --only filter", file=sys.stderr)
-            sys.exit(1)
+    failed = False
+    if not args.skip:
+        # Filter if --only specified
+        if args.only:
+            only_names = {token.strip() for token in args.only.split(",") if token.strip()}
+            families = [f for f in families if f["name"] in only_names]
+            missing = only_names - {f["name"] for f in families}
+            if missing:
+                print(f"WARNING: families not found in config: {', '.join(missing)}", file=sys.stderr)
+            if not families:
+                print("ERROR: no matching families after --only filter", file=sys.stderr)
+                sys.exit(1)
 
-    output_base = Path(args.output_dir)
+        if args.clean and output_base.exists():
+            print(f"Cleaning {output_base}...")
+            shutil.rmtree(output_base)
 
-    if args.clean and output_base.exists():
-        print(f"Cleaning {output_base}...")
-        shutil.rmtree(output_base)
+        output_base.mkdir(parents=True, exist_ok=True)
 
-    output_base.mkdir(parents=True, exist_ok=True)
+        # Download phase (sequential — avoids hammering servers)
+        print(f"\n=== Resolving {len(families)} font families ===\n")
+        for family in families:
+            for style_name, style_spec in family.get("styles", {}).items():
+                if "url" in style_spec:
+                    try:
+                        resolve_font_path(style_spec, family["name"], style_name)
+                    except Exception as e:
+                        print(f"ERROR: {e}", file=sys.stderr)
+                        sys.exit(1)
 
-    # Download phase (sequential — avoids hammering servers)
-    print(f"\n=== Resolving {len(families)} font families ===\n")
-    for family in families:
-        for style_name, style_spec in family.get("styles", {}).items():
-            if "url" in style_spec:
-                try:
-                    resolve_font_path(style_spec, family["name"], style_name)
-                except Exception as e:
-                    print(f"ERROR: {e}", file=sys.stderr)
-                    sys.exit(1)
+        # Build phase (parallel)
+        max_workers = args.jobs or len(families)
+        print(f"\n=== Building {len(families)} families ({max_workers} parallel jobs) ===\n")
 
-    # Build phase (parallel)
-    max_workers = args.jobs or len(families)
-    print(f"\n=== Building {len(families)} families ({max_workers} parallel jobs) ===\n")
-
-    failed = []
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(build_family, family, output_base): family["name"]
-            for family in families
-        }
-        for future in as_completed(futures):
-            name = futures[future]
-            success = False
-            message = ""
-            try:
-                name, success, message = future.result()
-            except Exception as e:
+        failed = []
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(build_family, family, output_base): family["name"]
+                for family in families
+            }
+            for future in as_completed(futures):
+                name = futures[future]
                 success = False
-                message = str(e)
-            if success:
-                # Count output files
-                family_dir = output_base / name
-                count = len(list(family_dir.glob("*.cpfont")))
-                size = sum(f.stat().st_size for f in family_dir.glob("*.cpfont"))
-                print(f"  OK: {name} ({count} files, {size / 1024 / 1024:.1f} MB)")
-            else:
-                print(f"  FAILED: {name}: {message}", file=sys.stderr)
-                failed.append(name)
+                message = ""
+                try:
+                    name, success, message = future.result()
+                except Exception as e:
+                    success = False
+                    message = str(e)
+                if success:
+                    # Count output files
+                    family_dir = output_base / name
+                    count = len(list(family_dir.glob("*.cpfont")))
+                    size = sum(f.stat().st_size for f in family_dir.glob("*.cpfont"))
+                    print(f"  OK: {name} ({count} files, {size / 1024 / 1024:.1f} MB)")
+                else:
+                    print(f"  FAILED: {name}: {message}", file=sys.stderr)
+                    failed.append(name)
 
-    # Summary
-    print("\n=== Summary ===\n")
-    total_files = len(list(output_base.rglob("*.cpfont")))
-    total_size = sum(f.stat().st_size for f in output_base.rglob("*.cpfont"))
-    print(f"Total: {total_files} .cpfont files ({total_size / 1024 / 1024:.1f} MB)")
+        # Summary
+        print("\n=== Summary ===\n")
+        total_files = len(list(output_base.rglob("*.cpfont")))
+        total_size = sum(f.stat().st_size for f in output_base.rglob("*.cpfont"))
+        print(f"Total: {total_files} .cpfont files ({total_size / 1024 / 1024:.1f} MB)")
 
-    if failed:
-        print(f"\nFailed families: {', '.join(failed)}", file=sys.stderr)
+        if failed:
+            print(f"\nFailed families: {', '.join(failed)}", file=sys.stderr)
 
     # Manifest
     if args.manifest:
