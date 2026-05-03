@@ -1,6 +1,7 @@
 #include "ButtonNavigator.h"
 
 #include "ButtonEventManager.h"
+#include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 
 const MappedInputManager* ButtonNavigator::mappedInput = nullptr;
