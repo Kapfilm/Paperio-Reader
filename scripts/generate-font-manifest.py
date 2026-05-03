@@ -134,7 +134,7 @@ def scan_cpfont_files(input_dir: Path) -> dict[str, list[Path]]:
 
 
 def build_manifest(
-    families: dict[str, list[Path]], base_url: str
+    families: dict[str, list[Path]], base_url: str, input_dir: Path
 ) -> dict:
     """Build the manifest dict from discovered font families."""
     manifest_families = []
@@ -238,7 +238,7 @@ def main():
     for name, files in sorted(families.items()):
         print(f"  {name}: {len(files)} files")
 
-    manifest = build_manifest(families, base_url)
+    manifest = build_manifest(families, base_url, input_dir)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
