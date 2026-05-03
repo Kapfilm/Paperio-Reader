@@ -539,6 +539,12 @@ void loop() {
         case BA::BTN_KOREADER_SYNC:
           activityManager.dispatchButtonAction(BA::BTN_KOREADER_SYNC);
           break;
+        case BA::BTN_TOGGLE_BIONIC_READING:
+          activityManager.dispatchButtonAction(BA::BTN_TOGGLE_BIONIC_READING);
+          break;
+        case BA::BTN_CYCLE_FONT_SIZE:
+          activityManager.dispatchButtonAction(BA::BTN_CYCLE_FONT_SIZE);
+          break;
         default:
           break;
       }

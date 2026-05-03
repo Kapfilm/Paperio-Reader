@@ -2006,6 +2006,16 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
         requestUpdate();
       }
       break;
+    case BA::BTN_CYCLE_FONT_SIZE:
+      if (epub) {
+        const uint8_t current =
+            (bookFontSizeOverride >= 0) ? static_cast<uint8_t>(bookFontSizeOverride) : SETTINGS.fontSize;
+        const int8_t next = static_cast<int8_t>((current + 1) % CrossPointSettings::FONT_SIZE_COUNT);
+        applyBookReaderOverrides(bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
+                                 bookSdFontFamilyOverride, next, bookBionicReadingOverride);
+        requestUpdate();
+      }
+      break;
     case BA::BTN_KOREADER_SYNC:
       launchKOReaderSync(SyncLaunchMode::COMPARE);
       break;

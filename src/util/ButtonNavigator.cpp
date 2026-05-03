@@ -1,6 +1,7 @@
 #include "ButtonNavigator.h"
 
 #include "ButtonEventManager.h"
+#include "activities/ActivityManager.h"
 
 const MappedInputManager* ButtonNavigator::mappedInput = nullptr;
 
@@ -42,15 +43,25 @@ void ButtonNavigator::onPress(const Buttons& buttons, const Callback& callback) 
 }
 
 void ButtonNavigator::onRelease(const Buttons& buttons, const Callback& callback) {
-  const bool wasReleased = std::any_of(buttons.begin(), buttons.end(), [](const MappedInputManager::Button button) {
-    if (mappedInput == nullptr || !mappedInput->wasReleased(button)) {
-      return false;
-    }
-
-    // If a button Short is still pending while we wait for a possible double,
-    // avoid firing release-based navigation first.
-    return !globalButtonEvents().isShortPending(button);
-  });
+  // The double-click FSM in ButtonEventManager delays Short events by DOUBLE_WINDOW_MS
+  // (300ms) when a double-press action is configured for that button, so the configured
+  // Short and Double actions can be disambiguated. In a reader activity that gating must
+  // suppress release-based navigation during the wait, otherwise Left/Right would both
+  // turn the page AND fire the configured short action.
+  //
+  // In non-reader UIs (settings, file browser, etc.), only navigation reacts to release —
+  // the configured per-button actions are not dispatched there (see
+  // ActivityManager::dispatchButtonAction, which is reader-only). Gating on isShortPending
+  // there just makes Left/Right navigation feel sluggish (300ms lag) compared to Up/Down
+  // (which have no FSM at all). So skip the gate outside reader activities.
+  const bool inReader = activityManager.isReaderActivity();
+  const bool wasReleased =
+      std::any_of(buttons.begin(), buttons.end(), [inReader](const MappedInputManager::Button button) {
+        if (mappedInput == nullptr || !mappedInput->wasReleased(button)) {
+          return false;
+        }
+        return !(inReader && globalButtonEvents().isShortPending(button));
+      });
 
   if (wasReleased) {
     if (lastContinuousNavTime == 0) {
