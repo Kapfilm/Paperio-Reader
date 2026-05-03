@@ -1441,7 +1441,8 @@ static constexpr size_t MAX_FONT_FILE_NAME_LEN = 60;
 
 bool isValidFontFileName(const std::string& name) {
   if (name.empty() || name.size() > MAX_FONT_FILE_NAME_LEN) return false;
-  if (name.find('/') != std::string::npos) return false;
+  // Allow '/' for subdirectories of font families, but prevent absolute paths
+  if (name[0] == '/') return false;
   if (name.find('\\') != std::string::npos) return false;
   if (name.find("..") != std::string::npos) return false;
   return true;
@@ -1515,8 +1516,14 @@ bool fetchRemoteFontManifest(FontInstaller& installer, std::vector<RemoteManifes
     family.hasUpdate = false;
     if (family.installed) {
       for (const auto& file : family.files) {
+        std::string localFilename = file.name;
+        std::string familyPrefix = family.name + "/";
+        if (localFilename.find(familyPrefix) == 0) {
+          localFilename = localFilename.substr(familyPrefix.length());
+        }
+
         char path[128];
-        FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), path, sizeof(path));
+        FontInstaller::buildFontPath(family.name.c_str(), localFilename.c_str(), path, sizeof(path));
         FsFile f;
         if (Storage.openFileForRead("WEB", path, f)) {
           const size_t actual = static_cast<size_t>(f.size());
@@ -1583,13 +1590,27 @@ bool installRemoteFamily(const RemoteManifestFamily& family, const std::string& 
   for (const auto& file : family.files) {
     esp_task_wdt_reset();
 
+    std::string localFilename = file.name;
+    std::string familyPrefix = family.name + "/";
+    if (localFilename.find(familyPrefix) == 0) {
+      localFilename = localFilename.substr(familyPrefix.length());
+    }
+
     char stagedPath[128];
-    int sn = snprintf(stagedPath, sizeof(stagedPath), "%s/%s", stagingDir, file.name.c_str());
+    int sn = snprintf(stagedPath, sizeof(stagedPath), "%s/%s", stagingDir, localFilename.c_str());
     if (sn < 0 || static_cast<size_t>(sn) >= sizeof(stagedPath)) {
       Storage.removeDir(stagingDir);
-      outError = std::string("File path too long: ") + file.name;
+      outError = std::string("File path too long: ") + localFilename;
       return false;
     }
+
+    // Ensure intermediate subdirectories exist inside stagingDir
+    std::string stagedPathStr(stagedPath);
+    size_t lastSlash = stagedPathStr.find_last_of('/');
+    if (lastSlash != std::string::npos) {
+      Storage.mkdir(stagedPathStr.substr(0, lastSlash).c_str());
+    }
+
     const std::string url = baseUrl + file.name;
 
     auto result = HttpDownloader::downloadToFile(url, stagedPath, nullptr);

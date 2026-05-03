@@ -128,8 +128,14 @@ bool FontDownloadActivity::fetchAndParseManifest() {
 
     if (family.installed) {
       for (const auto& file : family.files) {
+        std::string localFilename = file.name;
+        std::string familyPrefix = family.name + "/";
+        if (localFilename.find(familyPrefix) == 0) {
+          localFilename = localFilename.substr(familyPrefix.length());
+        }
+
         char path[128];
-        FontInstaller::buildFontPath(family.name.c_str(), file.name.c_str(), path, sizeof(path));
+        FontInstaller::buildFontPath(family.name.c_str(), localFilename.c_str(), path, sizeof(path));
         FsFile f;
         if (Storage.openFileForRead("FONT", path, f)) {
           size_t actual = f.fileSize();
@@ -219,8 +225,14 @@ void FontDownloadActivity::downloadFamily(ManifestFamily& family) {
     }
     requestUpdateAndWait();
 
+    std::string localFilename = file.name;
+    std::string familyPrefix = family.name + "/";
+    if (localFilename.find(familyPrefix) == 0) {
+      localFilename = localFilename.substr(familyPrefix.length());
+    }
+
     char stagedPath[128];
-    snprintf(stagedPath, sizeof(stagedPath), "%s/%s", stagingDir, file.name.c_str());
+    snprintf(stagedPath, sizeof(stagedPath), "%s/%s", stagingDir, localFilename.c_str());
 
     // Make sure parent directories exist for the file
     std::string stagedPathStr(stagedPath);
