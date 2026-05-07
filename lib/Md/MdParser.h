@@ -23,10 +23,7 @@ enum class BlockType : uint8_t {
   Blockquote,
   CodeBlock,
   HorizontalRule,
-  BlankLine,
-  TableHeader,     // | col | col | — header row
-  TableSeparator,  // | --- | --- | — ignored visually
-  TableRow,        // | val | val | — data row
+  BlankLine
 };
 
 struct ParsedLine {
@@ -34,14 +31,7 @@ struct ParsedLine {
   std::vector<Span> spans;
   std::string listPrefix;   // "• " or "1. " etc.
   uint8_t indentLevel = 0;  // Nesting depth (each 4 spaces = 1 level)
-  // For TableHeader / TableRow: one entry per cell (already inline-parsed)
-  std::vector<std::vector<Span>> tableCells;
 };
-
-// Returns true if the line is a GFM pipe-table row (| ... |) or separator (| --- |).
-bool isTableRow(const std::string& line);
-// Returns true if the line is a GFM table separator row (| :---: | --- |).
-bool isTableSeparator(const std::string& line);
 
 // Parse a single raw line of markdown into block type and styled spans.
 // |inCodeBlock| indicates whether the line is inside a fenced code block.
