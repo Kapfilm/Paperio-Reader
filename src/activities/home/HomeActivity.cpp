@@ -217,6 +217,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
           book.coverBmpPath = "";
         } else {
+          // Free the carousel frame cache before converting — PNG/JPEG decode needs ~42 KB
+          // contiguous heap, which won't be available while the 48 KB frame buffer is held.
+          // The cache will be rebuilt on the next render.
+          UITheme::getInstance().getMutableTheme().invalidateFrameCache();
+
           const std::string cacheBase = "/.crosspoint/sidecar_" + std::to_string(std::hash<std::string>{}(book.path));
           const std::string placeholder = cacheBase + "/[HEIGHT].bmp";
           bool success = true;
@@ -239,8 +244,8 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             book.coverBmpPath = placeholder;
           } else {
             LOG_ERR("HOME", "Failed to convert sidecar cover for %s", book.path.c_str());
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
-            book.coverBmpPath = "";
+            // Don't permanently clear the path on failure — keep the raw sidecar path
+            // so the next home visit can retry (e.g. after more memory becomes available).
           }
           coverRendered = false;
           nextRecentCoverIndex++;

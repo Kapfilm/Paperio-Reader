@@ -266,7 +266,15 @@ std::string Xtc::getThumbBmpPath(int width, int height) const {
   return cachePath + "/thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
 }
 
-bool Xtc::generateThumbBmp(int height) const { return generateThumbBmp(height * 0.6, height); }
+bool Xtc::generateThumbBmp(int height) const {
+  const std::string destPath = getThumbBmpPath(height);
+  if (Storage.exists(destPath.c_str())) return true;
+  const int width = static_cast<int>(height * 0.6f);
+  if (!generateThumbBmp(width, height)) return false;
+  const std::string srcPath = getThumbBmpPath(width, height);
+  Storage.rename(srcPath.c_str(), destPath.c_str());
+  return Storage.exists(destPath.c_str());
+}
 
 bool Xtc::generateThumbBmp(int width, int height) const {
   if (Storage.exists(getThumbBmpPath(width, height).c_str())) return true;
