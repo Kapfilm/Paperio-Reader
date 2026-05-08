@@ -17,9 +17,11 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
+#include "ReaderActivity.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
+#include "components/UITheme.h"
 #include "fontIds.h"
 
 void XtcReaderActivity::onEnter() {
@@ -41,7 +43,9 @@ void XtcReaderActivity::onEnter() {
   // Save current XTC as last opened book and add to recent books
   APP_STATE.openEpubPath = xtc->getPath();
   APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), "", xtc->getThumbBmpPath());
+  const std::string xtcSidecar = ReaderActivity::sidecarCoverPath(xtc->getPath());
+  const std::string xtcCover = xtcSidecar.empty() ? xtc->getThumbBmpPath() : xtcSidecar;
+  RECENT_BOOKS.addBook(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), "", xtcCover);
 
   // Trigger first update
   requestUpdate();
@@ -52,6 +56,8 @@ void XtcReaderActivity::onExit() {
 
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
+
+  UITheme::getInstance().getMutableTheme().onBookWillClose(xtc ? xtc->getPath() : "", nullptr, xtc.get(), nullptr);
   xtc.reset();
 }
 

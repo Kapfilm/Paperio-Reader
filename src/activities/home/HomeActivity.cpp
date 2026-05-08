@@ -6,11 +6,15 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <JpegToBmpConverter.h>
+#include <Logging.h>
+#include <PngToBmpConverter.h>
 #include <Utf8.h>
 #include <Xtc.h>
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "CrossPointSettings.h"
@@ -19,10 +23,43 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "activities/reader/ReaderActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
+// Convert a sidecar JPG/PNG cover to a 1-bit BMP in the cache and return the BMP path, or "" on failure.
+// fileName is the basename of the output file (without directory), e.g. "340x540.bmp" or "400.bmp".
+std::string convertSidecarToBmp(const std::string& bookPath, const std::string& sidecarPath, int width, int height,
+                                const std::string& fileName) {
+  const std::string cacheDir = "/.crosspoint/sidecar_" + std::to_string(std::hash<std::string>{}(bookPath));
+  Storage.mkdir(cacheDir.c_str());
+  const std::string bmpPath = cacheDir + "/" + fileName;
+  if (Storage.exists(bmpPath.c_str())) return bmpPath;
+
+  FsFile src;
+  if (!Storage.openFileForRead("HOME", sidecarPath, src)) return "";
+  FsFile dst;
+  if (!Storage.openFileForWrite("HOME", bmpPath, dst)) {
+    src.close();
+    return "";
+  }
+
+  bool ok = false;
+  if (FsHelpers::hasJpgExtension(sidecarPath)) {
+    ok = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, dst, width, height);
+  } else if (FsHelpers::hasPngExtension(sidecarPath)) {
+    ok = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, dst, width, height);
+  }
+  src.close();
+  dst.close();
+  if (!ok) {
+    Storage.remove(bmpPath.c_str());
+    return "";
+  }
+  return bmpPath;
+}
+
 constexpr int CLASSIC_MIN_RECENT_TILE_HEIGHT = 280;
 constexpr int LYRA_MIN_RECENT_TILE_HEIGHT = 170;
 constexpr int LYRA_3_COVERS_MIN_RECENT_TILE_HEIGHT = 200;
@@ -139,6 +176,24 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
       continue;
     }
 
+    // Check for a sidecar cover — takes priority over embedded cover.
+    // Also catches books registered before sidecar support (empty coverBmpPath).
+    const std::string sidecar = ReaderActivity::sidecarCoverPath(book.path);
+    if (!sidecar.empty()) {
+      const bool sidecarAlreadyStored =
+          book.coverBmpPath == sidecar || book.coverBmpPath.find("sidecar_") != std::string::npos;
+      LOG_DBG("HOME", "Sidecar for %s: stored=%s alreadyStored=%d", book.path.c_str(), book.coverBmpPath.c_str(),
+              sidecarAlreadyStored ? 1 : 0);
+      if (!sidecarAlreadyStored) {
+        LOG_DBG("HOME", "Updating coverBmpPath to sidecar: %s", sidecar.c_str());
+        RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, sidecar);
+        RecentBook updated = book;
+        updated.coverBmpPath = sidecar;
+        recentBooks.push_back(updated);
+        continue;
+      }
+    }
+
     recentBooks.push_back(book);
   }
 }
@@ -146,34 +201,90 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
 void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
 
+  const auto thumbSizes = GUI.getCoverThumbSizes(coverHeight);
+
   for (; nextRecentCoverIndex < recentBooks.size(); nextRecentCoverIndex++) {
     RecentBook& book = recentBooks[nextRecentCoverIndex];
     if (!book.coverBmpPath.empty()) {
-      std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
-      if (!Storage.exists(coverPath.c_str())) {
-        // If epub, try to load the metadata for title/author and cover
-        if (FsHelpers::hasEpubExtension(book.path)) {
-          Epub epub(book.path, "/.crosspoint");
-          // Skip loading css since we only need metadata here
-          epub.load(false, true);
+      // Sidecar covers (JPG/PNG paths stored directly) must be converted to BMP thumbnails
+      // and the stored coverBmpPath updated to the cache path with [WIDTH]x[HEIGHT] placeholder.
+      const bool isSidecar =
+          FsHelpers::hasJpgExtension(book.coverBmpPath) || FsHelpers::hasPngExtension(book.coverBmpPath);
+      if (isSidecar) {
+        LOG_DBG("HOME", "Converting sidecar %s for book %s", book.coverBmpPath.c_str(), book.path.c_str());
+        if (!Storage.exists(book.coverBmpPath.c_str())) {
+          LOG_ERR("HOME", "Sidecar file missing: %s", book.coverBmpPath.c_str());
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
+          book.coverBmpPath = "";
+        } else {
+          // Free the carousel frame cache before converting — PNG/JPEG decode needs ~42 KB
+          // contiguous heap, which won't be available while the 48 KB frame buffer is held.
+          // The cache will be rebuilt on the next render.
+          UITheme::getInstance().getMutableTheme().invalidateFrameCache();
 
-          // Try to generate thumbnail image for Continue Reading card
-          bool success = epub.generateThumbBmp(coverHeight);
-          if (!success) {
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
-            book.coverBmpPath = "";
+          const std::string cacheBase = "/.crosspoint/sidecar_" + std::to_string(std::hash<std::string>{}(book.path));
+          const std::string placeholder = cacheBase + "/[HEIGHT].bmp";
+          bool success = true;
+          if (!thumbSizes.empty()) {
+            for (const auto& sz : thumbSizes) {
+              const std::string name = std::to_string(sz.first) + "x" + std::to_string(sz.second) + ".bmp";
+              if (convertSidecarToBmp(book.path, book.coverBmpPath, sz.first, sz.second, name).empty()) {
+                success = false;
+                break;
+              }
+            }
+          } else {
+            const int w = coverHeight * 6 / 10;
+            const std::string name = std::to_string(coverHeight) + ".bmp";
+            if (convertSidecarToBmp(book.path, book.coverBmpPath, w, coverHeight, name).empty()) success = false;
+          }
+          if (success) {
+            LOG_DBG("HOME", "Sidecar converted, placeholder: %s", placeholder.c_str());
+            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
+            book.coverBmpPath = placeholder;
+          } else {
+            LOG_ERR("HOME", "Failed to convert sidecar cover for %s", book.path.c_str());
+            // Don't permanently clear the path on failure — keep the raw sidecar path
+            // so the next home visit can retry (e.g. after more memory becomes available).
           }
           coverRendered = false;
           nextRecentCoverIndex++;
           recentsLoading = false;
           requestUpdate();
           return;
-        } else if (FsHelpers::hasXtcExtension(book.path)) {
-          // Handle XTC file
-          Xtc xtc(book.path, "/.crosspoint");
-          if (xtc.load()) {
-            // Try to generate thumbnail image for Continue Reading card
-            bool success = xtc.generateThumbBmp(coverHeight);
+        }
+      }
+
+      if (!book.coverBmpPath.empty()) {
+        if (!thumbSizes.empty()) {
+          // Theme uses WxH thumbnails — check which are missing and generate
+          bool anyMissing = false;
+          for (const auto& sz : thumbSizes) {
+            const std::string path = UITheme::getCoverThumbPath(book.coverBmpPath, sz.first, sz.second);
+            if (!Storage.exists(path.c_str())) {
+              anyMissing = true;
+              break;
+            }
+          }
+
+          if (anyMissing) {
+            bool success = true;
+            if (FsHelpers::hasEpubExtension(book.path)) {
+              Epub epub(book.path, "/.crosspoint");
+              epub.load(false, true);
+              for (const auto& sz : thumbSizes) {
+                const std::string path = UITheme::getCoverThumbPath(book.coverBmpPath, sz.first, sz.second);
+                if (!Storage.exists(path.c_str())) success = epub.generateThumbBmp(sz.first, sz.second) && success;
+              }
+            } else if (FsHelpers::hasXtcExtension(book.path)) {
+              Xtc xtc(book.path, "/.crosspoint");
+              if (xtc.load()) {
+                for (const auto& sz : thumbSizes) {
+                  const std::string path = UITheme::getCoverThumbPath(book.coverBmpPath, sz.first, sz.second);
+                  if (!Storage.exists(path.c_str())) success = xtc.generateThumbBmp(sz.first, sz.second) && success;
+                }
+              }
+            }
             if (!success) {
               RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
               book.coverBmpPath = "";
@@ -184,8 +295,40 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             requestUpdate();
             return;
           }
+        } else {
+          std::string coverPath = UITheme::getCoverThumbPath(book.coverBmpPath, coverHeight);
+          if (!Storage.exists(coverPath.c_str())) {
+            if (FsHelpers::hasEpubExtension(book.path)) {
+              Epub epub(book.path, "/.crosspoint");
+              epub.load(false, true);
+              bool success = epub.generateThumbBmp(coverHeight);
+              if (!success) {
+                RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
+                book.coverBmpPath = "";
+              }
+              coverRendered = false;
+              nextRecentCoverIndex++;
+              recentsLoading = false;
+              requestUpdate();
+              return;
+            } else if (FsHelpers::hasXtcExtension(book.path)) {
+              Xtc xtc(book.path, "/.crosspoint");
+              if (xtc.load()) {
+                bool success = xtc.generateThumbBmp(coverHeight);
+                if (!success) {
+                  RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
+                  book.coverBmpPath = "";
+                }
+                coverRendered = false;
+                nextRecentCoverIndex++;
+                recentsLoading = false;
+                requestUpdate();
+                return;
+              }
+            }
+          }
         }
-      }
+      }  // if (!book.coverBmpPath.empty()) after sidecar check
     }
   }
 
@@ -241,9 +384,8 @@ void HomeActivity::onEnter() {
 
 void HomeActivity::onExit() {
   Activity::onExit();
-
-  // Free the stored cover buffer if any
   freeCoverBuffer();
+  UITheme::getInstance().getMutableTheme().invalidateFrameCache();
 }
 
 bool HomeActivity::storeCoverBuffer() {
@@ -292,26 +434,69 @@ void HomeActivity::loop() {
   if (menuEntriesDirty) {
     rebuildMenuEntries();
   }
-  const int totalItems = static_cast<int>(recentBooks.size() + menuEntries.size());
 
-  if (firstRenderDone && !recentsLoaded && !recentsLoading) {
-    const auto& metrics = UITheme::getInstance().getMetrics();
-    const Rect contentRect = UITheme::getContentRect(renderer, true, false);
-    const HomeScreenLayout layout =
-        computeHomeScreenLayout(metrics, contentRect.height, static_cast<int>(menuEntries.size()));
-    loadRecentCovers(getHomeCoverRenderHeight(layout));
-    return;
+  const bool isCarousel = (GUI.getHomeNavigation() == HomeNavigation::Carousel);
+
+  if (isCarousel) {
+    const int bookCount = static_cast<int>(recentBooks.size());
+    const int menuItemCount = static_cast<int>(menuEntries.size());
+    const bool inCarouselRow = (selectorIndex < bookCount);
+    const int menuIdx = inCarouselRow ? 0 : (selectorIndex - bookCount);
+
+    if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
+      if (inCarouselRow && bookCount > 0)
+        selectorIndex = (selectorIndex + 1) % bookCount;
+      else if (!inCarouselRow)
+        selectorIndex = bookCount + (menuIdx + 1) % menuItemCount;
+      requestUpdate();
+    }
+    if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
+      if (inCarouselRow && bookCount > 0)
+        selectorIndex = (selectorIndex + bookCount - 1) % bookCount;
+      else if (!inCarouselRow)
+        selectorIndex = bookCount + (menuIdx + menuItemCount - 1) % menuItemCount;
+      requestUpdate();
+    }
+    if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
+      if (inCarouselRow) {
+        lastCarouselBookIndex = selectorIndex;
+        selectorIndex = bookCount;
+      } else {
+        selectorIndex = lastCarouselBookIndex;
+      }
+      requestUpdate();
+    }
+    if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
+      if (inCarouselRow) {
+        lastCarouselBookIndex = selectorIndex;
+        selectorIndex = bookCount;
+      } else {
+        selectorIndex = lastCarouselBookIndex;
+      }
+      requestUpdate();
+    }
+  } else {
+    const int totalItems = static_cast<int>(recentBooks.size() + menuEntries.size());
+
+    if (firstRenderDone && !recentsLoaded && !recentsLoading) {
+      const auto& metrics = UITheme::getInstance().getMetrics();
+      const Rect contentRect = UITheme::getContentRect(renderer, true, false);
+      const HomeScreenLayout layout =
+          computeHomeScreenLayout(metrics, contentRect.height, static_cast<int>(menuEntries.size()));
+      loadRecentCovers(getHomeCoverRenderHeight(layout));
+      return;
+    }
+
+    buttonNavigator.onNext([this, totalItems] {
+      selectorIndex = ButtonNavigator::nextIndex(selectorIndex, totalItems);
+      requestUpdate();
+    });
+
+    buttonNavigator.onPrevious([this, totalItems] {
+      selectorIndex = ButtonNavigator::previousIndex(selectorIndex, totalItems);
+      requestUpdate();
+    });
   }
-
-  buttonNavigator.onNext([this, totalItems] {
-    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, totalItems);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPrevious([this, totalItems] {
-    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, totalItems);
-    requestUpdate();
-  });
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const int recentsCount = static_cast<int>(recentBooks.size());
@@ -330,21 +515,43 @@ void HomeActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect contentRect = UITheme::getContentRect(renderer, true, false);
 
+  if (menuEntriesDirty) {
+    rebuildMenuEntries();
+  }
+
+  const int menuCount = static_cast<int>(menuEntries.size());
+  const bool isCarousel = (GUI.getHomeNavigation() == HomeNavigation::Carousel);
+
+  // Fast path: theme owns its own pre-rendered frame cache
+  if (isCarousel) {
+    const auto carouselLabels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+    const bool handled = GUI.tryFastHomeRender(
+        renderer, recentBooks, selectorIndex, menuCount,
+        [this](int index) { return std::string(I18N.get(menuEntries[index].label)); },
+        [this](int index) { return menuEntries[index].icon; }, carouselLabels.btn1, carouselLabels.btn2,
+        carouselLabels.btn3, carouselLabels.btn4);
+    if (handled) {
+      if (!firstRenderDone) {
+        firstRenderDone = true;
+        requestUpdate();
+      } else if (!recentsLoaded && !recentsLoading) {
+        recentsLoading = true;
+        loadRecentCovers(metrics.homeCoverHeight);
+      }
+      return;
+    }
+  }
+
   renderer.clearScreen();
   bool bufferRestored = coverBufferStored && restoreCoverBuffer();
 
   GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.homeTopPadding}, nullptr);
-
-  if (menuEntriesDirty) {
-    rebuildMenuEntries();
-  }
 
   const int totalItems = static_cast<int>(recentBooks.size() + menuEntries.size());
   if (selectorIndex >= totalItems) {
     selectorIndex = std::max(0, totalItems - 1);
   }
 
-  const int menuCount = static_cast<int>(menuEntries.size());
   const HomeScreenLayout layout = computeHomeScreenLayout(metrics, contentRect.height, menuCount);
 
   GUI.drawRecentBookCover(renderer,
@@ -360,7 +567,8 @@ void HomeActivity::render(RenderLock&&) {
       [this](int index) { return std::string(I18N.get(menuEntries[index].label)); },
       [this](int index) { return menuEntries[index].icon; });
 
-  const auto labels = mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = isCarousel ? mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT))
+                                 : mappedInput.mapLabels("", tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();
@@ -368,6 +576,9 @@ void HomeActivity::render(RenderLock&&) {
   if (!firstRenderDone) {
     firstRenderDone = true;
     requestUpdate();
+  } else if (!recentsLoaded && !recentsLoading) {
+    recentsLoading = true;
+    loadRecentCovers(getHomeCoverRenderHeight(computeHomeScreenLayout(metrics, contentRect.height, menuCount)));
   }
 }
 

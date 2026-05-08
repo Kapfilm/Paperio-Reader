@@ -18,6 +18,7 @@ class UITheme {
 
   const ThemeMetrics& getMetrics() const { return *currentMetrics; }
   const BaseTheme& getTheme() const { return *currentTheme; }
+  BaseTheme& getMutableTheme() { return *currentTheme; }
   void reload();
   void setTheme(CrossPointSettings::UI_THEME type);
   static int getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
@@ -60,6 +61,7 @@ class UITheme {
   // The mapping to logical edges is orientation-dependent.
   static Rect getContentRect(const GfxRenderer& renderer, bool hasBottomHints, bool hasSideHints);
   static std::string getCoverThumbPath(std::string coverBmpPath, int coverHeight);
+  static std::string getCoverThumbPath(std::string coverBmpPath, int width, int height);
   static UIIcon getFileIcon(const std::string& filename);
   static int getStatusBarTopHeight(bool forceStatusItems = false);
   static int getStatusBarBottomHeight(bool forceStatusItems = false);

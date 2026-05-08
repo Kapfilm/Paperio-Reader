@@ -1482,6 +1482,61 @@ void GfxRenderer::drawIcon(const uint8_t bitmap[], const int x, const int y, con
   display.drawImageTransparent(bitmap, y, getScreenWidth() - width - x, height, width);
 }
 
+void GfxRenderer::drawIconInverted(const uint8_t bitmap[], const int x, const int y, const int width,
+                                   const int height) const {
+  // Portrait-mode coordinate transform (x↔y swap), matching drawIcon.
+  // OR with ~srcByte sets framebuffer bits to 1 (white) wherever the icon
+  // bitmap is 0 (black) — produces a white icon on a black background.
+  const int physX = y;
+  const int physY = getScreenWidth() - width - x;
+  const int imgW = height;  // dimensions swapped by portrait transform
+  const int imgH = width;
+  const int srcStride = (imgW + 7) / 8;
+
+  if (physX + imgW <= 0 || physX >= static_cast<int>(panelWidthBytes) * 8) return;
+  if (physY + imgH <= 0 || physY >= static_cast<int>(panelHeight)) return;
+
+  const int baseByte = (physX >= 0) ? (physX >> 3) : -(((-physX) + 7) >> 3);
+  const int bitShift = ((physX % 8) + 8) % 8;
+
+  const int trail = srcStride * 8 - imgW;
+  const uint8_t trailMask = static_cast<uint8_t>(0xFF << trail);
+  const int lastCol = srcStride - 1;
+
+  for (int row = 0; row < imgH; ++row) {
+    const int destY = physY + row;
+    if (destY < 0 || destY >= static_cast<int>(panelHeight)) continue;
+    const int rowBase = destY * static_cast<int>(panelWidthBytes);
+    const int srcOffset = row * srcStride;
+
+    if (bitShift == 0) {
+      for (int col = 0; col < srcStride; ++col) {
+        const int dst = baseByte + col;
+        if (dst < 0) continue;
+        if (dst >= static_cast<int>(panelWidthBytes)) break;
+        uint8_t inv = ~bitmap[srcOffset + col];
+        if (col == lastCol && trail > 0) inv &= trailMask;
+        frameBuffer[rowBase + dst] |= inv;
+      }
+    } else {
+      const int rsh = bitShift;
+      const int lsh = 8 - bitShift;
+      for (int col = 0; col < srcStride; ++col) {
+        uint8_t inv = ~bitmap[srcOffset + col];
+        if (col == lastCol && trail > 0) inv &= trailMask;
+        const int dstHi = baseByte + col;
+        const int dstLo = dstHi + 1;
+        if (dstHi >= 0 && dstHi < static_cast<int>(panelWidthBytes)) {
+          frameBuffer[rowBase + dstHi] |= static_cast<uint8_t>(inv >> rsh);
+        }
+        if (dstLo >= 0 && dstLo < static_cast<int>(panelWidthBytes)) {
+          frameBuffer[rowBase + dstLo] |= static_cast<uint8_t>(inv << lsh);
+        }
+      }
+    }
+  }
+}
+
 void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
                              const float cropX, const float cropY) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
@@ -1495,8 +1550,6 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
   bool isScaled = false;
   int cropPixX = std::floor(bitmap.getWidth() * cropX / 2.0f);
   int cropPixY = std::floor(bitmap.getHeight() * cropY / 2.0f);
-  LOG_DBG("GFX", "Cropping %dx%d by %dx%d pix, is %s", bitmap.getWidth(), bitmap.getHeight(), cropPixX, cropPixY,
-          bitmap.isTopDown() ? "top-down" : "bottom-up");
 
   const float croppedWidth = (1.0f - cropX) * static_cast<float>(bitmap.getWidth());
   const float croppedHeight = (1.0f - cropY) * static_cast<float>(bitmap.getHeight());
@@ -1518,7 +1571,6 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     scale = fitScale;
     isScaled = true;
   }
-  LOG_DBG("GFX", "Scaling by %f - %s", scale, isScaled ? "scaled" : "not scaled");
 
   // Calculate output row size (2 bits per pixel, packed into bytes)
   // IMPORTANT: Use int, not uint8_t, to avoid overflow for images > 1020 pixels wide
@@ -1595,13 +1647,19 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
                                  const int maxHeight) const {
   float scale = 1.0f;
   bool isScaled = false;
-  if (maxWidth > 0 && bitmap.getWidth() > maxWidth) {
-    scale = static_cast<float>(maxWidth) / static_cast<float>(bitmap.getWidth());
-    isScaled = true;
+  if (maxWidth > 0) {
+    const float s = static_cast<float>(maxWidth) / static_cast<float>(bitmap.getWidth());
+    if (s != 1.0f) {
+      scale = s;
+      isScaled = true;
+    }
   }
-  if (maxHeight > 0 && bitmap.getHeight() > maxHeight) {
-    scale = std::min(scale, static_cast<float>(maxHeight) / static_cast<float>(bitmap.getHeight()));
-    isScaled = true;
+  if (maxHeight > 0) {
+    const float s = static_cast<float>(maxHeight) / static_cast<float>(bitmap.getHeight());
+    if (s < scale || (scale == 1.0f && s != 1.0f)) {
+      scale = s;
+      isScaled = (scale != 1.0f);
+    }
   }
 
   // For 1-bit BMP, output is still 2-bit packed (for consistency with readNextRow)

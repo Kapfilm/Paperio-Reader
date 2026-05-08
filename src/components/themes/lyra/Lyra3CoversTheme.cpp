@@ -52,7 +52,7 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
               const float ratio = bitmapWidth / bitmapHeight;
               const float tileRatio =
                   static_cast<float>(tileWidth - 2 * hPaddingInSelection) / static_cast<float>(coverHeight);
-              const float cropX = 1.0f - (tileRatio / ratio);
+              const float cropX = std::max(0.0f, 1.0f - (tileRatio / ratio));
 
               renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection,
                                   tileWidth - 2 * hPaddingInSelection, coverHeight, cropX);

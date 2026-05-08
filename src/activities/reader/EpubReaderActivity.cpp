@@ -29,6 +29,7 @@
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "QrDisplayActivity.h"
+#include "ReaderActivity.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontGlobals.h"
@@ -207,7 +208,9 @@ void EpubReaderActivity::onEnter() {
   if (!series.empty() && !epub->getSeriesIndex().empty()) {
     series += " #" + epub->getSeriesIndex();
   }
-  RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), series, epub->getThumbBmpPath());
+  const std::string epubSidecar = ReaderActivity::sidecarCoverPath(epub->getPath());
+  const std::string epubCover = epubSidecar.empty() ? epub->getThumbBmpPath() : epubSidecar;
+  RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), series, epubCover);
   const RecentBook currentBook = RECENT_BOOKS.getBookByPath(epub->getPath());
   bookEmbeddedStyleOverride = currentBook.embeddedStyleOverride;
   bookImageRenderingOverride = currentBook.imageRenderingOverride;
@@ -241,6 +244,7 @@ void EpubReaderActivity::onExit() {
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
   section.reset();
+  UITheme::getInstance().getMutableTheme().onBookWillClose(epub ? epub->getPath() : "", epub.get(), nullptr, nullptr);
   epub.reset();
   currentPageFootnotes.clear();
   currentPageFootnotes.shrink_to_fit();

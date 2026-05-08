@@ -15,6 +15,7 @@
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "MdReaderTocSelectionActivity.h"
+#include "ReaderActivity.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
@@ -52,7 +53,7 @@ void MdReaderActivity::onEnter() {
   auto fileName = filePath.substr(filePath.rfind('/') + 1);
   APP_STATE.openEpubPath = filePath;
   APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(filePath, fileName, "", "", "");
+  RECENT_BOOKS.addBook(filePath, fileName, "", "", ReaderActivity::sidecarCoverPath(filePath));
 
   requestUpdate();
 }
@@ -219,6 +220,7 @@ void MdReaderActivity::onExit() {
   currentPageLines.clear();
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
+  UITheme::getInstance().getMutableTheme().onBookWillClose(txt ? txt->getPath() : "", nullptr, nullptr, txt.get());
   txt.reset();
 }
 

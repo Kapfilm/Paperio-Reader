@@ -32,20 +32,22 @@ class HomeActivity final : public Activity {
 
   ButtonNavigator buttonNavigator;
   int selectorIndex = 0;
+  int lastCarouselBookIndex = 0;  // remembered position when leaving carousel row
   bool recentsLoading = false;
   bool recentsLoaded = false;
   bool firstRenderDone = false;
   bool hasOpdsServers = false;
-  bool coverRendered = false;      // Track if cover has been rendered once
-  bool coverBufferStored = false;  // Track if cover buffer is stored
+  bool coverRendered = false;
+  bool coverBufferStored = false;
   size_t nextRecentCoverIndex = 0;
-  uint8_t* coverBuffer = nullptr;  // HomeActivity's own buffer for cover image
+  uint8_t* coverBuffer = nullptr;
+
   std::vector<RecentBook> recentBooks;
   std::vector<MenuEntry> menuEntries;
   bool menuEntriesDirty = true;
 
-  std::string focusBookPath;    // book path to re-select on first render, if present in recents
-  int focusSelectorIndex = -1;  // fallback combined-selector index when focusBookPath doesn't match
+  std::string focusBookPath;
+  int focusSelectorIndex = -1;
 
   void onSelectBook(const std::string& path);
   void dispatchMenuAction(MenuAction action);
