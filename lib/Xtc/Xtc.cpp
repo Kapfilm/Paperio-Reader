@@ -345,8 +345,9 @@ bool Xtc::generateThumbBmp(int width, int height) const {
     return false;
   }
 
+  const std::string thumbPath = getThumbBmpPath(width, height);
   FsFile thumbBmp;
-  if (!Storage.openFileForWrite("XTC", getThumbBmpPath(width, height), thumbBmp)) {
+  if (!Storage.openFileForWrite("XTC", thumbPath, thumbBmp)) {
     free(pageBuffer);
     return false;
   }
@@ -360,6 +361,7 @@ bool Xtc::generateThumbBmp(int width, int height) const {
   if (!rowBuffer) {
     free(pageBuffer);
     thumbBmp.close();
+    Storage.remove(thumbPath.c_str());
     return false;
   }
 
