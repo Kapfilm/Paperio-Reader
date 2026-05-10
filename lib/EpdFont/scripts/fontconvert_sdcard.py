@@ -385,14 +385,19 @@ def extract_kerning_fonttools(font_path, codepoints, ppem):
             lookup = gpos.LookupList.Lookup[li]
             for st in lookup.SubTable:
                 actual = st
-                # Unwrap Extension (lookup type 9) wrappers
+                # Unwrap Extension (lookup type 9) wrappers. After unwrapping,
+                # `lookup.LookupType` is still 9 and the unwrapped subtable
+                # carries `Format` rather than `LookupType`, so the *effective*
+                # type for the dispatch below comes from `st.ExtensionLookupType`.
                 if lookup.LookupType == 9 and hasattr(st, 'ExtSubTable'):
                     actual = st.ExtSubTable
+                effective_type = getattr(st, 'ExtensionLookupType', lookup.LookupType)
                 if hasattr(actual, 'Format'):
-                    if actual.LookupType == 2:
+                    if effective_type == 2:
                         _extract_pairpos_subtable(actual, glyph_to_cp, raw_kern)
                     else:
-                        print(f"  Debug: skipping unsupported GPOS kern lookupType={actual.LookupType} (Format={actual.Format})",
+                        print(f"  Debug: skipping unsupported GPOS kern lookupType="
+                              f"{effective_type} (outer={lookup.LookupType}, Format={actual.Format})",
                               file=sys.stderr)
 
     font.close()
@@ -552,7 +557,13 @@ def extract_ligatures_fonttools(font_path, codepoints):
     codepoints_set = set(codepoints)
     filtered = {}
     for seq, lig_cp in raw_ligatures.items():
-        if lig_cp not in codepoints_set:
+        if lig_cp not in codepoints_set or lig_cp > 0xFFFF:
+            continue
+        # The on-disk format packs each ligature component as a uint16. Drop
+        # any seq with an SMP component here so the chained 3+ char path —
+        # which uses `intermediate_cp = filtered[prefix].lig_cp` — also stays
+        # 16-bit safe by construction.
+        if any(cp > 0xFFFF for cp in seq):
             continue
         if all(cp in codepoints_set for cp in seq):
             filtered[seq] = lig_cp
@@ -727,9 +738,10 @@ def rasterize_font_style(fontfile, size, intervals, style_id=0, force_autohint=F
         print(f"  [{style_label}] Kerning classes: {kern_left_class_count} left, {kern_right_class_count} right, "
               f"{matrix_size + entries_size} bytes", file=sys.stderr)
 
+    # SMP codepoints in ligature inputs / outputs are filtered inside
+    # extract_ligatures_fonttools (see the codepoints_set filter), so every
+    # entry returned here is already 16-bit safe.
     ligature_pairs = extract_ligatures_fonttools(fontfile, all_cps)
-    # SMP codepoints overflow the uint32 packed-pair encoding; drop them.
-    ligature_pairs = [(pk, lc) for pk, lc in ligature_pairs if (pk >> 16) <= 0xFFFF and (pk & 0xFFFF) <= 0xFFFF]
     if len(ligature_pairs) > 255:
         print(f"  [{style_label}] WARNING: {len(ligature_pairs)} ligature pairs exceeds uint8_t max (255), truncating",
               file=sys.stderr)
