@@ -3,6 +3,7 @@
 #include <Epub.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <OpdsStream.h>
@@ -39,13 +40,78 @@ int formatItemsPerPage(const Rect& contentRect) {
   const int itemsPerPage = availableHeight / FORMAT_ITEM_HEIGHT;
   return itemsPerPage > 0 ? itemsPerPage : 1;
 }
+
+void writeString(HalFile& f, const std::string& s) {
+  uint16_t len = s.length();
+  f.write(reinterpret_cast<const uint8_t*>(&len), sizeof(len));
+  if (len > 0) f.write(reinterpret_cast<const void*>(s.data()), len);
+}
+
+std::string readString(HalFile& f) {
+  uint16_t len = 0;
+  if (f.read(&len, sizeof(len)) != sizeof(len)) return "";
+  if (len == 0) return "";
+  std::string s(len, '\0');
+  f.read(s.data(), len);
+  return s;
+}
+
+void writeEntryToCache(HalFile& f, const OpdsEntry& entry) {
+  uint8_t type = static_cast<uint8_t>(entry.type);
+  f.write(&type, sizeof(type));
+  writeString(f, entry.title);
+  writeString(f, entry.author);
+  writeString(f, entry.href);
+  writeString(f, entry.id);
+  uint16_t numLinks = entry.acquisitionLinks.size();
+  f.write(reinterpret_cast<const uint8_t*>(&numLinks), sizeof(numLinks));
+  for (const auto& link : entry.acquisitionLinks) {
+    writeString(f, link.href);
+    writeString(f, link.mimeType);
+    writeString(f, link.formatKey);
+    writeString(f, link.fileExtension);
+  }
+}
+
+OpdsEntry readEntryFromCache(HalFile& f) {
+  OpdsEntry entry;
+  uint8_t type = 0;
+  if (f.read(&type, sizeof(type)) == sizeof(type)) {
+    entry.type = static_cast<OpdsEntryType>(type);
+  }
+  entry.title = readString(f);
+  entry.author = readString(f);
+  entry.href = readString(f);
+  entry.id = readString(f);
+  uint16_t numLinks = 0;
+  if (f.read(&numLinks, sizeof(numLinks)) == sizeof(numLinks)) {
+    for (uint16_t i = 0; i < numLinks; ++i) {
+      OpdsAcquisitionLink link;
+      link.href = readString(f);
+      link.mimeType = readString(f);
+      link.formatKey = readString(f);
+      link.fileExtension = readString(f);
+      entry.acquisitionLinks.push_back(link);
+    }
+  }
+  return entry;
+}
 }  // namespace
+
+OpdsEntry OpdsBookBrowserActivity::getEntry(size_t index) const {
+  if (index >= entryOffsets.size()) return {};
+  HalFile f;
+  if (!Storage.openFileForRead("OPDS", "/.tmp_opds_cache.dat", f)) return {};
+  f.seek(entryOffsets[index]);
+  OpdsEntry entry = readEntryFromCache(f);
+  return entry;
+}
 
 void OpdsBookBrowserActivity::onEnter() {
   Activity::onEnter();
 
   state = BrowserState::CHECK_WIFI;
-  entries.clear();
+  entryOffsets.clear();
   navigationHistory.clear();
   currentPath = "";  // Root path - user provides full URL in settings
   searchTemplate.clear();
@@ -67,9 +133,10 @@ void OpdsBookBrowserActivity::onExit() {
 
   HalClock::wifiOff();
 
-  entries.clear();
+  entryOffsets.clear();
   navigationHistory.clear();
   formatSelectionLabels.clear();
+  Storage.remove("/.tmp_opds_cache.dat");
 }
 
 void OpdsBookBrowserActivity::loop() {
@@ -112,13 +179,13 @@ void OpdsBookBrowserActivity::loop() {
   if (state == BrowserState::DOWNLOADING) return;
 
   if (state == BrowserState::FORMAT_SELECTION) {
-    if (selectedBookIndex < 0 || selectedBookIndex >= static_cast<int>(entries.size())) {
+    if (selectedBookIndex < 0 || selectedBookIndex >= static_cast<int>(entryOffsets.size())) {
       state = BrowserState::BROWSING;
       requestUpdate();
       return;
     }
 
-    const auto& entry = entries[selectedBookIndex];
+    const auto entry = getEntry(selectedBookIndex);
     if (entry.acquisitionLinks.empty()) {
       state = BrowserState::BROWSING;
       selectedBookIndex = -1;
@@ -140,11 +207,11 @@ void OpdsBookBrowserActivity::loop() {
       return;
     }
 
-    buttonNavigator.onNextRelease([this, &entry] {
+    buttonNavigator.onNextRelease([this, entry] {
       formatSelectorIndex = ButtonNavigator::nextIndex(formatSelectorIndex, entry.acquisitionLinks.size());
       requestUpdate();
     });
-    buttonNavigator.onPreviousRelease([this, &entry] {
+    buttonNavigator.onPreviousRelease([this, entry] {
       formatSelectorIndex = ButtonNavigator::previousIndex(formatSelectorIndex, entry.acquisitionLinks.size());
       requestUpdate();
     });
@@ -153,8 +220,8 @@ void OpdsBookBrowserActivity::loop() {
 
   if (state == BrowserState::BROWSING) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      if (!entries.empty()) {
-        const auto& entry = entries[selectorIndex];
+      if (!entryOffsets.empty()) {
+        const auto entry = getEntry(selectorIndex);
         entry.type == OpdsEntryType::BOOK ? chooseBookFormat(entry) : navigateToEntry(entry);
       }
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -163,24 +230,24 @@ void OpdsBookBrowserActivity::loop() {
       if (!searchTemplate.empty() && selectorIndex == 0) launchSearch();
     }
 
-    if (!entries.empty()) {
+    if (!entryOffsets.empty()) {
       // Navigator is restricted to Up/Down so a Left release used to launch
       // search (line above) cannot also be consumed here as a previous-item
       // step on the same tick.
       buttonNavigator.onRelease({MappedInputManager::Button::Down}, [this] {
-        selectorIndex = ButtonNavigator::nextIndex(selectorIndex, entries.size());
+        selectorIndex = ButtonNavigator::nextIndex(selectorIndex, entryOffsets.size());
         requestUpdate();
       });
       buttonNavigator.onRelease({MappedInputManager::Button::Up}, [this] {
-        selectorIndex = ButtonNavigator::previousIndex(selectorIndex, entries.size());
+        selectorIndex = ButtonNavigator::previousIndex(selectorIndex, entryOffsets.size());
         requestUpdate();
       });
       buttonNavigator.onContinuous({MappedInputManager::Button::Down}, [this] {
-        selectorIndex = ButtonNavigator::nextPageIndex(selectorIndex, entries.size(), PAGE_ITEMS);
+        selectorIndex = ButtonNavigator::nextPageIndex(selectorIndex, entryOffsets.size(), PAGE_ITEMS);
         requestUpdate();
       });
       buttonNavigator.onContinuous({MappedInputManager::Button::Up}, [this] {
-        selectorIndex = ButtonNavigator::previousPageIndex(selectorIndex, entries.size(), PAGE_ITEMS);
+        selectorIndex = ButtonNavigator::previousPageIndex(selectorIndex, entryOffsets.size(), PAGE_ITEMS);
         requestUpdate();
       });
     }
@@ -239,7 +306,7 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
   }
 
   if (state == BrowserState::FORMAT_SELECTION) {
-    const auto& entry = entries[selectedBookIndex];
+    const auto entry = getEntry(selectedBookIndex);
     auto title = renderer.truncatedText(UI_10_FONT_ID, entry.title.c_str(), contentRect.width - 40);
     renderer.drawCenteredText(UI_10_FONT_ID, midY - 40, title.c_str(), true, EpdFontFamily::BOLD);
     if (!entry.author.empty()) {
@@ -269,12 +336,12 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
   // Browsing state
   // Show appropriate button hint based on selected entry type
   const char* confirmLabel =
-      (!entries.empty() && entries[selectorIndex].type == OpdsEntryType::BOOK) ? tr(STR_DOWNLOAD) : tr(STR_OPEN);
+      (!entryOffsets.empty() && getEntry(selectorIndex).type == OpdsEntryType::BOOK) ? tr(STR_DOWNLOAD) : tr(STR_OPEN);
   const char* searchLabel = (!searchTemplate.empty() && selectorIndex == 0) ? tr(STR_SEARCH) : tr(STR_DIR_UP);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, searchLabel, tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  if (entries.empty()) {
+  if (entryOffsets.empty()) {
     renderer.drawCenteredText(UI_10_FONT_ID, midY, tr(STR_NO_ENTRIES));
     renderer.displayBuffer();
     return;
@@ -283,8 +350,9 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
   const auto pageStartIndex = selectorIndex / PAGE_ITEMS * PAGE_ITEMS;
   renderer.fillRect(contentRect.x, 60 + (selectorIndex % PAGE_ITEMS) * 30 - 2, contentRect.width - 1, 30);
 
-  for (size_t i = pageStartIndex; i < entries.size() && i < static_cast<size_t>(pageStartIndex + PAGE_ITEMS); i++) {
-    const auto& entry = entries[i];
+  for (size_t i = pageStartIndex; i < entryOffsets.size() && i < static_cast<size_t>(pageStartIndex + PAGE_ITEMS);
+       i++) {
+    const auto entry = getEntry(i);
 
     // Format display text with type indicator
     std::string displayText;
@@ -318,6 +386,21 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   LOG_DBG("OPDS", "Fetching: %s", url.c_str());
 
   OpdsParser parser;
+  HalFile cacheFile;
+
+  if (!Storage.openFileForWrite("OPDS", "/.tmp_opds_cache.dat", cacheFile)) {
+    LOG_ERR("OPDS", "Could not open cache file");
+    state = BrowserState::ERROR;
+    errorMessage = "Cache Error";
+    requestUpdate();
+    return;
+  }
+
+  parser.onEntryParsed = [&](OpdsEntry entry) {
+    uint32_t offset = cacheFile.position();
+    entryOffsets.push_back(offset);
+    writeEntryToCache(cacheFile, entry);
+  };
 
   {
     OpdsParserStream stream{parser};
@@ -342,18 +425,21 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   }
   const auto& nextUrl = parser.getNextPageUrl();
   const auto& prevUrl = parser.getPrevPageUrl();
-  entries = std::move(parser).getEntries();
 
   if (!prevUrl.empty()) {
-    entries.insert(entries.begin(), OpdsEntry{OpdsEntryType::NAVIGATION, tr(STR_PREV_PAGE), "", prevUrl, ""});
+    OpdsEntry prevEntry{OpdsEntryType::NAVIGATION, tr(STR_PREV_PAGE), "", prevUrl, ""};
+    entryOffsets.insert(entryOffsets.begin(), cacheFile.position());
+    writeEntryToCache(cacheFile, prevEntry);
   }
   if (!nextUrl.empty()) {
-    entries.push_back(OpdsEntry{OpdsEntryType::NAVIGATION, tr(STR_NEXT_PAGE), "", nextUrl, ""});
+    OpdsEntry nextEntry{OpdsEntryType::NAVIGATION, tr(STR_NEXT_PAGE), "", nextUrl, ""};
+    entryOffsets.push_back(cacheFile.position());
+    writeEntryToCache(cacheFile, nextEntry);
   }
 
   selectorIndex = 0;
-  state = entries.empty() ? BrowserState::ERROR : BrowserState::BROWSING;
-  if (entries.empty()) errorMessage = tr(STR_NO_ENTRIES);
+  state = entryOffsets.empty() ? BrowserState::ERROR : BrowserState::BROWSING;
+  if (entryOffsets.empty()) errorMessage = tr(STR_NO_ENTRIES);
   requestUpdate();
 }
 
@@ -362,7 +448,7 @@ void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
   currentPath = entry.href;
   state = BrowserState::LOADING;
   statusMessage = tr(STR_LOADING);
-  entries.clear();
+  entryOffsets.clear();
   selectorIndex = 0;
   requestUpdate(true);
   fetchFeed(currentPath);
@@ -376,7 +462,7 @@ void OpdsBookBrowserActivity::navigateBack() {
     navigationHistory.pop_back();
     state = BrowserState::LOADING;
     statusMessage = tr(STR_LOADING);
-    entries.clear();
+    entryOffsets.clear();
     selectorIndex = 0;
     requestUpdate();
     fetchFeed(currentPath);

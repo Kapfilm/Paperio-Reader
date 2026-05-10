@@ -146,7 +146,6 @@ void OpdsParser::flush() {
 bool OpdsParser::error() const { return errorOccured; }
 
 void OpdsParser::clear() {
-  entries.clear();
   searchTemplate.clear();
   osdUrl.clear();
   nextPageUrl.clear();
@@ -154,14 +153,6 @@ void OpdsParser::clear() {
   currentEntry = OpdsEntry{};
   currentText.clear();
   inEntry = inTitle = inAuthor = inAuthorName = inId = false;
-}
-
-std::vector<OpdsEntry> OpdsParser::getBooks() const {
-  std::vector<OpdsEntry> books;
-  for (const auto& entry : entries) {
-    if (entry.type == OpdsEntryType::BOOK) books.push_back(entry);
-  }
-  return books;
 }
 
 const char* OpdsParser::findAttribute(const XML_Char** atts, const char* name) {
@@ -243,7 +234,7 @@ void XMLCALL OpdsParser::endElement(void* userData, const XML_Char* name) {
 
   if (strcmp(name, "entry") == 0 || strstr(name, ":entry") != nullptr) {
     if (!self->currentEntry.title.empty() && !self->currentEntry.href.empty()) {
-      self->entries.push_back(self->currentEntry);
+      if (self->onEntryParsed) self->onEntryParsed(self->currentEntry);
     }
     self->inEntry = false;
   } else if (self->inEntry) {
