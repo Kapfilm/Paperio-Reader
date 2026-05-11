@@ -1783,9 +1783,11 @@ void GfxRenderer::fillPolygon(const int* xPoints, const int* yPoints, int numPoi
 
 // For performance measurement (using static to allow "const" methods)
 static unsigned long start_ms = 0;
+static bool start_ms_valid = false;
 
 void GfxRenderer::clearScreen(const uint8_t color) const {
   start_ms = millis();
+  start_ms_valid = true;
   display.clearScreen(color);
 }
 
@@ -1821,8 +1823,13 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
     }
   }
 
-  auto elapsed = millis() - start_ms;
-  LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
+  if (start_ms_valid) {
+    auto elapsed = millis() - start_ms;
+    LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
+  } else {
+    LOG_DBG("GFX", "Time = n/a from clearScreen to displayBuffer (no clearScreen marker)");
+  }
+  start_ms_valid = false;
   display.displayBuffer(effectiveMode, fadingFix.load(std::memory_order_relaxed));
 }
 
