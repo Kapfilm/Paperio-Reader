@@ -230,7 +230,7 @@ bool ChapterHtmlSlimParser::ensureHeapForTextLayout(const char* phase) {
 
   const uint32_t freeHeap = ESP.getFreeHeap();
   const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
-  if (freeHeap >= MIN_FREE_HEAP_FOR_TEXT_LAYOUT || maxAllocHeap >= MIN_MAX_ALLOC_FOR_TEXT_LAYOUT) {
+  if (freeHeap >= MIN_FREE_HEAP_FOR_TEXT_LAYOUT && maxAllocHeap >= MIN_MAX_ALLOC_FOR_TEXT_LAYOUT) {
     return true;
   }
 
