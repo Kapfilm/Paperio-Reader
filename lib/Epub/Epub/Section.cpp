@@ -3,6 +3,8 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 
 #include <algorithm>
 
@@ -12,7 +14,7 @@
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION = 26;
+constexpr uint8_t SECTION_FILE_VERSION = 27;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) +   // SECTION_FILE_VERSION
                                  sizeof(int) +       // fontId
                                  sizeof(float) +     // lineCompression
@@ -20,6 +22,7 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) +   // SECTION_FILE_VERSION
                                  sizeof(uint8_t) +   // paragraphAlignment
                                  sizeof(uint16_t) +  // viewportWidth
                                  sizeof(uint16_t) +  // viewportHeight
+                                 sizeof(bool) +      // parseComplete
                                  sizeof(uint16_t) +  // pageCount (stored as 16-bit in header)
                                  sizeof(bool) +      // hyphenationEnabled
                                  sizeof(bool) +      // embeddedStyle
@@ -28,6 +31,13 @@ constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) +   // SECTION_FILE_VERSION
                                  sizeof(uint32_t) +  // page LUT offset
                                  sizeof(uint32_t) +  // anchor map offset
                                  sizeof(uint32_t);   // paragraph LUT offset
+
+constexpr uint32_t HEADER_TAIL_PARSE_COMPLETE_OFFSET =
+    HEADER_SIZE - sizeof(uint32_t) * 3 - sizeof(uint16_t) - sizeof(bool);
+constexpr uint32_t HEADER_TAIL_PAGE_COUNT_OFFSET = HEADER_SIZE - sizeof(uint32_t) * 3 - sizeof(uint16_t);
+constexpr uint32_t HEADER_TAIL_PAGE_LUT_OFFSET = HEADER_SIZE - sizeof(uint32_t) * 3;
+constexpr uint32_t HEADER_TAIL_ANCHOR_OFFSET = HEADER_SIZE - sizeof(uint32_t) * 2;
+constexpr uint32_t HEADER_TAIL_PARAGRAPH_LUT_OFFSET = HEADER_SIZE - sizeof(uint32_t);
 
 // On-disk paragraph LUT entry: u32 xhtmlByteOffset + u16 paragraphIndex + u16 listItemIndex.
 // listItemIndex is the running <li> count at page-break time; together with
@@ -44,6 +54,20 @@ inline uint32_t paragraphLutEntryOffset(uint32_t lutStart, uint16_t page) {
 namespace {
 constexpr uint32_t FNV_PRIME = 0x01000193;         // 16777619
 constexpr uint32_t FNV_OFFSET_BASIS = 0x811C9DC5;  // 2166136261
+
+// On constrained targets, loading the CSS rules map before chapter parsing can
+// consume a large share of available heap and increase parse truncation risk.
+// Allow compile-time override for tuning.
+#ifndef SCT_EMBEDDED_STYLE_MIN_FREE_HEAP_BYTES
+#define SCT_EMBEDDED_STYLE_MIN_FREE_HEAP_BYTES (96 * 1024)
+#endif
+
+#ifndef SCT_EMBEDDED_STYLE_MIN_CONTIG_HEAP_BYTES
+#define SCT_EMBEDDED_STYLE_MIN_CONTIG_HEAP_BYTES (56 * 1024)
+#endif
+
+constexpr uint32_t EMBEDDED_STYLE_MIN_FREE_HEAP_BYTES = SCT_EMBEDDED_STYLE_MIN_FREE_HEAP_BYTES;
+constexpr uint32_t EMBEDDED_STYLE_MIN_CONTIG_HEAP_BYTES = SCT_EMBEDDED_STYLE_MIN_CONTIG_HEAP_BYTES;
 
 uint32_t fnv1a(const uint8_t* data, size_t length) {
   uint32_t hash = FNV_OFFSET_BASIS;
@@ -195,9 +219,9 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
   }
   static_assert(HEADER_SIZE == sizeof(SECTION_FILE_VERSION) + sizeof(fontId) + sizeof(lineCompression) +
                                    sizeof(extraParagraphSpacing) + sizeof(paragraphAlignment) + sizeof(viewportWidth) +
-                                   sizeof(viewportHeight) + sizeof(pageCount) + sizeof(hyphenationEnabled) +
-                                   sizeof(embeddedStyle) + sizeof(bionicReadingEnabled) + sizeof(imageRendering) +
-                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
+                                   sizeof(viewportHeight) + sizeof(bool) + sizeof(pageCount) +
+                                   sizeof(hyphenationEnabled) + sizeof(embeddedStyle) + sizeof(bionicReadingEnabled) +
+                                   sizeof(imageRendering) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   serialization::writePod(file, SECTION_FILE_VERSION);
   serialization::writePod(file, fontId);
@@ -210,6 +234,7 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
   serialization::writePod(file, embeddedStyle);
   serialization::writePod(file, bionicReadingEnabled);
   serialization::writePod(file, imageRendering);
+  serialization::writePod(file, false);      // Placeholder for parseComplete (patched later)
   serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -220,13 +245,30 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
                               const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                               const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                               const bool bionicReadingEnabled, const uint8_t imageRendering) {
+  truncatedCache = false;
   uint32_t propertyHash =
       calculatePropertyHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
                             viewportHeight, hyphenationEnabled, embeddedStyle, bionicReadingEnabled, imageRendering);
   filePath = getSectionFilePath(propertyHash);
 
+  bool usingEmbeddedStyleFallback = false;
   if (!Storage.openFileForRead("SCT", filePath, file)) {
-    return false;
+    // Fallback: allow loading a no-CSS cache variant when embedded CSS is enabled.
+    if (embeddedStyle) {
+      const uint32_t fallbackHash =
+          calculatePropertyHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+                                viewportHeight, hyphenationEnabled, false, bionicReadingEnabled, imageRendering);
+      const std::string fallbackPath = getSectionFilePath(fallbackHash);
+      if (Storage.openFileForRead("SCT", fallbackPath, file)) {
+        filePath = fallbackPath;
+        usingEmbeddedStyleFallback = true;
+        LOG_INF("SCT", "Using no-CSS section cache fallback: %s", filePath.c_str());
+      } else {
+        return false;
+      }
+    } else {
+      return false;
+    }
   }
 
   // Match parameters
@@ -248,6 +290,7 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     bool fileEmbeddedStyle;
     bool fileBionicReadingEnabled;
     uint8_t fileImageRendering;
+    bool fileParseComplete;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
@@ -258,16 +301,21 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     serialization::readPod(file, fileEmbeddedStyle);
     serialization::readPod(file, fileBionicReadingEnabled);
     serialization::readPod(file, fileImageRendering);
+    serialization::readPod(file, fileParseComplete);
 
+    const bool embeddedStyleMatches =
+        (embeddedStyle == fileEmbeddedStyle) || (usingEmbeddedStyleFallback && !fileEmbeddedStyle);
     if (fontId != fileFontId || lineCompression != fileLineCompression ||
         extraParagraphSpacing != fileExtraParagraphSpacing || paragraphAlignment != fileParagraphAlignment ||
         viewportWidth != fileViewportWidth || viewportHeight != fileViewportHeight ||
-        hyphenationEnabled != fileHyphenationEnabled || embeddedStyle != fileEmbeddedStyle ||
+        hyphenationEnabled != fileHyphenationEnabled || !embeddedStyleMatches ||
         bionicReadingEnabled != fileBionicReadingEnabled || imageRendering != fileImageRendering) {
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
       clearCache();  // closes file before removal
       return false;
     }
+
+    truncatedCache = !fileParseComplete;
   }
 
   serialization::readPod(file, pageCount);
@@ -309,8 +357,10 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
 bool Section::clearCache() {
   file.close();  // Must be closed before removal on FAT32
   lut.clear();
+  tocBoundaries.clear();
   pageCount = 0;
   currentPage = 0;
+  truncatedCache = false;
 
   if (!Storage.exists(filePath.c_str())) {
     LOG_DBG("SCT", "Cache does not exist, no action needed");
@@ -330,7 +380,25 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                                 const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                                 const bool bionicReadingEnabled, const uint8_t imageRendering,
-                                const std::function<void(int)>& progressFn) {
+                                const std::function<void(int)>& progressFn, const bool skipEviction) {
+  if (!skipEviction) {
+    evictOldVariants();
+  }
+  if (embeddedStyle) {
+    const uint32_t freeHeap = esp_get_free_heap_size();
+    const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+    if (freeHeap < EMBEDDED_STYLE_MIN_FREE_HEAP_BYTES || contigHeap < EMBEDDED_STYLE_MIN_CONTIG_HEAP_BYTES) {
+      LOG_INF("SCT",
+              "Low heap for embedded CSS (free=%lu contig=%lu, need free>=%lu contig>=%lu); "
+              "building no-CSS section cache",
+              freeHeap, contigHeap, static_cast<uint32_t>(EMBEDDED_STYLE_MIN_FREE_HEAP_BYTES),
+              static_cast<uint32_t>(EMBEDDED_STYLE_MIN_CONTIG_HEAP_BYTES));
+      return createSectionFile(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+                               viewportHeight, hyphenationEnabled, false, bionicReadingEnabled, imageRendering,
+                               progressFn, true);
+    }
+  }
+
   uint32_t propertyHash =
       calculatePropertyHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
                             viewportHeight, hyphenationEnabled, embeddedStyle, bionicReadingEnabled, imageRendering);
@@ -353,9 +421,6 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     return false;
   }
 
-  // Evict old variants for this spine to keep cache size controlled BEFORE creating the new one
-  evictOldVariants();
-
   if (!Storage.openFileForWrite("SCT", filePath, file)) {
     return false;
   }
@@ -375,6 +440,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
       if (!cssParser->loadFromCache()) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
       }
+      cssParser->resetResolveStats();
     }
   }
 
@@ -413,7 +479,13 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   const uint32_t phaseParseStart = millis();
   const bool streamOk = epub->readItemContentsToStream(localPath, visitor, 1024);
   const bool finalizeOk = visitor.finalize();
-  bool success = streamOk && finalizeOk && visitor.streamSucceeded();
+  const bool parserStreamOk = visitor.streamSucceeded();
+  if (cssParser) {
+    cssParser->logResolveStats(localPath.c_str());
+  }
+  const bool parseComplete = streamOk && finalizeOk && parserStreamOk;
+  bool success = parseComplete;
+  const bool hasParsedPages = pageCount > 0;
   const uint32_t parseMs = millis() - phaseParseStart;
   // streamMs is no longer a separate phase (SD-write of temp file is gone); keep the
   // log breakdown stable by reporting it as 0.
@@ -421,13 +493,35 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
 
   const uint32_t phaseFinalizeStart = millis();
   if (!success) {
-    LOG_ERR("SCT", "Failed to parse XML and build pages (stream=%d finalize=%d)", streamOk ? 1 : 0, finalizeOk ? 1 : 0);
-    file.close();
-    Storage.remove(filePath.c_str());
-    if (cssParser) {
-      cssParser->clear();
+    // If parsing fails mid-stream due low memory but some pages were already serialized,
+    // keep the partial section cache so the chapter remains readable instead of failing hard.
+    if (hasParsedPages) {
+      LOG_ERR("SCT", "Parse incomplete; keeping partial section cache with %u pages (stream=%d finalize=%d parser=%d)",
+              pageCount, streamOk ? 1 : 0, finalizeOk ? 1 : 0, parserStreamOk ? 1 : 0);
+      success = true;
+    } else if (embeddedStyle) {
+      LOG_ERR("SCT",
+              "Parse failed with embedded CSS enabled; retrying section creation with embeddedStyle=0 "
+              "(stream=%d finalize=%d parser=%d)",
+              streamOk ? 1 : 0, finalizeOk ? 1 : 0, parserStreamOk ? 1 : 0);
+      file.close();
+      Storage.remove(filePath.c_str());
+      if (cssParser) {
+        cssParser->clear();
+      }
+      return createSectionFile(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+                               viewportHeight, hyphenationEnabled, false, bionicReadingEnabled, imageRendering,
+                               progressFn, true);
+    } else {
+      LOG_ERR("SCT", "Failed to parse XML and build pages (stream=%d finalize=%d parser=%d)", streamOk ? 1 : 0,
+              finalizeOk ? 1 : 0, parserStreamOk ? 1 : 0);
+      file.close();
+      Storage.remove(filePath.c_str());
+      if (cssParser) {
+        cssParser->clear();
+      }
+      return false;
     }
-    return false;
   }
   const uint32_t fileSize = static_cast<uint32_t>(inflatedSize);
 
@@ -477,13 +571,30 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     serialization::writePod(file, entry.listItemIndex);
   }
 
-  // Patch header with final pageCount, lutOffset, anchorMapOffset, and paragraphLutOffset
-  file.seek(HEADER_SIZE - sizeof(uint32_t) * 3 - sizeof(pageCount));
+  // Patch header with final parseComplete/pageCount and offsets.
+  const size_t headerPatchStart = HEADER_TAIL_PARSE_COMPLETE_OFFSET;
+  if (!file.seek(headerPatchStart)) {
+    LOG_ERR("SCT", "Failed to seek to section header patch offset %u", HEADER_TAIL_PARSE_COMPLETE_OFFSET);
+    file.close();
+    Storage.remove(filePath.c_str());
+    return false;
+  }
+  serialization::writePod(file, parseComplete);
   serialization::writePod(file, pageCount);
   serialization::writePod(file, lutOffset);
   serialization::writePod(file, anchorMapOffset);
   serialization::writePod(file, paragraphLutOffset);
   file.flush();
+
+  const size_t expectedHeaderPatchEnd = headerPatchStart + sizeof(parseComplete) + sizeof(pageCount) +
+                                        sizeof(lutOffset) + sizeof(anchorMapOffset) + sizeof(paragraphLutOffset);
+  if (file.position() != expectedHeaderPatchEnd) {
+    LOG_ERR("SCT", "Section header patch write failed: wrote %u bytes at offset %u",
+            static_cast<unsigned>(file.position() - headerPatchStart), static_cast<unsigned>(headerPatchStart));
+    file.close();
+    Storage.remove(filePath.c_str());
+    return false;
+  }
 
   if (cssParser) {
     cssParser->clear();
@@ -499,6 +610,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     LOG_ERR("SCT", "Failed to open section file for reading after creation");
     return false;
   }
+  truncatedCache = !parseComplete;
   this->lut = std::move(lut);
   const uint32_t finalizeMs = millis() - phaseFinalizeStart;
   const uint32_t totalMs = millis() - phaseTotalStart;
@@ -619,7 +731,7 @@ void Section::buildTocBoundariesFromFile(FsFile& f) {
   // Single pass through on-disk anchors, matching against cached TOC anchors.
   // Stop early once all TOC anchors are resolved.
   // Header layout: ... | lutOffset (u32) | anchorMapOffset (u32) | paragraphLutOffset (u32) |
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 2);
+  f.seek(HEADER_TAIL_ANCHOR_OFFSET);
   uint32_t anchorMapOffset;
   serialization::readPod(f, anchorMapOffset);
 
@@ -689,7 +801,7 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
   }
 
   const uint32_t fileSize = f.size();
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 2);
+  f.seek(HEADER_TAIL_ANCHOR_OFFSET);
   uint32_t anchorMapOffset;
   serialization::readPod(f, anchorMapOffset);
   if (anchorMapOffset == 0 || anchorMapOffset >= fileSize) {
@@ -722,7 +834,7 @@ bool Section::readParagraphLutHeader(FsFile& outFile, uint16_t& outCount, uint32
 
   const uint32_t fileSize = outFile.size();
 
-  outFile.seek(HEADER_SIZE - sizeof(uint32_t));
+  outFile.seek(HEADER_TAIL_PARAGRAPH_LUT_OFFSET);
   uint32_t paragraphLutOffset;
   serialization::readPod(outFile, paragraphLutOffset);
   if (fileSize < sizeof(uint16_t) || paragraphLutOffset == 0 || paragraphLutOffset > fileSize - sizeof(uint16_t)) {

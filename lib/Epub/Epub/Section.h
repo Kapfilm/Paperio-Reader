@@ -17,6 +17,7 @@ class Section {
   std::string filePath;
   FsFile file;
   std::vector<uint32_t> lut;  // Cached page byte-offsets; loaded once, avoids per-page LUT seek
+  bool truncatedCache = false;
 
   void writeSectionFileHeader(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                               uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
@@ -66,8 +67,9 @@ class Section {
   bool createSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                          uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
                          bool bionicReadingEnabled, uint8_t imageRendering,
-                         const std::function<void(int)>& progressFn = nullptr);
+                         const std::function<void(int)>& progressFn = nullptr, bool skipEviction = false);
   std::unique_ptr<Page> loadPageFromSectionFile();
+  bool isTruncatedCache() const { return truncatedCache; }
 
   // Given a page in this section, return the TOC index for that page.
   int getTocIndexForPage(int page) const;

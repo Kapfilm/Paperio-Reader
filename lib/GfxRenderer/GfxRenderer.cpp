@@ -69,6 +69,9 @@ void GfxRenderer::begin() {
   panelHeight = display.getDisplayHeight();
   panelWidthBytes = display.getDisplayWidthBytes();
   frameBufferSize = display.getBufferSize();
+  bwSnapshotRowStart = 0;
+  bwSnapshotRowEnd = 0;
+  bwSnapshotSizeBytes = 0;
   bwBufferChunkSize = BW_BUFFER_CHUNK_SIZE;
   bwBufferChunks.assign((frameBufferSize + bwBufferChunkSize - 1) / bwBufferChunkSize, nullptr);
 }
@@ -1780,9 +1783,11 @@ void GfxRenderer::fillPolygon(const int* xPoints, const int* yPoints, int numPoi
 
 // For performance measurement (using static to allow "const" methods)
 static unsigned long start_ms = 0;
+static bool start_ms_valid = false;
 
 void GfxRenderer::clearScreen(const uint8_t color) const {
   start_ms = millis();
+  start_ms_valid = true;
   display.clearScreen(color);
 }
 
@@ -1818,8 +1823,13 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
     }
   }
 
-  auto elapsed = millis() - start_ms;
-  LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
+  if (start_ms_valid) {
+    auto elapsed = millis() - start_ms;
+    LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
+  } else {
+    LOG_DBG("GFX", "Time = n/a from clearScreen to displayBuffer (no clearScreen marker)");
+  }
+  start_ms_valid = false;
   display.displayBuffer(effectiveMode, fadingFix.load(std::memory_order_relaxed));
 }
 
@@ -2143,9 +2153,91 @@ void GfxRenderer::freeBwBufferChunks() {
  * Uses chunked allocation to avoid needing 48KB of contiguous memory.
  * Returns true if buffer was stored successfully, false if allocation failed.
  */
-bool GfxRenderer::storeBwBuffer() {
+bool GfxRenderer::storeBwBuffer() { return storeBwBufferRect(0, 0, getScreenWidth(), getScreenHeight()); }
+
+bool GfxRenderer::storeBwBufferRect(const int x, const int y, const int width, const int height) {
+  if (width <= 0 || height <= 0) {
+    freeBwBufferChunks();
+    bwSnapshotRowStart = 0;
+    bwSnapshotRowEnd = 0;
+    bwSnapshotSizeBytes = 0;
+    LOG_ERR("GFX", "!! BW buffer store rect invalid: x=%d y=%d w=%d h=%d", x, y, width, height);
+    return false;
+  }
+
+  const int screenWidth = getScreenWidth();
+  const int screenHeight = getScreenHeight();
+  if (screenWidth <= 0 || screenHeight <= 0 || panelWidthBytes == 0 || panelHeight == 0 || !frameBuffer) {
+    freeBwBufferChunks();
+    bwSnapshotRowStart = 0;
+    bwSnapshotRowEnd = 0;
+    bwSnapshotSizeBytes = 0;
+    LOG_ERR("GFX", "!! BW buffer store unavailable (screen=%dx%d panelHeight=%u rowBytes=%u fb=%p)", screenWidth,
+            screenHeight, panelHeight, panelWidthBytes, frameBuffer);
+    return false;
+  }
+
+  const int clampedX0 = std::max(0, x);
+  const int clampedY0 = std::max(0, y);
+  const int clampedX1 = std::min(screenWidth - 1, x + width - 1);
+  const int clampedY1 = std::min(screenHeight - 1, y + height - 1);
+  if (clampedX0 > clampedX1 || clampedY0 > clampedY1) {
+    freeBwBufferChunks();
+    bwSnapshotRowStart = 0;
+    bwSnapshotRowEnd = 0;
+    bwSnapshotSizeBytes = 0;
+    LOG_ERR("GFX", "!! BW buffer store rect outside screen: x=%d y=%d w=%d h=%d", x, y, width, height);
+    return false;
+  }
+
+  int rowStart = 0;
+  int rowEnd = 0;
+  switch (getOrientation()) {
+    case LandscapeCounterClockwise:
+      rowStart = clampedY0;
+      rowEnd = clampedY1;
+      break;
+    case LandscapeClockwise:
+      rowStart = static_cast<int>(panelHeight) - 1 - clampedY1;
+      rowEnd = static_cast<int>(panelHeight) - 1 - clampedY0;
+      break;
+    case Portrait:
+      rowStart = static_cast<int>(panelHeight) - 1 - clampedX1;
+      rowEnd = static_cast<int>(panelHeight) - 1 - clampedX0;
+      break;
+    case PortraitInverted:
+      rowStart = clampedX0;
+      rowEnd = clampedX1;
+      break;
+  }
+
+  rowStart = std::max(0, rowStart);
+  rowEnd = std::min(static_cast<int>(panelHeight) - 1, rowEnd);
+  if (rowStart > rowEnd) {
+    freeBwBufferChunks();
+    bwSnapshotRowStart = 0;
+    bwSnapshotRowEnd = 0;
+    bwSnapshotSizeBytes = 0;
+    LOG_ERR("GFX", "!! BW buffer store row-band invalid after orientation mapping: rows=%d..%d", rowStart, rowEnd);
+    return false;
+  }
+
+  const size_t rows = static_cast<size_t>(rowEnd - rowStart + 1);
+  const size_t snapshotSizeBytes = rows * panelWidthBytes;
+  const size_t snapshotBaseOffset = static_cast<size_t>(rowStart) * panelWidthBytes;
+  if (snapshotSizeBytes == 0 || snapshotBaseOffset + snapshotSizeBytes > frameBufferSize) {
+    LOG_ERR("GFX", "!! BW buffer store row-band out of bounds: base=%zu size=%zu frame=%u", snapshotBaseOffset,
+            snapshotSizeBytes, frameBufferSize);
+    return false;
+  }
+
+  freeBwBufferChunks();
+  bwSnapshotRowStart = static_cast<uint16_t>(rowStart);
+  bwSnapshotRowEnd = static_cast<uint16_t>(rowEnd);
+  bwSnapshotSizeBytes = snapshotSizeBytes;
+
   auto attemptStore = [&](size_t chunkSize) {
-    bwBufferChunks.assign((frameBufferSize + chunkSize - 1) / chunkSize, nullptr);
+    bwBufferChunks.assign((bwSnapshotSizeBytes + chunkSize - 1) / chunkSize, nullptr);
     for (size_t i = 0; i < bwBufferChunks.size(); i++) {
       if (bwBufferChunks[i]) {
         LOG_ERR("GFX", "!! BW buffer chunk %zu already stored - this is likely a bug, freeing chunk", i);
@@ -2154,7 +2246,7 @@ bool GfxRenderer::storeBwBuffer() {
       }
 
       const size_t offset = i * chunkSize;
-      const size_t allocSize = std::min(chunkSize, static_cast<size_t>(frameBufferSize - offset));
+      const size_t allocSize = std::min(chunkSize, bwSnapshotSizeBytes - offset);
       bwBufferChunks[i] = static_cast<uint8_t*>(malloc(allocSize));
 
       if (!bwBufferChunks[i]) {
@@ -2166,10 +2258,11 @@ bool GfxRenderer::storeBwBuffer() {
         return false;
       }
 
-      memcpy(bwBufferChunks[i], frameBuffer + offset, allocSize);
+      memcpy(bwBufferChunks[i], frameBuffer + snapshotBaseOffset + offset, allocSize);
     }
     bwBufferChunkSize = chunkSize;
-    LOG_DBG("GFX", "Stored BW buffer in %zu chunks (%zu bytes each)", bwBufferChunks.size(), chunkSize);
+    LOG_DBG("GFX", "Stored BW buffer rows [%u..%u] (%zu bytes) in %zu chunks (%zu bytes each)", bwSnapshotRowStart,
+            bwSnapshotRowEnd, bwSnapshotSizeBytes, bwBufferChunks.size(), chunkSize);
     return true;
   };
 
@@ -2199,6 +2292,9 @@ bool GfxRenderer::storeBwBuffer() {
   }
 
   LOG_ERR("GFX", "!! BW buffer storage failed after retrying smaller chunk sizes");
+  bwSnapshotSizeBytes = 0;
+  bwSnapshotRowStart = 0;
+  bwSnapshotRowEnd = 0;
   return false;
 }
 
@@ -2208,6 +2304,13 @@ bool GfxRenderer::storeBwBuffer() {
  * Uses chunked restoration to match chunked storage.
  */
 void GfxRenderer::restoreBwBuffer() {
+  if (bwSnapshotSizeBytes == 0) {
+    display.cleanupGrayscaleBuffers(frameBuffer);
+    freeBwBufferChunks();
+    LOG_ERR("GFX", "BW restore skipped: no stored snapshot metadata; cleaned grayscale buffers only");
+    return;
+  }
+
   // Check if all chunks are allocated
   bool missingChunks = false;
   for (const auto& bwBufferChunk : bwBufferChunks) {
@@ -2223,20 +2326,28 @@ void GfxRenderer::restoreBwBuffer() {
     // allocations that can later starve TLS handshakes.
     display.cleanupGrayscaleBuffers(frameBuffer);
     freeBwBufferChunks();
+    bwSnapshotSizeBytes = 0;
+    bwSnapshotRowStart = 0;
+    bwSnapshotRowEnd = 0;
     LOG_ERR("GFX", "BW restore skipped due to missing chunks; cleaned grayscale buffers only");
     return;
   }
 
+  const size_t snapshotBaseOffset = static_cast<size_t>(bwSnapshotRowStart) * panelWidthBytes;
   for (size_t i = 0; i < bwBufferChunks.size(); i++) {
     const size_t offset = i * bwBufferChunkSize;
-    const size_t chunkSize = std::min(bwBufferChunkSize, static_cast<size_t>(frameBufferSize - offset));
-    memcpy(frameBuffer + offset, bwBufferChunks[i], chunkSize);
+    const size_t chunkSize = std::min(bwBufferChunkSize, bwSnapshotSizeBytes - offset);
+    memcpy(frameBuffer + snapshotBaseOffset + offset, bwBufferChunks[i], chunkSize);
   }
 
   display.cleanupGrayscaleBuffers(frameBuffer);
 
   freeBwBufferChunks();
-  LOG_DBG("GFX", "Restored and freed BW buffer chunks");
+  LOG_DBG("GFX", "Restored BW buffer rows [%u..%u] (%zu bytes) and freed BW chunks", bwSnapshotRowStart,
+          bwSnapshotRowEnd, bwSnapshotSizeBytes);
+  bwSnapshotSizeBytes = 0;
+  bwSnapshotRowStart = 0;
+  bwSnapshotRowEnd = 0;
 }
 
 /**
