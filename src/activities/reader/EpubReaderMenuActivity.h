@@ -28,6 +28,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
     PUSH_LOCAL,
     STARRED_PAGES,
     STAR_PAGE,
+    MARK_AS_READ,
     DELETE_CACHE,
     RENDER_BENCHMARK
   };

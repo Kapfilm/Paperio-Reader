@@ -135,6 +135,7 @@ class EpubReaderActivity final : public Activity {
   uint16_t pendingListItemIndex = 0;
   bool pendingScreenshot = false;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
+  bool finishedBookActivityStarted_ = false;
   ReaderUtils::InputDrainGuard inputDrainGuard;
   bool automaticPageTurnActive = false;
   // Pages turned in the current reader session. Used to gate auto-push-on-close: a brief

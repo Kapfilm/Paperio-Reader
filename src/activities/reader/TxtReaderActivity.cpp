@@ -11,6 +11,7 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "FinishedBookActivity.h"
 #include "GlobalBookmarkIndex.h"
 #include "MappedInputManager.h"
 #include "ReaderActivity.h"
@@ -197,7 +198,43 @@ void TxtReaderActivity::loop() {
         currentPage++;
         requestUpdate();
       } else {
-        finish();
+        saveProgress();
+        const std::string nextBookPath =
+            BookFinished::findNextBookInDirectory(txt->getPath(), std::string(), std::string());
+        startActivityForResult(
+            std::make_unique<FinishedBookActivity>(renderer, mappedInput, txt->getPath(), nextBookPath,
+                                                   SETTINGS.moveFinishedBooksToCompleted),
+            [this, nextBookPath](const ActivityResult& result) {
+              if (result.isCancelled) {
+                requestUpdate();
+                return;
+              }
+              const auto& menuResult = std::get<MenuResult>(result.data);
+              if (menuResult.action == static_cast<int>(BookFinished::FinishedBookAction::GoHome)) {
+                if (SETTINGS.moveFinishedBooksToCompleted) {
+                  std::string movedPath;
+                  BookFinished::moveFinishedBookToCompleted(txt->getPath(), movedPath);
+                }
+                if (SETTINGS.removeFinishedBooksFromRecents) {
+                  RECENT_BOOKS.removeBook(txt->getPath());
+                }
+                activityManager.goHome();
+                return;
+              }
+              if (menuResult.action == static_cast<int>(BookFinished::FinishedBookAction::OpenNextBook) &&
+                  !nextBookPath.empty()) {
+                if (SETTINGS.moveFinishedBooksToCompleted) {
+                  std::string movedPath;
+                  BookFinished::moveFinishedBookToCompleted(txt->getPath(), movedPath);
+                }
+                if (SETTINGS.removeFinishedBooksFromRecents) {
+                  RECENT_BOOKS.removeBook(txt->getPath());
+                }
+                activityManager.goToReader(nextBookPath);
+                return;
+              }
+              requestUpdate();
+            });
       }
       return;
     }
@@ -218,7 +255,32 @@ void TxtReaderActivity::loop() {
       currentPage++;
       requestUpdate();
     } else {
-      finish();
+      const std::string nextBookPath =
+          BookFinished::findNextBookInDirectory(txt->getPath(), std::string(), std::string());
+      startActivityForResult(
+          std::make_unique<FinishedBookActivity>(renderer, mappedInput, txt->getPath(), nextBookPath,
+                                                 SETTINGS.moveFinishedBooksToCompleted),
+          [this, nextBookPath](const ActivityResult& result) {
+            if (result.isCancelled) {
+              requestUpdate();
+              return;
+            }
+            const auto& menuResult = std::get<MenuResult>(result.data);
+            if (menuResult.action == static_cast<int>(BookFinished::FinishedBookAction::GoHome)) {
+              activityManager.goHome();
+              return;
+            }
+            if (menuResult.action == static_cast<int>(BookFinished::FinishedBookAction::OpenNextBook) &&
+                !nextBookPath.empty()) {
+              if (SETTINGS.moveFinishedBooksToCompleted) {
+                std::string movedPath;
+                BookFinished::moveFinishedBookToCompleted(txt->getPath(), movedPath);
+              }
+              activityManager.goToReader(nextBookPath);
+              return;
+            }
+            requestUpdate();
+          });
     }
   }
 }
