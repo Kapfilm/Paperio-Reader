@@ -177,9 +177,7 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
     // Also catches books registered before sidecar support (empty coverBmpPath).
     const std::string sidecar = ReaderActivity::sidecarCoverPath(book.path);
     if (!sidecar.empty()) {
-      const std::string bookCache = ReaderActivity::bookCacheDir(book.path);
-      const bool sidecarAlreadyStored =
-          book.coverBmpPath == sidecar || book.coverBmpPath.find(bookCache) != std::string::npos;
+      const bool sidecarAlreadyStored = book.coverBmpPath == sidecar;
       LOG_DBG("HOME", "Sidecar for %s: stored=%s alreadyStored=%d", book.path.c_str(), book.coverBmpPath.c_str(),
               sidecarAlreadyStored ? 1 : 0);
       if (!sidecarAlreadyStored) {
