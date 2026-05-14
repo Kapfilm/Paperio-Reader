@@ -100,7 +100,8 @@ inline const std::vector<SettingInfo> list = {
     SettingInfo::DynamicEnum(StrId::STR_FONT_FAMILY, {StrId::STR_BOOKERLY, StrId::STR_NOTO_SANS},
                              fontFamilyDynamicGetter, fontFamilyDynamicSetter, "fontFamily", StrId::STR_CAT_READER)
         .withSubcategory(StrId::STR_MENU_READER_FONT)
-        .withSubmenu(StrId::STR_MENU_READER_FONT),
+        .withSubmenu(StrId::STR_MENU_READER_FONT)
+        .withSelectorActivity(),
     SettingInfo::Enum(StrId::STR_FONT_SIZE, &CrossPointSettings::fontSize,
                       {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE, StrId::STR_TINY},
                       "fontSize", StrId::STR_CAT_READER)
@@ -116,7 +117,8 @@ inline const std::vector<SettingInfo> list = {
     SettingInfo::DynamicEnum(StrId::STR_TXT_FONT_FAMILY, {StrId::STR_BOOKERLY, StrId::STR_NOTO_SANS},
                              txtFontFamilyDynamicGetter, txtFontFamilyDynamicSetter, "txtFontFamily",
                              StrId::STR_CAT_READER)
-        .withSubmenu(StrId::STR_MENU_TXT_FONT),
+        .withSubmenu(StrId::STR_MENU_TXT_FONT)
+        .withSelectorActivity(),
     SettingInfo::Enum(StrId::STR_TXT_FONT_SIZE, &CrossPointSettings::txtFontSize,
                       {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE, StrId::STR_TINY},
                       "txtFontSize", StrId::STR_CAT_READER)

@@ -8,6 +8,7 @@
 #include "CrossPointSettings.h"
 #include "FontSelectionActivity.h"
 #include "MappedInputManager.h"
+#include "SdCardFontGlobals.h"
 #include "SettingActionDispatch.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -22,26 +23,6 @@ void SettingsSubmenuActivity::onEnter() {
 void SettingsSubmenuActivity::onActionSelected(int index) {
   const auto& setting = menuItems[index];
   if (setting.isSeparator) return;
-
-  if (setting.type == SettingType::ENUM && setting.nameId == StrId::STR_FONT_FAMILY) {
-    startActivityForResult(
-        std::make_unique<FontSelectionActivity>(renderer, mappedInput, FontSelectionActivity::Target::EPUB),
-        [this](const ActivityResult&) {
-          SETTINGS.saveToFile();
-          needsHalfRefresh = true;
-        });
-    return;
-  }
-
-  if (setting.type == SettingType::ENUM && setting.nameId == StrId::STR_TXT_FONT_FAMILY) {
-    startActivityForResult(
-        std::make_unique<FontSelectionActivity>(renderer, mappedInput, FontSelectionActivity::Target::TXT),
-        [this](const ActivityResult&) {
-          SETTINGS.saveToFile();
-          needsHalfRefresh = true;
-        });
-    return;
-  }
 
   if (setting.type == SettingType::ACTION) {
     MenuResult menuResult;
@@ -67,6 +48,26 @@ std::string SettingsSubmenuActivity::getItemValueString(int index) const {
     return itemValueStringOverride(item);
   }
   return MenuListActivity::getItemValueString(index);
+}
+
+void SettingsSubmenuActivity::toggleCurrentItem() {
+  if (selectedIndex < 0 || selectedIndex >= static_cast<int>(menuItems.size())) return;
+  const auto& setting = menuItems[selectedIndex];
+  if (setting.isSeparator) return;
+
+  if (setting.usesSelectorActivity) {
+    const auto target = (setting.valueGetter == txtFontFamilyDynamicGetter) ? FontSelectionActivity::Target::TXT
+                                                                            : FontSelectionActivity::Target::EPUB;
+    startActivityForResult(std::make_unique<FontSelectionActivity>(renderer, mappedInput, target),
+                           [this](const ActivityResult&) {
+                             SETTINGS.saveToFile();
+                             needsHalfRefresh = true;
+                             requestUpdate();
+                           });
+    return;
+  }
+
+  MenuListActivity::toggleCurrentItem();
 }
 
 void SettingsSubmenuActivity::onSettingToggled(int /*index*/) { SETTINGS.saveToFile(); }

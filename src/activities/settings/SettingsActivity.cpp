@@ -278,23 +278,14 @@ void SettingsActivity::toggleCurrentSetting() {
   const auto& setting = (*currentSettings)[selectedSetting];
   if (setting.isSeparator) return;
 
-  if (setting.type == SettingType::ENUM && setting.nameId == StrId::STR_FONT_FAMILY) {
-    startActivityForResult(
-        std::make_unique<FontSelectionActivity>(renderer, mappedInput, FontSelectionActivity::Target::EPUB),
-        [this](const ActivityResult&) {
-          SETTINGS.saveToFile();
-          needsHalfRefresh = true;
-        });
-    return;
-  }
-
-  if (setting.type == SettingType::ENUM && setting.nameId == StrId::STR_TXT_FONT_FAMILY) {
-    startActivityForResult(
-        std::make_unique<FontSelectionActivity>(renderer, mappedInput, FontSelectionActivity::Target::TXT),
-        [this](const ActivityResult&) {
-          SETTINGS.saveToFile();
-          needsHalfRefresh = true;
-        });
+  if (setting.usesSelectorActivity) {
+    const auto target = (setting.valueGetter == txtFontFamilyDynamicGetter) ? FontSelectionActivity::Target::TXT
+                                                                            : FontSelectionActivity::Target::EPUB;
+    startActivityForResult(std::make_unique<FontSelectionActivity>(renderer, mappedInput, target),
+                           [this](const ActivityResult&) {
+                             SETTINGS.saveToFile();
+                             needsHalfRefresh = true;
+                           });
     return;
   }
 
