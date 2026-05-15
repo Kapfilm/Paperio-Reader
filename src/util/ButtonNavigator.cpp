@@ -270,6 +270,12 @@ void ButtonNavigator::onListNav(const Buttons& buttons, const bool forward, int&
     return;
   }
 
+  const bool wasPressed = std::any_of(buttons.begin(), buttons.end(),
+                                      [](const MappedInputManager::Button b) { return mappedInput->wasPressed(b); });
+  if (wasPressed) {
+    lastPressMs = millis();
+  }
+
   const bool wasReleased = std::any_of(buttons.begin(), buttons.end(),
                                        [](const MappedInputManager::Button b) { return mappedInput->wasReleased(b); });
   if (!wasReleased) return;
@@ -283,7 +289,6 @@ void ButtonNavigator::onListNav(const Buttons& buttons, const bool forward, int&
 
   const uint32_t now = millis();
   const bool isDouble = (now - lastPressMs) < listDoubleClickMs;
-  lastPressMs = now;
 
   if (isDouble) {
     // Restore to position before the first press so the total movement is exactly listJumpCount.

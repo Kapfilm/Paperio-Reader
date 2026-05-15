@@ -22,7 +22,7 @@ class ButtonNavigator final {
   bool longPressPreviousFired = false;
   int indexBeforePress = 0;
 
-  static constexpr uint16_t listDoubleClickMs = 350;
+  static constexpr uint16_t listDoubleClickMs = 200;
   static constexpr uint32_t listLongPressMs = 1500;
   static constexpr int listJumpCount = 10;
 
