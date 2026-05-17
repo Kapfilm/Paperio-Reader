@@ -18,6 +18,7 @@ class Section {
   FsFile file;
   std::vector<uint32_t> lut;  // Cached page byte-offsets; loaded once, avoids per-page LUT seek
   bool truncatedCache = false;
+  bool embeddedStyleFallback = false;
 
   void writeSectionFileHeader(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                               uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
@@ -70,6 +71,7 @@ class Section {
                          const std::function<void(int)>& progressFn = nullptr, bool skipEviction = false);
   std::unique_ptr<Page> loadPageFromSectionFile();
   bool isTruncatedCache() const { return truncatedCache; }
+  bool isEmbeddedStyleFallback() const { return embeddedStyleFallback; }
 
   // Given a page in this section, return the TOC index for that page.
   int getTocIndexForPage(int page) const;

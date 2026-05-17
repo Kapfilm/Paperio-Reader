@@ -1604,6 +1604,30 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         section.reset();
         return;
       }
+    } else if (section->isEmbeddedStyleFallback()) {
+      LOG_INF("ERS", "No-CSS fallback loaded; rebuilding with embedded CSS...");
+      lastRenderStats.cacheRebuilt = true;
+
+      Rect popupRect{};
+      const auto progressFn = [this, &popupRect](int progress) {
+        if (popupRect.width == 0) {
+          popupRect = GUI.drawPopup(renderer, tr(STR_INDEXING));
+          return;
+        }
+        GUI.fillPopupProgress(renderer, popupRect, progress);
+      };
+
+      renderer.clearSdCardFontAccumulation();
+      if (!section->createSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
+                                      SETTINGS.extraParagraphSpacing, getEffectiveParagraphAlignment(), viewportWidth,
+                                      viewportHeight, SETTINGS.hyphenationEnabled, embeddedStyle,
+                                      bookBionicReadingOverride, imageRendering, progressFn)) {
+        LOG_ERR("ERS", "Failed to rebuild CSS section cache; keeping fallback");
+        section->loadSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
+                                 SETTINGS.extraParagraphSpacing, getEffectiveParagraphAlignment(), viewportWidth,
+                                 viewportHeight, SETTINGS.hyphenationEnabled, embeddedStyle, bookBionicReadingOverride,
+                                 imageRendering);
+      }
     } else {
       LOG_DBG("ERS", "Cache found, skipping build...");
     }
