@@ -59,6 +59,8 @@ class Epub {
   const std::string& getSeriesIndex() const;
   const std::string& getDescription() const;
   std::string getCoverBmpPath(bool cropped = false) const;
+  std::string getCoverImageCachePath() const;
+  bool ensureCoverImageCached() const;
   bool generateCoverBmp(bool cropped = false) const;
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
