@@ -407,6 +407,12 @@ void EpubReaderActivity::loop() {
         return;
       }
       if (ev.type == ButtonEventManager::PressType::Short) {
+        if (pageHasPlaceholders) {
+          forceLoadLargeImages = true;
+          pageHasPlaceholders = false;
+          requestUpdate();
+          return;
+        }
         openReaderMenu();
         return;
       }
@@ -607,6 +613,8 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                                     : std::nullopt;
             if (resolvedPage) {
               section->currentPage = *resolvedPage;
+              forceLoadLargeImages = false;
+              pageHasPlaceholders = false;
             } else {
               navTarget =
                   chapter.tocIndex ? NavigationTarget::makeTocIndex(*chapter.tocIndex) : NavigationTarget::makePage(0);
@@ -1512,6 +1520,8 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
   }
 
   lastPageTurnTime = millis();
+  forceLoadLargeImages = false;
+  pageHasPlaceholders = false;
   return true;
 }
 
@@ -1782,6 +1792,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
     navTarget.resolveInto(*section, currentSpineIndex);
     navTarget = NavigationTarget::makePage(section->currentPage);
+    forceLoadLargeImages = false;
+    pageHasPlaceholders = false;
   }
 
   renderer.clearScreen();
@@ -1949,15 +1961,20 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   }
   lastRenderStats.textAntiAliasing = aaEnabledForThisRender;
 
-  // Force special handling for pages with images when anti-aliasing is on
-  bool imagePageWithAA = page->hasImages() && aaEnabledForThisRender;
+  const bool effectiveForceLoad = forceLoadLargeImages || !SETTINGS.largeImagePlaceholder;
+  pageHasPlaceholders = page->hasPlaceholderImages(effectiveForceLoad);
+
+  // Force special handling for pages with at least one real (decoded) image when anti-aliasing is on.
+  // Mixed pages (some decoded, some placeholder) still need the AA codepath.
+  bool imagePageWithAA =
+      page->hasImages() && !page->allImagesArePlaceholders(effectiveForceLoad) && aaEnabledForThisRender;
   bool forceHalfRefreshThisPage = pendingHalfRefreshAfterImagePage && SETTINGS.halfRefreshAfterImagePage;
   pendingHalfRefreshAfterImagePage = false;
   lastRenderStats.imagePageWithAA = imagePageWithAA;
   lastRenderStats.forcedHalfRefresh = forceHalfRefreshThisPage;
 
   logReaderMemSnapshot("before_bw_render");
-  page->render(renderer, getEffectiveReaderFontId(), orientedMarginLeft, contentTop);
+  page->render(renderer, getEffectiveReaderFontId(), orientedMarginLeft, contentTop, effectiveForceLoad);
   renderStatusBar();
   if (showTruncatedSectionHintThisRender) {
     const int hintX = orientedMarginLeft + 4;
@@ -1993,7 +2010,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
       // Re-render page content to restore images into the blanked area
       // Status bar is not re-rendered here to avoid reading stale dynamic values (e.g. battery %)
-      page->render(renderer, getEffectiveReaderFontId(), orientedMarginLeft, contentTop);
+      page->render(renderer, getEffectiveReaderFontId(), orientedMarginLeft, contentTop, effectiveForceLoad);
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     } else {
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -2051,7 +2068,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     LOG_INF("ERS", "Skipping grayscale/BW-restore for this page (insufficient heap for BW snapshot)");
   }
 
-  if (page->hasImages() && getEffectiveImageRendering() != CrossPointSettings::IMAGES_SUPPRESS) {
+  // Only schedule the half-refresh if at least one real image was decoded on this page.
+  // Placeholder-only pages don't deposit grayscale data that needs settling.
+  if (page->hasImages() && !page->allImagesArePlaceholders(effectiveForceLoad) &&
+      getEffectiveImageRendering() != CrossPointSettings::IMAGES_SUPPRESS) {
     pendingHalfRefreshAfterImagePage = true;
   }
 
@@ -2137,8 +2157,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 }
 
 void EpubReaderActivity::renderPageContentOnly(const Page& page, const int orientedMarginTop,
-                                               const int orientedMarginRight,
-                                               const int orientedMarginBottom, const int orientedMarginLeft) {
+                                               const int orientedMarginRight, const int orientedMarginBottom,
+                                               const int orientedMarginLeft) {
   auto* fcm = renderer.getFontCacheManager();
   fcm->resetStats();
 
@@ -2155,8 +2175,8 @@ void EpubReaderActivity::renderPageContentOnly(const Page& page, const int orien
 }
 
 void EpubReaderActivity::displayPreRenderedPage(const Page& page, const int orientedMarginTop,
-                                                const int orientedMarginRight,
-                                                const int orientedMarginBottom, const int orientedMarginLeft) {
+                                                const int orientedMarginRight, const int orientedMarginBottom,
+                                                const int orientedMarginLeft) {
   const int viewportHeight = std::max(0, renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom);
   const int contentTop = orientedMarginTop + getImageOnlyPageYOffset(page, viewportHeight);
 
@@ -2509,6 +2529,8 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
                                          : std::nullopt;
                                  if (resolvedPage) {
                                    section->currentPage = *resolvedPage;
+                                   forceLoadLargeImages = false;
+                                   pageHasPlaceholders = false;
                                  } else {
                                    navTarget = chapter.tocIndex ? NavigationTarget::makeTocIndex(*chapter.tocIndex)
                                                                 : NavigationTarget::makePage(0);
@@ -2535,6 +2557,8 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
             if (newSpineIndex == currentSpineIndex) {
               if (const auto resolvedPage = section->getPageForTocIndex(nextTocIndex)) {
                 section->currentPage = *resolvedPage;
+                forceLoadLargeImages = false;
+                pageHasPlaceholders = false;
               }
             } else {
               navTarget = NavigationTarget::makeTocIndex(nextTocIndex);
