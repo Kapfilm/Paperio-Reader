@@ -290,3 +290,7 @@ STR_AUTO_TURN_PAGES_PER_MIN: "Passar automàtic (pàgines per minut)"
 
 STR_VIEW_LIST: "List"
 STR_VIEW_GRID: "Grid"
+STR_LARGE_IMAGE_PLACEHOLDER: "Text de mostra per a imatges grans"
+STR_LARGE_IMAGE: "Imatge gran"
+STR_PRESS_CONFIRM_TO_LOAD: "Premeu Confirma per carregar"
+STR_TOOL_UTILITIES: "Utilitats"

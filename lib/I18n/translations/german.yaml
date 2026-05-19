@@ -669,3 +669,7 @@ STR_RESTART_DEVICE: "Neustart des Geräts"
 
 STR_VIEW_LIST: "List"
 STR_VIEW_GRID: "Grid"
+STR_LARGE_IMAGE_PLACEHOLDER: "Platzhalter für große Bilder"
+STR_LARGE_IMAGE: "Großes Bild"
+STR_PRESS_CONFIRM_TO_LOAD: "Zum Laden Bestätigen drücken"
+STR_TOOL_UTILITIES: "Hilfsfunktionen"

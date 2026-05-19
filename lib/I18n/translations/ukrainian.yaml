@@ -668,3 +668,7 @@ STR_KB_HINT_LOWER_SECONDARY: "Утримуйте SELECT для малих літ
 
 STR_VIEW_LIST: "List"
 STR_VIEW_GRID: "Grid"
+STR_LARGE_IMAGE_PLACEHOLDER: "Заглушка для великих зображень"
+STR_LARGE_IMAGE: "Велике зображення"
+STR_PRESS_CONFIRM_TO_LOAD: "Натисніть Підтвердити, щоб завантажити"
+STR_TOOL_UTILITIES: "Корисні інструменти"

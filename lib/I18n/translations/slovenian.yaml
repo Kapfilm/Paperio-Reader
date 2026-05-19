@@ -668,3 +668,7 @@ STR_KB_HINT_LOWER_SECONDARY: "Drži SELECT za male črke ali sek. znak"
 
 STR_VIEW_LIST: "List"
 STR_VIEW_GRID: "Grid"
+STR_LARGE_IMAGE_PLACEHOLDER: "Oznaka mesta za velike slike"
+STR_LARGE_IMAGE: "Velika slika"
+STR_PRESS_CONFIRM_TO_LOAD: "Pritisnite Potrdi za nalaganje"
+STR_TOOL_UTILITIES: "Pomočnik"

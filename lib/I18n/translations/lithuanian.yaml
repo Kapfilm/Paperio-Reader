@@ -290,3 +290,7 @@ STR_AUTO_TURN_PAGES_PER_MIN: "Automatinis puslapių vartymas (psl./min.)"
 
 STR_VIEW_LIST: "List"
 STR_VIEW_GRID: "Grid"
+STR_LARGE_IMAGE_PLACEHOLDER: "Vietaženklis dideliems paveikslėliams"
+STR_LARGE_IMAGE: "Didelis paveikslėlis"
+STR_PRESS_CONFIRM_TO_LOAD: "Paspauskite Gerai, kad įkeltumėte"
+STR_TOOL_UTILITIES: "Pagalbiniai įrankiai"

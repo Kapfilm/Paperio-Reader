@@ -683,3 +683,7 @@ STR_RESTART_DEVICE: "Uruchom ponownie urządzenie"
 
 STR_VIEW_LIST: "List"
 STR_VIEW_GRID: "Grid"
+STR_LARGE_IMAGE_PLACEHOLDER: "Ramka dużego obrazka"
+STR_LARGE_IMAGE: "Duży obrazek"
+STR_PRESS_CONFIRM_TO_LOAD: "Naciśnij Potwierdź, aby wczytać"
+STR_TOOL_UTILITIES: "Narzędzia"

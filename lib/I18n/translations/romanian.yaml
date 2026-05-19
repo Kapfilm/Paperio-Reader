@@ -290,3 +290,7 @@ STR_AUTO_TURN_PAGES_PER_MIN: "Pagini pe minut"
 
 STR_VIEW_LIST: "List"
 STR_VIEW_GRID: "Grid"
+STR_LARGE_IMAGE_PLACEHOLDER: "Substituent pentru imagini mari"
+STR_LARGE_IMAGE: "Imagine mare"
+STR_PRESS_CONFIRM_TO_LOAD: "Apăsați Confirmă pentru încărcare"
+STR_TOOL_UTILITIES: "Utilitare"

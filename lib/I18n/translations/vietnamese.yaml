@@ -668,3 +668,7 @@ STR_KB_HINT_LOWER_SECONDARY: "Giữ SELECT để nhập chữ thường hoặc k
 
 STR_VIEW_LIST: "List"
 STR_VIEW_GRID: "Grid"
+STR_LARGE_IMAGE_PLACEHOLDER: "Giữ chỗ cho hình ảnh lớn"
+STR_LARGE_IMAGE: "Hình ảnh lớn"
+STR_PRESS_CONFIRM_TO_LOAD: "Nhấn Xác nhận để tải"
+STR_TOOL_UTILITIES: "Trợ giúp"
