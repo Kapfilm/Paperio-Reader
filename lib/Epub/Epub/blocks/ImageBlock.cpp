@@ -2,6 +2,7 @@
 
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <I18n.h>
 #include <Logging.h>
 #include <Serialization.h>
 
@@ -17,8 +18,8 @@
 // - uint16_t height
 // - uint8_t pixels[...] - 2 bits per pixel, packed (4 pixels per byte), row-major order
 
-ImageBlock::ImageBlock(const std::string& imagePath, int16_t width, int16_t height)
-    : imagePath(imagePath), width(width), height(height) {}
+ImageBlock::ImageBlock(const std::string& imagePath, int16_t width, int16_t height, const std::string& altText)
+    : imagePath(imagePath), altText(altText), width(width), height(height) {}
 
 bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str()); }
 
@@ -135,13 +136,18 @@ void ImageBlock::renderPlaceholder(GfxRenderer& renderer, const int x, const int
   renderer.drawRect(x, y, width, height, BORDER, true);
 
   const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
-  const int totalTextH = lineH * 2;
+  const bool hasAlt = !altText.empty();
+  const int lineCount = hasAlt ? 3 : 2;
+  const int totalTextH = lineH * lineCount;
 
   if (lineH > 0 && width > PADDING * 2 && height > totalTextH + PADDING * 2) {
     const int textX = x + PADDING;
     const int textY = y + (height - totalTextH) / 2;
-    renderer.drawText(UI_10_FONT_ID, textX, textY, "Image");
-    renderer.drawText(UI_10_FONT_ID, textX, textY + lineH, "Press OK to load");
+    renderer.drawText(UI_10_FONT_ID, textX, textY, tr(STR_LARGE_IMAGE));
+    if (hasAlt) {
+      renderer.drawText(UI_10_FONT_ID, textX, textY + lineH, altText.c_str());
+    }
+    renderer.drawText(UI_10_FONT_ID, textX, textY + lineH * (lineCount - 1), tr(STR_PRESS_CONFIRM_TO_LOAD));
   }
 }
 
@@ -218,6 +224,7 @@ bool ImageBlock::serialize(FsFile& file) {
   serialization::writeString(file, imagePath);
   serialization::writePod(file, width);
   serialization::writePod(file, height);
+  serialization::writeString(file, altText);
   return true;
 }
 
@@ -227,5 +234,7 @@ std::unique_ptr<ImageBlock> ImageBlock::deserialize(FsFile& file) {
   int16_t w, h;
   serialization::readPod(file, w);
   serialization::readPod(file, h);
-  return std::unique_ptr<ImageBlock>(new ImageBlock(path, w, h));
+  std::string alt;
+  serialization::readString(file, alt);
+  return std::unique_ptr<ImageBlock>(new ImageBlock(path, w, h, alt));
 }

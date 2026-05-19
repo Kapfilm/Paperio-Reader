@@ -13,12 +13,13 @@ static constexpr int32_t LARGE_IMAGE_PIXEL_THRESHOLD = 800 * 600;
 
 class ImageBlock final : public Block {
  public:
-  ImageBlock(const std::string& imagePath, int16_t width, int16_t height);
+  ImageBlock(const std::string& imagePath, int16_t width, int16_t height, const std::string& altText = "");
   ~ImageBlock() override = default;
 
   const std::string& getImagePath() const { return imagePath; }
   int16_t getWidth() const { return width; }
   int16_t getHeight() const { return height; }
+  const std::string& getAltText() const { return altText; }
 
   bool imageExists() const;
 
@@ -39,6 +40,7 @@ class ImageBlock final : public Block {
 
  private:
   std::string imagePath;
+  std::string altText;
   int16_t width;
   int16_t height;
 

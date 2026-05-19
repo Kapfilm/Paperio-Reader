@@ -849,7 +849,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 self->currentPageNextY += imageSpacingTop;
 
                 // Create ImageBlock and add to page
-                auto imageBlock = std::make_shared<ImageBlock>(cachedImagePath, displayWidth, displayHeight);
+                auto imageBlock = std::make_shared<ImageBlock>(cachedImagePath, displayWidth, displayHeight, alt);
                 if (!imageBlock) {
                   LOG_ERR("EHP", "Failed to create ImageBlock");
                   return;
