@@ -334,6 +334,11 @@ void EpubReaderActivity::onExit() {
   Activity::onExit();
   logReaderMemSnapshot("onExit_before_release");
 
+  // If a pre-render left the next page in the frame buffer, redraw the current page so the
+  // next activity (notably SleepActivity's OVERLAY mode) sees what the user was looking at.
+  // Must run before section.reset() and the orientation reset below.
+  restoreCurrentPageToBufferIfPreRendered();
+
   // Save bookmarks before exit
   bookmarkStore.save();
   if (epub) {
@@ -2229,6 +2234,31 @@ void EpubReaderActivity::displayPreRenderedPage(const Page& page, const int orie
       }
     }
   }
+}
+
+void EpubReaderActivity::restoreCurrentPageToBufferIfPreRendered() {
+  if (!preRenderedPage.ready || !section || !epub) {
+    return;
+  }
+
+  int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
+  renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
+                                   &orientedMarginLeft);
+  const int statusBarTopHeight = UITheme::getStatusBarTopHeight(automaticPageTurnActive);
+  const int statusBarBottomHeight = UITheme::getStatusBarBottomHeight(automaticPageTurnActive);
+  orientedMarginTop += std::max(static_cast<int>(SETTINGS.screenMargin), statusBarTopHeight);
+  orientedMarginLeft += SETTINGS.screenMargin;
+  orientedMarginRight += SETTINGS.screenMargin;
+  orientedMarginBottom += std::max(static_cast<int>(SETTINGS.screenMargin), statusBarBottomHeight);
+
+  auto p = section->loadPageFromSectionFile();
+  if (!p) {
+    return;
+  }
+  renderPageContentOnly(*p, orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
+  preRenderedPage.ready = false;
+  pendingPreRender = false;
+  usePreRenderedBuffer = false;
 }
 
 void EpubReaderActivity::renderStatusBar() const {
