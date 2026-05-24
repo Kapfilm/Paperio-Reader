@@ -2541,8 +2541,14 @@ void EpubReaderActivity::renderStatusBar() const {
                                                       static_cast<uint16_t>(section->currentPage));
   std::string printedPageLabel;
   if (section) {
-    if (const auto label = section->getPrintedPageLabelForPage(static_cast<uint16_t>(section->currentPage))) {
+    const auto page = static_cast<uint16_t>(section->currentPage);
+    if (const auto label = section->getPrintedPageLabelForPage(page)) {
+      // Exact-match label (already parenthesised, may be "7/8" when multiple anchors collapse).
       printedPageLabel = *label;
+    } else if (const auto nearest = section->getNearestPrintedPageLabelAtOrBefore(page)) {
+      // No pagebreak on this device page: show the last printed-page label we passed within
+      // this section so the status bar still tells the reader which printed page they're on.
+      printedPageLabel = std::string("(") + *nearest + ")";
     }
   }
   GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, isStarred, printedPageLabel);
