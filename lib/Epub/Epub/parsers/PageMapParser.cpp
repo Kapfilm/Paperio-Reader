@@ -3,8 +3,6 @@
 #include <FsHelpers.h>
 #include <Logging.h>
 
-#include "PageListSink.h"
-
 bool PageMapParser::setup() {
   parser = XML_ParserCreate(nullptr);
   if (!parser) {
@@ -90,7 +88,7 @@ void XMLCALL PageMapParser::startElement(void* userData, const XML_Char* name, c
     }
   }
 
-  if (!self->pageListSink || label.empty() || rawHref.empty()) {
+  if (label.empty() || rawHref.empty()) {
     return;
   }
 
@@ -101,5 +99,5 @@ void XMLCALL PageMapParser::startElement(void* userData, const XML_Char* name, c
     anchor = href.substr(pos + 1);
     href = href.substr(0, pos);
   }
-  self->pageListSink->addEntry(href, anchor, label);
+  self->pageList.push_back({std::move(href), std::move(anchor), std::move(label)});
 }
