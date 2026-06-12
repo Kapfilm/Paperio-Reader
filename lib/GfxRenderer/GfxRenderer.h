@@ -273,6 +273,13 @@ class GfxRenderer {
   // GfxRenderer.cpp for the per-level pixel breakdown and a worked example.
   void setTextDarkness(const uint8_t d) { textDarkness.store(d, std::memory_order_relaxed); }
   uint8_t getTextDarkness() const { return static_cast<uint8_t>(textDarkness.load(std::memory_order_relaxed)); }
+
+  // Grayscale preconditioning settle pass (no-op on X4). The rect overload
+  // takes the gray region in LOGICAL screen coordinates and rotates it to the
+  // panel; the no-arg overload settles the full frame. Call after the BW base
+  // frame is displayed and before the grayscale planes are written.
+  void preconditionGrayscale() const;
+  void preconditionGrayscale(int x, int y, int w, int h) const;
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
