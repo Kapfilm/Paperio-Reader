@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <Logging.h>
-#include <Memory.h>
 #include <NaturalSort.h>
 
 #include <algorithm>
