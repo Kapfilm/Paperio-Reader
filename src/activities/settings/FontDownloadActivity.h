@@ -11,7 +11,7 @@
 
 #ifndef FONT_MANIFEST_URL
 #define FONT_MANIFEST_URL \
-  "https://raw.githubusercontent.com/jpirnay/crosspoint-reader/master/assets/sd-fonts/fonts.json"
+  "https://raw.githubusercontent.com/jpirnay/witchhunt-reader/master/assets/sd-fonts/fonts.json"
 #endif
 
 class FontDownloadActivity : public Activity {
