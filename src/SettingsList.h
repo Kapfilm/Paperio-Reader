@@ -345,10 +345,10 @@ inline std::vector<SettingInfo> buildSettingsList() {
   // --- System ---
   settings.push_back(SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles,
                                          "showHiddenFiles", StrId::STR_CAT_SYSTEM)
-                                         .withSubmenu(StrId::STR_SHOW_FILES));
+                         .withSubmenu(StrId::STR_SHOW_FILES));
   settings.push_back(SettingInfo::Toggle(StrId::STR_SHOW_FILE_EXTENSIONS, &CrossPointSettings::showFileExtensions,
-                                         "showFileExtensions", StrId::STR_CAT_SYSTEM) 
-                                         .withSubmenu(StrId::STR_SHOW_FILES));
+                                         "showFileExtensions", StrId::STR_CAT_SYSTEM)
+                         .withSubmenu(StrId::STR_SHOW_FILES));
   settings.push_back(SettingInfo::Toggle(StrId::STR_INCLUDE_BETA_UPDATES, &CrossPointSettings::includeBetaUpdates,
                                          "includeRcUpdates", StrId::STR_CAT_SYSTEM));
   // Will be dealt with separately, so these receive none of the main categories and
@@ -372,30 +372,30 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::DynamicString(
       StrId::STR_SYNC_SERVER_URL, static_cast<SettingInfo::StringGetterFn>(getKoReaderServerUrl),
       [](void*, const std::string& v) {
-    KOREADER_STORE.setServerUrl(v);
-    KOREADER_STORE.saveToFile();
+        KOREADER_STORE.setServerUrl(v);
+        KOREADER_STORE.saveToFile();
       },
       "koServerUrl", StrId::STR_KOREADER_SYNC));
   settings.push_back(SettingInfo::DynamicString(
       StrId::STR_KOREADER_USERNAME, static_cast<SettingInfo::StringGetterFn>(getKoReaderUsername),
       [](void*, const std::string& v) {
-    KOREADER_STORE.setCredentials(v, KOREADER_STORE.getPassword());
-    KOREADER_STORE.saveToFile();
+        KOREADER_STORE.setCredentials(v, KOREADER_STORE.getPassword());
+        KOREADER_STORE.saveToFile();
       },
       "koUsername", StrId::STR_KOREADER_SYNC));
   settings.push_back(SettingInfo::DynamicString(
                          StrId::STR_KOREADER_PASSWORD, static_cast<SettingInfo::StringGetterFn>(getKoReaderPassword),
                          [](void*, const std::string& v) {
-    KOREADER_STORE.setCredentials(KOREADER_STORE.getUsername(), v);
-    KOREADER_STORE.saveToFile();
+                           KOREADER_STORE.setCredentials(KOREADER_STORE.getUsername(), v);
+                           KOREADER_STORE.saveToFile();
                          },
                          "koPassword", StrId::STR_KOREADER_SYNC)
                          .withObfuscated());
   settings.push_back(SettingInfo::DynamicEnum(
       StrId::STR_DOCUMENT_MATCHING, {StrId::STR_FILENAME, StrId::STR_BINARY}, getKoReaderMatchMethod,
       [](void*, uint8_t v) {
-    KOREADER_STORE.setMatchMethod(static_cast<DocumentMatchMethod>(v));
-    KOREADER_STORE.saveToFile();
+        KOREADER_STORE.setMatchMethod(static_cast<DocumentMatchMethod>(v));
+        KOREADER_STORE.saveToFile();
       },
       "koMatchMethod", StrId::STR_KOREADER_SYNC));
   settings.push_back(SettingInfo::Toggle(StrId::STR_KO_SYNC_ON_BOOK_CLOSE, &CrossPointSettings::koSyncOnBookClose,
