@@ -45,9 +45,12 @@ TEST(NaturalSort, VectorSort) {
     return FsHelpers::naturalCompare(a.c_str(), b.c_str()) < 0;
   });
 
+  // naturalCompare is case-insensitive (see the CaseInsensitive test), so "File3"
+  // collates as "file3" — between file2 and file10, NOT before file2. The previous
+  // expectations assumed case-sensitive ordering and contradicted that contract.
   EXPECT_EQ(files[0], "file1.txt");
-  EXPECT_EQ(files[1], "File3.txt");
-  EXPECT_EQ(files[2], "file2.txt");
+  EXPECT_EQ(files[1], "file2.txt");
+  EXPECT_EQ(files[2], "File3.txt");
   EXPECT_EQ(files[3], "file10.txt");
 }
 
