@@ -29,19 +29,104 @@ This firmware is based on the [crosspoint-reader](https://github.com/crosspoint-
 All of them have their strengths and constraints (as has Witch reader), so they deserve a testrun before you decide which one is right for you
 
 
-# Why this name
-Originally this fork was called CrossPoint++ - it had a small userbase and then I made an honest mistake by reusing the crosspoint fork, providing ample reference in the PRs and the release notes of code origin and authorship but was losing the github commit author information in the progress when I copied code over instead of taking the tedious (and correct) way of cherrypicking the original commit and post-cleanup effort.
+# Feature comparison with CrossPoint
 
-Another crosspoint developer approached me pointing this flaw out and I agreed to change the future integration work. What I did not care for was that persons attitude and way of communicating, and I told him so.
+A feature-by-feature comparison of **Witch Reader** against its ancestor,
+**[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)**, focused on what
+a user actually sees and does on the device.
 
-Then all hell broke lose, ending up in insults, harassment and plain lies in other forums without even caring for feedback (a good cause for any lawsuit for slander). So I took the repo down and just continued the development for my own benefit.
+> **Snapshot of 2026-06-19.** Both projects are under active and dynamic development, so individual
+> rows may change quickly — treat this as a point-in-time picture rather than a guarantee. The
+> entries were verified against the current source of both projects rather than commit history,
+> since the two have effectively diverged.
 
-Still I wanted others to benefit from my progress, so here we are again:
+Legend: ✅ supported · ⚠️ partial / basic · ❌ not supported.
 
-Witch(hunt) Reader (name for obvious reasons) 
+## Rendering & Typography
 
-- So if you are one of those who felt poorly appreciated: please accept my apologies, that was never my intent, and I have taken a lot of effort to replace code / to properly attribute the origin of code or ideas
-- If you are one of those who felt the need to raise a witchhunt, to lie, to libel: just go away - trolls aren't welcome here or more clearly: F*** OFF
+| Feature | Witch Reader | CrossPoint |
+| --- | :---: | :---: |
+| Floating images / text wrap around figures | ✅ left/right float, text wraps beside figure | ❌ falls back to block placement |
+| Tables | ✅ real grid (colspan, header cells, multi-column) | ⚠️ flattened to text ("Row X, Cell Y:") |
+| Images inside tables | ✅ | ❌ |
+| Small-caps (`font-variant`) | ✅ | ❌ |
+| Strikethrough (`line-through`) | ✅ rendered | ❌ parsed but never drawn |
+| Superscript / subscript | ✅ | ✅ |
+| Underline | ✅ | ✅ |
+| CSS `line-height` | ✅ | ❌ |
+| CSS `font-size` scaling (em/rem/%) | ✅ | ❌ |
+| CSS margin collapsing | ⚠️ sums margins | ✅ proper collapsing |
+| GIF images | ✅ custom decoder | ❌ JPEG + PNG only |
+| JPEG / PNG decode | ✅ TJpgDec (IRAM) + uzlib PNG | ✅ JPEGDEC + PNGdec |
+| Image dithering options | ✅ Bayer / Atkinson / Floyd-Steinberg | ⚠️ Bayer 4-level only |
+| Large-image placeholders & tall-image cropping | ✅ | ❌ |
+| Grayscale image caches | ✅ | ⚠️ minimal |
+| Heading fonts (h1–h3) | ✅ crisp taller real fonts | ⚠️ single font size per block |
+| Horizontal rules | ✅ | ✅ |
+| Hyphenation (9 languages) | ✅ | ✅ |
+| Bionic / focus reading | ✅ | ✅ |
+| Anti-aliasing toggle | ✅ (+ fast AA, max-darkness mode) | ✅ |
+| Markdown (`.md`) rendering | ✅ headings, tables, HR, code, lists, TOC | ❌ shown as raw plain text |
+| **Right-to-left / BiDi (Hebrew, Arabic)** | ❌ **not supported** | ✅ full BiDi + Hebrew font + CSS `direction` |
+| Drop caps | ❌ | ❌ |
+
+## Reading Experience, Library & Navigation
+
+| Feature | Witch Reader | CrossPoint |
+| --- | :---: | :---: |
+| Background prerendering | ✅  | ❌ |
+| Background indexing | ✅ (up to 3 sections ahead during reading pauses, not obstructing the reading experience) | ⚠️ (next section during the last 5 pages, partially blocking the reader) |
+| Custom fonts | ✅  | ✅ |
+| Sizes per font family | 4 | 3 |
+| SD font rendering | ✅ on-demand glyph from memory | ⚠️ on demand-glyph from SD-card |  
+| File browser sorting (name / date / size / type, asc/desc) | ✅ | ❌ name-only, fixed |
+| File context menu (open, mark-read, info, set sleep screen, flash `.bin`…) | ✅ | ❌ open / delete only |
+| Large-folder handling (SD-backed index, bounded RAM) | ✅ | ❌ all in RAM |
+| Cover carousel home view | ✅ | ❌ |
+| Cover-grid Recent Books view | ✅ | ❌ plain text list |
+| Book Info screen (metadata, cover, paged description) | ✅ | ❌ |
+| Global (cross-book) bookmarks | ✅ jump into any book at a page | ❌ |
+| Named starred pages | ✅ custom names | ⚠️ unnamed progress snapshots |
+| Reading statistics (streaks, time, pages/min, per-book ETA, sparkline) | ✅ | ❌ |
+| Interactive "finished book" flow (open next, series detection, move folder) | ✅ | ⚠️ passive screen |
+| Jump to printed page | ✅ | ❌ |
+| Jump to percent | ✅ | ✅ |
+| Quick per-book overrides while reading (font, images, hyphenation, bionic…) | ✅ | ❌ |
+| Footnotes | ✅ richer navigation | ✅ |
+| TOC / chapter selection | ✅ | ✅ |
+| Browser breadcrumb footer + continuous page-jump | ❌ dropped | ✅ |
+
+## System, Settings, Network & Input
+
+| Feature | Witch Reader | CrossPoint |
+| --- | :---: | :---: |
+| Clock on X4 | ✅ software clock (X3 **and** X4) | ❌ X3 only (DS3231 hardware RTC) |
+| Weather panel (Open-Meteo, forecast, 48h graph) | ✅ from Home menu | ❌ |
+| Timezone auto-detect (IP geolocation + DST) | ✅ | ⚠️ manual offset picker |
+| Time sync (NTP) | ✅ | ✅ (X3) |
+| Sleep screens: transparent overlay over reader page | ✅ | ❌ |
+| Sleep screens: PNG with alpha | ✅ | ❌ BMP only |
+| Sleep screens: info overlay (title/chapter/page/percent) | ✅ | ❌ |
+| Sleep screens: sequential image pick | ✅ | ⚠️ random only |
+| KOReader sync | ✅ auto bidirectional, on-device settings, differential refresh | ⚠️ manual compare only |
+| Per-button custom actions (23 actions × short/double/long) | ✅ + overview screen | ❌ physical remap + a few toggles |
+| Captive-portal login (client detect + QR to authorize) | ✅ | ❌ AP-side only |
+| System information screen | ✅ | ❌ |
+| OTA / SD firmware update | ✅ | ✅ |
+| Categorized settings submenus | ✅ | ⚠️ flat list |
+| OPDS / Calibre / web upload | ✅ (+ format badges, signal widget, streaming) | ✅ |
+| Memory management | ✅ lean libraries, more on demand memory | ⚠️ limited memory management |
+
+## At a glance
+
+**Choose Witch Reader for:** speed, richer CSS and typography (floats, real tables, small-caps,
+strikethrough, line-height), GIF and better image handling, Markdown, a weather panel, a clock on
+the X4, reading statistics, global bookmarks, a cover carousel, fully customizable per-button
+gestures, automatic KOReader sync, and a deeper settings/system surface.
+
+**Choose CrossPoint for:** right-to-left languages (Hebrew / Arabic) — the one user-facing
+capability Witch Reader genuinely lacks — plus slightly more correct CSS margin collapsing and a
+couple of small browser-navigation conveniences. It is also the leaner, simpler codebase.
 
 # Rendering comparisons
 Rendering examples from [Alice in Wonderland](https://www.gutenberg.org/ebooks/28885)
@@ -78,3 +163,17 @@ Pulled from the PlatformIO registry at build time.
 
 - **ArduinoJson** by Benoît Blanchon — JSON parsing/serialization. https://github.com/bblanchon/ArduinoJson — MIT.
 - **arduinoWebSockets** by Markus Sattler — WebSocket client (KOReader sync). https://github.com/Links2004/arduinoWebSockets — LGPL-2.1.
+
+# Why this name
+Originally this fork was called CrossPoint++ - it had a small userbase and then I made an honest mistake by reusing the crosspoint fork, providing ample reference in the PRs and the release notes of code origin and authorship but was losing the github commit author information in the progress when I copied code over instead of taking the tedious (and correct) way of cherrypicking the original commit and post-cleanup effort.
+
+Another crosspoint developer approached me pointing this flaw out and I agreed to change the future integration work. What I did not care for was that persons attitude and way of communicating, and I told him so.
+
+Then all hell broke lose, ending up in insults, harassment and plain lies in other forums without even caring for feedback (a good cause for any lawsuit for slander). So I took the repo down and just continued the development for my own benefit.
+
+Still I wanted others to benefit from my progress, so here we are again:
+
+Witch(hunt) Reader (name for obvious reasons) 
+
+- So if you are one of those who felt poorly appreciated: please accept my apologies, that was never my intent, and I have taken a lot of effort to replace code / to properly attribute the origin of code or ideas
+- If you are one of those who felt the need to raise a witchhunt, to lie, to libel: just go away - trolls aren't welcome here or more clearly: F*** OFF
