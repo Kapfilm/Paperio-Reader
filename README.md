@@ -58,7 +58,6 @@ Legend: ✅ supported · ⚠️ partial / basic · ❌ not supported.
 | CSS margin collapsing | ⚠️ sums margins | ✅ proper collapsing |
 | GIF images | ✅ custom decoder | ❌ JPEG + PNG only |
 | JPEG / PNG decode | ✅ TJpgDec (IRAM) + uzlib PNG | ✅ JPEGDEC + PNGdec |
-| Image dithering options | ✅ Bayer / Atkinson / Floyd-Steinberg | ⚠️ Bayer 4-level only |
 | Large-image placeholders & tall-image cropping | ✅ | ❌ |
 | Grayscale image caches | ✅ | ⚠️ minimal |
 | Heading fonts (h1–h3) | ✅ crisp taller real fonts | ⚠️ single font size per block |
