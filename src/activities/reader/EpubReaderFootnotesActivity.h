@@ -2,12 +2,9 @@
 
 #include <Epub/FootnoteEntry.h>
 
-#include <cstring>
-#include <functional>
 #include <vector>
 
 #include "../Activity.h"
-#include "util/ButtonNavigator.h"
 
 class EpubReaderFootnotesActivity final : public Activity {
  public:
@@ -25,5 +22,4 @@ class EpubReaderFootnotesActivity final : public Activity {
   const std::vector<FootnoteEntry>& footnotes;
   int selectedIndex = 0;
   int scrollOffset = 0;
-  ButtonNavigator buttonNavigator;
 };

@@ -28,7 +28,11 @@ void EpubReaderFootnotesActivity::loop() {
       return;
     }
 
-    if (ev.button == MappedInputManager::Button::Confirm && ev.type == ButtonEventManager::PressType::Short) {
+    // Power short-press also selects the footnote, mirroring upstream's quick-access
+    // gesture. This context-specific binding is active only while the footnote list is
+    // open, alongside the navigation bindings below.
+    if ((ev.button == MappedInputManager::Button::Confirm || ev.button == MappedInputManager::Button::Power) &&
+        ev.type == ButtonEventManager::PressType::Short) {
       if (selectedIndex >= 0 && selectedIndex < static_cast<int>(footnotes.size())) {
         setResult(FootnoteResult{footnotes[selectedIndex].href});
         finish();
@@ -36,26 +40,22 @@ void EpubReaderFootnotesActivity::loop() {
       return;
     }
 
-    if ((ev.button == MappedInputManager::Button::PageBack || ev.button == MappedInputManager::Button::Left) &&
+    // Previous: Up / Left / PageBack
+    if ((ev.button == MappedInputManager::Button::Up || ev.button == MappedInputManager::Button::Left ||
+         ev.button == MappedInputManager::Button::PageBack) &&
         ev.type == ButtonEventManager::PressType::Short) {
       advanceSelection(-1);
-      return;
+      continue;
     }
 
-    if ((ev.button == MappedInputManager::Button::PageForward || ev.button == MappedInputManager::Button::Right) &&
+    // Next: Down / Right / PageForward
+    if ((ev.button == MappedInputManager::Button::Down || ev.button == MappedInputManager::Button::Right ||
+         ev.button == MappedInputManager::Button::PageForward) &&
         ev.type == ButtonEventManager::PressType::Short) {
       advanceSelection(1);
-      return;
+      continue;
     }
   }
-
-  buttonNavigator.onNextRelease([this] { advanceSelection(1); });
-
-  buttonNavigator.onPreviousRelease([this] { advanceSelection(-1); });
-
-  buttonNavigator.onNextContinuous([this] { advanceSelection(1); });
-
-  buttonNavigator.onPreviousContinuous([this] { advanceSelection(-1); });
 }
 
 void EpubReaderFootnotesActivity::advanceSelection(int delta) {
