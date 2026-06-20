@@ -77,8 +77,12 @@ struct BlockStyle {
   BlockStyle getCombinedBlockStyle(const BlockStyle& child) const {
     BlockStyle combinedBlockStyle;
 
-    combinedBlockStyle.marginTop = static_cast<int16_t>(child.marginTop + marginTop);
-    combinedBlockStyle.marginBottom = static_cast<int16_t>(child.marginBottom + marginBottom);
+    // Vertical margins between a parent and its child collapse (CSS collapsing margins):
+    // the combined margin is the larger of the two, not their sum. Without this, a
+    // margined block wrapping a margined child (e.g. <div> around an <h1>) double-counts
+    // the gap and over-spaces. Horizontal margins and padding stay additive.
+    combinedBlockStyle.marginTop = std::max(child.marginTop, marginTop);
+    combinedBlockStyle.marginBottom = std::max(child.marginBottom, marginBottom);
     combinedBlockStyle.marginLeft = static_cast<int16_t>(child.marginLeft + marginLeft);
     combinedBlockStyle.marginRight = static_cast<int16_t>(child.marginRight + marginRight);
 
