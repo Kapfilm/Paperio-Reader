@@ -18,8 +18,8 @@
 
 namespace {
 constexpr uint8_t SECTION_FILE_VERSION =
-    54;  // bumped: font-variant: small-caps adds the SMALL_CAPS word-style bit, baked into the
-         // per-word style byte at parse time; discards v53 caches so small-caps re-parses cleanly
+    55;  // bumped: parent/child vertical margins now collapse (std::max) instead of summing,
+         // changing block spacing; discards v54 caches so layout re-parses cleanly
 
 namespace header {
 constexpr uint32_t kVersion = 0;
