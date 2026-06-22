@@ -8,7 +8,7 @@ class OpdsParserStream : public Stream {
  public:
   explicit OpdsParserStream(OpdsParser& parser);
 
-  // That functions are not implimented for that stream
+  // These functions are not implemented for this stream
   int available() override;
   int peek() override;
   int read() override;

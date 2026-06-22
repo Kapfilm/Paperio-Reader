@@ -257,8 +257,35 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     return HttpDownloader::HTTP_ERROR;
   }
   applyRequestHeaders(client, username, password);
-  const HttpDownloader::DownloadError result = performGet(client, sink);
+  HttpDownloader::DownloadError result = performGet(client, sink);
   esp_http_client_cleanup(client);
+
+  // The crt_bundle has a Subject-DN collision bug that picks the wrong ISRG
+  // Root X1 on some Let's Encrypt cross-signed chains (PK verify error
+  // -0x4290). If no bytes arrived (sink.downloaded == 0 guards against retrying
+  // a partial transfer — re-sending to the same sink would corrupt the output)
+  // and the URL is https, retry once with the pinned ISRG cert to catch any
+  // LE-signed host — not just *.githubusercontent.com which is already covered
+  // by needsLetsEncryptPin().
+  if (result == HttpDownloader::HTTP_ERROR && sink.downloaded == 0 && url.compare(0, 8, "https://") == 0 &&
+      !needsLetsEncryptPin(url)) {
+    LOG_INF("HTTP", "Retrying with ISRG pin (crt_bundle may have failed Let's Encrypt chain)");
+    esp_http_client_config_t isrgConfig = {};
+    isrgConfig.url = url.c_str();
+    isrgConfig.buffer_size = HTTP_RX_BUF;
+    isrgConfig.buffer_size_tx = HTTP_TX_BUF;
+    isrgConfig.timeout_ms = HTTP_TIMEOUT_MS;
+    isrgConfig.cert_pem = ISRG_ROOT_X1_PEM;
+    isrgConfig.cert_len = sizeof(ISRG_ROOT_X1_PEM);
+    isrgConfig.keep_alive_enable = true;
+    client = esp_http_client_init(&isrgConfig);
+    if (client) {
+      applyRequestHeaders(client, username, password);
+      result = performGet(client, sink);
+      esp_http_client_cleanup(client);
+    }
+  }
+
   return result;
 }
 }  // namespace
