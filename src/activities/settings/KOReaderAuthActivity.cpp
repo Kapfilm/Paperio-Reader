@@ -1,7 +1,9 @@
 #include "KOReaderAuthActivity.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Logging.h>
 #include <WiFi.h>
 
 #include "KOReaderCredentialStore.h"
@@ -11,6 +13,19 @@
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+// Release secondary framebuffer + font cache before TLS to free a large
+// contiguous heap block (~36 KB needed). The activity already silentRestart()s
+// on exit so the buffer never needs to be reallocated.
+void trimMemoryBeforeTls(const GfxRenderer& renderer) {
+  if (auto* cache = renderer.getFontCacheManager()) cache->clearCache();
+  if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
+    LOG_DBG("KOSync", "Released secondary framebuffer before TLS (~52 KB contiguous)");
+    renderer.setSingleBufferFastDiff(true);
+  }
+}
+}  // namespace
 
 void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {
@@ -33,7 +48,8 @@ void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
       statusMessage = tr(STR_AUTHENTICATING);
     }
   }
-  requestUpdate();
+  requestUpdateAndWait();  // show status before blocking TLS call
+  trimMemoryBeforeTls(renderer);
 
   if (mode == Mode::REGISTER) {
     performRegistration();
