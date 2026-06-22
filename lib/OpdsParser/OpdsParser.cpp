@@ -113,7 +113,7 @@ void OpdsParser::clear() {
   prevPageUrl.clear();
   currentEntry = OpdsEntry{};
   currentText.clear();
-  inEntry = inTitle = inAuthor = inAuthorName = inId = false;
+  inEntry = inTitle = inAuthor = inAuthorName = inId = inSummary = inContent = false;
 }
 
 const char* OpdsParser::findAttribute(const char** atts, const char* name) {
@@ -191,6 +191,12 @@ void OpdsParser::startElement(void* userData, const char* name, const char** att
   } else if (strcmp(name, "id") == 0 || strstr(name, ":id") != nullptr) {
     self->inId = true;
     self->currentText.clear();
+  } else if (strcmp(name, "summary") == 0 || strstr(name, ":summary") != nullptr) {
+    self->inSummary = true;
+    self->currentText.clear();
+  } else if (strcmp(name, "content") == 0 || strstr(name, ":content") != nullptr) {
+    self->inContent = true;
+    self->currentText.clear();
   }
 }
 
@@ -217,13 +223,33 @@ void OpdsParser::endElement(void* userData, const char* name) {
     } else if (strcmp(name, "id") == 0 || strstr(name, ":id") != nullptr) {
       if (self->inId) self->currentEntry.id = self->currentText;
       self->inId = false;
+    } else if (strcmp(name, "summary") == 0 || strstr(name, ":summary") != nullptr) {
+      // <summary> wins over <content>: first non-empty element encountered is kept.
+      if (self->inSummary && self->currentEntry.summary.empty()) {
+        self->currentEntry.summary = self->currentText;
+      }
+      self->inSummary = false;
+    } else if (strcmp(name, "content") == 0 || strstr(name, ":content") != nullptr) {
+      // <content> is a fallback when no <summary> was present in this entry.
+      if (self->inContent && self->currentEntry.summary.empty()) {
+        self->currentEntry.summary = self->currentText;
+      }
+      self->inContent = false;
     }
   }
 }
 
 void OpdsParser::characterData(void* userData, const char* s, const int len) {
   auto* self = static_cast<OpdsParser*>(userData);
-  if (self->inTitle || self->inAuthorName || self->inId) {
-    self->currentText.append(s, len);
+  // Hard caps prevent a malicious or pathological feed from exhausting heap.
+  // Summaries/content get a larger budget than short metadata fields.
+  if (self->inSummary || self->inContent) {
+    constexpr size_t kSummaryMax = 2048;
+    const size_t space = kSummaryMax > self->currentText.size() ? kSummaryMax - self->currentText.size() : 0;
+    if (space > 0) self->currentText.append(s, std::min<size_t>(len, space));
+  } else if (self->inTitle || self->inAuthorName || self->inId) {
+    constexpr size_t kFieldMax = 512;
+    const size_t space = kFieldMax > self->currentText.size() ? kFieldMax - self->currentText.size() : 0;
+    if (space > 0) self->currentText.append(s, std::min<size_t>(len, space));
   }
 }

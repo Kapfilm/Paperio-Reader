@@ -1,15 +1,19 @@
 #include "OpdsBookBrowserActivity.h"
 
+#include <ArduinoJson.h>
 #include <Epub.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <JpegToBmpConverter.h>
 #include <Logging.h>
 #include <OpdsStream.h>
 #include <SaxParser/SaxParser.h>
 #include <WiFi.h>
 #include <Xtc.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <memory>
@@ -27,6 +31,22 @@
 
 namespace {
 constexpr int PAGE_ITEMS = 23;
+
+// Mirrors KOReaderSyncActivity::trimMemoryBeforeTls: frees the ~52 KB secondary
+// framebuffer and clears the font cache right before the first HTTPS request.
+// TLS needs a large contiguous block (~36 KB); the secondary buffer is a
+// resident allocation that can prevent the allocator from finding it even when
+// total free heap looks sufficient. Safe here because onExit() always silentRestart()s,
+// so the secondary buffer never needs to be reallocated.
+void trimMemoryBeforeTls(const GfxRenderer& renderer) {
+  if (auto* cache = renderer.getFontCacheManager()) {
+    cache->clearCache();
+  }
+  if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
+    LOG_DBG("OPDS", "Released secondary framebuffer before TLS (~52 KB contiguous)");
+    renderer.setSingleBufferFastDiff(true);
+  }
+}
 
 // Hard ceiling on entries held from a single feed. Each entry costs 4 bytes in
 // the in-RAM entryOffsets index; the bodies live on the SD cache file. Well-behaved
@@ -49,20 +69,39 @@ int formatItemsPerPage(const Rect& contentRect) {
 }
 
 void writeString(HalFile& f, const std::string& s) {
-  uint16_t len = s.length();
+  if (s.length() > UINT16_MAX) {
+    LOG_ERR("OPDS", "writeString: string truncated from %zu to %u bytes", s.length(), UINT16_MAX);
+  }
+  const uint16_t len = static_cast<uint16_t>(std::min<size_t>(s.length(), UINT16_MAX));
   f.write(reinterpret_cast<const uint8_t*>(&len), sizeof(len));
   if (len > 0) f.write(reinterpret_cast<const void*>(s.data()), len);
 }
 
-std::string readString(HalFile& f) {
+// Reads a length-prefixed string. Sets ok=false and returns "" on any read failure;
+// subsequent calls with ok=false are no-ops, preserving the error state for the caller.
+std::string readString(HalFile& f, bool& ok) {
+  if (!ok) return {};
   uint16_t len = 0;
-  if (f.read(&len, sizeof(len)) != sizeof(len)) return "";
-  if (len == 0) return "";
+  if (f.read(&len, sizeof(len)) != sizeof(len)) {
+    ok = false;
+    return {};
+  }
+  if (len == 0) return {};
   std::string s(len, '\0');
-  f.read(s.data(), len);
+  if (f.read(s.data(), len) != static_cast<int>(len)) {
+    ok = false;
+    return {};
+  }
   return s;
 }
 
+// Binary cache entry format (/.tmp_opds_cache.dat):
+//   uint8_t  type (OpdsEntryType)
+//   u16+str  title | author | href | id | summary | imageHref
+//   uint16_t numLinks
+//   per link: u16+str href | mimeType | formatKey | fileExtension
+// All multi-byte integers are native-endian. The file is session-scoped and
+// never persisted across reboots, so no versioning is needed.
 void writeEntryToCache(HalFile& f, const OpdsEntry& entry) {
   uint8_t type = static_cast<uint8_t>(entry.type);
   f.write(&type, sizeof(type));
@@ -70,6 +109,7 @@ void writeEntryToCache(HalFile& f, const OpdsEntry& entry) {
   writeString(f, entry.author);
   writeString(f, entry.href);
   writeString(f, entry.id);
+  writeString(f, entry.summary);
   writeString(f, entry.imageHref);
   uint16_t numLinks = entry.acquisitionLinks.size();
   f.write(reinterpret_cast<const uint8_t*>(&numLinks), sizeof(numLinks));
@@ -84,26 +124,109 @@ void writeEntryToCache(HalFile& f, const OpdsEntry& entry) {
 OpdsEntry readEntryFromCache(HalFile& f) {
   OpdsEntry entry;
   uint8_t type = 0;
-  if (f.read(&type, sizeof(type)) == sizeof(type)) {
-    entry.type = static_cast<OpdsEntryType>(type);
-  }
-  entry.title = readString(f);
-  entry.author = readString(f);
-  entry.href = readString(f);
-  entry.id = readString(f);
-  entry.imageHref = readString(f);
+  if (f.read(&type, sizeof(type)) != sizeof(type)) return {};
+  entry.type = static_cast<OpdsEntryType>(type);
+  bool ok = true;
+  entry.title = readString(f, ok);
+  entry.author = readString(f, ok);
+  entry.href = readString(f, ok);
+  entry.id = readString(f, ok);
+  entry.summary = readString(f, ok);
+  entry.imageHref = readString(f, ok);
+  if (!ok) return {};
   uint16_t numLinks = 0;
-  if (f.read(&numLinks, sizeof(numLinks)) == sizeof(numLinks)) {
-    for (uint16_t i = 0; i < numLinks; ++i) {
-      OpdsAcquisitionLink link;
-      link.href = readString(f);
-      link.mimeType = readString(f);
-      link.formatKey = readString(f);
-      link.fileExtension = readString(f);
-      entry.acquisitionLinks.push_back(link);
-    }
+  if (f.read(&numLinks, sizeof(numLinks)) != sizeof(numLinks)) return {};
+  for (uint16_t i = 0; i < numLinks; ++i) {
+    OpdsAcquisitionLink link;
+    link.href = readString(f, ok);
+    link.mimeType = readString(f, ok);
+    link.formatKey = readString(f, ok);
+    link.fileExtension = readString(f, ok);
+    if (!ok) return {};
+    entry.acquisitionLinks.push_back(std::move(link));
   }
   return entry;
+}
+
+// Per-server discovery cache (/.crosspoint/opds_XXXXXXXX_disc.json):
+// Stores the root feed's nav entries and search template so the browser can
+// open instantly without a network round-trip. The filename is derived from a
+// 32-bit FNV-1a hash of the server URL. Format:
+//   { "v": 1, "st": "<search-template>", "nav": [{"t":"<title>","h":"<href>"}] }
+// Increment "v" if the schema changes so old caches are automatically discarded.
+
+std::string opdsDiscoveryPath(const std::string& serverUrl) {
+  uint32_t h = 2166136261u;
+  for (unsigned char c : serverUrl) {
+    h ^= c;
+    h *= 16777619u;
+  }
+  char buf[48];
+  snprintf(buf, sizeof(buf), "/.crosspoint/opds_%08lx_disc.json", static_cast<unsigned long>(h));
+  return buf;
+}
+
+// Reads the discovery cache for serverUrl. On success, writes the cached nav
+// entries into an already-open cacheFile and appends their offsets to entryOffsets.
+// Sets searchTemplateOut. Returns false if the cache is absent or unusable.
+bool loadOpdsDiscovery(const std::string& serverUrl, std::string& searchTemplateOut, HalFile& cacheFile,
+                       std::vector<uint32_t>& entryOffsets) {
+  const std::string path = opdsDiscoveryPath(serverUrl);
+  if (!Storage.exists(path.c_str())) return false;
+  const String json = Storage.readFile(path.c_str());
+  if (json.isEmpty()) return false;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, json)) return false;
+
+  if ((doc["v"] | 0) != 1) return false;  // unknown or pre-versioned format — discard
+
+  searchTemplateOut = doc["st"] | std::string{};
+
+  const JsonArray arr = doc["nav"].as<JsonArray>();
+  if (arr.isNull()) return false;
+
+  for (JsonObject obj : arr) {
+    const char* t = obj["t"] | "";
+    const char* h = obj["h"] | "";
+    if (!t[0] || !h[0]) continue;
+    OpdsEntry entry;
+    entry.type = OpdsEntryType::NAVIGATION;
+    entry.title = t;
+    entry.href = h;
+    const uint32_t offset = cacheFile.position();
+    entryOffsets.push_back(offset);
+    writeEntryToCache(cacheFile, entry);
+  }
+
+  // A search-only server may have no nav entries but a valid search template — still a usable cache.
+  return !entryOffsets.empty() || !searchTemplateOut.empty();
+}
+
+void saveOpdsDiscovery(const std::string& serverUrl, const std::string& searchTemplate,
+                       const std::vector<std::pair<std::string, std::string>>& navEntries) {
+  if (navEntries.empty() && searchTemplate.empty()) return;
+  Storage.mkdir("/.crosspoint");
+
+  JsonDocument doc;
+  doc["v"] = 1;
+  doc["st"] = searchTemplate;
+  JsonArray arr = doc["nav"].to<JsonArray>();
+  for (const auto& [title, href] : navEntries) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["t"] = title;
+    obj["h"] = href;
+  }
+
+  String json;
+  serializeJson(doc, json);
+  const std::string path = opdsDiscoveryPath(serverUrl);
+  if (!Storage.writeFile(path.c_str(), json)) {
+    LOG_ERR("OPDS", "Failed to save discovery cache: %s", path.c_str());
+  } else {
+    LOG_DBG("OPDS", "Saved discovery cache: %zu nav entries, search=%s", navEntries.size(),
+            searchTemplate.empty() ? "none" : "yes");
+  }
 }
 }  // namespace
 
@@ -130,9 +253,30 @@ void OpdsBookBrowserActivity::onEnter() {
   formatSelectionLabels.clear();
   consumeConfirm = false;
   consumeBack = false;
+  memoryTrimmed = false;
   errorMessage.clear();
   statusMessage = tr(STR_CHECKING_WIFI);
   requestUpdate();
+
+  // Try the per-server discovery cache so the browser opens instantly without
+  // a network round-trip. Nav entries and search template from the last
+  // successful root-feed fetch are written into the tmp cache file so the
+  // existing BROWSING render path works unchanged.
+  {
+    HalFile cacheFile;
+    if (Storage.openFileForWrite("OPDS", "/.tmp_opds_cache.dat", cacheFile)) {
+      if (loadOpdsDiscovery(server.url, searchTemplate, cacheFile, entryOffsets)) {
+        LOG_DBG("OPDS", "Discovery cache hit: %zu nav entries", entryOffsets.size());
+        cacheFile.flush();
+        cacheFile.close();
+        state = BrowserState::BROWSING;
+        requestUpdate();
+        return;  // WiFi connects lazily on first navigation
+      }
+      cacheFile.close();
+      Storage.remove("/.tmp_opds_cache.dat");
+    }
+  }
 
   checkAndConnectWifi();
 }
@@ -191,6 +335,20 @@ void OpdsBookBrowserActivity::loop() {
 
   if (state == BrowserState::DOWNLOADING) return;
 
+  if (state == BrowserState::BOOK_DETAIL) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      state = BrowserState::BROWSING;
+      requestUpdate();
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      const auto entry = getEntry(selectorIndex);
+      state = BrowserState::BROWSING;
+      requestUpdate();
+      chooseBookFormat(entry);
+    }
+    return;
+  }
+
   if (state == BrowserState::FORMAT_SELECTION) {
     if (selectedBookIndex < 0 || selectedBookIndex >= static_cast<int>(entryOffsets.size())) {
       state = BrowserState::BROWSING;
@@ -236,7 +394,19 @@ void OpdsBookBrowserActivity::loop() {
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       navigateBack();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-      if (!searchTemplate.empty() && selectorIndex == 0) launchSearch();
+      if (!searchTemplate.empty()) launchSearch();
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      if (!entryOffsets.empty()) {
+        const auto entry = getEntry(selectorIndex);
+        if (entry.type == OpdsEntryType::BOOK) {
+          state = BrowserState::LOADING;
+          statusMessage = tr(STR_LOADING);
+          requestUpdateAndWait();
+          fetchCoverForEntry(entry);
+          state = BrowserState::BOOK_DETAIL;
+          requestUpdate();
+        }
+      }
     }
 
     if (!entryOffsets.empty()) {
@@ -330,12 +500,85 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
     return;
   }
 
+  if (state == BrowserState::BOOK_DETAIL) {
+    const auto entry = getEntry(selectorIndex);
+    const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
+    const int fmtY = contentRect.y + contentRect.height - lineH - 4;
+
+    // Cover: draw on the left if available
+    int coverColW = 0;
+    if (coverAvailable) {
+      HalFile bmpFile;
+      if (Storage.openFileForRead("OPDS", "/.tmp_opds_cover.bmp", bmpFile)) {
+        Bitmap bmp(bmpFile);
+        if (bmp.parseHeaders() == BmpReaderError::Ok && bmp.getWidth() > 0 && bmp.getHeight() > 0) {
+          const int coverAreaH = fmtY - 35 - 4;
+          int coverH = std::min(bmp.getHeight(), coverAreaH);
+          int coverW = bmp.getWidth() * coverH / bmp.getHeight();
+          if (coverW > contentRect.width / 3) {
+            coverW = contentRect.width / 3;
+            coverH = bmp.getHeight() * coverW / bmp.getWidth();
+          }
+          renderer.drawBitmap(bmp, contentRect.x, 35, coverW, coverH);
+          coverColW = coverW + 6;
+        }
+        bmpFile.close();
+      }
+    }
+
+    // Text column (right of cover, or full width)
+    const int textX = contentRect.x + coverColW + 10;
+    const int textW = contentRect.width - coverColW - 20;
+    int y = 35;
+
+    auto title = renderer.truncatedText(UI_10_FONT_ID, entry.title.c_str(), textW, EpdFontFamily::BOLD);
+    renderer.drawText(UI_10_FONT_ID, textX, y, title.c_str(), true, EpdFontFamily::BOLD);
+    y += lineH + 2;
+
+    if (!entry.author.empty()) {
+      auto author = renderer.truncatedText(UI_10_FONT_ID, entry.author.c_str(), textW);
+      renderer.drawText(UI_10_FONT_ID, textX, y, author.c_str());
+      y += lineH + 2;
+    }
+
+    renderer.drawLine(contentRect.x + coverColW, y, contentRect.x + contentRect.width - 1, y);
+    y += 5;
+
+    if (!entry.summary.empty()) {
+      const int maxLines = (fmtY - 8 - y) / lineH;
+      if (maxLines > 0) {
+        const auto lines = renderer.wrappedText(UI_10_FONT_ID, entry.summary.c_str(), textW, maxLines);
+        for (const auto& line : lines) {
+          renderer.drawText(UI_10_FONT_ID, textX, y, line.c_str());
+          y += lineH;
+        }
+      }
+    }
+
+    if (!entry.acquisitionLinks.empty()) {
+      std::string fmts;
+      for (const auto& link : entry.acquisitionLinks) {
+        if (!fmts.empty()) fmts += " · ";
+        fmts += link.formatKey;
+      }
+      auto fmtsStr = renderer.truncatedText(UI_10_FONT_ID, fmts.c_str(), contentRect.width - 20);
+      renderer.drawCenteredText(UI_10_FONT_ID, fmtY, fmtsStr.c_str());
+    }
+
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DOWNLOAD), "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    renderer.displayBuffer();
+    return;
+  }
+
   // Browsing state
-  // Show appropriate button hint based on selected entry type
-  const char* confirmLabel =
-      (!entryOffsets.empty() && getEntry(selectorIndex).type == OpdsEntryType::BOOK) ? tr(STR_DOWNLOAD) : tr(STR_OPEN);
-  const char* searchLabel = (!searchTemplate.empty() && selectorIndex == 0) ? tr(STR_SEARCH) : tr(STR_DIR_UP);
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, searchLabel, tr(STR_DIR_DOWN));
+  // Show appropriate button hint based on selected entry type.
+  // Read the selected entry once so its type drives both button labels.
+  const bool selectedIsBook = !entryOffsets.empty() && getEntry(selectorIndex).type == OpdsEntryType::BOOK;
+  const char* confirmLabel = selectedIsBook ? tr(STR_DOWNLOAD) : tr(STR_OPEN);
+  const char* searchLabel = !searchTemplate.empty() ? tr(STR_SEARCH) : tr(STR_DIR_UP);
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), confirmLabel, searchLabel, selectedIsBook ? tr(STR_INFO) : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (entryOffsets.empty()) {
@@ -379,12 +622,23 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     return;
   }
 
+  // Trim memory once per session before the first TLS connection, regardless of
+  // whether we arrived here via the WiFi-first path or directly from a cache hit.
+  if (!memoryTrimmed) {
+    trimMemoryBeforeTls(renderer);
+    memoryTrimmed = true;
+  }
+
   entryOffsets.clear();
   // Reserve up front so the per-entry push_back loop doesn't repeatedly realloc
   // (2x grow + copy) and fragment the heap mid-fetch. One page-ish worth covers
   // the common case; larger feeds grow once or twice up to MAX_FEED_ENTRIES.
   entryOffsets.reserve(PAGE_ITEMS + 2);  // +2 for prev/next nav entries
   bool feedCapped = false;
+
+  // Root feed: path is empty (first open or back-to-root navigation).
+  const bool isRootFeed = path.empty();
+  std::vector<std::pair<std::string, std::string>> capturedNavEntries;
 
   std::string url = (path.find("http") == 0) ? path : UrlUtils::buildUrl(server.url, path);
   LOG_DBG("OPDS", "Fetching: %s", url.c_str());
@@ -411,6 +665,9 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     uint32_t offset = cacheFile.position();
     entryOffsets.push_back(offset);
     writeEntryToCache(cacheFile, entry);
+    if (isRootFeed && entry.type == OpdsEntryType::NAVIGATION) {
+      capturedNavEntries.push_back({entry.title, entry.href});
+    }
   };
 
   {
@@ -441,6 +698,11 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   if (searchTemplate.empty() && !parser.getOsdUrl().empty()) {
     fetchOsdTemplate(UrlUtils::buildUrl(url, parser.getOsdUrl()));
   }
+
+  if (isRootFeed) {
+    saveOpdsDiscovery(server.url, searchTemplate, capturedNavEntries);
+  }
+
   const auto& nextUrl = parser.getNextPageUrl();
   const auto& prevUrl = parser.getPrevPageUrl();
 
@@ -466,12 +728,9 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
 void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
   navigationHistory.push_back(currentPath);
   currentPath = entry.href;
-  state = BrowserState::LOADING;
-  statusMessage = tr(STR_LOADING);
   entryOffsets.clear();
   selectorIndex = 0;
-  requestUpdate(true);
-  fetchFeed(currentPath);
+  checkAndConnectWifi();
 }
 
 void OpdsBookBrowserActivity::navigateBack() {
@@ -480,12 +739,9 @@ void OpdsBookBrowserActivity::navigateBack() {
   } else {
     currentPath = navigationHistory.back();
     navigationHistory.pop_back();
-    state = BrowserState::LOADING;
-    statusMessage = tr(STR_LOADING);
     entryOffsets.clear();
     selectorIndex = 0;
-    requestUpdate();
-    fetchFeed(currentPath);
+    checkAndConnectWifi();
   }
 }
 
@@ -528,13 +784,18 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book, const OpdsAcqu
 
   LOG_DBG("OPDS", "Downloading: %s -> %s", downloadUrl.c_str(), filename.c_str());
 
+  uint32_t lastProgressUpdateMs = 0;
   const auto result = HttpDownloader::downloadToFile(
       downloadUrl, filename,
-      [this](const unsigned int downloaded, const unsigned int total) {
+      [this, &lastProgressUpdateMs](const unsigned int downloaded, const unsigned int total) {
         mappedInput.update();
         downloadProgress = downloaded;
         downloadTotal = total;
-        requestUpdate(true);
+        const uint32_t now = millis();
+        if (now - lastProgressUpdateMs >= 3000) {
+          lastProgressUpdateMs = now;
+          requestUpdate(true);
+        }
         return !mappedInput.wasPressed(MappedInputManager::Button::Back);
       },
       server.username, server.password);
@@ -622,6 +883,13 @@ void OpdsBookBrowserActivity::fetchOsdTemplate(const std::string& osdUrl) {
     LOG_ERR("OPDS", "Failed to fetch OSD: %s", osdUrl.c_str());
     return;
   }
+  // OSD documents are typically a few hundred bytes. Reject suspiciously large
+  // responses before handing them to the XML parser to avoid heap exhaustion.
+  constexpr size_t kOsdMaxBytes = 64 * 1024;
+  if (content.size() > kOsdMaxBytes) {
+    LOG_ERR("OPDS", "OSD response too large (%zu bytes), ignoring", content.size());
+    return;
+  }
 
   struct OsdState {
     std::string templateUrl;
@@ -667,6 +935,46 @@ void OpdsBookBrowserActivity::launchSearch() {
   });
 }
 
+void OpdsBookBrowserActivity::fetchCoverForEntry(const OpdsEntry& entry) {
+  coverAvailable = false;
+  Storage.remove("/.tmp_opds_cover.bmp");
+  if (entry.imageHref.empty()) return;
+
+  const std::string coverUrl =
+      (entry.imageHref.rfind("http", 0) == 0) ? entry.imageHref : UrlUtils::buildUrl(server.url, entry.imageHref);
+  LOG_DBG("OPDS", "Fetching cover: %s", coverUrl.c_str());
+
+  if (HttpDownloader::downloadToFile(coverUrl, "/.tmp_opds_cover.jpg", nullptr, server.username, server.password) !=
+      HttpDownloader::OK) {
+    LOG_DBG("OPDS", "Cover download failed");
+    return;
+  }
+
+  const int coverMaxW = renderer.getScreenWidth() / 3;
+  const int coverMaxH = coverMaxW * 4 / 3;
+
+  HalFile src;
+  if (!Storage.openFileForRead("OPDS", "/.tmp_opds_cover.jpg", src)) return;
+  HalFile dst;
+  if (!Storage.openFileForWrite("OPDS", "/.tmp_opds_cover.bmp", dst)) {
+    src.close();
+    return;
+  }
+
+  const bool ok = JpegToBmpConverter::jpegFileToBmpStreamWithSize(src, dst, coverMaxW, coverMaxH);
+  src.close();
+  dst.close();
+  Storage.remove("/.tmp_opds_cover.jpg");
+
+  if (ok) {
+    coverAvailable = true;
+    LOG_DBG("OPDS", "Cover ready");
+  } else {
+    Storage.remove("/.tmp_opds_cover.bmp");
+    LOG_INF("OPDS", "Cover JPEG conversion failed (progressive JPEG unsupported; see JPG log for details)");
+  }
+}
+
 void OpdsBookBrowserActivity::performSearch(const std::string& query) {
   if (query.empty() || searchTemplate.empty()) {
     state = BrowserState::BROWSING;
@@ -696,11 +1004,7 @@ void OpdsBookBrowserActivity::performSearch(const std::string& query) {
 
   navigationHistory.push_back(currentPath);
   currentPath = url;
-
-  state = BrowserState::LOADING;
-  statusMessage = tr(STR_LOADING);
-  requestUpdate(true);
-  fetchFeed(url);
+  checkAndConnectWifi();
 }
 
 void OpdsBookBrowserActivity::checkAndConnectWifi() {

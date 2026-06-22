@@ -30,6 +30,7 @@ struct OpdsEntry {
   std::string author;  // Only for books
   std::string href;    // Navigation URL or epub download URL
   std::string id;
+  std::string summary;  // Short description from <summary> or <content>, books only
   std::vector<OpdsAcquisitionLink> acquisitionLinks;
   std::string imageHref;  // Cover image URL (rel="http://opds-spec.org/image"), books only
 };
@@ -111,6 +112,8 @@ class OpdsParser final : public Print {
   bool inAuthor = false;
   bool inAuthorName = false;
   bool inId = false;
+  bool inSummary = false;
+  bool inContent = false;
 
   bool errorOccured = false;
 };

@@ -20,6 +20,7 @@ class OpdsBookBrowserActivity final : public Activity {
     WIFI_SELECTION,
     LOADING,
     BROWSING,
+    BOOK_DETAIL,
     FORMAT_SELECTION,
     DOWNLOADING,
     ERROR,
@@ -43,7 +44,8 @@ class OpdsBookBrowserActivity final : public Activity {
   std::string searchTemplate;
   bool consumeConfirm = false;
   bool consumeBack = false;
-  bool cancelDownloadRequested = false;
+  bool memoryTrimmed = false;
+  bool coverAvailable = false;
   int selectorIndex = 0;
   int selectedBookIndex = -1;
   int formatSelectorIndex = 0;
@@ -68,5 +70,6 @@ class OpdsBookBrowserActivity final : public Activity {
   void fetchOsdTemplate(const std::string& osdUrl);
   void launchSearch();
   void performSearch(const std::string& query);
+  void fetchCoverForEntry(const OpdsEntry& entry);
   bool preventAutoSleep() override { return true; }
 };
