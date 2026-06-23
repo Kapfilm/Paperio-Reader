@@ -24,7 +24,8 @@
 #include <unistd.h>
 #endif
 
-#define CHUNK 2048
+#define CHUNK 2048          // upload chunk (ACK-paced, must match the protocol)
+#define DL_BUF (16 * 1024)  // download read gulp (drain fast; no flow control)
 #define ACK 0x06
 
 struct CpSerial {
@@ -491,10 +492,15 @@ int cp_download(CpSerial* s, const char* remote, const char* local, CpProgress c
     set_err(s, "cannot create %s", local);
     return -1;
   }
+  // Download has no per-chunk flow control, so drain in large gulps and keep
+  // per-iteration work minimal (read fast, like the CLI). Report progress only
+  // when the percentage actually changes, so a host-side progress callback can't
+  // gate the read loop and stall the device's TX (which would drop bytes).
   uint32_t crc = 0, remaining = size;
-  uint8_t buf[CHUNK];
+  uint8_t buf[DL_BUF];
+  int last_pct = -1;
   while (remaining > 0) {
-    size_t want = remaining < CHUNK ? remaining : CHUNK;
+    size_t want = remaining < DL_BUF ? remaining : DL_BUF;
     if (read_exact(s, buf, want, 30000) != 0) {
       fclose(f);
       return -1;
@@ -502,10 +508,16 @@ int cp_download(CpSerial* s, const char* remote, const char* local, CpProgress c
     fwrite(buf, 1, want, f);
     crc = crc32_update(crc, buf, want);
     remaining -= (uint32_t)want;
-    if (cb && cb(size - remaining, size, user)) {
-      fclose(f);
-      set_err(s, "aborted");
-      return -1;
+    if (cb) {
+      int pct = size ? (int)(((uint64_t)(size - remaining) * 100) / size) : 100;
+      if (pct != last_pct) {
+        last_pct = pct;
+        if (cb(size - remaining, size, user)) {
+          fclose(f);
+          set_err(s, "aborted");
+          return -1;
+        }
+      }
     }
   }
   fclose(f);

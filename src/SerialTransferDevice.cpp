@@ -32,6 +32,10 @@ uint32_t fatToUnix(uint16_t fdate, uint16_t ftime) {
 // for long.
 constexpr unsigned long kReadTimeoutMs = 2000;
 
+// Give up a stalled TX (download) only after the host has made no progress for
+// this long, so a vanished host can't hang the transfer forever.
+constexpr unsigned long kWriteStallAbortMs = 15000;
+
 // Last path component (handles both '/' and '\\' separators the host may send).
 std::string baseName(const std::string& path) {
   const size_t slash = path.find_last_of("/\\");
@@ -130,7 +134,26 @@ int SerialTransferDevice::readByte() {
   return logSerial.read();
 }
 
-void SerialTransferDevice::writeBytes(const uint8_t* data, size_t len) { logSerial.write(data, len); }
+void SerialTransferDevice::writeBytes(const uint8_t* data, size_t len) {
+  // logSerial.write() returns a SHORT count when the USB-CDC TX ring stays full
+  // past HWCDC's ~100ms tx timeout (host slow to drain — e.g. a download client
+  // that reads in small chunks with work between reads). The old code ignored
+  // the return value and silently dropped the rest, corrupting downloads. Loop
+  // over the remainder so we never drop; bail only if the host appears gone.
+  size_t sent = 0;
+  unsigned long lastProgressMs = millis();
+  while (sent < len) {
+    const size_t n = logSerial.write(data + sent, len - sent);
+    if (n > 0) {
+      sent += n;
+      lastProgressMs = millis();
+    } else {
+      if (millis() - lastProgressMs > kWriteStallAbortMs) break;  // host vanished
+      esp_task_wdt_reset();
+      vTaskDelay(1);
+    }
+  }
+}
 
 bool SerialTransferDevice::fileBegin(const std::string& path) {
   Storage.ensureDirectoryExists(kBooksRoot);
