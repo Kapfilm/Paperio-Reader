@@ -19,6 +19,14 @@ RTC_NOINIT_ATTR size_t logHead = 0;
 RTC_NOINIT_ATTR uint32_t rtcLogMagic;
 static constexpr uint32_t LOG_RTC_MAGIC = 0xDEADBEEF;
 
+// When true, LOG_* output is withheld from the serial wire (still ring-buffered).
+// Single writer (the active transfer activity) / single reader (logPrintf on the
+// loop task); a plain volatile bool is sufficient on the 32-bit C3.
+static volatile bool serialWireMuted = false;
+
+void setSerialWireMuted(bool muted) { serialWireMuted = muted; }
+bool isSerialWireMuted() { return serialWireMuted; }
+
 void addToLogRingBuffer(const char* message) {
   // Add the message to the ring buffer, overwriting old messages if necessary.
   // If the magic is wrong or logHead is out of range (RTC_NOINIT_ATTR garbage
@@ -69,7 +77,7 @@ void logPrintf(const char* level, const char* origin, const char* format, ...) {
     }
   }
   va_end(args);
-  if (logSerial) {
+  if (logSerial && !serialWireMuted) {
     logSerial.print(buf);
   }
   addToLogRingBuffer(buf);

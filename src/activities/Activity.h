@@ -47,6 +47,12 @@ class Activity {
   virtual bool preventAutoSleep() { return false; }
   virtual bool isReaderActivity() const { return false; }
 
+  // Return true while this activity owns the raw serial input stream (e.g. the
+  // USB serial file-transfer activity reading a binary protocol). When true,
+  // main.cpp's line-based `CMD:` handler skips reading logSerial so it can't
+  // steal bytes from the activity's byte stream. Default: false.
+  virtual bool ownsSerialInput() const { return false; }
+
   // Called before something captures the raw frame buffer (e.g. a screenshot) outside the
   // normal render flow. An activity that may leave content other than what is on screen in
   // the frame buffer (e.g. the reader's pre-rendered next page) must redraw the visible page

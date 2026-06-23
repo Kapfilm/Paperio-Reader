@@ -31,6 +31,16 @@ static HWCDC& logSerial = Serial;
 
 void logPrintf(const char* level, const char* origin, const char* format, ...);
 
+// Mute/unmute LOG_* output to the serial wire. While muted, log lines are still
+// recorded in the RTC ring buffer (getLastLogs) but are NOT written to
+// logSerial. Used during binary serial file transfers so a concurrent task's
+// log bytes can't interleave with the protocol's 0x06 ACKs / payload and
+// corrupt the stream. Direct logSerial.write() (e.g. the transfer itself) is
+// unaffected — only the LOG_* path is gated. Mirrors MicroReader's
+// esp_log_level_set("*", ESP_LOG_NONE) during uploads.
+void setSerialWireMuted(bool muted);
+bool isSerialWireMuted();
+
 #ifdef ENABLE_SERIAL_LOG
 #if LOG_LEVEL >= 0
 #define LOG_ERR(origin, format, ...) logPrintf("ERR", origin, format "\n", ##__VA_ARGS__)

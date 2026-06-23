@@ -112,6 +112,7 @@ class ActivityManager {
 
   // goTo... functions are convenient wrapper for replaceActivity()
   void goToFileTransfer();
+  void goToSerialTransfer();  // direct entry (also used by the boot-into-transfer path)
   void goToSettings();
   void goToFileBrowser(std::string path = {}, std::string focusName = {});
   void goToRecentBooks(int focusIndex = -1);
@@ -162,6 +163,11 @@ class ActivityManager {
   bool preventAutoSleep() const;
   bool isReaderActivity() const;
   bool skipLoopDelay() const;
+
+  // True while the current activity owns the raw serial input stream (see
+  // Activity::ownsSerialInput()). main.cpp consults this to suppress its
+  // line-based `CMD:` serial reader so it doesn't steal protocol bytes.
+  bool currentOwnsSerialInput() const;
 
   // Forward to the current activity so it can redraw the visible screen into the frame
   // buffer before a raw capture (e.g. a screenshot). See Activity::prepareFramebufferForCapture().

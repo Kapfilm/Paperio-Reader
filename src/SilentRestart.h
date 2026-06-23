@@ -13,3 +13,11 @@ void silentRestartToReader();  // currently-open EPUB (APP_STATE.openEpubPath)
 // restart attempt across consecutive silent boots until a non-silent boot
 // clears the latch.
 bool trySilentRestartToReaderForHeapRecovery();
+
+// Arm/disarm a boot target that routes setup() straight back into the USB serial
+// file-transfer activity. Unlike silentRestart*(), arm does NOT reboot — it only
+// sets the RTC flag so the involuntary C3 USB-Serial/JTAG reset (triggered when a
+// host opens the serial port) lands back in the activity instead of Home. The
+// activity arms on entry and disarms on clean exit.
+void armSerialTransferReboot();
+void disarmSerialTransferReboot();

@@ -20,6 +20,7 @@
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
 #include "network/CrossPointWebServerActivity.h"
+#include "network/SerialTransferActivity.h"
 #include "reader/KOReaderSyncActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
@@ -312,6 +313,10 @@ void ActivityManager::goToFileTransfer() {
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
 
+void ActivityManager::goToSerialTransfer() {
+  replaceActivity(std::make_unique<SerialTransferActivity>(renderer, mappedInput));
+}
+
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToFileBrowser(std::string path, std::string focusName) {
@@ -454,6 +459,8 @@ bool ActivityManager::isReaderActivity() const {
 }
 
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
+
+bool ActivityManager::currentOwnsSerialInput() const { return currentActivity && currentActivity->ownsSerialInput(); }
 
 void ActivityManager::prepareFramebufferForCapture() {
   if (currentActivity) {

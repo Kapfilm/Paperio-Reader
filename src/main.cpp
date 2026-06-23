@@ -150,6 +150,11 @@ RTC_NOINIT_ATTR uint32_t heapCorruptionBootLatch;
 constexpr uint32_t SILENT_REBOOT_MAGIC = 0xC1EAB007;
 constexpr uint32_t SILENT_REBOOT_TARGET_HOME = 0;
 constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
+// Boot straight back into the USB serial file-transfer activity. Armed (without
+// restarting) while that activity is open, so the unavoidable C3 USB-Serial/JTAG
+// reset that fires when a host opens the port lands back in the activity instead
+// of Home — making the transfer reset-tolerant. See armSerialTransferReboot().
+constexpr uint32_t SILENT_REBOOT_TARGET_SERIAL_TRANSFER = 2;
 constexpr uint32_t HEAP_RECOVERY_RESTART_LATCH_MAGIC = 0x48EA9C01;
 
 // How the device is coming back to life, resolved once at boot. Both resume
@@ -205,6 +210,23 @@ bool trySilentRestartToReaderForHeapRecovery() {
   delay(50);
   ESP.restart();
   return true;
+}
+
+void armSerialTransferReboot() {
+  // Does NOT restart — just arms the RTC target so that *if* the device resets
+  // (the C3 hardware reset that fires when a host opens the USB serial port),
+  // setup() routes straight back into the serial-transfer activity. Re-armed on
+  // every entry into that activity (setup() read-and-clears the magic).
+  silentRebootTarget = SILENT_REBOOT_TARGET_SERIAL_TRANSFER;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+}
+
+void disarmSerialTransferReboot() {
+  // Clear the arm on a clean exit so the next plain reboot shows Home as usual.
+  if (silentRebootMagic == SILENT_REBOOT_MAGIC && silentRebootTarget == SILENT_REBOOT_TARGET_SERIAL_TRANSFER) {
+    silentRebootMagic = 0;
+    silentRebootTarget = 0;
+  }
 }
 
 // ---- Quick Resume framebuffer persistence ----
@@ -323,7 +345,7 @@ void enterDeepSleep(bool fromTimeout = false) {
   powerManager.startDeepSleep(gpio, keepLpAlive);
 }
 
-void setupDisplayAndFonts(bool seamless = false) {
+void setupDisplayAndFonts(bool seamless = false, bool skipSdFontDiscovery = false) {
   display.begin(seamless);
   renderer.begin();
   activityManager.begin();
@@ -354,7 +376,12 @@ void setupDisplayAndFonts(bool seamless = false) {
 
   // Discover SD card fonts (under /.crosspoint/fonts/) and load the family
   // currently selected in settings (if any). Safe to call without an SD card.
-  sdFontSystem.begin(renderer);
+  // Skipped on the serial-transfer boot path: that activity only uses built-in
+  // UI fonts, and it reboots on exit, so Home re-discovers fonts then. Saves an
+  // SD directory scan on the reboot the host is waiting through.
+  if (!skipSdFontDiscovery) {
+    sdFontSystem.begin(renderer);
+  }
 
   LOG_DBG("MAIN", "Fonts setup");
 }
@@ -475,11 +502,19 @@ void setup() {
   // Bound the target range too — RTC_NOINIT memory is uninitialized on cold boot.
   const bool isSilentReboot = (silentRebootMagic == SILENT_REBOOT_MAGIC);
   const uint32_t silentRebootTargetSnapshot =
-      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_READER) ? silentRebootTarget : 0;
+      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_SERIAL_TRANSFER) ? silentRebootTarget : 0;
   silentRebootMagic = 0;
   silentRebootTarget = 0;
   if (!isSilentReboot) {
     heapRecoveryRestartLatch = 0;
+  }
+
+  // When rebooting back into the USB serial-transfer activity (after the host's
+  // open-triggered reset), keep all boot LOG_* off the wire so the reconnecting
+  // host sees a clean binary protocol stream, not interleaved boot logs. The
+  // activity unmutes on exit; a plain boot is unaffected.
+  if (silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SERIAL_TRANSFER) {
+    setSerialWireMuted(true);
   }
 
   HalSystem::begin();
@@ -500,6 +535,13 @@ void setup() {
 
 #ifdef ENABLE_SERIAL_LOG
   if (gpio.isUsbConnected()) {
+    // Enlarge the USB-CDC RX buffer from the 256-byte default before begin().
+    // The serial file-transfer protocol receives 2048-byte chunks in bursts; a
+    // 256-byte ring drops bytes whenever the byte-by-byte drain stalls briefly,
+    // which surfaces as "Timeout waiting for ACK" / failed uploads. 4096 matches
+    // MicroReader's usb_serial_jtag rx_buffer_size. setRxBufferSize() recreates
+    // the queue, so it takes effect even though CDC_ON_BOOT already ran begin().
+    logSerial.setRxBufferSize(4096);
     Serial.begin(115200);
     const unsigned long start = millis();
     while (!Serial && (millis() - start) < 500) {
@@ -627,7 +669,11 @@ void setup() {
                             : !APP_STATE.showBootScreen ? BootResume::QuickResume
                                                         : BootResume::Splash;
 
-  setupDisplayAndFonts(resume != BootResume::Splash);
+  // Booting straight into the USB serial-transfer activity? Skip SD-font
+  // discovery (only built-in UI fonts are used there) to shorten the reboot the
+  // host is waiting through. Safe because that activity reboots on exit.
+  const bool bootToSerialTransfer = (silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SERIAL_TRANSFER);
+  setupDisplayAndFonts(resume != BootResume::Splash, bootToSerialTransfer);
   logStartupMemory("after_display_fonts");
 
   switch (resume) {
@@ -668,6 +714,10 @@ void setup() {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
     activityManager.replaceActivity(
         std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInputManager, /*recoveryMode=*/true));
+  } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SERIAL_TRANSFER) {
+    // Reset fired while the USB transfer screen was open (host opened the port):
+    // land straight back in it so the host's retried command is served.
+    activityManager.goToSerialTransfer();
   } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);
@@ -754,8 +804,11 @@ void loop() {
   }
 
   // Handle incoming serial commands,
-  // nb: we use logSerial from logging to avoid deprecation warnings
-  if (logSerial.available() > 0) {
+  // nb: we use logSerial from logging to avoid deprecation warnings.
+  // Skip while an activity owns the serial input (e.g. the USB serial
+  // file-transfer activity): it drives a binary protocol on logSerial and this
+  // line reader would otherwise steal bytes from its stream.
+  if (logSerial.available() > 0 && !activityManager.currentOwnsSerialInput()) {
     String line = logSerial.readStringUntil('\n');
     if (line.startsWith("CMD:")) {
       String cmd = line.substring(4);
