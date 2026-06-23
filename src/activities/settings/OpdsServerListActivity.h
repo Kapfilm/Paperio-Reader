@@ -11,8 +11,11 @@
  */
 class OpdsServerListActivity final : public Activity {
  public:
-  explicit OpdsServerListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool pickerMode = false)
-      : Activity("OpdsServerList", renderer, mappedInput), pickerMode(pickerMode) {}
+  explicit OpdsServerListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool pickerMode = false,
+                                  std::string initialQuery = {})
+      : Activity("OpdsServerList", renderer, mappedInput),
+        pickerMode(pickerMode),
+        initialQuery_(std::move(initialQuery)) {}
 
   void onEnter() override;
   void onExit() override;
@@ -23,6 +26,7 @@ class OpdsServerListActivity final : public Activity {
   ButtonNavigator buttonNavigator;
   int selectedIndex = 0;
   bool pickerMode = false;
+  std::string initialQuery_;
 
   int getItemCount() const;
   void handleSelection();

@@ -344,6 +344,15 @@ void ActivityManager::goToBrowser() {
   }
 }
 
+void ActivityManager::goToBrowserWithSearch(std::string query) {
+  const auto& servers = OPDS_STORE.getServers();
+  if (servers.size() == 1) {
+    replaceActivity(std::make_unique<OpdsBookBrowserActivity>(renderer, mappedInput, servers[0], std::move(query)));
+  } else {
+    replaceActivity(std::make_unique<OpdsServerListActivity>(renderer, mappedInput, true, std::move(query)));
+  }
+}
+
 void ActivityManager::goToReader(std::string path) {
   RenderLock lock;
   ensureSdFontLoadedForPath(path.c_str());

@@ -119,6 +119,7 @@ class ActivityManager {
   void goToGlobalBookmarks();
   void goToGlobalBookmarks(ReturnHint hint);
   void goToBrowser();
+  void goToBrowserWithSearch(std::string query);
   void goToReader(std::string path);
   void goToKOReaderSync();
   // fromTimeout=true marks this as an auto-sleep (used to gate Quick Resume on Timeout).

@@ -27,8 +27,12 @@ class OpdsBookBrowserActivity final : public Activity {
     SEARCH_INPUT
   };
 
-  explicit OpdsBookBrowserActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, OpdsServer server)
-      : Activity("OpdsBookBrowser", renderer, mappedInput), buttonNavigator(), server(std::move(server)) {}
+  explicit OpdsBookBrowserActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, OpdsServer server,
+                                   std::string initialQuery = {})
+      : Activity("OpdsBookBrowser", renderer, mappedInput),
+        buttonNavigator(),
+        server(std::move(server)),
+        initialQuery_(std::move(initialQuery)) {}
 
   void onEnter() override;
   void onExit() override;
@@ -56,6 +60,7 @@ class OpdsBookBrowserActivity final : public Activity {
   size_t downloadTotal = 0;
 
   OpdsServer server;  // Copied at construction — safe even if the store changes during browsing
+  std::string initialQuery_;
 
   OpdsEntry getEntry(size_t index) const;
 

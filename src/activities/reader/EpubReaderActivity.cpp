@@ -573,7 +573,7 @@ void EpubReaderActivity::loop() {
       writeReaderProgressCache(epub->getCachePath(), lastSpineIndex, lastPageIndex, lastPageCount, 100);
 
       BookFinished::launchFinishedBookFlow(*this, renderer, mappedInput, epub->getPath(), epub->getSeries(),
-                                           epub->getSeriesIndex());
+                                           epub->getSeriesIndex(), epub->getAuthor());
     } else {
       currentSpineIndex = epub->getSpineItemsCount() - 1;
       navTarget = NavigationTarget::makeLastPage();
@@ -1136,7 +1136,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
         }
       }
       BookFinished::launchFinishedBookFlow(*this, renderer, mappedInput, epub->getPath(), epub->getSeries(),
-                                           epub->getSeriesIndex());
+                                           epub->getSeriesIndex(), epub->getAuthor());
       return;
     }
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
@@ -2179,7 +2179,7 @@ void EpubReaderActivity::renderFinishedBookPass(RenderLock& lock, const int spin
   writeReaderProgressCache(epub->getCachePath(), lastSpineIndex, 0, 0, 100);
   lock.unlock();
   BookFinished::launchFinishedBookFlow(
-      *this, renderer, mappedInput, epub->getPath(), epub->getSeries(), epub->getSeriesIndex(),
+      *this, renderer, mappedInput, epub->getPath(), epub->getSeries(), epub->getSeriesIndex(), epub->getAuthor(),
       [](void* ctx) { static_cast<EpubReaderActivity*>(ctx)->finishedBookActivityStarted_ = false; }, this);
 }
 

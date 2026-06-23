@@ -15,6 +15,7 @@ enum class FinishedBookAction {
   Stay = 0,
   GoHome = 1,
   OpenNextBook = 2,
+  SearchOpdsForAuthor = 3,
 };
 
 // Launches the finished-book menu on top of `host` and handles its result:
@@ -29,13 +30,14 @@ enum class FinishedBookAction {
 // project callback convention.
 void launchFinishedBookFlow(Activity& host, GfxRenderer& renderer, MappedInputManager& mappedInput,
                             const std::string& bookPath, const std::string& series, const std::string& seriesIndex,
-                            void (*onMenuClosed)(void*) = nullptr, void* onMenuClosedCtx = nullptr);
+                            const std::string& author = {}, void (*onMenuClosed)(void*) = nullptr,
+                            void* onMenuClosedCtx = nullptr);
 }  // namespace BookFinished
 
 class FinishedBookActivity : public Activity {
  public:
   FinishedBookActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string currentBookPath,
-                       std::string nextBookPath);
+                       std::string nextBookPath, std::string currentBookAuthor = {});
 
   void onEnter() override;
   void loop() override;
@@ -44,6 +46,7 @@ class FinishedBookActivity : public Activity {
  private:
   std::string currentBookPath_;
   std::string nextBookPath_;
+  std::string currentBookAuthor_;
   std::string nextBookName_;
   std::string nextBookTitle_;
   std::string nextBookAuthor_;

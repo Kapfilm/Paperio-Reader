@@ -719,7 +719,7 @@ void FileBrowserActivity::doMarkAsRead(const std::string& fullPath) {
   f.close();
   LOG_INF("FBR", "Marked as read: %s", fullPath.c_str());
 
-  // Series/index unknown without loading — findNextBook falls back to alphabetical order.
+  // Series/index/author unknown without loading — findNextBook falls back to alphabetical order.
   const std::string nextBookPath = BookFinished::findNextBookInDirectory(fullPath, {}, {});
   startActivityForResult(std::make_unique<FinishedBookActivity>(renderer, mappedInput, fullPath, nextBookPath),
                          [this, fullPath, nextBookPath](const ActivityResult& result) {

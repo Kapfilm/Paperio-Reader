@@ -21,9 +21,11 @@
 #include <string>
 #include <vector>
 
+#include "OpdsServerStore.h"
 #include "ReaderActivity.h"
 #include "ReadingSessionTracker.h"
 #include "RecentBooksStore.h"
+#include "activities/ActivityManager.h"
 #include "activities/home/RecentBooksActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -175,7 +177,7 @@ NextBookMetadata loadNextBookMetadata(const std::string& nextBookPath) {
   if (FsHelpers::hasEpubExtension(nextBookPath)) {
     Epub epub(nextBookPath, "/.crosspoint");
     epub.setSyntheticTocFallbackEnabled(SETTINGS.syntheticTocFallback != 0);
-    if (epub.load(false, true)) {
+    if (epub.load(true, true)) {
       metadata.title = epub.getTitle();
       metadata.author = epub.getAuthor();
       metadata.series = epub.getSeries();
@@ -450,12 +452,12 @@ bool moveFinishedBookToCompleted(const std::string& currentBookPath, std::string
 
 void launchFinishedBookFlow(Activity& host, GfxRenderer& renderer, MappedInputManager& mappedInput,
                             const std::string& bookPath, const std::string& series, const std::string& seriesIndex,
-                            void (*onMenuClosed)(void*), void* onMenuClosedCtx) {
+                            const std::string& author, void (*onMenuClosed)(void*), void* onMenuClosedCtx) {
   const std::string nextBookPath = findNextBookInDirectory(bookPath, series, seriesIndex);
   Activity* hostPtr = &host;
   host.startActivityForResult(
-      std::make_unique<FinishedBookActivity>(renderer, mappedInput, bookPath, nextBookPath),
-      [hostPtr, bookPath, nextBookPath, onMenuClosed, onMenuClosedCtx](const ActivityResult& result) {
+      std::make_unique<FinishedBookActivity>(renderer, mappedInput, bookPath, nextBookPath, author),
+      [hostPtr, bookPath, nextBookPath, author, onMenuClosed, onMenuClosedCtx](const ActivityResult& result) {
         if (onMenuClosed) {
           onMenuClosed(onMenuClosedCtx);
         }
@@ -470,7 +472,9 @@ void launchFinishedBookFlow(Activity& host, GfxRenderer& renderer, MappedInputMa
         const bool goHome = menuResult.action == static_cast<int>(FinishedBookAction::GoHome);
         const bool openNext =
             menuResult.action == static_cast<int>(FinishedBookAction::OpenNextBook) && !nextBookPath.empty();
-        if (!goHome && !openNext) {
+        const bool searchOpds =
+            menuResult.action == static_cast<int>(FinishedBookAction::SearchOpdsForAuthor) && !author.empty();
+        if (!goHome && !openNext && !searchOpds) {
           hostPtr->requestUpdate();
           return;
         }
@@ -483,8 +487,10 @@ void launchFinishedBookFlow(Activity& host, GfxRenderer& renderer, MappedInputMa
         }
         if (goHome) {
           activityManager.goHome();
-        } else {
+        } else if (openNext) {
           activityManager.goToReader(nextBookPath);
+        } else {
+          activityManager.goToBrowserWithSearch(author);
         }
       });
 }
@@ -492,10 +498,12 @@ void launchFinishedBookFlow(Activity& host, GfxRenderer& renderer, MappedInputMa
 }  // namespace BookFinished
 
 FinishedBookActivity::FinishedBookActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                           std::string currentBookPath, std::string nextBookPath)
+                                           std::string currentBookPath, std::string nextBookPath,
+                                           std::string currentBookAuthor)
     : Activity("FinishedBook", renderer, mappedInput),
       currentBookPath_(std::move(currentBookPath)),
       nextBookPath_(std::move(nextBookPath)),
+      currentBookAuthor_(std::move(currentBookAuthor)),
       nextBookAvailable_(!nextBookPath_.empty()) {
   nextBookName_ = nextBookAvailable_ ? getFilename(nextBookPath_) : tr(STR_NOT_SET);
 }
@@ -503,7 +511,8 @@ FinishedBookActivity::FinishedBookActivity(GfxRenderer& renderer, MappedInputMan
 void FinishedBookActivity::onEnter() {
   Activity::onEnter();
   const bool canMoveToCompleted = !pathIsInCompleted(currentBookPath_);
-  const int optionCount = 1 + (nextBookAvailable_ ? 1 : 0) + (canMoveToCompleted ? 1 : 0) + 1;
+  const bool canSearchOpds = !currentBookAuthor_.empty() && OPDS_STORE.hasServers();
+  const int optionCount = 1 + (nextBookAvailable_ ? 1 : 0) + (canSearchOpds ? 1 : 0) + (canMoveToCompleted ? 1 : 0) + 1;
   selectedIndex_ = std::clamp(selectedIndex_, 0, optionCount - 1);
   moveFinishedBooksToCompleted_ = SETTINGS.moveFinishedBooksToCompleted;
   removeFinishedBooksFromRecents_ = SETTINGS.removeFinishedBooksFromRecents;
@@ -532,7 +541,9 @@ void FinishedBookActivity::loop() {
     }
 
     const bool canMoveToCompleted = !pathIsInCompleted(currentBookPath_);
-    const int optionCount = 1 + (nextBookAvailable_ ? 1 : 0) + (canMoveToCompleted ? 1 : 0) + 1;
+    const bool canSearchOpds = !currentBookAuthor_.empty() && OPDS_STORE.hasServers();
+    const int optionCount =
+        1 + (nextBookAvailable_ ? 1 : 0) + (canSearchOpds ? 1 : 0) + (canMoveToCompleted ? 1 : 0) + 1;
 
     if (ev.button == MappedInputManager::Button::Back) {
       MenuResult menuResult;
@@ -562,7 +573,17 @@ void FinishedBookActivity::loop() {
         return;
       }
 
-      const int moveIndex = 1 + (nextBookAvailable_ ? 1 : 0);
+      const int opdsIndex = 1 + (nextBookAvailable_ ? 1 : 0);
+      if (selectedIndex_ == opdsIndex && canSearchOpds) {
+        MenuResult menuResult;
+        menuResult.action = static_cast<int>(BookFinished::FinishedBookAction::SearchOpdsForAuthor);
+        ActivityResult result(menuResult);
+        setResult(std::move(result));
+        finish();
+        return;
+      }
+
+      const int moveIndex = 1 + (nextBookAvailable_ ? 1 : 0) + (canSearchOpds ? 1 : 0);
       if (selectedIndex_ == moveIndex && canMoveToCompleted) {
         moveFinishedBooksToCompleted_ = !moveFinishedBooksToCompleted_;
         SETTINGS.moveFinishedBooksToCompleted = moveFinishedBooksToCompleted_;
@@ -571,7 +592,7 @@ void FinishedBookActivity::loop() {
         return;
       }
 
-      const int removeIndex = 1 + (nextBookAvailable_ ? 1 : 0) + (canMoveToCompleted ? 1 : 0);
+      const int removeIndex = 1 + (nextBookAvailable_ ? 1 : 0) + (canSearchOpds ? 1 : 0) + (canMoveToCompleted ? 1 : 0);
       if (selectedIndex_ == removeIndex) {
         removeFinishedBooksFromRecents_ = !removeFinishedBooksFromRecents_;
         SETTINGS.removeFinishedBooksFromRecents = removeFinishedBooksFromRecents_;
@@ -701,7 +722,8 @@ void FinishedBookActivity::render(RenderLock&&) {
 
   const bool currentBookIsCompleted = pathIsInCompleted(currentBookPath_);
   const bool canMoveToCompleted = !currentBookIsCompleted;
-  const int optionCount = 1 + (nextBookAvailable_ ? 1 : 0) + (canMoveToCompleted ? 1 : 0) + 1;
+  const bool canSearchOpds = !currentBookAuthor_.empty() && OPDS_STORE.hasServers();
+  const int optionCount = 1 + (nextBookAvailable_ ? 1 : 0) + (canSearchOpds ? 1 : 0) + (canMoveToCompleted ? 1 : 0) + 1;
 
   std::vector<std::string> rowTitles;
   std::vector<std::string> rowSubtitles;
@@ -726,6 +748,12 @@ void FinishedBookActivity::render(RenderLock&&) {
     rowTitles.push_back(nextBookTitle_.empty() ? tr(STR_OPEN_NEXT_BOOK) : nextBookTitle_);
     rowSubtitles.push_back(subtitle);
     rowValues.push_back(tr(STR_OPEN));
+  }
+
+  if (canSearchOpds) {
+    rowTitles.push_back(tr(STR_SEARCH_OPDS_FOR_AUTHOR));
+    rowSubtitles.push_back(currentBookAuthor_);
+    rowValues.push_back(tr(STR_SEARCH));
   }
 
   if (canMoveToCompleted) {

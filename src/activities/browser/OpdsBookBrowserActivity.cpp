@@ -271,6 +271,10 @@ void OpdsBookBrowserActivity::onEnter() {
         cacheFile.close();
         state = BrowserState::BROWSING;
         requestUpdate();
+        if (!initialQuery_.empty() && !searchTemplate.empty()) {
+          performSearch(std::move(initialQuery_));
+          initialQuery_.clear();
+        }
         return;  // WiFi connects lazily on first navigation
       }
       cacheFile.close();
@@ -697,6 +701,9 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   searchTemplate = parser.getSearchTemplate();
   if (searchTemplate.empty() && !parser.getOsdUrl().empty()) {
     fetchOsdTemplate(UrlUtils::buildUrl(url, parser.getOsdUrl()));
+  } else if (!initialQuery_.empty() && !searchTemplate.empty()) {
+    performSearch(std::move(initialQuery_));
+    initialQuery_.clear();
   }
 
   if (isRootFeed) {
@@ -916,6 +923,10 @@ void OpdsBookBrowserActivity::fetchOsdTemplate(const std::string& osdUrl) {
 
   if (!osdState.templateUrl.empty()) {
     searchTemplate = UrlUtils::buildUrl(osdUrl, osdState.templateUrl);
+    if (!initialQuery_.empty()) {
+      performSearch(std::move(initialQuery_));
+      initialQuery_.clear();
+    }
   }
 }
 

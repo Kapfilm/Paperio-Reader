@@ -164,7 +164,8 @@ void XtcReaderActivity::loop() {
   if (currentPage >= xtc->getPageCount()) {
     if (nextTriggered) {
       saveProgress();
-      BookFinished::launchFinishedBookFlow(*this, renderer, mappedInput, xtc->getPath(), std::string(), std::string());
+      BookFinished::launchFinishedBookFlow(*this, renderer, mappedInput, xtc->getPath(), std::string(), std::string(),
+                                           xtc->getAuthor());
     } else {
       currentPage = xtc->getPageCount() - 1;
       requestUpdate();
