@@ -1,0 +1,7 @@
+# Built WFX plugin binaries
+crosspoint.wfx
+crosspoint.wfx64
+crosspoint32.wfx
+crosspoint64.wfx64
+__pycache__/
+*.pyc
