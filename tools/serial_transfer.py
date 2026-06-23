@@ -213,15 +213,37 @@ class CrossPointSerial:
         return books
 
     def download(self, remote, local):
+        # Retry a few times: a download can occasionally stall on a transient
+        # USB-CDC link hiccup and abort; the device recovers, so a re-request
+        # succeeds.
+        last = None
+        for _ in range(3):
+            try:
+                return self._download_once(remote, local)
+            except TransferError as e:
+                last = e
+                self.s.reset_input_buffer()
+                time.sleep(0.1)
+        raise last
+
+    def _download_once(self, remote, local):
         self.s.reset_input_buffer()
         self.s.write(CMND + b"T" + struct.pack("<H", len(remote.encode())) + remote.encode())
         ready = self._read_until(("READY", "ERR:"), timeout=10.0)
         if ready != "READY":
             raise TransferError(f"download {remote} failed: {ready or '<no reply>'}")
         size = struct.unpack("<I", self._read_exact(4))[0]
-        data = self._read_exact(size) if size else b""
+        # ACK-paced: read each chunk, send 0x06, then the device sends the next.
+        data = bytearray()
+        remaining = size
+        while remaining > 0:
+            want = min(remaining, CHUNK)
+            data += self._read_exact(want)
+            self.s.write(bytes([ACK]))
+            self.s.flush()
+            remaining -= want
         crc = struct.unpack("<I", self._read_exact(4))[0]
-        if (zlib.crc32(data) & 0xFFFFFFFF) != crc:
+        if (zlib.crc32(bytes(data)) & 0xFFFFFFFF) != crc:
             raise TransferError("download CRC mismatch")
         with open(local, "wb") as f:
             f.write(data)

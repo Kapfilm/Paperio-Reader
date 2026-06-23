@@ -43,4 +43,5 @@ class SerialTransferActivity final : public Activity {
 
   SerialTransferDevice device_;
   std::string statusMessage_;
+  bool statusDirty_ = false;  // a new status message is waiting to be painted (in loop())
 };

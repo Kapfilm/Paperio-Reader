@@ -352,11 +352,29 @@ TEST(SerialTransferDownload, RoundTripMultiChunk) {
   h.push("CMNDT");
   h.pushU16(static_cast<uint16_t>(path.size()));
   h.push(path);
+  // Download is ACK-paced: the device reads one 0x06 per 2048-byte chunk.
+  const size_t chunks = (h.downloadSource.size() + 2047) / 2048;  // 3 here
+  for (size_t i = 0; i < chunks; ++i) h.in.push_back(0x06);
 
   SerialTransferProtocol proto(h);
   EXPECT_TRUE(proto.poll());
   EXPECT_EQ(h.lastReadPath, path);
   EXPECT_EQ(h.out, expectedDownload(h.downloadSource));
+}
+
+// If the host never ACKs a chunk, the device aborts and sends no trailing CRC.
+TEST(SerialTransferDownload, NoAckAborts) {
+  FakeHost h;
+  for (int i = 0; i < 100; ++i) h.downloadSource.push_back(static_cast<uint8_t>(i));
+  const std::string path = "/x.bin";
+  h.push("CMNDT");
+  h.pushU16(static_cast<uint16_t>(path.size()));
+  h.push(path);
+  // no 0x06 ACK provided -> readByte() returns -1 after the first chunk
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  // READY + size + the chunk data, but NO 4-byte CRC at the end.
+  EXPECT_EQ(h.out.size(), 6u + 4u + 100u);
 }
 
 TEST(SerialTransferDownload, EmptyFile) {

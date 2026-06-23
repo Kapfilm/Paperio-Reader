@@ -18,7 +18,9 @@
 //   chunk with byte 0x06, then reads a trailing <u32 crc32> and replies
 //   "OK"/"ERR:...". CRC32 is zlib/IEEE (poly 0xEDB88320).
 //   Download   = CMND opcode 'T' + <u16 pathLen> + path. Device replies "READY"
-//   then <u32 size> + raw data + <u32 crc32> (no per-chunk ACK), or "ERR:...".
+//   then <u32 size> + data in 2048-byte chunks (host 0x06-ACKs each, flow
+//   control) + <u32 crc32>, or "ERR:...". (ACK-paced unlike MicroReader's 'T',
+//   which streams unpaced; our host tools are the only download clients.)
 //   CMND opcodes (1 byte after "CMND"): 'L' list books, 'S' status, 'R' remove,
 //   'T' download, 'A' list dir (DIR:/d|/f|name|size|mtime/END), 'W' write file
 //   to an arbitrary path (same framing as EPUB upload), 'N' rename/move

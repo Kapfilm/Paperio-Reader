@@ -24,8 +24,7 @@
 #include <unistd.h>
 #endif
 
-#define CHUNK 2048          // upload chunk (ACK-paced, must match the protocol)
-#define DL_BUF (16 * 1024)  // download read gulp (drain fast; no flow control)
+#define CHUNK 2048  // transfer chunk (ACK-paced both directions; matches protocol)
 #define ACK 0x06
 
 struct CpSerial {
@@ -479,7 +478,7 @@ int cp_list_dir(CpSerial* s, const char* path, CpEntryCb cb, void* user) {
   return 0;
 }
 
-int cp_download(CpSerial* s, const char* remote, const char* local, CpProgress cb, void* user) {
+static int cp_download_once(CpSerial* s, const char* remote, const char* local, CpProgress cb, void* user) {
   port_flush_in(s);
   if (send_cmd_path(s, 'T', remote) != 0) return -1;
   char line[600];
@@ -492,21 +491,26 @@ int cp_download(CpSerial* s, const char* remote, const char* local, CpProgress c
     set_err(s, "cannot create %s", local);
     return -1;
   }
-  // Download has no per-chunk flow control, so drain in large gulps and keep
-  // per-iteration work minimal (read fast, like the CLI). Report progress only
-  // when the percentage actually changes, so a host-side progress callback can't
-  // gate the read loop and stall the device's TX (which would drop bytes).
+  // Download is ACK-paced (one 0x06 per chunk): read a chunk, ACK it, and only
+  // then will the device send the next. This caps the device to our read speed
+  // so it can never overflow the USB-CDC TX (an unpaced stream intermittently
+  // corrupts). Report progress only on a percentage change.
   uint32_t crc = 0, remaining = size;
-  uint8_t buf[DL_BUF];
+  uint8_t buf[CHUNK];
   int last_pct = -1;
   while (remaining > 0) {
-    size_t want = remaining < DL_BUF ? remaining : DL_BUF;
+    size_t want = remaining < CHUNK ? remaining : CHUNK;
     if (read_exact(s, buf, want, 30000) != 0) {
       fclose(f);
       return -1;
     }
     fwrite(buf, 1, want, f);
     crc = crc32_update(crc, buf, want);
+    uint8_t ack = ACK;
+    if (port_write(s, &ack, 1) != 0) {  // pace the device
+      fclose(f);
+      return -1;
+    }
     remaining -= (uint32_t)want;
     if (cb) {
       int pct = size ? (int)(((uint64_t)(size - remaining) * 100) / size) : 100;
@@ -527,6 +531,18 @@ int cp_download(CpSerial* s, const char* remote, const char* local, CpProgress c
     return -1;
   }
   return 0;
+}
+
+int cp_download(CpSerial* s, const char* remote, const char* local, CpProgress cb, void* user) {
+  // Retry: a download can occasionally stall on the device (a transient USB-CDC
+  // link hiccup) and abort; the device recovers immediately, so a re-request
+  // succeeds. Drain and retry a few times before giving up.
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (cp_download_once(s, remote, local, cb, user) == 0) return 0;
+    if (s->err[0] && strstr(s->err, "aborted")) return -1;  // user cancelled: don't retry
+    port_flush_in(s);
+  }
+  return -1;
 }
 
 int cp_upload(CpSerial* s, const char* local, const char* remote, CpProgress cb, void* user) {

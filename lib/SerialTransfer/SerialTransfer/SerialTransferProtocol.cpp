@@ -272,19 +272,33 @@ bool SerialTransferProtocol::handleDownload() {
   uint32_t crc = 0;
   uint32_t remaining = size;
   uint8_t buf[kChunkSize];
+  bool ok = true;
   while (remaining > 0) {
     const size_t want = remaining < kChunkSize ? remaining : kChunkSize;
     const size_t n = host_.fileRead(buf, want);
-    if (n == 0) break;  // unexpected short read; host's CRC will mismatch
+    if (n == 0) {
+      ok = false;
+      break;  // unexpected short read
+    }
     host_.writeBytes(buf, n);
     crc = crc32Update(crc, buf, n);
+    // Wait for the host to ACK this chunk before sending the next. Flow control:
+    // keeps the device from outrunning the host and overflowing the USB-CDC TX
+    // (an unpaced stream intermittently corrupts on HWCDC). One 0x06 per chunk,
+    // mirroring the upload direction.
+    if (host_.readByte() != kAck) {
+      ok = false;
+      break;  // host out of sync / gone
+    }
     remaining -= static_cast<uint32_t>(n);
   }
   host_.fileReadEnd();
 
-  const uint8_t crcb[4] = {static_cast<uint8_t>(crc), static_cast<uint8_t>(crc >> 8), static_cast<uint8_t>(crc >> 16),
-                           static_cast<uint8_t>(crc >> 24)};
-  host_.writeBytes(crcb, 4);
+  if (ok) {
+    const uint8_t crcb[4] = {static_cast<uint8_t>(crc), static_cast<uint8_t>(crc >> 8), static_cast<uint8_t>(crc >> 16),
+                             static_cast<uint8_t>(crc >> 24)};
+    host_.writeBytes(crcb, 4);
+  }
   return true;
 }
 

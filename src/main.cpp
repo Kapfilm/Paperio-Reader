@@ -543,8 +543,10 @@ void setup() {
     // the queue, so it takes effect even though CDC_ON_BOOT already ran begin().
     logSerial.setRxBufferSize(4096);
     // Enlarge the TX buffer too (default 256) so file downloads stream out in
-    // larger bursts without the device having to block mid-chunk on a full ring.
-    logSerial.setTxBufferSize(4096);
+    // larger bursts without the device having to block mid-chunk on a full ring
+    // (a full ring that doesn't drain within HWCDC's tx timeout flips the link
+    // to "disconnected" and silently drops TX).
+    logSerial.setTxBufferSize(8192);
     Serial.begin(115200);
     const unsigned long start = millis();
     while (!Serial && (millis() - start) < 500) {

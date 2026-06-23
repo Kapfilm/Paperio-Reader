@@ -20,6 +20,13 @@ constexpr uint32_t kLowHeapTrimThreshold = 60 * 1024;
 // Process at most this many protocol messages per loop() so a flood of small
 // commands can't starve the Back-button check.
 constexpr int kMaxMessagesPerLoop = 64;
+
+// Raise HWCDC's TX timeout for the session from its 100ms default. At 100ms, a
+// brief ring-drain timing race at a chunk boundary flips the link to
+// "disconnected" and silently drops TX, stalling a download. 1000ms gives the
+// drain ISR ample slack while staying well under the 5s task watchdog (logs are
+// muted during the session, so nothing else blocks on it).
+constexpr uint32_t kSerialTxTimeoutMs = 1000;
 }  // namespace
 
 void SerialTransferActivity::statusThunk(void* ctx, const char* msg) {
@@ -27,11 +34,12 @@ void SerialTransferActivity::statusThunk(void* ctx, const char* msg) {
 }
 
 void SerialTransferActivity::onStatus(const char* msg) {
+  // Only record the message here — do NOT paint. This is called from inside the
+  // protocol (mid-transfer); a blocking e-ink refresh in that path delays
+  // protocol bytes and intermittently corrupted transfers. loop() paints the
+  // latest message between protocol messages, when no SD/serial is in flight.
   statusMessage_ = msg ? msg : "";
-  // Paint synchronously. This only fires between transfers (before the first
-  // chunk / after the last), so there is no concurrent SD or serial traffic and
-  // thus no display/SD SPI contention.
-  requestUpdateAndWait();
+  statusDirty_ = true;
 }
 
 void SerialTransferActivity::onEnter() {
@@ -42,6 +50,7 @@ void SerialTransferActivity::onEnter() {
   // RTC ring buffer (getLastLogs). (On a boot-into-transfer, setup() already
   // muted; this keeps it muted.)
   setSerialWireMuted(true);
+  logSerial.setTxTimeoutMs(kSerialTxTimeoutMs);  // see constant; restored in onExit
 
   // Arm the boot target: opening the port resets the C3 (unavoidable hardware
   // reset), so without this the device would land on Home and the host couldn't
@@ -68,6 +77,7 @@ void SerialTransferActivity::onEnter() {
 void SerialTransferActivity::onExit() {
   device_.setStatusCallback(nullptr, nullptr);
   setSerialWireMuted(false);
+  logSerial.setTxTimeoutMs(100);  // restore HWCDC default (exit reboot also resets it)
   // Clear the arm first, in case silentRestart() below no-ops (e.g. a deep sleep
   // is already in progress), so we don't wake back into this activity.
   disarmSerialTransferReboot();
@@ -100,6 +110,14 @@ void SerialTransferActivity::loop() {
     }
     break;  // nothing actionable this iteration
   }
+
+  // Paint the latest status now that the protocol is idle this iteration — no SD
+  // or serial in flight, so the blocking e-ink refresh is SPI-safe and can't
+  // delay a transfer.
+  if (statusDirty_) {
+    statusDirty_ = false;
+    requestUpdateAndWait();
+  }
 }
 
 void SerialTransferActivity::render(RenderLock&&) {
@@ -124,8 +142,9 @@ void SerialTransferActivity::render(RenderLock&&) {
     }
   };
 
-  // Instruction chrome (translated).
-  drawWrapped(tr(STR_USB_TRANSFER_HINT), 2, EpdFontFamily::REGULAR);
+  // Instruction chrome (translated). Generous line budget so a longer hint
+  // isn't truncated; it sits at the top with room above the status line.
+  drawWrapped(tr(STR_USB_TRANSFER_HINT), 5, EpdFontFamily::REGULAR);
   y += metrics.verticalSpacing * 2;
 
   // Live status / diagnostic line (dynamic, includes file names; not translated).
