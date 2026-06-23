@@ -1,5 +1,6 @@
 #include "SerialTransferProtocol.h"
 
+#include <cstdio>
 #include <cstring>
 
 namespace serialtransfer {
@@ -58,6 +59,15 @@ bool SerialTransferProtocol::readU32LE(uint32_t& out) {
   return true;
 }
 
+bool SerialTransferProtocol::readLenPrefixed(std::string& out) {
+  uint16_t len = 0;
+  if (!readU16LE(len)) return false;
+  if (len > kMaxPathLen) return false;  // refuse to allocate an absurd buffer
+  out.assign(len, '\0');
+  if (len && !readExact(reinterpret_cast<uint8_t*>(&out[0]), len)) return false;
+  return true;
+}
+
 // --- dispatch ---------------------------------------------------------------
 bool SerialTransferProtocol::poll() {
   // Need a full 4-byte magic before we commit to either protocol.
@@ -97,10 +107,8 @@ bool SerialTransferProtocol::handleCommand() {
       return true;
     }
     case 'R': {  // remove file
-      uint16_t len = 0;
-      if (!readU16LE(len)) return true;
-      std::string path(len, '\0');
-      if (len && !readExact(reinterpret_cast<uint8_t*>(&path[0]), len)) return true;
+      std::string path;
+      if (!readLenPrefixed(path)) return true;
       host_.writeLine(host_.removeFile(path) ? "OK" : "ERR:remove");
       return true;
     }
@@ -109,6 +117,16 @@ bool SerialTransferProtocol::handleCommand() {
       host_.writeLine(s.c_str());
       return true;
     }
+    case 'T':  // read file (download to host)
+      return handleDownload();
+    case 'A':  // list directory
+      return handleListDir();
+    case 'W':  // write file to an arbitrary path
+      return handleWrite();
+    case 'N':  // rename / move
+      return handleRename();
+    case 'K':  // make directory
+      return handleMkDir();
     default:
       // Recognized magic but an opcode we don't implement (bench/clear/etc.).
       // Report rather than silently stall the host.
@@ -118,15 +136,15 @@ bool SerialTransferProtocol::handleCommand() {
 }
 
 bool SerialTransferProtocol::handleUpload() {
-  uint16_t nameLen = 0;
-  if (!readU16LE(nameLen)) return true;
-  std::string name(nameLen, '\0');
-  if (nameLen && !readExact(reinterpret_cast<uint8_t*>(&name[0]), nameLen)) return true;
+  std::string name;
+  if (!readLenPrefixed(name)) return true;
+  return receiveFile(host_.uploadDestination(name));
+}
 
+bool SerialTransferProtocol::receiveFile(const std::string& dest) {
   uint32_t dataLen = 0;
   if (!readU32LE(dataLen)) return true;
 
-  const std::string dest = host_.uploadDestination(name);
   if (!host_.fileBegin(dest)) {
     host_.writeLine("ERR:create");
     return true;
@@ -178,6 +196,95 @@ bool SerialTransferProtocol::handleUpload() {
 
   host_.fileEnd(/*keep=*/true);
   host_.writeLine("OK");
+  return true;
+}
+
+bool SerialTransferProtocol::handleWrite() {
+  std::string path;
+  if (!readLenPrefixed(path)) return true;
+  return receiveFile(path);
+}
+
+bool SerialTransferProtocol::handleListDir() {
+  std::string path;
+  if (!readLenPrefixed(path)) return true;
+
+  if (!host_.listDirBegin(path)) {
+    host_.writeLine("ERR:opendir");
+    return true;
+  }
+  host_.writeLine(("DIR:" + path).c_str());
+
+  DirEntry e;
+  char buf[32];
+  while (host_.listDirNext(e)) {
+    std::string line;
+    if (e.isDir) {
+      line = "d|" + e.name;
+    } else {
+      line = "f|" + e.name + "|";
+      snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(e.size));
+      line += buf;
+      line += "|";
+      snprintf(buf, sizeof(buf), "%lu", static_cast<unsigned long>(e.mtime));
+      line += buf;
+    }
+    host_.writeLine(line.c_str());
+  }
+  host_.listDirEnd();
+  host_.writeLine("END");
+  return true;
+}
+
+bool SerialTransferProtocol::handleRename() {
+  std::string src, dst;
+  if (!readLenPrefixed(src)) return true;
+  if (!readLenPrefixed(dst)) return true;
+  host_.writeLine(host_.renameFile(src, dst) ? "OK" : "ERR:rename_failed");
+  return true;
+}
+
+bool SerialTransferProtocol::handleMkDir() {
+  std::string path;
+  if (!readLenPrefixed(path)) return true;
+  host_.writeLine(host_.makeDir(path) ? "OK" : "ERR:mkdir_failed");
+  return true;
+}
+
+bool SerialTransferProtocol::handleDownload() {
+  std::string path;
+  if (!readLenPrefixed(path)) return true;
+
+  uint32_t size = 0;
+  if (!host_.fileReadBegin(path, size)) {
+    host_.writeLine("ERR:fopen");
+    return true;
+  }
+
+  // Reply: "READY\n" then <u32 size LE> + raw data + <u32 crc32 LE>. No
+  // per-chunk ACK on download — the device just streams. (Wire-compatible with
+  // MicroReader's 'T'.)
+  host_.writeLine("READY");
+  const uint8_t szb[4] = {static_cast<uint8_t>(size), static_cast<uint8_t>(size >> 8), static_cast<uint8_t>(size >> 16),
+                          static_cast<uint8_t>(size >> 24)};
+  host_.writeBytes(szb, 4);
+
+  uint32_t crc = 0;
+  uint32_t remaining = size;
+  uint8_t buf[kChunkSize];
+  while (remaining > 0) {
+    const size_t want = remaining < kChunkSize ? remaining : kChunkSize;
+    const size_t n = host_.fileRead(buf, want);
+    if (n == 0) break;  // unexpected short read; host's CRC will mismatch
+    host_.writeBytes(buf, n);
+    crc = crc32Update(crc, buf, n);
+    remaining -= static_cast<uint32_t>(n);
+  }
+  host_.fileReadEnd();
+
+  const uint8_t crcb[4] = {static_cast<uint8_t>(crc), static_cast<uint8_t>(crc >> 8), static_cast<uint8_t>(crc >> 16),
+                           static_cast<uint8_t>(crc >> 24)};
+  host_.writeBytes(crcb, 4);
   return true;
 }
 

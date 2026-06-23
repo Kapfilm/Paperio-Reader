@@ -9,6 +9,7 @@
 
 using serialtransfer::BookEntry;
 using serialtransfer::crc32Update;
+using serialtransfer::DirEntry;
 using serialtransfer::SerialTransferHost;
 using serialtransfer::SerialTransferProtocol;
 
@@ -31,6 +32,22 @@ class FakeHost : public SerialTransferHost {
 
   std::vector<std::string> removed;
   bool removeResult = true;
+
+  // Captured download (read) state.
+  std::vector<uint8_t> downloadSource;  // file content fileRead() serves
+  std::string lastReadPath;
+  size_t readPos = 0;
+  bool failOpen = false;
+
+  // Directory listing / file-op state.
+  std::vector<DirEntry> dirEntries;
+  std::string lastListPath;
+  size_t dirPos = 0;
+  bool failListDir = false;
+  std::string renSrc, renDst;
+  bool renameResult = true;
+  std::string mkdirPath;
+  bool mkdirResult = true;
 
   // -- inbound --
   size_t available() override { return in.size(); }
@@ -61,6 +78,45 @@ class FakeHost : public SerialTransferHost {
     return true;
   }
   void fileEnd(bool keep) override { fileKept = keep; }
+
+  // -- file source (download) --
+  bool fileReadBegin(const std::string& path, uint32_t& outSize) override {
+    if (failOpen) return false;
+    lastReadPath = path;
+    readPos = 0;
+    outSize = static_cast<uint32_t>(downloadSource.size());
+    return true;
+  }
+  size_t fileRead(uint8_t* buf, size_t len) override {
+    const size_t n = std::min(len, downloadSource.size() - readPos);
+    std::copy(downloadSource.begin() + readPos, downloadSource.begin() + readPos + n, buf);
+    readPos += n;
+    return n;
+  }
+  void fileReadEnd() override {}
+
+  // -- directory listing + file ops --
+  bool listDirBegin(const std::string& path) override {
+    if (failListDir) return false;
+    lastListPath = path;
+    dirPos = 0;
+    return true;
+  }
+  bool listDirNext(DirEntry& out) override {
+    if (dirPos >= dirEntries.size()) return false;
+    out = dirEntries[dirPos++];
+    return true;
+  }
+  void listDirEnd() override {}
+  bool renameFile(const std::string& src, const std::string& dst) override {
+    renSrc = src;
+    renDst = dst;
+    return renameResult;
+  }
+  bool makeDir(const std::string& path) override {
+    mkdirPath = path;
+    return mkdirResult;
+  }
 
   // -- queries --
   std::vector<BookEntry> listBooks() override { return books; }
@@ -266,4 +322,173 @@ TEST(SerialTransferUpload, TruncatedStreamTimesOut) {
   EXPECT_TRUE(proto.poll());
   EXPECT_FALSE(h.fileKept);
   EXPECT_NE(h.outStr().find("ERR:io\n"), std::string::npos);
+}
+
+namespace {
+// Build the expected download reply: "READY\n" + <u32 size LE> + data + <u32 crc LE>.
+std::vector<uint8_t> expectedDownload(const std::vector<uint8_t>& data) {
+  std::vector<uint8_t> e;
+  const char* ready = "READY\n";
+  e.insert(e.end(), ready, ready + 6);
+  auto u32 = [&](uint32_t v) {
+    e.push_back(v & 0xFF);
+    e.push_back((v >> 8) & 0xFF);
+    e.push_back((v >> 16) & 0xFF);
+    e.push_back((v >> 24) & 0xFF);
+  };
+  u32(static_cast<uint32_t>(data.size()));
+  e.insert(e.end(), data.begin(), data.end());
+  u32(zlibCrc(data));
+  return e;
+}
+}  // namespace
+
+// Full download (CMND 'T') round-trip spanning multiple chunks plus a partial.
+TEST(SerialTransferDownload, RoundTripMultiChunk) {
+  FakeHost h;
+  for (int i = 0; i < 2048 * 2 + 100; ++i) h.downloadSource.push_back(static_cast<uint8_t>((i * 17 + 3) & 0xFF));
+
+  const std::string path = "/books/grab.epub";
+  h.push("CMNDT");
+  h.pushU16(static_cast<uint16_t>(path.size()));
+  h.push(path);
+
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  EXPECT_EQ(h.lastReadPath, path);
+  EXPECT_EQ(h.out, expectedDownload(h.downloadSource));
+}
+
+TEST(SerialTransferDownload, EmptyFile) {
+  FakeHost h;  // downloadSource left empty
+  const std::string path = "/empty.bin";
+  h.push("CMNDT");
+  h.pushU16(static_cast<uint16_t>(path.size()));
+  h.push(path);
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  // READY\n + size(0) + crc(0)
+  const std::vector<uint8_t> expected = {'R', 'E', 'A', 'D', 'Y', '\n', 0, 0, 0, 0, 0, 0, 0, 0};
+  EXPECT_EQ(h.out, expected);
+}
+
+TEST(SerialTransferDownload, OpenFailure) {
+  FakeHost h;
+  h.failOpen = true;
+  const std::string path = "/nope.epub";
+  h.push("CMNDT");
+  h.pushU16(static_cast<uint16_t>(path.size()));
+  h.push(path);
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  EXPECT_EQ(h.outStr(), "ERR:fopen\n");
+}
+
+// --- Directory listing (CMND 'A') ---
+TEST(SerialTransferDispatch, ListDir) {
+  FakeHost h;
+  h.dirEntries = {
+      {true, "sub", 0, 0},
+      {false, "a.epub", 1234, 1700000000u},
+      {false, "b.txt", 7, 0},
+  };
+  const std::string path = "/books";
+  h.push("CMNDA");
+  h.pushU16(static_cast<uint16_t>(path.size()));
+  h.push(path);
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  EXPECT_EQ(h.lastListPath, path);
+  EXPECT_EQ(h.outStr(), "DIR:/books\nd|sub\nf|a.epub|1234|1700000000\nf|b.txt|7|0\nEND\n");
+}
+
+TEST(SerialTransferDispatch, ListDirOpenFailure) {
+  FakeHost h;
+  h.failListDir = true;
+  const std::string path = "/nope";
+  h.push("CMNDA");
+  h.pushU16(static_cast<uint16_t>(path.size()));
+  h.push(path);
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  EXPECT_EQ(h.outStr(), "ERR:opendir\n");
+}
+
+// --- Write to arbitrary path (CMND 'W'), shares the chunked receive with EPUB ---
+TEST(SerialTransferWrite, RoundTripMultiChunk) {
+  FakeHost h;
+  std::vector<uint8_t> data;
+  for (int i = 0; i < 2048 + 50; ++i) data.push_back(static_cast<uint8_t>((i * 13 + 7) & 0xFF));
+  const std::string path = "/sleep/cover.bmp";
+
+  h.push("CMNDW");
+  h.pushU16(static_cast<uint16_t>(path.size()));
+  h.push(path);
+  h.pushU32(static_cast<uint32_t>(data.size()));
+  h.push(data.data(), data.size());
+  h.pushU32(zlibCrc(data));
+
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  EXPECT_EQ(h.lastPath, path);  // written to the exact path, not /books/
+  EXPECT_EQ(h.lastData, data);
+  EXPECT_TRUE(h.fileKept);
+  EXPECT_EQ(h.ackCount(), 2u);  // 2048 + 50 => 2 chunks
+  EXPECT_NE(h.outStr().find("READY\n"), std::string::npos);
+  EXPECT_NE(h.outStr().find("OK\n"), std::string::npos);
+}
+
+// --- Rename / move (CMND 'N') ---
+TEST(SerialTransferDispatch, Rename) {
+  FakeHost h;
+  const std::string src = "/a/old.epub", dst = "/b/new.epub";
+  h.push("CMNDN");
+  h.pushU16(static_cast<uint16_t>(src.size()));
+  h.push(src);
+  h.pushU16(static_cast<uint16_t>(dst.size()));
+  h.push(dst);
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  EXPECT_EQ(h.renSrc, src);
+  EXPECT_EQ(h.renDst, dst);
+  EXPECT_EQ(h.outStr(), "OK\n");
+}
+
+TEST(SerialTransferDispatch, RenameFailure) {
+  FakeHost h;
+  h.renameResult = false;
+  const std::string src = "/a", dst = "/b";
+  h.push("CMNDN");
+  h.pushU16(static_cast<uint16_t>(src.size()));
+  h.push(src);
+  h.pushU16(static_cast<uint16_t>(dst.size()));
+  h.push(dst);
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  EXPECT_EQ(h.outStr(), "ERR:rename_failed\n");
+}
+
+// --- Make directory (CMND 'K') ---
+TEST(SerialTransferDispatch, MkDir) {
+  FakeHost h;
+  const std::string path = "/new/folder";
+  h.push("CMNDK");
+  h.pushU16(static_cast<uint16_t>(path.size()));
+  h.push(path);
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  EXPECT_EQ(h.mkdirPath, path);
+  EXPECT_EQ(h.outStr(), "OK\n");
+}
+
+TEST(SerialTransferDispatch, MkDirFailure) {
+  FakeHost h;
+  h.mkdirResult = false;
+  const std::string path = "/x";
+  h.push("CMNDK");
+  h.pushU16(static_cast<uint16_t>(path.size()));
+  h.push(path);
+  SerialTransferProtocol proto(h);
+  EXPECT_TRUE(proto.poll());
+  EXPECT_EQ(h.outStr(), "ERR:mkdir_failed\n");
 }

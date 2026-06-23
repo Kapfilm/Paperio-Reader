@@ -6,10 +6,27 @@
 #include <esp_task_wdt.h>
 
 #include <cstdarg>
+#include <ctime>
 
 #include "RecentBooksStore.h"
 
 namespace {
+
+// Convert a FAT modify date/time (as returned by HalFile::getModifyDateTime) to
+// unix seconds for the 'A' listing's mtime field. Returns 0 if unavailable.
+uint32_t fatToUnix(uint16_t fdate, uint16_t ftime) {
+  if (fdate == 0) return 0;
+  struct tm t = {};
+  t.tm_year = ((fdate >> 9) & 0x7F) + 80;  // FAT year is since 1980; tm_year since 1900
+  t.tm_mon = ((fdate >> 5) & 0x0F) - 1;
+  t.tm_mday = fdate & 0x1F;
+  t.tm_hour = (ftime >> 11) & 0x1F;
+  t.tm_min = (ftime >> 5) & 0x3F;
+  t.tm_sec = (ftime & 0x1F) * 2;
+  t.tm_isdst = -1;
+  const time_t e = mktime(&t);
+  return e < 0 ? 0 : static_cast<uint32_t>(e);
+}
 // Per-byte read timeout while a transfer message is in flight. Must stay small
 // so a stalled host can't freeze loop() (and with it button/cancel handling)
 // for long.
@@ -183,6 +200,83 @@ void SerialTransferDevice::fileEnd(bool keep) {
   }
 }
 
+bool SerialTransferDevice::fileReadBegin(const std::string& path, uint32_t& outSize) {
+  if (!Storage.openFileForRead("SerialTransfer", path, downloadFile_)) {
+    emitStatus("Download failed (open): %s", baseName(path).c_str());
+    return false;
+  }
+  downloadName_ = baseName(path);
+  outSize = static_cast<uint32_t>(downloadFile_.size());
+  downloadBytes_ = 0;
+  downloadStartMs_ = millis();
+  emitStatus("Sending '%s'", downloadName_.c_str());
+  return true;
+}
+
+size_t SerialTransferDevice::fileRead(uint8_t* buf, size_t len) {
+  // Feed the task WDT once per chunk (a long download never waits in readByte).
+  esp_task_wdt_reset();
+  const int n = downloadFile_.read(buf, len);
+  if (n <= 0) return 0;
+  downloadBytes_ += static_cast<uint32_t>(n);
+  return static_cast<size_t>(n);
+}
+
+void SerialTransferDevice::fileReadEnd() {
+  downloadFile_.close();
+  const unsigned long elapsed = millis() - downloadStartMs_;
+  const unsigned long kbps =
+      elapsed > 0 ? (static_cast<unsigned long>(downloadBytes_) * 1000UL) / (elapsed * 1024UL) : 0;
+  const unsigned long kb = (static_cast<unsigned long>(downloadBytes_) + 1023UL) / 1024UL;
+  LOG_INF("SXF", "Download %s: %u bytes in %lu ms (~%lu KB/s)", downloadName_.c_str(),
+          static_cast<unsigned>(downloadBytes_), elapsed, kbps);
+  emitStatus("Sent '%s': %lu KB in %lu.%lus (%lu KB/s)", downloadName_.c_str(), kb, elapsed / 1000UL,
+             (elapsed % 1000UL) / 100UL, kbps);
+}
+
+bool SerialTransferDevice::listDirBegin(const std::string& path) {
+  dirHandle_ = Storage.open(path.c_str());
+  if (!dirHandle_ || !dirHandle_.isDirectory()) {
+    if (dirHandle_) dirHandle_.close();
+    emitStatus("List failed: %s", path.c_str());
+    return false;
+  }
+  dirHandle_.rewindDirectory();
+  emitStatus("Listing %s", path.c_str());
+  return true;
+}
+
+bool SerialTransferDevice::listDirNext(serialtransfer::DirEntry& out) {
+  HalFile entry = dirHandle_.openNextFile();
+  if (!entry) return false;  // end of directory
+  char name[256];
+  entry.getName(name, sizeof(name));
+  out.name = name;
+  out.isDir = entry.isDirectory();
+  out.size = out.isDir ? 0 : static_cast<uint32_t>(entry.size());
+  out.mtime = 0;
+  uint16_t fdate = 0, ftime = 0;
+  if (entry.getModifyDateTime(&fdate, &ftime)) out.mtime = fatToUnix(fdate, ftime);
+  entry.close();
+  return true;
+}
+
+void SerialTransferDevice::listDirEnd() {
+  if (dirHandle_) dirHandle_.close();
+}
+
+bool SerialTransferDevice::renameFile(const std::string& src, const std::string& dst) {
+  const bool ok = Storage.rename(src.c_str(), dst.c_str());
+  emitStatus(ok ? "Moved '%s'" : "Move failed: '%s'", baseName(src).c_str());
+  return ok;
+}
+
+bool SerialTransferDevice::makeDir(const std::string& path) {
+  const bool ok = Storage.mkdir(path.c_str());
+  emitStatus(ok ? "Created '%s'" : "Mkdir failed: '%s'", baseName(path).c_str());
+  return ok;
+}
+
 std::vector<serialtransfer::BookEntry> SerialTransferDevice::listBooks() {
   emitStatus("Listing books...");
   std::vector<std::string> paths;
@@ -208,7 +302,10 @@ std::vector<serialtransfer::BookEntry> SerialTransferDevice::listBooks() {
 }
 
 bool SerialTransferDevice::removeFile(const std::string& path) {
-  const bool ok = Storage.remove(path.c_str());
+  // Try a file remove first; if that fails it may be a directory (file managers
+  // empty a folder, then remove the now-empty dir), so fall back to removeDir.
+  bool ok = Storage.remove(path.c_str());
+  if (!ok) ok = Storage.removeDir(path.c_str());
   emitStatus(ok ? "Removed '%s'" : "Remove failed: '%s'", baseName(path).c_str());
   return ok;
 }

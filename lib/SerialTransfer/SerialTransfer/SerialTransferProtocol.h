@@ -17,6 +17,12 @@
 //   Upload: device replies "READY", streams data in 2048-byte chunks, ACKs each
 //   chunk with byte 0x06, then reads a trailing <u32 crc32> and replies
 //   "OK"/"ERR:...". CRC32 is zlib/IEEE (poly 0xEDB88320).
+//   Download   = CMND opcode 'T' + <u16 pathLen> + path. Device replies "READY"
+//   then <u32 size> + raw data + <u32 crc32> (no per-chunk ACK), or "ERR:...".
+//   CMND opcodes (1 byte after "CMND"): 'L' list books, 'S' status, 'R' remove,
+//   'T' download, 'A' list dir (DIR:/d|/f|name|size|mtime/END), 'W' write file
+//   to an arbitrary path (same framing as EPUB upload), 'N' rename/move
+//   (<u16>src + <u16>dst), 'K' mkdir. Replies are "OK"/"ERR:..." unless noted.
 
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +36,15 @@ struct BookEntry {
   std::string path;
   std::string title;
   std::string author;
+};
+
+// One entry of a directory listing (CMND 'A'). Files are sent as
+// "f|name|size|mtime", directories as "d|name".
+struct DirEntry {
+  bool isDir = false;
+  std::string name;
+  uint32_t size = 0;   // bytes (files only)
+  uint32_t mtime = 0;  // unix seconds, 0 if unknown
 };
 
 // Abstracts everything the protocol needs from the outside world so the state
@@ -63,6 +78,30 @@ class SerialTransferHost {
   // Finish the file. If `keep` is false the (partial) file must be removed.
   virtual void fileEnd(bool keep) = 0;
 
+  // --- File source for downloads (CMND 'T') ---
+  // Open `path` for reading. Returns false if it can't be opened; on success
+  // sets outSize to the file's byte length (sent to the host before the data).
+  virtual bool fileReadBegin(const std::string& path, uint32_t& outSize) = 0;
+  // Read up to `len` bytes into `buf`. Returns the number read (0 at EOF).
+  virtual size_t fileRead(uint8_t* buf, size_t len) = 0;
+  // Finish reading (close the file).
+  virtual void fileReadEnd() = 0;
+
+  // --- Directory listing (CMND 'A'), streamed one entry at a time so the
+  //     device never builds a vector for a large folder. ---
+  // Open `path` for iteration. Returns false if it can't be opened.
+  virtual bool listDirBegin(const std::string& path) = 0;
+  // Fill `out` with the next entry; returns false when iteration is done.
+  virtual bool listDirNext(DirEntry& out) = 0;
+  // End iteration (close the directory).
+  virtual void listDirEnd() = 0;
+
+  // --- Other file ops ---
+  // Rename / move src -> dst. Returns false on failure (CMND 'N').
+  virtual bool renameFile(const std::string& src, const std::string& dst) = 0;
+  // Create directory (and parents). Returns false on failure (CMND 'K').
+  virtual bool makeDir(const std::string& path) = 0;
+
   // --- Misc device queries used by simple opcodes ---
   virtual std::vector<BookEntry> listBooks() = 0;
   virtual bool removeFile(const std::string& path) = 0;
@@ -87,12 +126,29 @@ class SerialTransferProtocol {
   // Chunk size mandated by the protocol (one 0x06 ACK per chunk).
   static constexpr size_t kChunkSize = 2048;
 
+  // Upper bound on a length-prefixed path/name field. Real SD paths are well
+  // under this; the cap stops a malformed <u16 len> from forcing a huge
+  // (failure-prone, abort()-on-OOM under -fno-exceptions) std::string alloc.
+  static constexpr uint16_t kMaxPathLen = 512;
+
  private:
-  bool handleCommand();  // after "CMND" consumed
-  bool handleUpload();   // after "EPUB" consumed
+  bool handleCommand();   // after "CMND" consumed
+  bool handleUpload();    // after "EPUB" consumed
+  bool handleDownload();  // CMND 'T': stream a file out to the host
+  bool handleListDir();   // CMND 'A': directory listing
+  bool handleWrite();     // CMND 'W': write file to an arbitrary path
+  bool handleRename();    // CMND 'N': rename / move
+  bool handleMkDir();     // CMND 'K': make directory
+  // Shared chunked receive (header already consumed): reads <u32 size> + 2KB
+  // chunks (0x06 ACK each) + <u32 crc>, writing to `dest`. Used by EPUB and 'W'.
+  bool receiveFile(const std::string& dest);
   bool readExact(uint8_t* buf, size_t len);
   bool readU16LE(uint16_t& out);
   bool readU32LE(uint32_t& out);
+  // Read a <u16 len> + bytes field into `out`, rejecting absurd lengths. Returns
+  // false on timeout or over-cap length (caller bails; the host's read times out
+  // and the device's magic resync recovers).
+  bool readLenPrefixed(std::string& out);
 
   SerialTransferHost& host_;
 };

@@ -52,6 +52,14 @@ class SerialTransferDevice : public serialtransfer::SerialTransferHost {
   bool fileBegin(const std::string& path) override;
   bool fileWrite(const uint8_t* data, size_t len) override;
   void fileEnd(bool keep) override;
+  bool fileReadBegin(const std::string& path, uint32_t& outSize) override;
+  size_t fileRead(uint8_t* buf, size_t len) override;
+  void fileReadEnd() override;
+  bool listDirBegin(const std::string& path) override;
+  bool listDirNext(serialtransfer::DirEntry& out) override;
+  void listDirEnd() override;
+  bool renameFile(const std::string& src, const std::string& dst) override;
+  bool makeDir(const std::string& path) override;
   std::vector<serialtransfer::BookEntry> listBooks() override;
   bool removeFile(const std::string& path) override;
   std::string statusLine() override;
@@ -81,6 +89,15 @@ class SerialTransferDevice : public serialtransfer::SerialTransferHost {
   // Timing for the post-upload throughput status/log.
   uint32_t uploadBytes_ = 0;
   unsigned long uploadStartMs_ = 0;
+
+  // In-progress download (CMND 'T') state.
+  HalFile downloadFile_;
+  std::string downloadName_;
+  uint32_t downloadBytes_ = 0;
+  unsigned long downloadStartMs_ = 0;
+
+  // In-progress directory listing (CMND 'A') handle.
+  HalFile dirHandle_;
 
   StatusFn statusFn_ = nullptr;
   void* statusCtx_ = nullptr;

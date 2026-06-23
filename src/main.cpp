@@ -542,6 +542,9 @@ void setup() {
     // MicroReader's usb_serial_jtag rx_buffer_size. setRxBufferSize() recreates
     // the queue, so it takes effect even though CDC_ON_BOOT already ran begin().
     logSerial.setRxBufferSize(4096);
+    // Enlarge the TX buffer too (default 256) so file downloads stream out in
+    // larger bursts; matches MicroReader's usb_serial_jtag tx_buffer_size.
+    logSerial.setTxBufferSize(1024);
     Serial.begin(115200);
     const unsigned long start = millis();
     while (!Serial && (millis() - start) < 500) {
