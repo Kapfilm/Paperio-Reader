@@ -53,3 +53,28 @@ jobs:
             .pio/build/gh_release/firmware.map
             .pio/build/gh_release/partitions.bin
           fail_on_unmatched_files: true
+
+  # Build the Total/Double Commander file-system plugin (WFX) for Linux and
+  # Windows and attach the installable zips to the release.
+  build-plugins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install mingw-w64 cross-compilers + zip
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64 zip
+
+      - name: Build WFX plugin release zips
+        run: make -C tools/wfx dist-linux dist-windows
+
+      - name: Upload plugin assets
+        if: ${{ env.ACT != 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: |
+            tools/wfx/dist/crosspoint-usb-wfx-linux-x86_64.zip
+            tools/wfx/dist/crosspoint-usb-wfx-windows.zip
+          fail_on_unmatched_files: true
