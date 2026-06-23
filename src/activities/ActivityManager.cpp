@@ -23,6 +23,7 @@
 #include "network/SerialTransferActivity.h"
 #include "reader/KOReaderSyncActivity.h"
 #include "reader/ReaderActivity.h"
+#include "settings/ClockSettingsActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/FullScreenMessageActivity.h"
@@ -318,6 +319,10 @@ void ActivityManager::goToSerialTransfer() {
 }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToClockSettings() {
+  replaceActivity(std::make_unique<ClockSettingsActivity>(renderer, mappedInput));
+}
 
 void ActivityManager::goToFileBrowser(std::string path, std::string focusName) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path), std::move(focusName)));

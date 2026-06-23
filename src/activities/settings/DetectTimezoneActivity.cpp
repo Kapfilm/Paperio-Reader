@@ -1,6 +1,7 @@
 #include "DetectTimezoneActivity.h"
 
 #include <ArduinoJson.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <I18n.h>
@@ -11,6 +12,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -148,7 +150,7 @@ bool detectTimezoneSetting(uint8_t& outSetting, std::string& outIana, bool& outD
     }
   }
 
-  if (payload.empty() && !fetchTimezonePayload("https://ip-api.com/json/?fields=timezone,dst", payload)) {
+  if (payload.empty() && !fetchTimezonePayload("http://ip-api.com/json/?fields=timezone,dst", payload)) {
     LOG_ERR("CLK", "Timezone detect failed: fetch error");
     return false;
   }
@@ -223,6 +225,9 @@ void DetectTimezoneActivity::onEnter() {
 void DetectTimezoneActivity::onExit() {
   Activity::onExit();
   HalClock::wifiOff();
+  if (wifiWasUsed_) {
+    silentRestartToClockSettings();
+  }
 }
 
 void DetectTimezoneActivity::onWifiSelectionComplete(bool success) {
@@ -244,6 +249,15 @@ void DetectTimezoneActivity::onWifiSelectionComplete(bool success) {
 void DetectTimezoneActivity::onWifiSelectionCancelled() { finish(); }
 
 void DetectTimezoneActivity::performDetect() {
+  wifiWasUsed_ = true;
+  if (auto* cache = renderer.getFontCacheManager()) {
+    cache->clearCache();
+  }
+  if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
+    LOG_DBG("CLK", "Released secondary framebuffer before TLS (~52 KB contiguous)");
+    renderer.setSingleBufferFastDiff(true);
+  }
+
   uint8_t detected = SETTINGS.timeZone;
   detectedTimezone.clear();
   dstKnown = false;

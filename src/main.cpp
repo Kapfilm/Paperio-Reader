@@ -155,6 +155,9 @@ constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
 // reset that fires when a host opens the port lands back in the activity instead
 // of Home — making the transfer reset-tolerant. See armSerialTransferReboot().
 constexpr uint32_t SILENT_REBOOT_TARGET_SERIAL_TRANSFER = 2;
+// Boot into the clock settings screen after a timezone-detection WiFi session
+// (WiFi teardown fragments the heap; need a clean reboot before re-entering the UI).
+constexpr uint32_t SILENT_REBOOT_TARGET_CLOCK_SETTINGS = 3;
 constexpr uint32_t HEAP_RECOVERY_RESTART_LATCH_MAGIC = 0x48EA9C01;
 
 // How the device is coming back to life, resolved once at boot. Both resume
@@ -192,6 +195,16 @@ void silentRestartToReader() {
   silentRebootTarget = SILENT_REBOOT_TARGET_READER;
   silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_DBG("MAIN", "Silent restart (target=reader)");
+  delay(50);
+  ESP.restart();
+}
+
+void silentRestartToClockSettings() {
+  if (deepSleepInProgress) return;
+  globalReadingSessionTracker().end();
+  silentRebootTarget = SILENT_REBOOT_TARGET_CLOCK_SETTINGS;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_DBG("MAIN", "Silent restart (target=clock-settings)");
   delay(50);
   ESP.restart();
 }
@@ -502,7 +515,7 @@ void setup() {
   // Bound the target range too — RTC_NOINIT memory is uninitialized on cold boot.
   const bool isSilentReboot = (silentRebootMagic == SILENT_REBOOT_MAGIC);
   const uint32_t silentRebootTargetSnapshot =
-      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_SERIAL_TRANSFER) ? silentRebootTarget : 0;
+      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_CLOCK_SETTINGS) ? silentRebootTarget : 0;
   silentRebootMagic = 0;
   silentRebootTarget = 0;
   if (!isSilentReboot) {
@@ -726,6 +739,8 @@ void setup() {
   } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);
+  } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_CLOCK_SETTINGS) {
+    activityManager.goToClockSettings();
   } else if (resume == BootResume::Silent) {
     // target == home (or reader with no open book): land on home — don't fall
     // through to the sleep-wake "resume reader" logic, which fires on stale

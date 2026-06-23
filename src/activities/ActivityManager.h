@@ -114,6 +114,7 @@ class ActivityManager {
   void goToFileTransfer();
   void goToSerialTransfer();  // direct entry (also used by the boot-into-transfer path)
   void goToSettings();
+  void goToClockSettings();
   void goToFileBrowser(std::string path = {}, std::string focusName = {});
   void goToRecentBooks(int focusIndex = -1);
   void goToGlobalBookmarks();

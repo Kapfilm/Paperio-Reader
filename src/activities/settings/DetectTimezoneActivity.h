@@ -25,4 +25,6 @@ class DetectTimezoneActivity final : public Activity {
   void onWifiSelectionCancelled();
   void performDetect();
   const char* dstStatusLabel() const;
+
+  bool wifiWasUsed_ = false;
 };
