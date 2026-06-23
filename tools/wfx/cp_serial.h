@@ -41,6 +41,10 @@ int cp_mkdir(CpSerial* s, const char* path);
 
 const char* cp_last_error(CpSerial* s);
 
+// Returns 1 if a local file at the given UTF-8 path exists (Unicode-safe on
+// Windows). Used by the plugin's overwrite check.
+int cp_local_exists(const char* utf8_path);
+
 #ifdef __cplusplus
 }
 #endif

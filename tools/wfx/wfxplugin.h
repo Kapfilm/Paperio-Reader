@@ -43,6 +43,22 @@ typedef struct {
   char cFileName[260];
   char cAlternateFileName[14];
 } WIN32_FIND_DATAA;
+
+// Wide (UTF-16) variant. WCHAR is 2 bytes to match Free Pascal's WideChar, which
+// is what Double Commander uses for Unicode plugins on every platform.
+typedef uint16_t WCHAR;
+typedef struct {
+  DWORD dwFileAttributes;
+  FILETIME ftCreationTime;
+  FILETIME ftLastAccessTime;
+  FILETIME ftLastWriteTime;
+  DWORD nFileSizeHigh;
+  DWORD nFileSizeLow;
+  DWORD dwReserved0;
+  DWORD dwReserved1;
+  WCHAR cFileName[260];
+  WCHAR cAlternateFileName[14];
+} WIN32_FIND_DATAW;
 #endif  // _WIN32
 
 // --- WFX callbacks (host -> plugin) ---
@@ -50,6 +66,20 @@ typedef int (*tProgressProc)(int PluginNr, char* SourceName, char* TargetName, i
 typedef void (*tLogProc)(int PluginNr, int MsgType, char* LogString);
 typedef BOOL (*tRequestProc)(int PluginNr, int RequestType, char* CustomTitle, char* CustomText, char* ReturnedText,
                              int maxlen);
+// Wide (Unicode) callback variants, passed to FsInitW.
+typedef int (*tProgressProcW)(int PluginNr, WCHAR* SourceName, WCHAR* TargetName, int PercentDone);
+typedef void (*tLogProcW)(int PluginNr, int MsgType, WCHAR* LogString);
+typedef BOOL (*tRequestProcW)(int PluginNr, int RequestType, WCHAR* CustomTitle, WCHAR* CustomText, WCHAR* ReturnedText,
+                              int maxlen);
+
+// Passed to FsSetDefaultParams; DefaultIniName is where the plugin reads/writes
+// its settings (used here for the optional serial-port override).
+typedef struct {
+  int size;
+  DWORD PluginInterfaceVersionLow;
+  DWORD PluginInterfaceVersionHi;
+  char DefaultIniName[260];
+} FsDefaultParamStruct;
 
 // --- FsGetFile / FsPutFile / FsRenMovFile return codes ---
 #define FS_FILE_OK 0

@@ -55,11 +55,26 @@ Notes:
 ## Port selection
 
 The reader is found automatically by its USB id (Espressif **303a:1001**), so it
-works even with other serial gadgets plugged in. To force a specific port, set
-the `CROSSPOINT_PORT` environment variable before launching the commander, e.g.
-`CROSSPOINT_PORT=/dev/ttyACM1 doublecmd` (Linux) or `set CROSSPOINT_PORT=COM7`
-(Windows). On Windows the auto-scan tries each COM port, so `CROSSPOINT_PORT` is
-the reliable way to pick the right one.
+works even with other serial gadgets plugged in. To force a specific port, in
+priority order:
+
+1. **`CROSSPOINT_PORT` environment variable** — `CROSSPOINT_PORT=/dev/ttyACM1
+   doublecmd` (Linux) / `set CROSSPOINT_PORT=COM7` (Windows).
+2. **`Port=` in the plugin's ini** — add to the plugin's settings ini (the one
+   the commander assigns it; Total Commander shows it under the plugin's config):
+
+   ```ini
+   [crosspoint]
+   Port=COM7
+   ```
+
+3. Otherwise: USB VID:PID auto-detect (Linux), or the first COM port that opens
+   (Windows — where `CROSSPOINT_PORT` / the ini are the reliable choice).
+
+## Unicode
+
+The plugin exports both the ANSI and wide-char (`Fs*W`) interfaces, so non-ASCII
+file names work in both Double Commander and 64-bit Total Commander.
 
 ## Limitations
 

@@ -132,6 +132,20 @@ static void port_flush_in(CpSerial* s) {
 #endif
 }
 
+// Open a local file given a UTF-8 path. On Windows fopen() uses the ANSI code
+// page (lossy for Unicode), so convert to UTF-16 and use _wfopen; POSIX fopen
+// already takes UTF-8.
+static FILE* cp_fopen(const char* utf8_path, const char* mode) {
+#ifdef _WIN32
+  wchar_t wpath[1024], wmode[8];
+  if (MultiByteToWideChar(CP_UTF8, 0, utf8_path, -1, wpath, 1024) == 0) return NULL;
+  MultiByteToWideChar(CP_UTF8, 0, mode, -1, wmode, 8);
+  return _wfopen(wpath, wmode);
+#else
+  return fopen(utf8_path, mode);
+#endif
+}
+
 // --- protocol helpers -------------------------------------------------------
 static int read_exact(CpSerial* s, uint8_t* buf, size_t n, int timeout_ms) {
   int got = port_read(s, buf, n, timeout_ms);
@@ -472,7 +486,7 @@ int cp_download(CpSerial* s, const char* remote, const char* local, CpProgress c
   uint8_t b4[4];
   if (read_exact(s, b4, 4, 5000) != 0) return -1;
   uint32_t size = get_u32(b4);
-  FILE* f = fopen(local, "wb");
+  FILE* f = cp_fopen(local, "wb");
   if (!f) {
     set_err(s, "cannot create %s", local);
     return -1;
@@ -504,7 +518,7 @@ int cp_download(CpSerial* s, const char* remote, const char* local, CpProgress c
 }
 
 int cp_upload(CpSerial* s, const char* local, const char* remote, CpProgress cb, void* user) {
-  FILE* f = fopen(local, "rb");
+  FILE* f = cp_fopen(local, "rb");
   if (!f) {
     set_err(s, "cannot open %s", local);
     return -1;
@@ -597,4 +611,13 @@ int cp_mkdir(CpSerial* s, const char* path) {
   port_flush_in(s);
   if (send_cmd_path(s, 'K', path) != 0) return -1;
   return expect_ok(s, "mkdir", 10000);
+}
+
+int cp_local_exists(const char* utf8_path) {
+  FILE* f = cp_fopen(utf8_path, "rb");
+  if (f) {
+    fclose(f);
+    return 1;
+  }
+  return 0;
 }
