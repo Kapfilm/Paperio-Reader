@@ -307,7 +307,7 @@ std::vector<serialtransfer::BookEntry> SerialTransferDevice::listBooks() {
 
   std::vector<serialtransfer::BookEntry> out;
   out.reserve(paths.size());
-  for (auto& p : paths) {
+  for (const auto& p : paths) {
     serialtransfer::BookEntry e;
     e.path = p;
     // Use cached metadata if this book has been opened before; otherwise leave
