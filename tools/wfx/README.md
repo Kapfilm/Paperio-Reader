@@ -11,24 +11,34 @@ by CidVonHighwind.
 ## Build
 
 ```sh
-make            # Linux  -> crosspoint.wfx
-make win32      # Windows 32-bit -> crosspoint.wfx     (needs i686-w64-mingw32-gcc)
-make win64      # Windows 64-bit -> crosspoint.wfx64   (needs x86_64-w64-mingw32-gcc)
+make                 # native build -> crosspoint.wfx (what Double Commander loads here)
+make dist-linux      # release zip:  dist/crosspoint-usb-wfx-linux-x86_64.zip
+make dist-windows    # release zip:  dist/crosspoint-usb-wfx-windows.zip
 ```
 
+`dist-windows` needs the mingw cross-compilers — on Debian/Ubuntu:
+`sudo apt install gcc-mingw-w64`.
+
 Files: `crosspoint.c` (the WFX plugin), `cp_serial.c/.h` (the serial transport,
-shared protocol logic), `wfxplugin.h` (trimmed WFX API + cross-platform shims).
+shared protocol logic), `wfxplugin.h` (trimmed WFX API + cross-platform shims),
+`pluginst.inf` (the commander install manifest).
 
 ## Install
 
-**Double Commander:** Configuration → Plugins → WFX → Add → pick `crosspoint.wfx`
-(Linux) / `crosspoint.wfx`/`.wfx64` (Windows). It then appears in the drive/file-
-system list as **CrossPoint USB**.
+The release zips contain the binary plus `pluginst.inf`, so the easiest install
+is the one-click path:
 
-**Total Commander:** copy `crosspoint.wfx`/`.wfx64` into a folder, then
-Configuration → Options → Plugins → File system plugins → Configure → Add, or
-just open the `.wfx` from within TC to be prompted to install. Reach it via the
-**Network Neighborhood** (`\\`) → **CrossPoint USB**.
+- **Double Commander / Total Commander:** open the matching `…-<os>.zip` *from
+  within the commander* (navigate onto it and press Enter) — it reads
+  `pluginst.inf` and offers to install. Then reach it via the file-system /
+  Network Neighborhood (`\\`) list as **CrossPoint USB**.
+
+Manual alternative (e.g. running from the build tree):
+
+- **Double Commander:** Configuration → Plugins → WFX → Add → pick
+  `crosspoint.wfx`.
+- **Total Commander:** Configuration → Options → Plugins → File system plugins →
+  Configure → Add, pointing at `crosspoint.wfx` / `.wfx64`.
 
 ## Use
 

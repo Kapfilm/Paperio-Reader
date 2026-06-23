@@ -1,0 +1,8 @@
+[plugininstall]
+type=wfx
+file=crosspoint.wfx
+description=CrossPoint USB - browse the e-reader's SD card over the USB cable
+defaultdir=crosspoint_usb
+; On 64-bit Total Commander, crosspoint.wfx64 (if present in this archive) is
+; used automatically. Open the device's "File Transfer -> USB Transfer" screen
+; before connecting. See README.md.
