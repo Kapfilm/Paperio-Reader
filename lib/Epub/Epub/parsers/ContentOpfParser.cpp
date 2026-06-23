@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 
 #include "../BookMetadataCache.h"
+#include "../htmlEntities.h"
 
 namespace {
 constexpr char MEDIA_TYPE_NCX[] = "application/x-dtbncx+xml";
@@ -30,6 +32,35 @@ bool startsWithImageMediaType(const std::string& mediaType) {
     }
   }
 
+  return true;
+}
+
+bool appendHtmlEntity(std::string& out, const std::string& html, size_t& i) {
+  const size_t semi = html.find(';', i + 1);
+  if (semi == std::string::npos) {
+    return false;
+  }
+
+  const size_t len = semi - i + 1;
+  const char* entity = html.data() + i;
+
+  // Metadata descriptions should collapse these to normal spaces; the chapter
+  // renderer keeps NBSP because it has layout semantics there.
+  if ((len == 6 && std::memcmp(entity, "&nbsp;", len) == 0) || (len == 6 && std::memcmp(entity, "&ensp;", len) == 0) ||
+      (len == 6 && std::memcmp(entity, "&emsp;", len) == 0) ||
+      (len == 8 && std::memcmp(entity, "&thinsp;", len) == 0)) {
+    out += ' ';
+    i = semi;
+    return true;
+  }
+
+  const char* resolved = lookupHtmlEntity(entity, len);
+  if (resolved == nullptr) {
+    return false;
+  }
+
+  out += resolved;
+  i = semi;
   return true;
 }
 
@@ -60,21 +91,10 @@ std::string stripHtml(const std::string& html) {
       }
     } else if (!inTag) {
       if (c == '&') {
-        // Decode common HTML entities not covered by Expat
-        if (html.compare(i, 6, "&nbsp;") == 0) {
-          result += ' ';
-          i += 5;
-        } else if (html.compare(i, 7, "&ndash;") == 0) {
-          result += '-';
-          i += 6;
-        } else if (html.compare(i, 7, "&mdash;") == 0) {
-          result += '-';
-          i += 6;
-        } else if (html.compare(i, 8, "&hellip;") == 0) {
-          result += "...";
-          i += 7;
-        } else
+        // Decode HTML entities not covered by XML/Expat.
+        if (!appendHtmlEntity(result, html, i)) {
           result += c;
+        }
       } else if (c == '\n' || c == '\r' || c == '\t') {
         if (!result.empty() && result.back() != ' ') result += ' ';
       } else {
