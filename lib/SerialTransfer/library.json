@@ -1,0 +1,8 @@
+{
+  "name": "SerialTransfer",
+  "version": "1.0.0",
+  "build": {
+    "srcFilter": ["+<SerialTransfer/SerialTransferProtocol.cpp>"],
+    "includeDir": "."
+  }
+}

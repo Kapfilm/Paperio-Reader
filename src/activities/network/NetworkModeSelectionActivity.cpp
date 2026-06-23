@@ -8,7 +8,7 @@
 #include "fontIds.h"
 
 namespace {
-constexpr int MENU_ITEM_COUNT = 3;
+constexpr int MENU_ITEM_COUNT = 4;
 }  // namespace
 
 void NetworkModeSelectionActivity::onEnter() {
@@ -37,7 +37,18 @@ void NetworkModeSelectionActivity::loop() {
       mode = NetworkMode::CONNECT_CALIBRE;
     } else if (selectedIndex == 2) {
       mode = NetworkMode::CREATE_HOTSPOT;
+    } else if (selectedIndex == 3) {
+      mode = NetworkMode::USB_SERIAL;
     }
+
+    // USB serial transfer needs neither WiFi nor the web server, so hand off
+    // directly here instead of routing the result back through the WiFi-centric
+    // CrossPointWebServerActivity. The WiFi modes still return to that owner.
+    if (mode == NetworkMode::USB_SERIAL) {
+      activityManager.goToSerialTransfer();
+      return;
+    }
+
     onModeSelected(mode);
     return;
   }
@@ -60,10 +71,11 @@ void NetworkModeSelectionActivity::render(RenderLock&&) {
   const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing * 2;
   // Menu items and descriptions
   static constexpr StrId menuItems[MENU_ITEM_COUNT] = {StrId::STR_JOIN_NETWORK, StrId::STR_CALIBRE_WIRELESS,
-                                                       StrId::STR_CREATE_HOTSPOT};
+                                                       StrId::STR_CREATE_HOTSPOT, StrId::STR_USB_TRANSFER};
   static constexpr StrId menuDescs[MENU_ITEM_COUNT] = {StrId::STR_JOIN_DESC, StrId::STR_CALIBRE_DESC,
-                                                       StrId::STR_HOTSPOT_DESC};
-  static constexpr UIIcon menuIcons[MENU_ITEM_COUNT] = {UIIcon::Wifi, UIIcon::Library, UIIcon::Hotspot};
+                                                       StrId::STR_HOTSPOT_DESC, StrId::STR_USB_TRANSFER_DESC};
+  static constexpr UIIcon menuIcons[MENU_ITEM_COUNT] = {UIIcon::Wifi, UIIcon::Library, UIIcon::Hotspot,
+                                                        UIIcon::Transfer};
 
   GUI.drawList(
       renderer, Rect{contentRect.x, contentTop, contentRect.width, contentHeight}, static_cast<int>(MENU_ITEM_COUNT),

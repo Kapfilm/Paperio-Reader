@@ -15,6 +15,7 @@ Welcome to the **CrossPoint** firmware. This guide outlines the hardware control
     - [3.4 Recent Books Screen](#34-recent-books-screen)
     - [3.5 File Transfer Screen](#35-file-transfer-screen)
       - [3.5.1 Calibre Wireless Transfers](#351-calibre-wireless-transfers)
+      - [3.5.2 USB Transfer (over the cable)](#352-usb-transfer-over-the-cable)
     - [3.6 Settings](#36-settings)
       - [3.6.1 Display](#361-display)
       - [3.6.2 Reader](#362-reader)
@@ -113,6 +114,19 @@ CrossPoint supports sending books from Calibre using the CrossPoint Reader devic
 2. On the device: File Transfer → Connect to Calibre → Join a network.
 3. Make sure your computer is on the same WiFi network.
 4. In Calibre, click "Send to device" to transfer books.
+
+### 3.5.2 USB Transfer (over the cable)
+
+If you'd rather not use WiFi, you can transfer books over the USB cable. On the device choose **File Transfer → USB Transfer**; the screen then waits for a host connection and shows per-operation status (e.g. *Receiving 'book.epub'*, *Saved …*).
+
+This uses a serial protocol that is wire-compatible with **[MicroReader](https://github.com/CidVonHighwind/microreader)** by CidVonHighwind — a clean-room, independently written reimplementation of its protocol — so MicroReader's host tools work unchanged:
+
+- Its **Calibre device plugin** ("Send to device" over USB), and
+- Its `tools/serial_cmd.py` command-line tool (`--upload`, `--list`, …).
+
+Full credit to CidVonHighwind for the original protocol and tooling. While a transfer is in progress the device pauses on-screen redraws and on-wire logging so the binary stream stays clean.
+
+**Open this screen first, then connect.** Opening the USB port from a computer briefly resets the device (a hardware quirk of the ESP32-C3's USB port). As long as you've opened the **USB Transfer** screen first, the device automatically returns to this screen after that reset, so the transfer just works — press **Back** when you're done. (If you connect while on another screen, the device will simply reboot to Home; open USB Transfer and reconnect.)
 
 ### 3.6 Settings
 
