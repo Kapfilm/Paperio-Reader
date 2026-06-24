@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -11,8 +12,9 @@
 #include "WString.h"
 
 // Minimal FsFile stub — only the methods CssParser calls at runtime are needed.
-// Since tests only exercise parseInlineStyle / parseDeclarations (static, no I/O),
-// none of these methods will actually be called.
+// The default (no-backing-store) instance stubs all I/O as no-ops/failures.
+// Use HalFile::fromString() to get a readable instance backed by a CSS string —
+// used by tests that call CssParser::loadFromStream().
 class HalFile : public Print {
  public:
   HalFile() = default;
@@ -22,22 +24,42 @@ class HalFile : public Print {
   HalFile(const HalFile&) = delete;
   HalFile& operator=(const HalFile&) = delete;
 
+  // Returns a readable HalFile backed by the given string content.
+  static HalFile fromString(std::string content) {
+    HalFile f;
+    f.backing_ = std::move(content);
+    f.hasData_ = true;
+    return f;
+  }
+
   void flush() {}
   size_t getName(char*, size_t) { return 0; }
-  size_t size() { return 0; }
-  size_t fileSize() { return 0; }
-  bool seek(size_t) { return false; }
+  size_t size() { return hasData_ ? backing_.size() : 0; }
+  size_t fileSize() { return size(); }
+  bool seek(size_t pos) {
+    if (!hasData_) return false;
+    pos_ = pos < backing_.size() ? pos : backing_.size();
+    return true;
+  }
   bool seekCur(int64_t) { return false; }
-  bool seekSet(size_t) { return false; }
-  int available() const { return 0; }
-  size_t position() const { return 0; }
-  int read(void*, size_t) { return -1; }
+  bool seekSet(size_t pos) { return seek(pos); }
+  int available() const { return hasData_ ? static_cast<int>(backing_.size() - pos_) : 0; }
+  size_t position() const { return pos_; }
+  int read(void* buf, size_t n) {
+    if (!hasData_) return -1;
+    const size_t remaining = backing_.size() - pos_;
+    if (remaining == 0) return 0;
+    const size_t toRead = n < remaining ? n : remaining;
+    std::memcpy(buf, backing_.data() + pos_, toRead);
+    pos_ += toRead;
+    return static_cast<int>(toRead);
+  }
   int read() { return -1; }
-  uint64_t size64() { return 0; }
-  uint64_t fileSize64() { return 0; }
+  uint64_t size64() { return size(); }
+  uint64_t fileSize64() { return size(); }
   bool seek64(uint64_t) { return false; }
   bool seekSet64(uint64_t) { return false; }
-  uint64_t position64() const { return 0; }
+  uint64_t position64() const { return pos_; }
   size_t write(const void*, size_t) { return 0; }
   size_t write(uint8_t) override { return 0; }
   bool rename(const char*) { return false; }
@@ -46,8 +68,13 @@ class HalFile : public Print {
   void rewindDirectory() {}
   bool close() { return false; }
   HalFile openNextFile() { return HalFile{}; }
-  bool isOpen() const { return false; }
-  operator bool() const { return false; }
+  bool isOpen() const { return hasData_; }
+  operator bool() const { return hasData_; }
+
+ private:
+  std::string backing_;
+  size_t pos_ = 0;
+  bool hasData_ = false;
 };
 
 using FsFile = HalFile;

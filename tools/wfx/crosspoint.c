@@ -25,7 +25,7 @@ static tLogProc g_logA = NULL;
 static tProgressProcW g_progW = NULL;
 static tLogProcW g_logW = NULL;
 static CpSerial* g_conn = NULL;
-static int g_disconnected = 0;  // set by FsDisconnect; cleared when user re-enters root
+static int g_disconnected = 0;      // set by FsDisconnect; cleared when user re-enters root
 static char g_ini_port[128] = {0};  // optional port override from the plugin ini
 
 // --- UTF-8 <-> UTF-16 (portable; WCHAR is 2-byte on Windows and DC/Linux) ----

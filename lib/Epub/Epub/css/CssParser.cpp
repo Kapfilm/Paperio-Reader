@@ -83,17 +83,34 @@ constexpr char compileTempRulesCache[] = "/css_rules.compile.tmp";
 // Check if character is CSS whitespace
 bool isCssWhitespace(const char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f'; }
 
-// Resolver supports only: tag, .class, tag.class
+// Resolver supports: tag, .class, tag.class, #id, tag#id
 bool isSelectorUsableByResolver(std::string_view selector) {
   if (selector.empty()) {
     return false;
   }
 
-  if (selector.find_first_of("+>[:#~* ") != std::string_view::npos) {
+  // Reject combinators, pseudo-classes, wildcards, and whitespace
+  if (selector.find_first_of("+>:[~* ") != std::string_view::npos) {
     return false;
   }
 
+  const size_t hashPos = selector.find('#');
   const size_t dotPos = selector.find('.');
+
+  // Reject selectors with both # and . (too complex)
+  if (hashPos != std::string_view::npos && dotPos != std::string_view::npos) {
+    return false;
+  }
+
+  if (hashPos != std::string_view::npos) {
+    // #id  (hashPos == 0, must have content after)
+    if (hashPos == 0) {
+      return selector.size() > 1 && selector.find('#', 1) == std::string_view::npos;
+    }
+    // tag#id (no second #, must have content after #)
+    return hashPos + 1 < selector.size() && selector.find('#', hashPos + 1) == std::string_view::npos;
+  }
+
   if (dotPos == std::string_view::npos) {
     return true;  // tag
   }
@@ -1314,7 +1331,8 @@ bool CssParser::ensureCacheIndexLoaded() const {
 
 // Style resolution
 
-CssStyle CssParser::resolveStyle(const std::string& tagName, const std::string& classAttr) const {
+CssStyle CssParser::resolveStyle(const std::string& tagName, const std::string& classAttr,
+                                 const std::string& idAttr) const {
   static bool lowHeapWarningLogged = false;
   resolveStats_.resolveCalls++;
   const uint32_t freeHeap = ESP.getFreeHeap();
@@ -1376,6 +1394,36 @@ CssStyle CssParser::resolveStyle(const std::string& tagName, const std::string& 
         result.applyOver(combinedStyle);
       }
     });
+  }
+
+  // 3. Apply ID styles (highest priority: #id < tag#id)
+  if (!idAttr.empty()) {
+    std::string idKey;
+    idKey.reserve(1 + idAttr.size());
+    idKey.push_back('#');
+    for (const char c : idAttr) {
+      idKey.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    CssStyle idStyle;
+    if (lookupRule(idKey, idStyle, !lowHeapMode)) {
+      if (lowHeapMode) resolveStats_.lowHeapRescuedHits++;
+      result.applyOver(idStyle);
+    }
+
+    std::string tagIdKey;
+    tagIdKey.reserve(tag.size() + 1 + idAttr.size());
+    tagIdKey.append(tag);
+    tagIdKey.push_back('#');
+    for (const char c : idAttr) {
+      tagIdKey.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+
+    CssStyle tagIdStyle;
+    if (lookupRule(tagIdKey, tagIdStyle, !lowHeapMode)) {
+      if (lowHeapMode) resolveStats_.lowHeapRescuedHits++;
+      result.applyOver(tagIdStyle);
+    }
   }
 
   if (!result.defined.anySet()) {
