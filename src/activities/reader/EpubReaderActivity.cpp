@@ -1946,9 +1946,13 @@ void EpubReaderActivity::NavigationTarget::resolveInto(Section& sec, int spineIn
 }
 
 bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
-  if (!epub || !section || section->pageCount == 0) {
+  if (!epub || !section) {
     return false;
   }
+
+  // A 0-page section (permanently unparse-able chapter) has no within-chapter navigation,
+  // but the user must still be able to cross spine boundaries to escape it.
+  const bool hasPages = section->pageCount > 0;
 
   // NOTE: crossing a section boundary used to pre-arm pendingHalfRefreshAfterBufferRealloc_
   // here. It no longer does: the half-refresh is only needed when the secondary buffer is
@@ -1957,7 +1961,7 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
   // section change served from cache or from a completed Background-B build never releases the
   // buffer, so its baseline is intact and the first page can use a normal fast refresh.
   if (isForwardTurn) {
-    if (section->currentPage < section->pageCount - 1) {
+    if (hasPages && section->currentPage < section->pageCount - 1) {
       // Serialize against the render task: it reads section->currentPage (and the
       // PreRender pass temporarily writes it), so the advance must not race.
       RenderLock lock(*this);
@@ -1976,7 +1980,7 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
       return false;
     }
   } else {
-    if (section->currentPage > 0) {
+    if (hasPages && section->currentPage > 0) {
       RenderLock lock(*this);
       section->currentPage--;
     } else if (currentSpineIndex > 0) {
@@ -2420,8 +2424,11 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
     renderer.restoreFontMetadata();
     readerPhase_ = ReaderPhase::READING;
     if (outcome == BuildOutcome::Failed) {
-      LOG_ERR("ERS", "Failed to persist page data to SD");
-      section.reset();
+      LOG_ERR("ERS", "Failed to build section; showing empty chapter");
+      // Do NOT reset section: leave it alive with pageCount=0 so getRenderPass()
+      // returns Normal on the next cycle (not BuildSection), breaking the retry loop.
+      // renderNormalPass handles pageCount==0 gracefully with an "empty chapter" screen.
+      requestUpdate();
       return false;
     }
   } else if (section->isEmbeddedStyleFallback()) {
