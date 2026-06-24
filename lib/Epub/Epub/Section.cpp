@@ -1087,6 +1087,35 @@ std::unique_ptr<Page> Section::loadPageFromSectionFile() {
   // File is intentionally NOT closed; stays open for the next page load
 }
 
+uint16_t Section::activeBuildPageCount() const {
+  if (!buildState_) return 0;
+  return pageCount;  // pageCount is incremented by onPageComplete() as each page is written
+}
+
+std::unique_ptr<Page> Section::loadPageFromActiveBuild(const uint16_t pageIndex) {
+  if (!buildState_ || pageIndex >= pageCount) {
+    LOG_ERR("SCT", "loadPageFromActiveBuild: page %u out of range (built=%u)", pageIndex, pageCount);
+    return nullptr;
+  }
+  const uint32_t offset = buildState_->lut[pageIndex];
+  if (offset == 0 || offset == UINT32_MAX) {
+    LOG_ERR("SCT", "loadPageFromActiveBuild: bad LUT entry %u for page %u", offset, pageIndex);
+    return nullptr;
+  }
+  FsFile readHandle;
+  if (!Storage.openFileForRead("SCT", filePath, readHandle)) {
+    LOG_ERR("SCT", "loadPageFromActiveBuild: cannot open %s for reading", filePath.c_str());
+    return nullptr;
+  }
+  if (!readHandle.seek(offset)) {
+    LOG_ERR("SCT", "loadPageFromActiveBuild: seek to %u failed", offset);
+    return nullptr;
+  }
+  auto page = Page::deserialize(readHandle);
+  readHandle.close();
+  return page;
+}
+
 void Section::warmAllImageCaches(const int xOffset, const int yOffset, const bool forceLoad,
                                  const bool monochromeOutput) {
   if (pageCount == 0) return;

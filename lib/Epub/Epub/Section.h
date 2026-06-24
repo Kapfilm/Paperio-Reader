@@ -176,6 +176,16 @@ class Section {
   // log refusals at whatever cadence suits them.
   static bool heapAllowsEmbeddedStyle(size_t cssRuleCount);
   std::unique_ptr<Page> loadPageFromSectionFile();
+  // Number of pages fully written to the section file during an active build.
+  // Increases monotonically as the build progresses; 0 when no build is live.
+  // Pages [0, activeBuildPageCount()) are safe to read via loadPageFromActiveBuild().
+  uint16_t activeBuildPageCount() const;
+  // Load any page that has already been written during an active build, using the
+  // in-memory LUT that grows with every onPageComplete(). Opens a temporary read
+  // handle on the same file the build is writing to; safe because both handles are
+  // used only between build slices (never concurrently). Returns nullptr on error.
+  // pageIndex must be < activeBuildPageCount().
+  std::unique_ptr<Page> loadPageFromActiveBuild(uint16_t pageIndex);
   // Pre-decode every image in the section into its .pxc cache while heap is
   // maximally contiguous (secondary display buffer still released). Skips images
   // that are already cached or would show as a placeholder. The decode writes
