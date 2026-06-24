@@ -472,16 +472,11 @@ void HomeActivity::restoreSecondaryBuffer(bool callerHoldsRenderLock) {
       // Two-buffer differential is available again — turn off the single-buffer
       // RED-RAM-baseline mode so normal fast refresh resumes against the secondary.
       renderer.setSingleBufferFastDiff(false);
-      // reallocSecondaryBuffer() fills the new secondary (the X4 fast-differential
-      // baseline) with WHITE, but the panel still shows the last frame. A fast refresh
-      // would diff against that wrong baseline and ghost — most visibly when the NEXT
-      // activity (e.g. RecentBooks) renders after this onExit. Force the next refresh to
-      // HALF so it doesn't rely on the stale baseline; the refresh after that re-seeds it
-      // cleanly. This is the same recovery the reader does (pendingHalfRefreshAfterBufferRealloc_).
-      // setNextDisplayRefreshMode is a one-shot renderer-level override that survives the
-      // activity transition. No-op concern on X3: its differential needs no secondary buffer.
+      // reallocSecondaryBuffer() fills the new secondary with WHITE. Reseed RED RAM from
+      // the last displayed frame so the next fast differential has the correct baseline.
+      // No-op on X3: its differential lives in the controller, not the secondary buffer.
       if (!renderer.isX3()) {
-        renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
+        renderer.syncRedRamFromFrameBuffer();
       }
       LOG_DBG("HOME", "Restored secondary framebuffer after cover loading (free=%lu)",
               static_cast<unsigned long>(esp_get_free_heap_size()));

@@ -272,6 +272,11 @@ void EpubReaderActivity::onEnter() {
   // the long-standing "heap may be corrupt after image decode failures" note below).
   checkHeapIntegrity("reader_onEnter");
   secondaryBufferDegraded_ = !renderer.hasSecondaryBuffer();
+  // Start the refresh cadence at the configured frequency so the first page uses a fast
+  // differential. RED RAM is valid: the previous activity's last displayBuffer() called
+  // syncRedRamFromFrameBuffer(). If the previous activity set a HALF_REFRESH override via
+  // enforceExitFullRefresh(), consumeRefreshOverride() will honour it on the first display call.
+  pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
 
   // Drop any input events that arrived from the activity that launched us (e.g. a wake-up power
   // button hold) before they reach detectPageTurn() — see ReaderUtils::InputDrainGuard.
@@ -1954,12 +1959,10 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
   // but the user must still be able to cross spine boundaries to escape it.
   const bool hasPages = section->pageCount > 0;
 
-  // NOTE: crossing a section boundary used to pre-arm pendingHalfRefreshAfterBufferRealloc_
-  // here. It no longer does: the half-refresh is only needed when the secondary buffer is
-  // actually released + reallocated (white baseline), so that flag is now owned by the real
-  // release sites (buildSection's indexing path, the image-warm pass, buffer recovery). A
-  // section change served from cache or from a completed Background-B build never releases the
-  // buffer, so its baseline is intact and the first page can use a normal fast refresh.
+  // NOTE: section changes served from cache or a completed Background-B build never release
+  // the secondary buffer, so RED RAM baseline is intact and the first page uses a normal fast refresh.
+  // When the secondary buffer IS released+reallocated (indexing path, image-warm pass, OOM recovery),
+  // the release site immediately calls syncRedRamFromFrameBuffer() to restore the correct baseline.
   if (isForwardTurn) {
     if (hasPages && section->currentPage < section->pageCount - 1) {
       // Serialize against the render task: it reads section->currentPage (and the
@@ -2110,7 +2113,7 @@ void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
   if (secondaryBufferDegraded_ && !renderer.hasSecondaryBuffer()) {
     if (renderer.reallocSecondaryBuffer()) {
       secondaryBufferDegraded_ = false;
-      if (!renderer.isX3()) pendingHalfRefreshAfterBufferRealloc_ = true;
+      if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
       LOG_INF("ERS", "Secondary display buffer restored; re-enabling normal refresh/AA paths");
     }
   } else if (secondaryBufferDegraded_ && renderer.hasSecondaryBuffer()) {
@@ -2367,7 +2370,7 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
       }
     } else {
       secondaryBufferDegraded_ = false;
-      if (!renderer.isX3()) pendingHalfRefreshAfterBufferRealloc_ = true;
+      if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
       LOG_DBG("ERS", "Index end mem (after fb realloc): free=%lu", esp_get_free_heap_size());
     }
   }
@@ -2769,10 +2772,9 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
       LOG_ERR("ERS", "Failed to reallocate secondary buffer after image warm — display quality degraded");
       secondaryBufferDegraded_ = true;
     } else if (!renderer.isX3()) {
-      // The realloc whitened the secondary buffer, so on X4 RED RAM no longer matches the panel.
-      // Force this page through HALF_REFRESH (read just below) instead of a fast differential, which
-      // would otherwise diff against a white baseline and ghost. Mirrors the section-change realloc.
-      pendingHalfRefreshAfterBufferRealloc_ = true;
+      // The realloc whitened the secondary buffer. Reseed RED RAM from the last displayed frame
+      // so the next fast differential diffs against the correct baseline, not the white new buffer.
+      renderer.syncRedRamFromFrameBuffer();
     }
   }
   renderer.clearScreen();
@@ -2795,10 +2797,8 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   const bool effectiveForceLoad = forceLoadLargeImages || !SETTINGS.largeImagePlaceholder;
   pageHasPlaceholders = page->hasPlaceholderImages(effectiveForceLoad, imageMonochrome);
 
-  bool forceHalfRefreshThisPage =
-      (pendingHalfRefreshAfterImagePage && SETTINGS.halfRefreshAfterImagePage) || pendingHalfRefreshAfterBufferRealloc_;
+  bool forceHalfRefreshThisPage = pendingHalfRefreshAfterImagePage && SETTINGS.halfRefreshAfterImagePage;
   pendingHalfRefreshAfterImagePage = false;
-  pendingHalfRefreshAfterBufferRealloc_ = false;
   lastRenderStats.imagePageWithAA = false;
   lastRenderStats.forcedHalfRefresh = forceHalfRefreshThisPage;
 
@@ -2944,17 +2944,11 @@ void EpubReaderActivity::displayPreRenderedPage(const Page& page, const int orie
   renderStatusBar();
 
   // Pre-rendered pages are text-only (image pages are excluded from pre-rendering), so
-  // imagePageWithAA never applies here. Two half-refresh requests can still carry over: the
-  // image-page follow-up AND the post-buffer-realloc request. The realloc one is critical here:
-  // after a section change / OOM recovery the secondary buffer is reallocated to white, so on X4
-  // RED RAM no longer matches the panel. If this pre-rendered page is the first display after that
-  // realloc and we let it run a fast differential, it diffs against a white baseline and ghosts
-  // heavily. Honour (and clear) the flag exactly like renderContents() does, so the fast pre-render
-  // path can't race ahead of the required baseline-restoring half-refresh.
-  const bool forceHalfRefreshThisPage =
-      (pendingHalfRefreshAfterImagePage && SETTINGS.halfRefreshAfterImagePage) || pendingHalfRefreshAfterBufferRealloc_;
+  // imagePageWithAA never applies here. The image-page follow-up half-refresh can still carry
+  // over if the previous page had images; honour and clear it here so the pre-render path
+  // doesn't skip it.
+  const bool forceHalfRefreshThisPage = pendingHalfRefreshAfterImagePage && SETTINGS.halfRefreshAfterImagePage;
   pendingHalfRefreshAfterImagePage = false;
-  pendingHalfRefreshAfterBufferRealloc_ = false;
   if (secondaryBufferDegraded_) {
     renderer.displayBuffer(HalDisplay::FULL_REFRESH);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();

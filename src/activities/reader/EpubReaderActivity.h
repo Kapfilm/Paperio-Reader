@@ -144,19 +144,11 @@ class EpubReaderActivity final : public Activity {
   std::unique_ptr<Section> section = nullptr;
   int currentSpineIndex = 0;
   NavigationTarget navTarget;
-  int pagesUntilFullRefresh = 0;
+  int pagesUntilFullRefresh =
+      1;  // initialized to freq in onEnter(); 1 triggers HALF on first render if somehow not reset
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   bool pendingHalfRefreshAfterImagePage = false;
-  // X4 only: set after the secondary display buffer is released + reallocated
-  // (chapter/section change indexing or buffer recovery) so the next BW page
-  // render uses HALF_REFRESH instead of a fast differential. After a section
-  // change the buffer is released for the build and the panel's physical state
-  // no longer matches RED RAM, so a fast differential ghosts heavily. The single
-  // HALF_REFRESH on the new section's first page clears that cleanly. NOTE: this
-  // is deliberately NOT set after a normal grayscale AA pass — doing so forced a
-  // half-refresh on every text page while AA was enabled (the clumsy old fix).
-  bool pendingHalfRefreshAfterBufferRealloc_ = false;
   // Force-refresh button: -1 = none, else a HalDisplay::RefreshMode to apply on the next
   // normal render of the CURRENT page (overrides the fast/half cadence for that one render).
   // Used by BTN_FORCE_REFRESH / BTN_FORCE_FAST_REFRESH so the user's manual refresh re-displays
