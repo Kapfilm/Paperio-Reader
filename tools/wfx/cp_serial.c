@@ -11,8 +11,10 @@
 #include <time.h>
 
 #ifdef _WIN32
-#include <windows.h>
+// clang-format off
+#include <windows.h>   // must come first — setupapi.h depends on its types
 #include <setupapi.h>
+// clang-format on
 #else
 #include <dirent.h>
 #include <errno.h>
@@ -773,7 +775,22 @@ int cp_upload(CpSerial* s, const char* local, const char* remote, CpProgress cb,
     }
     if (ack != ACK) {
       fclose(f);
-      set_err(s, "bad ACK 0x%02x", ack);
+      // Device sent an error response instead of a 0x06 ACK. Read the rest of
+      // the line so the message ("ERR:disk full", etc.) reaches the user.
+      char tail[200] = {0};
+      size_t ti = 0;
+      tail[ti++] = (char)ack;
+      uint8_t c;
+      while (ti < sizeof(tail) - 1) {
+        if (port_read(s, &c, 1, 2000) <= 0) break;
+        if (c == '\n') break;
+        if (c != '\r') tail[ti++] = (char)c;
+      }
+      tail[ti] = '\0';
+      if (tail[0] == 'E' && tail[1] == 'R' && tail[2] == 'R' && tail[3] == ':')
+        set_err(s, "upload error: %s", tail + 4);
+      else
+        set_err(s, "bad ACK 0x%02x (%s)", ack, tail);
       return -1;
     }
     sent += n;
