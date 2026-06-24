@@ -55,7 +55,7 @@ Legend: ✅ supported · ⚠️ partial / basic · ❌ not supported.
 | Underline | ✅ | ✅ |
 | CSS `line-height` | ✅ | ❌ |
 | CSS `font-size` scaling (em/rem/%) | ✅ | ❌ |
-| CSS margin collapsing | ⚠️ sums margins | ✅ proper collapsing |
+| CSS margin collapsing | ✅ proper collapsing | ✅ proper collapsing |
 | GIF images | ✅ custom decoder | ❌ JPEG + PNG only |
 | JPEG / PNG decode | ✅ TJpgDec (IRAM) + uzlib PNG | ✅ JPEGDEC + PNGdec |
 | Large-image placeholders & tall-image cropping | ✅ | ❌ |
@@ -124,7 +124,7 @@ the X4, reading statistics, global bookmarks, a cover carousel, fully customizab
 gestures, automatic KOReader sync, and a deeper settings/system surface.
 
 **Choose CrossPoint for:** right-to-left languages (Hebrew / Arabic) — the one user-facing
-capability Witch Reader genuinely lacks — plus slightly more correct CSS margin collapsing and a
+capability Witch Reader genuinely lacks — plus  a
 couple of small browser-navigation conveniences. It is also the leaner, simpler codebase.
 
 # Rendering comparisons
