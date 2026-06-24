@@ -114,6 +114,8 @@ Legend: ✅ supported · ⚠️ partial / basic · ❌ not supported.
 | OTA / SD firmware update | ✅ | ✅ |
 | Categorized settings submenus | ✅ | ⚠️ flat list |
 | OPDS / Calibre / web upload | ✅ (+ format badges, signal widget, streaming) | ✅ |
+| USB file transfer (serial protocol, Calibre plugin, `serial_cmd.py`) | ✅ wire-compatible with MicroReader | ❌ |
+| USB file manager plugin (Total/Double Commander WFX, [x4-filemanager-plugin](https://github.com/jpirnay/x4-filemanager-plugin)) | ✅ | ❌ |
 | Memory management | ✅ lean libraries, more on demand memory | ⚠️ limited memory management |
 
 ## At a glance
