@@ -184,6 +184,77 @@ TEST(SaxParser, DefaultHandler) {
   SUCCEED();
 }
 
+TEST(SaxParser, HtmlEntityRoutedToDefaultCb) {
+  // &nbsp; is not an XML built-in, so the yxml backend must intercept it and
+  // route it to defaultCb (mirroring expat's DefaultHandlerExpand).  Without
+  // the fix, yxml returns YXML_EREF and feed() returns false.
+  const char* xml = "<p>Silo&nbsp;1</p>";
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, Collector::onDefault));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, strlen(xml)));
+  ASSERT_TRUE(p.finalize());
+
+  // defaultCb must have received the raw "&nbsp;" text.
+  bool sawEntity = false;
+  for (const auto& e : c.events) {
+    if (e.type == Event::Type::Default && e.text == "&nbsp;") {
+      sawEntity = true;
+    }
+  }
+  EXPECT_TRUE(sawEntity) << "defaultCb was not called with &nbsp;";
+}
+
+TEST(SaxParser, HtmlEntitySpanningChunks) {
+  // Entity reference split across two feed() calls: first chunk ends inside
+  // "&nbs", second chunk starts with "p;".
+  const char* xml = "<p>x&nbsp;y</p>";
+  const size_t split = 7;  // "<p>x&nb" | "sp;y</p>"
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, Collector::onDefault));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, split));
+  ASSERT_TRUE(p.feed(bytes + split, strlen(xml) - split));
+  ASSERT_TRUE(p.finalize());
+
+  bool sawEntity = false;
+  for (const auto& e : c.events) {
+    if (e.type == Event::Type::Default && e.text == "&nbsp;") sawEntity = true;
+  }
+  EXPECT_TRUE(sawEntity) << "cross-chunk &nbsp; not delivered to defaultCb";
+}
+
+TEST(SaxParser, XmlBuiltinEntitiesPassThrough) {
+  // XML built-ins must still be expanded by yxml (not routed to defaultCb).
+  const char* xml = "<r>&amp;&lt;&gt;&quot;&apos;</r>";
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, Collector::onDefault));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, strlen(xml)));
+  ASSERT_TRUE(p.finalize());
+
+  // Collect all char data (built-ins are expanded to their characters).
+  std::string chars;
+  for (const auto& e : c.events) {
+    if (e.type == Event::Type::Char) chars += e.text;
+  }
+  EXPECT_EQ(chars, "&<>\"'");
+
+  // None of the built-ins should appear as Default events.
+  for (const auto& e : c.events) {
+    EXPECT_NE(e.type, Event::Type::Default) << "built-in entity reached defaultCb: " << e.text;
+  }
+}
+
 TEST(SaxParser, TruncationFlagsClearForWellSizedDoc) {
   const char* xml = "<root><child a=\"1\" b=\"2\">text</child></root>";
 

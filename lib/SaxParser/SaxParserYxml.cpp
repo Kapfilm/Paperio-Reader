@@ -91,6 +91,13 @@ struct SaxParserImpl {
   // Bitmask of SaxParser::TruncationFlag values — records which fixed-capacity
   // limits were hit (and silently truncated) over the lifetime of the parse.
   uint32_t truncFlags = 0;
+
+  // Entity pre-processor: buffers '&' + name chars until ';' is seen, then
+  // either passes the sequence through to yxml (XML built-ins / numeric refs)
+  // or routes it to defaultCb (HTML named entities like &nbsp;).
+  // Longest standard HTML entity name is ~8 chars; 24 bytes covers all cases.
+  char entityBuf[24];
+  int entityLen = 0;  // 0 = not accumulating
 };
 
 // ---------------------------------------------------------------------------
@@ -181,14 +188,167 @@ bool SaxParser::feed(const uint8_t* buf, size_t len) {
   if (!buf && len > 0) return false;
   auto* impl = static_cast<SaxParserImpl*>(impl_);
 
+  // Dispatch one yxml token. Used from both the normal byte path and the
+  // entity-flush path. Returns false on hard parse error.
+  auto dispatchToken = [this, impl](yxml_ret_t r) -> bool {
+    if (r == YXML_OK) return true;
+    if (r == YXML_CONTENT) {
+      if (impl->inOpeningTag) {
+        impl->byteOffset = static_cast<uint32_t>(impl->x.total);
+        fireStart(impl);
+      }
+      if (impl->charCb) {
+        if (impl->charLen < kCharBufLen) {
+          impl->charBuf[impl->charLen++] = impl->x.data[0];
+          if (impl->x.data[1] != '\0') appendChar(impl, impl->x.data + 1);
+        } else {
+          flushChar(impl);
+          appendChar(impl, impl->x.data);
+        }
+      }
+      return true;
+    }
+    impl->byteOffset = static_cast<uint32_t>(impl->x.total);
+    if (r < 0) {
+      errorLine_ = static_cast<int>(impl->x.line);
+      errorString_ = "yxml parse error";
+      return false;
+    }
+    switch (r) {
+      case YXML_ELEMSTART:
+        if (impl->inOpeningTag) fireStart(impl);
+        flushChar(impl);
+        if (strlen(impl->x.elem) > kElemNameLen - 1) impl->truncFlags |= SaxParser::kTruncElemName;
+        strncpy(impl->pendingElem, impl->x.elem, kElemNameLen - 1);
+        impl->pendingElem[kElemNameLen - 1] = '\0';
+        impl->attrCount = 0;
+        impl->inOpeningTag = true;
+        break;
+      case YXML_ATTRSTART:
+        if (impl->attrCount < kMaxAttrs) {
+          AttrPair& a = impl->attrs[impl->attrCount];
+          if (strlen(impl->x.attr) > kElemNameLen - 1) impl->truncFlags |= SaxParser::kTruncAttrName;
+          strncpy(a.name, impl->x.attr, kElemNameLen - 1);
+          a.name[kElemNameLen - 1] = '\0';
+          a.value[0] = '\0';
+          a.valueLen = 0;
+        } else {
+          impl->truncFlags |= SaxParser::kTruncMaxAttrs;
+        }
+        break;
+      case YXML_ATTRVAL:
+        if (impl->attrCount < kMaxAttrs) {
+          AttrPair& a = impl->attrs[impl->attrCount];
+          const char* p = impl->x.data;
+          for (; *p && a.valueLen < kAttrValueLen - 1; ++p) {
+            a.value[a.valueLen++] = *p;
+          }
+          if (*p) impl->truncFlags |= SaxParser::kTruncAttrValue;
+          a.value[a.valueLen] = '\0';
+        }
+        break;
+      case YXML_ATTREND:
+        if (impl->attrCount < kMaxAttrs) ++impl->attrCount;
+        break;
+      case YXML_ELEMEND:
+        if (impl->inOpeningTag) fireStart(impl);
+        flushChar(impl);
+        if (impl->endCb && impl->elemDepth > 0) {
+          impl->endCb(impl->userData, impl->elemStack[impl->elemDepth - 1]);
+        }
+        if (impl->elemDepth > 0) --impl->elemDepth;
+        break;
+      case YXML_PISTART:
+      case YXML_PICONTENT:
+      case YXML_PIEND:
+        break;
+      default:
+        break;
+    }
+    return true;
+  };
+
+  // Feed one byte to yxml and dispatch the result.
+  auto feedByte = [&](unsigned char c) -> bool { return dispatchToken(yxml_parse(&impl->x, static_cast<int>(c))); };
+
   for (size_t i = 0; i < len; ++i) {
     if (stopped_) break;
 
-    yxml_ret_t r = yxml_parse(&impl->x, static_cast<int>(buf[i]));
+    const uint8_t c = buf[i];
 
-    // Fast-path the two most frequent tokens without touching byteOffset or
-    // entering the switch. In content-heavy XHTML, YXML_CONTENT fires on
-    // almost every byte of text; in structural XML, YXML_OK dominates.
+    // ---------------------------------------------------------------------------
+    // HTML entity pre-processor
+    //
+    // XHTML files frequently contain HTML named entities (e.g. &nbsp;) that are
+    // defined in the XHTML DTD but are not XML built-ins. yxml does not load
+    // external DTDs, so it returns YXML_EREF for these and aborts the parse.
+    //
+    // We intercept &name; sequences before yxml sees them:
+    //   - XML built-ins (&amp; &lt; &gt; &quot; &apos;) and numeric refs
+    //     (&#N; &#xN;) pass straight through to yxml unchanged.
+    //   - All other named entities are routed to defaultCb (same contract as
+    //     expat's DefaultHandlerExpand), which lets ChapterHtmlSlimParser resolve
+    //     them via lookupHtmlEntity(). yxml never sees these bytes.
+    //   - If no defaultCb is registered the bytes pass to yxml → YXML_EREF →
+    //     error, preserving the pre-existing behaviour for non-HTML parsers.
+    // ---------------------------------------------------------------------------
+    if (impl->entityLen > 0) {
+      const bool isNameChar = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '#' ||
+                              c == '_' || c == ':';
+      if (c == ';') {
+        if (impl->entityLen < (int)sizeof(impl->entityBuf) - 1) {
+          impl->entityBuf[impl->entityLen++] = ';';
+          impl->entityBuf[impl->entityLen] = '\0';
+        }
+        // Numeric refs and the five XML built-ins pass through to yxml.
+        const bool isXmlBuiltin = (impl->entityLen > 1 && impl->entityBuf[1] == '#') ||
+                                  strcmp(impl->entityBuf, "&amp;") == 0 || strcmp(impl->entityBuf, "&lt;") == 0 ||
+                                  strcmp(impl->entityBuf, "&gt;") == 0 || strcmp(impl->entityBuf, "&quot;") == 0 ||
+                                  strcmp(impl->entityBuf, "&apos;") == 0;
+        if (isXmlBuiltin) {
+          for (int j = 0; j < impl->entityLen && !stopped_; ++j) {
+            if (!feedByte((unsigned char)impl->entityBuf[j])) return false;
+          }
+        } else if (impl->defaultCb) {
+          // Route to defaultCb — mirrors expat's DefaultHandlerExpand behaviour.
+          // Fire any pending element start and flush char data first so that the
+          // entity expansion arrives in the correct document order.
+          if (impl->inOpeningTag) {
+            impl->byteOffset = static_cast<uint32_t>(impl->x.total);
+            fireStart(impl);
+          }
+          flushChar(impl);
+          impl->defaultCb(impl->userData, impl->entityBuf, impl->entityLen);
+        } else {
+          // No resolver: pass to yxml, which will return YXML_EREF → error.
+          for (int j = 0; j < impl->entityLen && !stopped_; ++j) {
+            if (!feedByte((unsigned char)impl->entityBuf[j])) return false;
+          }
+        }
+        impl->entityLen = 0;
+        continue;
+      } else if (isNameChar && impl->entityLen < (int)sizeof(impl->entityBuf) - 2) {
+        impl->entityBuf[impl->entityLen++] = c;
+        continue;
+      } else {
+        // Not a valid entity sequence (invalid char or name too long): flush
+        // the buffered bytes to yxml and fall through to process c normally.
+        for (int j = 0; j < impl->entityLen && !stopped_; ++j) {
+          if (!feedByte((unsigned char)impl->entityBuf[j])) return false;
+        }
+        impl->entityLen = 0;
+        // fall through
+      }
+    } else if (c == '&') {
+      impl->entityBuf[0] = '&';
+      impl->entityLen = 1;
+      continue;
+    }
+
+    // Fast-path the two most frequent tokens without entering the switch.
+    // In content-heavy XHTML, YXML_CONTENT fires on almost every byte of text;
+    // in structural XML, YXML_OK dominates.
+    yxml_ret_t r = yxml_parse(&impl->x, static_cast<int>(c));
     if (r == YXML_OK) continue;
     if (r == YXML_CONTENT) {
       if (impl->inOpeningTag) {
@@ -208,75 +368,7 @@ bool SaxParser::feed(const uint8_t* buf, size_t len) {
       }
       continue;
     }
-
-    // Update byteOffset only when a structural token triggers a callback.
-    impl->byteOffset = static_cast<uint32_t>(impl->x.total);
-
-    if (r < 0) {
-      errorLine_ = static_cast<int>(impl->x.line);
-      errorString_ = "yxml parse error";
-      return false;
-    }
-
-    switch (r) {
-      case YXML_ELEMSTART:
-        if (impl->inOpeningTag) fireStart(impl);
-        flushChar(impl);
-        if (strlen(impl->x.elem) > kElemNameLen - 1) impl->truncFlags |= SaxParser::kTruncElemName;
-        strncpy(impl->pendingElem, impl->x.elem, kElemNameLen - 1);
-        impl->pendingElem[kElemNameLen - 1] = '\0';
-        impl->attrCount = 0;
-        impl->inOpeningTag = true;
-        break;
-
-      case YXML_ATTRSTART:
-        if (impl->attrCount < kMaxAttrs) {
-          AttrPair& a = impl->attrs[impl->attrCount];
-          if (strlen(impl->x.attr) > kElemNameLen - 1) impl->truncFlags |= SaxParser::kTruncAttrName;
-          strncpy(a.name, impl->x.attr, kElemNameLen - 1);
-          a.name[kElemNameLen - 1] = '\0';
-          a.value[0] = '\0';
-          a.valueLen = 0;
-        } else {
-          impl->truncFlags |= SaxParser::kTruncMaxAttrs;
-        }
-        break;
-
-      case YXML_ATTRVAL:
-        if (impl->attrCount < kMaxAttrs) {
-          AttrPair& a = impl->attrs[impl->attrCount];
-          // Append x.data (usually 1 byte, occasionally 2-3 for multi-byte
-          // char refs) using the stored cursor — no strlen() needed.
-          const char* p = impl->x.data;
-          for (; *p && a.valueLen < kAttrValueLen - 1; ++p) {
-            a.value[a.valueLen++] = *p;
-          }
-          if (*p) impl->truncFlags |= SaxParser::kTruncAttrValue;  // value didn't fit
-          a.value[a.valueLen] = '\0';
-        }
-        break;
-
-      case YXML_ATTREND:
-        if (impl->attrCount < kMaxAttrs) ++impl->attrCount;
-        break;
-
-      case YXML_ELEMEND:
-        if (impl->inOpeningTag) fireStart(impl);
-        flushChar(impl);
-        if (impl->endCb && impl->elemDepth > 0) {
-          impl->endCb(impl->userData, impl->elemStack[impl->elemDepth - 1]);
-        }
-        if (impl->elemDepth > 0) --impl->elemDepth;
-        break;
-
-      case YXML_PISTART:
-      case YXML_PICONTENT:
-      case YXML_PIEND:
-        break;
-
-      default:
-        break;
-    }
+    if (!dispatchToken(r)) return false;
   }
 
   return true;
