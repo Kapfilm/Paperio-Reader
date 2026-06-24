@@ -35,19 +35,38 @@ set WFXDIR=%WFXDIR%/
 
 :: Build 64-bit .wfx64 using the MinGW64 toolchain
 echo --- Building crosspoint.wfx64 (64-bit) ---
-"%BASH%" -lc "PATH=/mingw64/bin:$PATH && make -C '%WFXDIR%' dist-windows-native NATIVE_OUT=crosspoint.wfx64"
-if errorlevel 1 ( echo FAILED (64-bit build). Is mingw-w64-x86_64-gcc installed? & pause & exit /b 1 )
+"%BASH%" --norc -c "PATH=/mingw64/bin:/usr/bin make -C '%WFXDIR%' dist-windows-native NATIVE_OUT=crosspoint.wfx64"
+if errorlevel 1 goto fail64
 
 :: Build 32-bit .wfx using the MinGW32 toolchain
 echo --- Building crosspoint.wfx (32-bit) ---
-"%BASH%" -lc "PATH=/mingw32/bin:$PATH && make -C '%WFXDIR%' dist-windows-native NATIVE_OUT=crosspoint.wfx"
-if errorlevel 1 ( echo FAILED (32-bit build). Is mingw-w64-i686-gcc installed? & pause & exit /b 1 )
+"%BASH%" --norc -c "PATH=/mingw32/bin:/usr/bin make -C '%WFXDIR%' dist-windows-native NATIVE_OUT=crosspoint.wfx"
+if errorlevel 1 goto fail32
 
-:: Package both into the release zip
+:: Package both into the release zip (PowerShell Compress-Archive; no extra tools needed)
 echo --- Packaging ---
-"%BASH%" -lc "cp '%WFXDIR%pluginst.inf' '%WFXDIR%README.md' '%WFXDIR%dist/win/' && cd '%WFXDIR%dist/win' && zip -j ../crosspoint-usb-wfx-windows.zip crosspoint.wfx crosspoint.wfx64 pluginst.inf README.md"
-if errorlevel 1 ( echo FAILED (zip). Is zip installed? & pause & exit /b 1 )
+copy /y "%~dp0pluginst.inf" "%~dp0dist\win\" >nul
+copy /y "%~dp0README.md"    "%~dp0dist\win\" >nul
+del /f /q "%~dp0dist\crosspoint-usb-wfx-windows.zip" 2>nul
+powershell -NoProfile -Command "Compress-Archive -Path '%~dp0dist\win\crosspoint.wfx','%~dp0dist\win\crosspoint.wfx64','%~dp0dist\win\pluginst.inf','%~dp0dist\win\README.md' -DestinationPath '%~dp0dist\crosspoint-usb-wfx-windows.zip'"
+if errorlevel 1 goto failzip
 
 echo.
 echo Done: %~dp0dist\crosspoint-usb-wfx-windows.zip
 pause
+goto :eof
+
+:fail64
+echo FAILED (64-bit build). Is mingw-w64-x86_64-gcc installed?
+pause
+exit /b 1
+
+:fail32
+echo FAILED (32-bit build). Is mingw-w64-i686-gcc installed?
+pause
+exit /b 1
+
+:failzip
+echo FAILED (zip). Is zip installed?
+pause
+exit /b 1
