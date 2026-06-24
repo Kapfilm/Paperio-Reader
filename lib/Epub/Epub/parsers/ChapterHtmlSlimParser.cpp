@@ -2450,9 +2450,42 @@ void ChapterHtmlSlimParser::placeImageBlockAsBlock(const std::shared_ptr<ImageBl
   }
 
   const int xPos = (viewportWidth - displayWidth) / 2;
-  currentPage->elements.push_back(std::make_shared<PageImage>(image, xPos, currentPageNextY));
-  currentPageNextY += displayHeight;
-  LOG_DBG("EHP", "Table cell image placed as block: %dx%d", displayWidth, displayHeight);
+
+  if (displayHeight <= viewportHeight) {
+    currentPage->elements.push_back(std::make_shared<PageImage>(image, xPos, currentPageNextY));
+    currentPageNextY += displayHeight;
+    LOG_DBG("EHP", "Image placed as block: %dx%d", displayWidth, displayHeight);
+    return;
+  }
+
+  // Image taller than one page: split into per-page crops. The final slice must be at
+  // least kMinImageSliceH pixels tall to avoid a near-invisible sliver on the last page;
+  // if it would be shorter, absorb it into the preceding slice by shortening that slice.
+  static constexpr int kMinImageSliceH = 64;
+  int srcOffset = 0;
+  while (srcOffset < displayHeight) {
+    int remaining = displayHeight - srcOffset;
+    int sliceH = std::min(remaining, static_cast<int>(viewportHeight));
+    // If the leftover after this slice would be a sliver smaller than kMinImageSliceH,
+    // shrink the current slice to leave exactly kMinImageSliceH for the next page.
+    int leftover = remaining - sliceH;
+    if (leftover > 0 && leftover < kMinImageSliceH) {
+      sliceH -= (kMinImageSliceH - leftover);
+    }
+    auto crop =
+        std::shared_ptr<ImageBlock>(image->makeCrop(static_cast<int16_t>(srcOffset), static_cast<int16_t>(sliceH)));
+    if (!currentPage) {
+      currentPage.reset(new Page());
+      currentPageNextY = 0;
+    }
+    currentPage->elements.push_back(std::make_shared<PageImage>(crop, xPos, currentPageNextY));
+    currentPageNextY += sliceH;
+    srcOffset += sliceH;
+    LOG_DBG("EHP", "Image slice placed: offset=%d h=%d", srcOffset - sliceH, sliceH);
+    if (srcOffset < displayHeight) {
+      emitPage(lastBodyChildByteOffset);
+    }
+  }
 }
 
 void ChapterHtmlSlimParser::emitCellImagesAsBlocks(BufferedTable& table) {
