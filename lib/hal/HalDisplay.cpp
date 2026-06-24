@@ -125,6 +125,7 @@ void HalDisplay::triggerDisplay(RefreshMode mode, bool turnOffScreen) {
 void HalDisplay::completeDisplay() { einkDisplay.completeDisplay(); }
 
 bool HalDisplay::isRefreshPending() const { return einkDisplay.isRefreshPending(); }
+bool HalDisplay::isRedRamSynced() const { return einkDisplay.isRedRamSynced(); }
 
 HalDisplay::RefreshMode HalDisplay::getLastRefreshMode() const { return lastRefreshMode; }
 

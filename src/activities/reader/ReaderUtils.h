@@ -3,6 +3,7 @@
 #include <CrossPointSettings.h>
 #include <GfxRenderer.h>
 #include <HalTiltSensor.h>
+#include <Logging.h>
 
 #include <cstdint>
 
@@ -142,9 +143,11 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     return;
   }
   if (pagesUntilFullRefresh <= 1) {
+    LOG_DBG("RCY", "displayWithRefreshCycle: HALF (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     pagesUntilFullRefresh = freq;
   } else {
+    LOG_DBG("RCY", "displayWithRefreshCycle: fast (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
     renderer.displayBuffer();
     pagesUntilFullRefresh--;
   }
@@ -160,9 +163,11 @@ inline void triggerWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     return;
   }
   if (pagesUntilFullRefresh <= 1) {
+    LOG_DBG("RCY", "triggerWithRefreshCycle: HALF (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
     renderer.triggerDisplay(HalDisplay::HALF_REFRESH);
     pagesUntilFullRefresh = freq;
   } else {
+    LOG_DBG("RCY", "triggerWithRefreshCycle: fast (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
     renderer.triggerDisplay();
     pagesUntilFullRefresh--;
   }

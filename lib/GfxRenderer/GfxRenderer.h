@@ -188,6 +188,7 @@ class GfxRenderer {
     display.syncRedRamFromFrameBuffer();
   }
   bool isRefreshPending() const { return display.isRefreshPending(); }
+  bool isRedRamSynced() const { return display.isRedRamSynced(); }
   // Diagnostics: effective refresh mode of the last refresh (after any downgrade).
   HalDisplay::RefreshMode getLastRefreshMode() const { return display.getLastRefreshMode(); }
   // Diagnostics: last X4 displayMode byte (0x0C fast / 0x1C OTP-flash / 0xD4 half / 0x34 full).

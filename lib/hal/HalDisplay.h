@@ -46,6 +46,7 @@ class HalDisplay {
   void triggerDisplay(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
   void completeDisplay();
   bool isRefreshPending() const;
+  bool isRedRamSynced() const;
   // Diagnostics: effective refresh mode of the last refresh (after any downgrade).
   RefreshMode getLastRefreshMode() const;
   // Diagnostics: last X4 displayMode byte (0x0C fast / 0x1C OTP-flash / 0xD4 half / 0x34 full).
