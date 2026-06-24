@@ -251,7 +251,8 @@ def get_project_dir() -> str:
 project_dir = get_project_dir()
 version_string = get_version_string(project_dir)
 PLACEHOLDERS["%%VERSION%%"] = version_string
-
+ini_path = os.path.join(project_dir, "platformio.ini")
+ini_time = os.path.getmtime(ini_path) if os.path.exists(ini_path) else 0
 for root, _, files in os.walk(SRC_DIR):
     for file in files:
         if file.endswith(".html") or file.endswith(".js"):
@@ -279,6 +280,7 @@ for root, _, files in os.walk(SRC_DIR):
             if (
                 os.path.exists(header_path)
                 and os.path.getmtime(header_path) >= os.path.getmtime(file_path)
+                and os.path.getmtime(header_path) >= ini_time
             ):
                 print(f"Unchanged: {header_path}")
                 continue
