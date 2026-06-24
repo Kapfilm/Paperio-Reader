@@ -220,7 +220,9 @@ static int collect_cb(const CpEntry* e, void* user) {
   return 0;
 }
 
-// Lists `utf8_dir` into a fresh FindState. Returns NULL on error or empty dir.
+// Lists `utf8_dir` into a fresh FindState. Returns NULL on protocol error.
+// Returns a valid (possibly empty) FindState for an empty directory so that
+// Total Commander can enter it — FsFindFirst will synthesize a "." placeholder.
 static FindState* do_list(const char* utf8_dir) {
   // User is actively entering the plugin — clear the disconnect flag so
   // conn() will open a fresh connection.
@@ -235,11 +237,6 @@ static FindState* do_list(const char* utf8_dir) {
     free(st->items);
     free(st);
     return NULL;
-  }
-  if (st->count == 0) {
-    free(st->items);
-    free(st);
-    return NULL;  // empty directory
   }
   st->idx = 1;
   return st;
@@ -329,6 +326,13 @@ WFX_EXPORT HANDLE FsFindFirst(char* Path, WIN32_FIND_DATAA* FindData) {
   dev_path(Path, path, sizeof(path));
   FindState* st = do_list(path);
   if (!st) return INVALID_HANDLE_VALUE;
+  if (st->count == 0) {
+    // Empty directory: synthesize a "." placeholder so TC can enter the dir.
+    memset(FindData, 0, sizeof(*FindData));
+    FindData->dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+    snprintf(FindData->cFileName, sizeof(FindData->cFileName), ".");
+    return (HANDLE)st;
+  }
   fill_a(&st->items[0], FindData);
   return (HANDLE)st;
 }
@@ -393,6 +397,14 @@ WFX_EXPORT HANDLE FsFindFirstW(WCHAR* Path, WIN32_FIND_DATAW* FindData) {
   dev_path_w(Path, path, sizeof(path));
   FindState* st = do_list(path);
   if (!st) return INVALID_HANDLE_VALUE;
+  if (st->count == 0) {
+    // Empty directory: synthesize a "." placeholder so TC can enter the dir.
+    memset(FindData, 0, sizeof(*FindData));
+    FindData->dwFileAttributes = FILE_ATTRIBUTE_DIRECTORY;
+    FindData->cFileName[0] = L'.';
+    FindData->cFileName[1] = L'\0';
+    return (HANDLE)st;
+  }
   fill_w(&st->items[0], FindData);
   return (HANDLE)st;
 }

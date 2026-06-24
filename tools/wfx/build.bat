@@ -24,7 +24,14 @@ set BASH=%MSYS2%\usr\bin\bash.exe
 
 :: Convert the Windows path of this script to a MSYS2/Unix path.
 :: cygpath is available in the MSYS2 base install.
-for /f "delims=" %%P in ('"%MSYS2%\usr\bin\cygpath.exe" -u "%~dp0"') do set WFXDIR=%%P
+:: Use a temp file to capture cygpath output — avoids cmd.exe for/f quoting
+:: issues with paths that contain a trailing backslash or special characters.
+set _WFXWIN=%~dp0
+set _WFXWIN=%_WFXWIN:~0,-1%
+"%MSYS2%\usr\bin\cygpath.exe" -u "%_WFXWIN%" > "%TEMP%\_wfxdir.tmp"
+set /p WFXDIR= < "%TEMP%\_wfxdir.tmp"
+del "%TEMP%\_wfxdir.tmp" 2>nul
+set WFXDIR=%WFXDIR%/
 
 :: Build 64-bit .wfx64 using the MinGW64 toolchain
 echo --- Building crosspoint.wfx64 (64-bit) ---
