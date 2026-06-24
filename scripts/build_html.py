@@ -7,28 +7,25 @@ import sys
 
 SRC_DIR = "src"
 
-
-CROSSPOINT_NAME = "CrossPoint Reader"
-PLACEHOLDERS = {
-    "%%CROSSPOINT%%": CROSSPOINT_NAME,
-}
-
+PLACEHOLDERS = {}
 
 def warn(msg: str) -> None:
     print(f"WARNING [build_html.py]: {msg}", file=sys.stderr)
 
 
-def get_base_version(project_dir: str) -> str:
+def get_base_version(project_dir: str) -> (str, str):
     ini_path = os.path.join(project_dir, "platformio.ini")
     if not os.path.isfile(ini_path):
         warn(f"platformio.ini not found at {ini_path}; using 0.0.0")
-        return "0.0.0"
+        return "CrossPoint Reader", "0.0.0"
     config = configparser.ConfigParser()
     config.read(ini_path)
+    base_name = config.get("crosspoint", "name", fallback="CrossPoint Reader")
+    base_name = base_name.strip('"')
     if not config.has_option("crosspoint", "version"):
         warn("No [crosspoint] section or version in platformio.ini; using 0.0.0")
-        return "0.0.0"
-    return config.get("crosspoint", "version")
+        return base_name, "0.0.0"
+    return base_name, config.get("crosspoint", "version")
 
 
 def get_git_branch(project_dir: str) -> str:
@@ -62,16 +59,17 @@ def get_git_branch(project_dir: str) -> str:
         return "unknown"
 
 
-def get_version_string(project_dir: str) -> str:
+def get_version_string(project_dir: str) -> (str, str):
+    env_name = os.environ.get("CROSSPOINT_NAME")
     env_version = os.environ.get("CROSSPOINT_VERSION")
     if env_version:
-        return env_version.strip('"')
-    base_version = get_base_version(project_dir)
+        return env_name.strip('"'), env_version.strip('"')
+    base_name, base_version = get_base_version(project_dir)
     pioenv = os.environ.get("PIOENV", "default")
     if pioenv == "default":
         branch = get_git_branch(project_dir)
-        return f"{base_version}-dev+{branch}"
-    return base_version
+        return base_name, f"{base_version}-dev+{branch}"
+    return base_name, base_version
 
 
 def replace_placeholders(html: str, replacements: dict) -> str:
@@ -249,7 +247,9 @@ def get_project_dir() -> str:
 
 
 project_dir = get_project_dir()
-version_string = get_version_string(project_dir)
+name_string, version_string = get_version_string(project_dir)
+print (f"Building HTML/JS assets for {name_string} version {version_string}")
+PLACEHOLDERS["%%CROSSPOINT%%"] = name_string
 PLACEHOLDERS["%%VERSION%%"] = version_string
 ini_path = os.path.join(project_dir, "platformio.ini")
 ini_time = os.path.getmtime(ini_path) if os.path.exists(ini_path) else 0
