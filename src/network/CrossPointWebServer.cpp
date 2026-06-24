@@ -918,6 +918,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     state.bufferPos = 0;
     totalWriteTime = 0;
     writeCount = 0;
+    state.buffer.resize(UploadState::UPLOAD_BUFFER_SIZE);
 
     // Get upload path from query parameter (defaults to root if not specified)
     // Note: We use query parameter instead of form data because multipart form
@@ -1024,6 +1025,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         clearBookCacheIfNeeded(filePath);
       }
     }
+    state.buffer = {};
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
     state.bufferPos = 0;  // Discard buffered data
     if (state.file) {
@@ -1034,6 +1036,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       filePath += state.fileName;
       Storage.remove(filePath.c_str());
     }
+    state.buffer = {};
     state.error = "Upload aborted";
     LOG_DBG("WEB", "Upload aborted");
   }
@@ -2121,6 +2124,7 @@ void CrossPointWebServer::handleFontUploadData() {
       fontUpload.headerBytesReceived = 0;
       fontUpload.bytesWritten = 0;
       fontUpload.bufferPos = 0;
+      fontUpload.buffer.resize(FontUploadState::BUFFER_SIZE);
 
       if (!FontInstaller::isValidFamilyName(family.c_str())) {
         LOG_ERR("WEB", "Invalid font family name: %s", family.c_str());
@@ -2231,6 +2235,7 @@ void CrossPointWebServer::handleFontUploadData() {
         Storage.remove(fontUpload.filePath.c_str());
       }
 
+      fontUpload.buffer = {};
       LOG_DBG("WEB", "Font upload end: valid=%d, %zu bytes", fontUpload.valid, fontUpload.bytesWritten);
       break;
     }
@@ -2241,6 +2246,7 @@ void CrossPointWebServer::handleFontUploadData() {
         Storage.remove(fontUpload.filePath.c_str());
       }
       fontUpload.valid = false;
+      fontUpload.buffer = {};
       LOG_DBG("WEB", "Font upload aborted");
       break;
     }

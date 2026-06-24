@@ -242,24 +242,31 @@ void CrossPointWebServerActivity::startWebServer() {
   sdFontSystem.unload(renderer);
   LOG_DBG("WEBACT", "Free heap after SD font unload: %d bytes", ESP.getFreeHeap());
 
+  // Set running state now so the initial paint below uses the correct UI branch.
+  state = WebServerActivityState::SERVER_RUNNING;
+  if (!isApMode) {
+    currentRssi = WiFi.RSSI();
+    lastRssiUpdateTime = millis();
+  }
+
+  // Paint the QR / URL screen while both frame buffers are still available,
+  // then release them before allocating the web server. The e-ink controller
+  // retains the image in its own RAM — no framebuffer needed after displayBuffer().
+  LOG_DBG("WEBACT", "Free heap before frame buffer release: %d bytes", ESP.getFreeHeap());
+  renderer.clearScreen();
+  renderServerRunning();
+  renderer.displayBuffer();
+  buffersReleased = true;
+  renderer.releaseFrameBuffers();
+  LOG_DBG("WEBACT", "Free heap after frame buffer release: %d bytes", ESP.getFreeHeap());
+
   // Create the web server instance
   webServer.reset(new CrossPointWebServer());
   webServer->begin();
 
   if (webServer->isRunning()) {
     webServerStarted = true;
-    state = WebServerActivityState::SERVER_RUNNING;
-    if (!isApMode) {
-      currentRssi = WiFi.RSSI();
-      lastRssiUpdateTime = millis();
-    }
     LOG_DBG("WEBACT", "Web server started successfully");
-
-    // Trigger the initial render (QR code screen). The frame buffers will be
-    // released inside render() itself after the first paint completes — that
-    // way the render task owns the release and there is no race with a second
-    // render being scheduled before releaseFrameBuffers() returns.
-    requestUpdate();
   } else {
     LOG_ERR("WEBACT", "ERROR: Failed to start web server!");
     webServer.reset();
@@ -348,8 +355,8 @@ void CrossPointWebServerActivity::loop() {
 }
 
 void CrossPointWebServerActivity::render(RenderLock&&) {
-  // After the first render the frame buffers are released — any subsequent
-  // render attempt would write to nullptr and crash. Return immediately.
+  // Frame buffers are released before the web server starts (in startWebServer).
+  // Any render triggered after that point must not touch the null framebuffer.
   if (buffersReleased) return;
 
   // Only render our own UI when server is running.
@@ -374,18 +381,6 @@ void CrossPointWebServerActivity::render(RenderLock&&) {
       renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_STARTING_HOTSPOT));
     }
     renderer.displayBuffer();
-
-    // Release frame buffers immediately after the first SERVER_RUNNING paint.
-    // The e-ink controller retains the image in its own RAM. The render task
-    // owns this release so there is no race with the main task scheduling a
-    // second render between our displayBuffer() and the free. The device
-    // reboots on web server exit so the buffers are never needed again.
-    if (state == WebServerActivityState::SERVER_RUNNING) {
-      buffersReleased = true;
-      LOG_DBG("WEBACT", "Free heap before buffer release: %d bytes", ESP.getFreeHeap());
-      renderer.releaseFrameBuffers();
-      LOG_DBG("WEBACT", "Free heap after buffer release: %d bytes", ESP.getFreeHeap());
-    }
   }
 }
 
