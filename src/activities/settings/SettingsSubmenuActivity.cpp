@@ -65,14 +65,15 @@ void SettingsSubmenuActivity::onActionSelected(int index) {
       return;
     }
 
-    MenuResult menuResult;
-    if (setting.action != SettingAction::None) {
-      menuResult.action = static_cast<int>(setting.action);
-    } else {
-      menuResult.nameId = static_cast<int>(setting.nameId);
+    auto activity = createActivityForAction(setting.action, renderer, mappedInput);
+    if (activity) {
+      startActivityForResult(std::move(activity), [this](const ActivityResult&) {
+        CrossPointSettings::normalizeDependentSettings(SETTINGS);
+        SETTINGS.saveToFile();
+        needsHalfRefresh = true;
+        requestUpdate();
+      });
     }
-    setResult(ActivityResult(menuResult));
-    finish();
     return;
   }
 
