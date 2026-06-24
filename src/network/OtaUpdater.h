@@ -4,7 +4,7 @@
 #include <string>
 
 #ifndef CROSSPOINT_GIT_REPOSITORY
-#define CROSSPOINT_GIT_REPOSITORY "jpirnay/crosspoint-reader"
+#define CROSSPOINT_GIT_REPOSITORY "jpirnay/witchhunt-reader"
 #endif
 
 // Avoid pulling in esp_https_ota.h here — it transitively includes lwip/sockets.h
