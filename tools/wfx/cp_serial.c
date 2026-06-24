@@ -11,10 +11,10 @@
 #include <time.h>
 
 #ifdef _WIN32
-#include <windows.h>
-#include <setupapi.h>
 #include <devguid.h>
 #include <regstr.h>
+#include <setupapi.h>
+#include <windows.h>
 #else
 #include <dirent.h>
 #include <errno.h>
@@ -364,18 +364,15 @@ CpSerial* cp_open(const char* port) {
     // Use SetupAPI to find the ESP32-C3 (VID 303A, PID 1001) COM port.
     // Walk all COM-port devices, check their hardware-ID against the known
     // VID:PID, then read PortName from the device's registry key.
-    GUID guid_comport = {0x86E0D1E0L, 0x8089, 0x11D0,
-                         {0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73}};
-    HDEVINFO devs = SetupDiGetClassDevsA(&guid_comport, NULL, NULL,
-                                          DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    GUID guid_comport = {0x86E0D1E0L, 0x8089, 0x11D0, {0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73}};
+    HDEVINFO devs = SetupDiGetClassDevsA(&guid_comport, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
     if (devs != INVALID_HANDLE_VALUE) {
       SP_DEVINFO_DATA di;
       di.cbSize = sizeof(di);
       for (DWORD idx = 0; SetupDiEnumDeviceInfo(devs, idx, &di); idx++) {
         char hwid[512] = {0};
         // Hardware ID looks like: USB\VID_303A&PID_1001&MI_00\...
-        if (!SetupDiGetDeviceRegistryPropertyA(devs, &di, SPDRP_HARDWAREID,
-                                               NULL, (BYTE*)hwid, sizeof(hwid) - 1, NULL))
+        if (!SetupDiGetDeviceRegistryPropertyA(devs, &di, SPDRP_HARDWAREID, NULL, (BYTE*)hwid, sizeof(hwid) - 1, NULL))
           continue;
         // Case-insensitive substring match on VID_303A and PID_1001.
         char lo[512];
@@ -383,13 +380,11 @@ CpSerial* cp_open(const char* port) {
         lo[strlen(hwid)] = '\0';
         if (!strstr(lo, "vid_303a") || !strstr(lo, "pid_1001")) continue;
         // Matched: read the COM port name from the device's Parameters key.
-        HKEY hk = SetupDiOpenDevRegKey(devs, &di, DICS_FLAG_GLOBAL, 0,
-                                        DIREG_DEV, KEY_READ);
+        HKEY hk = SetupDiOpenDevRegKey(devs, &di, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ);
         if (hk == INVALID_HANDLE_VALUE) continue;
         char portname[32] = {0};
         DWORD sz = sizeof(portname) - 1, type;
-        if (RegQueryValueExA(hk, "PortName", NULL, &type,
-                             (BYTE*)portname, &sz) == ERROR_SUCCESS && portname[0])
+        if (RegQueryValueExA(hk, "PortName", NULL, &type, (BYTE*)portname, &sz) == ERROR_SUCCESS && portname[0])
           snprintf(auto_port, sizeof(auto_port), "%s", portname);
         RegCloseKey(hk);
         if (auto_port[0]) break;
