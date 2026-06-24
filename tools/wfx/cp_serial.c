@@ -11,8 +11,8 @@
 #include <time.h>
 
 #ifdef _WIN32
-#include <setupapi.h>
 #include <windows.h>
+#include <setupapi.h>
 #else
 #include <dirent.h>
 #include <errno.h>

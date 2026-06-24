@@ -24,7 +24,7 @@ set BASH=%MSYS2%\usr\bin\bash.exe
 
 :: Convert the Windows path of this script to a MSYS2/Unix path.
 :: cygpath is available in the MSYS2 base install.
-:: Use a temp file to capture cygpath output — avoids cmd.exe for/f quoting
+:: Use a temp file to capture cygpath output ? avoids cmd.exe for/f quoting
 :: issues with paths that contain a trailing backslash or special characters.
 set _WFXWIN=%~dp0
 set _WFXWIN=%_WFXWIN:~0,-1%
