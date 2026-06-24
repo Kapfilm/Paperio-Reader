@@ -55,7 +55,8 @@ class CssParser {
   //      11-byte header (before rule payloads), so ensureCacheIndexLoaded() reads header
   //      + index sequentially from file position 0 — no seek over the 37KB rule block.
   // v11: style payload gains a trailing smallCaps byte (font-variant: small-caps).
-  static constexpr uint8_t CSS_CACHE_VERSION = 11;
+  // v12: ID selectors (#id, tag#id) are now stored and resolved.
+  static constexpr uint8_t CSS_CACHE_VERSION = 12;
 
   // Retained RAM per rule in disk-backed lookup mode (the sorted SelectorEntry index).
   // Heap gates (Section::heapAllowsEmbeddedStyle) size their contiguous-block floor
@@ -78,14 +79,16 @@ class CssParser {
   bool loadFromStream(FsFile& source);
 
   /**
-   * Look up the style for an HTML element, considering tag name and class attributes.
-   * Applies CSS cascade: element style < class style < element.class style
+   * Look up the style for an HTML element, considering tag name, class, and id attributes.
+   * Applies CSS cascade: element < class < element.class < #id < tag#id
    *
    * @param tagName The HTML element name (e.g., "p", "div")
    * @param classAttr The class attribute value (may contain multiple space-separated classes)
+   * @param idAttr The id attribute value (empty string if absent)
    * @return Combined style with all applicable rules merged
    */
-  [[nodiscard]] CssStyle resolveStyle(const std::string& tagName, const std::string& classAttr) const;
+  [[nodiscard]] CssStyle resolveStyle(const std::string& tagName, const std::string& classAttr,
+                                      const std::string& idAttr = {}) const;
 
   /**
    * Parse an inline style attribute string.

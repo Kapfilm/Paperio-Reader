@@ -11,8 +11,8 @@
 #include <time.h>
 
 #ifdef _WIN32
-#include <windows.h>
 #include <setupapi.h>
+#include <windows.h>
 #else
 #include <dirent.h>
 #include <errno.h>
@@ -179,8 +179,7 @@ static int read_exact(CpSerial* s, uint8_t* buf, size_t n, int timeout_ms) {
 //   kProtoWhole   — tokens that are the *entire* line when genuine ("OK",
 //                   "END", "READY"). Only strip to these if nothing follows
 //                   them, to avoid matching "OK)" or "ENDpoint" in log text.
-static const char* const kProtoPrefix[] = {
-    "STATUS:", "DIR:", "BOOKS:", "READY:", "ERR:", "d|", "f|", NULL};
+static const char* const kProtoPrefix[] = {"STATUS:", "DIR:", "BOOKS:", "READY:", "ERR:", "d|", "f|", NULL};
 static const char* const kProtoWhole[] = {"OK", "END", "READY", NULL};
 
 // Strip any leading log noise from a line. Modifies in place.
@@ -248,8 +247,14 @@ static int read_until(CpSerial* s, const char* prefix, char* out, size_t cap, in
     }
     uint8_t c;
     int r = port_read(s, &c, 1, remaining);
-    if (r < 0) { set_err(s, "read error"); return -1; }
-    if (r == 0) { set_err(s, "no '%s' in stream", prefix); return -1; }
+    if (r < 0) {
+      set_err(s, "read error");
+      return -1;
+    }
+    if (r == 0) {
+      set_err(s, "no '%s' in stream", prefix);
+      return -1;
+    }
     if (c == '\r') continue;
     if (wlen < sizeof(window) - 1) window[wlen++] = (char)c;
     window[wlen] = '\0';
@@ -652,7 +657,10 @@ static FILE* download_begin(CpSerial* s, const char* remote, const char* local, 
   if (read_exact(s, b4, 4, 5000) != 0) return NULL;
   *out_size = get_u32(b4);
   FILE* f = cp_fopen(local, "wb");
-  if (!f) { set_err(s, "cannot create %s", local); return NULL; }
+  if (!f) {
+    set_err(s, "cannot create %s", local);
+    return NULL;
+  }
   return f;
 }
 
@@ -676,20 +684,31 @@ static int cp_download_once(CpSerial* s, const char* remote, const char* local, 
   int last_pct = -1;
   while (remaining > 0) {
     size_t want = remaining < CHUNK ? remaining : CHUNK;
-    if (read_exact(s, buf, want, 30000) != 0) { fclose(f); return -1; }
+    if (read_exact(s, buf, want, 30000) != 0) {
+      fclose(f);
+      return -1;
+    }
     fwrite(buf, 1, want, f);
     crc = crc32_update(crc, buf, want);
     uint8_t ack = ACK;
-    if (port_write(s, &ack, 1) != 0) { fclose(f); return -1; }
+    if (port_write(s, &ack, 1) != 0) {
+      fclose(f);
+      return -1;
+    }
     remaining -= (uint32_t)want;
     if (progress_report(cb, size - remaining, size, &last_pct, user)) {
-      fclose(f); set_err(s, "aborted"); return -1;
+      fclose(f);
+      set_err(s, "aborted");
+      return -1;
     }
   }
   fclose(f);
   uint8_t b4[4];
   if (read_exact(s, b4, 4, 5000) != 0) return -1;
-  if (get_u32(b4) != crc) { set_err(s, "CRC mismatch on %s", remote); return -1; }
+  if (get_u32(b4) != crc) {
+    set_err(s, "CRC mismatch on %s", remote);
+    return -1;
+  }
   return 0;
 }
 

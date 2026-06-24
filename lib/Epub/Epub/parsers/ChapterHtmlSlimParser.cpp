@@ -671,14 +671,20 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   CssStyle cssStyle;
   if (self->cssParser) {
     {
+      // ID-bearing elements are uncommon; only include idAttr in the cache key when
+      // present, so the common case (no id) stays as the minimal "tag|class" key.
       std::string cacheKey(name);
       cacheKey += '|';
       cacheKey += classAttr;
+      if (!idAttr.empty()) {
+        cacheKey += '|';
+        cacheKey += idAttr;
+      }
       auto it = self->cssStyleCache_.find(cacheKey);
       if (it != self->cssStyleCache_.end()) {
         cssStyle = it->second;
       } else {
-        CssStyle resolved = self->cssParser->resolveStyle(name, classAttr);
+        CssStyle resolved = self->cssParser->resolveStyle(name, classAttr, idAttr);
         if (resolved.defined.anySet())
           cssStyle = self->cssStyleCache_.emplace(cacheKey, resolved).first->second;
         else
