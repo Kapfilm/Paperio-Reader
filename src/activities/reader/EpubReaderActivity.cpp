@@ -2835,7 +2835,6 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   fcm->logStats("bw_render");
   const auto tBwRender = millis();
   logReaderMemSnapshot("after_bw_render");
-
   // Trigger the display refresh — sends pixel data, issues CMD_DISPLAY_REFRESH,
   // swaps buffers, and returns immediately without waiting for the waveform.
   if (secondaryBufferDegraded_) {

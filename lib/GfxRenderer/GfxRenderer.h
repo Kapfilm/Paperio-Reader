@@ -318,7 +318,7 @@ class GfxRenderer {
     t.planesMs = t1 - t0;
 
     setRenderMode(BW);
-    displayGrayBuffer();
+    display.displayGrayBuffer(/*turnOffScreen=*/false);
 
     const unsigned long t2 = millis();
     t.displayMs = t2 - t1;

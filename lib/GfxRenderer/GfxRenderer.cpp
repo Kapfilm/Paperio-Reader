@@ -2461,7 +2461,8 @@ HalDisplay::RefreshMode GfxRenderer::consumeRefreshOverride(const HalDisplay::Re
 
 void GfxRenderer::triggerDisplay(const HalDisplay::RefreshMode mode, const bool turnOffScreen) const {
   const HalDisplay::RefreshMode effectiveMode = consumeRefreshOverride(mode);
-  display.triggerDisplay(effectiveMode, turnOffScreen);
+  const bool effectiveTurnOff = turnOffScreen || fadingFix.load(std::memory_order_relaxed);
+  display.triggerDisplay(effectiveMode, effectiveTurnOff);
   // triggerDisplay swaps display buffers; keep renderer's cached pointer in
   // sync so subsequent draws/grayscale passes target the active write buffer.
   frameBuffer = display.getFrameBuffer();
