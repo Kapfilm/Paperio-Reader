@@ -25,6 +25,7 @@ static tLogProc g_logA = NULL;
 static tProgressProcW g_progW = NULL;
 static tLogProcW g_logW = NULL;
 static CpSerial* g_conn = NULL;
+static int g_disconnected = 0;  // set by FsDisconnect; cleared when user re-enters root
 static char g_ini_port[128] = {0};  // optional port override from the plugin ini
 
 // --- UTF-8 <-> UTF-16 (portable; WCHAR is 2-byte on Windows and DC/Linux) ----
@@ -113,6 +114,7 @@ static void logmsg(int type, const char* utf8) {
 // --- connection -------------------------------------------------------------
 static CpSerial* conn(void) {
   if (g_conn) return g_conn;
+  if (g_disconnected) return NULL;  // user disconnected; don't auto-reconnect
   logmsg(MSGTYPE_CONNECT, "CrossPoint USB: connecting...");
   const char* env = getenv("CROSSPOINT_PORT");
   const char* port = (env && env[0]) ? env : (g_ini_port[0] ? g_ini_port : NULL);
@@ -127,6 +129,28 @@ static void drop_conn(void) {
     cp_close(g_conn);
     g_conn = NULL;
   }
+}
+
+static void disconnect(void) {
+  drop_conn();
+  g_disconnected = 1;
+}
+
+// Called by Total/Double Commander when the user disconnects (e.g. right-click
+// → Disconnect, or closing the panel). Close the serial port so the device is
+// released and the next open re-runs the handshake cleanly.
+WFX_EXPORT BOOL FsDisconnect(char* DisconnectRoot) {
+  (void)DisconnectRoot;
+  disconnect();
+  logmsg(MSGTYPE_DISCONNECT, "CrossPoint USB: disconnected.");
+  return TRUE;
+}
+
+WFX_EXPORT BOOL FsDisconnectW(WCHAR* DisconnectRoot) {
+  (void)DisconnectRoot;
+  disconnect();
+  logmsg(MSGTYPE_DISCONNECT, "CrossPoint USB: disconnected.");
+  return TRUE;
 }
 
 // --- path conversion ("\books\foo" -> "/books/foo", UTF-8) ------------------
@@ -198,6 +222,9 @@ static int collect_cb(const CpEntry* e, void* user) {
 
 // Lists `utf8_dir` into a fresh FindState. Returns NULL on error or empty dir.
 static FindState* do_list(const char* utf8_dir) {
+  // User is actively entering the plugin — clear the disconnect flag so
+  // conn() will open a fresh connection.
+  g_disconnected = 0;
   CpSerial* c = conn();
   if (!c) return NULL;
   FindState* st = (FindState*)calloc(1, sizeof(FindState));
@@ -235,6 +262,10 @@ static int progress_cb(uint64_t done, uint64_t total, void* user) {
 static int do_get(const char* remote, const char* local, void* psrc, void* pdst, int copyflags) {
   CpSerial* c = conn();
   if (!c) return FS_FILE_READERROR;
+  if (!cp_download_supported(c)) {
+    logmsg(MSGTYPE_IMPORTANTERROR, "CrossPoint USB: file download not supported by this firmware.");
+    return FS_FILE_NOTSUPPORTED;
+  }
   if (!(copyflags & FS_COPYFLAGS_OVERWRITE) && cp_local_exists(local)) return FS_FILE_EXISTS;
   ProgCtx ctx = {psrc, pdst};
   if (cp_download(c, remote, local, progress_cb, &ctx) != 0) {

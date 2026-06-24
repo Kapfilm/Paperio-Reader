@@ -11,10 +11,8 @@
 #include <time.h>
 
 #ifdef _WIN32
-#include <devguid.h>
-#include <regstr.h>
-#include <setupapi.h>
 #include <windows.h>
+#include <setupapi.h>
 #else
 #include <dirent.h>
 #include <errno.h>
@@ -37,6 +35,13 @@ struct CpSerial {
   int fd;
 #endif
   char err[256];
+  // Path prefix prepended to every device path. Empty for Witchhunt (uses "/")
+  // as root directly. Set to "/sdcard" for MicroReader, which mounts the SD
+  // card at that VFS path and rejects bare "/" as a root.
+  char path_prefix[32];
+  // Download mode for CMND 'T': 0 = unsupported, 1 = ACK-paced (both
+  // Witchhunt and MicroReader use the same 0x06-per-chunk protocol).
+  int download_supported;
 };
 
 static void set_err(CpSerial* s, const char* fmt, ...) {
@@ -46,6 +51,7 @@ static void set_err(CpSerial* s, const char* fmt, ...) {
   va_end(ap);
 }
 const char* cp_last_error(CpSerial* s) { return s ? s->err : "null"; }
+int cp_download_supported(CpSerial* s) { return s ? s->download_supported : 0; }
 
 // --- CRC32 (zlib/IEEE) ------------------------------------------------------
 static uint32_t crc32_update(uint32_t crc, const uint8_t* d, size_t n) {
@@ -163,6 +169,44 @@ static int read_exact(CpSerial* s, uint8_t* buf, size_t n, int timeout_ms) {
   return 0;
 }
 
+// Protocol tokens that can appear mid-line when ESP log output runs directly
+// into a protocol response without an intervening newline (MicroReader
+// behaviour: logging is not suppressed on the wire).
+//
+// Two categories:
+//   kProtoPrefix  — tokens that always have content after them (colon/pipe
+//                   anchored), safe to match as substrings.
+//   kProtoWhole   — tokens that are the *entire* line when genuine ("OK",
+//                   "END", "READY"). Only strip to these if nothing follows
+//                   them, to avoid matching "OK)" or "ENDpoint" in log text.
+static const char* const kProtoPrefix[] = {
+    "STATUS:", "DIR:", "BOOKS:", "READY:", "ERR:", "d|", "f|", NULL};
+static const char* const kProtoWhole[] = {"OK", "END", "READY", NULL};
+
+// Strip any leading log noise from a line. Modifies in place.
+static void strip_log_noise(char* line) {
+  size_t len = strlen(line);
+  size_t best = len;  // index of earliest protocol token found
+
+  // Prefix tokens: safe to match anywhere.
+  for (int t = 0; kProtoPrefix[t]; t++) {
+    char* hit = strstr(line, kProtoPrefix[t]);
+    if (hit && (size_t)(hit - line) < best) best = (size_t)(hit - line);
+  }
+
+  // Whole-line tokens: only valid if the match runs to the end of the string.
+  for (int t = 0; kProtoWhole[t]; t++) {
+    size_t tlen = strlen(kProtoWhole[t]);
+    char* hit = strstr(line, kProtoWhole[t]);
+    if (hit && (hit - line) + tlen == len) {  // nothing after token
+      size_t pos = (size_t)(hit - line);
+      if (pos < best) best = pos;
+    }
+  }
+
+  if (best > 0) memmove(line, line + best, len - best + 1);
+}
+
 // Read a '\n'-terminated line (without CR/LF) into out. Returns 0 on success.
 static int read_line(CpSerial* s, char* out, size_t cap, int timeout_ms) {
   size_t i = 0;
@@ -184,25 +228,67 @@ static int read_line(CpSerial* s, char* out, size_t cap, int timeout_ms) {
     if (c != '\r' && i + 1 < cap) out[i++] = (char)c;
   }
   out[i] = '\0';
+  strip_log_noise(out);
   return 0;
 }
 
-// Read lines until one starts with `prefix`; returns 0 and copies it to out.
+// Read bytes until `prefix` appears in the stream, then copy from the prefix
+// to the next '\n' into out. Works even when ESP log lines arrive on the same
+// wire without a newline separator before the response (MicroReader behaviour).
 static int read_until(CpSerial* s, const char* prefix, char* out, size_t cap, int timeout_ms) {
   uint64_t deadline = now_ms() + (uint64_t)timeout_ms;
+  // Sliding window: accumulate bytes until we see the prefix.
+  char window[600];
+  size_t wlen = 0;
   for (;;) {
     int remaining = (int)(deadline - now_ms());
     if (remaining <= 0) {
-      set_err(s, "no line with prefix '%s'", prefix);
+      set_err(s, "no '%s' in stream", prefix);
       return -1;
     }
-    char line[600];
-    if (read_line(s, line, sizeof(line), remaining) != 0) return -1;
-    if (line[0] == '\0') continue;
-    if (strncmp(line, prefix, strlen(prefix)) == 0) {
-      if (out) snprintf(out, cap, "%s", line);
-      return 0;
+    uint8_t c;
+    int r = port_read(s, &c, 1, remaining);
+    if (r < 0) { set_err(s, "read error"); return -1; }
+    if (r == 0) { set_err(s, "no '%s' in stream", prefix); return -1; }
+    if (c == '\r') continue;
+    if (wlen < sizeof(window) - 1) window[wlen++] = (char)c;
+    window[wlen] = '\0';
+    // Check if the prefix appears anywhere in the accumulated window.
+    char* hit = strstr(window, prefix);
+    if (c == '\n') {
+      // End of a line. If prefix was found on this line, extract and return it.
+      if (hit) {
+        // Copy from hit to the end of the window (excluding the trailing '\n').
+        size_t li = wlen - (size_t)(hit - window);
+        // Remove trailing '\n' that we just stored.
+        if (li > 0 && window[wlen - 1] == '\n') li--;
+        char line[600];
+        if (li >= sizeof(line)) li = sizeof(line) - 1;
+        memcpy(line, hit, li);
+        line[li] = '\0';
+        if (out) snprintf(out, cap, "%s", line);
+        return 0;
+      }
+      // No prefix on this line; reset window for the next line.
+      wlen = 0;
+      continue;
     }
+    if (!hit) continue;
+    // Prefix found mid-line: read the rest of the line.
+    size_t o = (size_t)(wlen - (size_t)(hit - window));
+    char line[600];
+    memcpy(line, hit, o);
+    size_t li = o;
+    while (li < sizeof(line) - 1) {
+      remaining = (int)(deadline - now_ms());
+      if (remaining <= 0) break;
+      if (port_read(s, &c, 1, remaining) <= 0) break;
+      if (c == '\n') break;
+      if (c != '\r') line[li++] = (char)c;
+    }
+    line[li] = '\0';
+    if (out) snprintf(out, cap, "%s", line);
+    return 0;
   }
 }
 
@@ -239,29 +325,72 @@ static uint32_t get_u32(const uint8_t* b) {
 }
 
 // Send "CMND" + opcode + a length-prefixed path (path may be NULL for none).
+// The struct's path_prefix is prepended to non-NULL paths so MicroReader
+// (/sdcard root) and Witchhunt (/ root) both see the right VFS paths.
 static int send_cmd_path(CpSerial* s, char op, const char* path) {
   uint8_t hdr[7];
   memcpy(hdr, "CMND", 4);
   hdr[4] = (uint8_t)op;
   size_t hlen = 5;
   if (path) {
-    put_u16(hdr + 5, (uint16_t)strlen(path));
+    size_t prelen = strlen(s->path_prefix);
+    size_t pathlen = strlen(path);
+    // Avoid double-slash: don't prepend prefix if path already starts with it.
+    if (prelen && strncmp(path, s->path_prefix, prelen) == 0) prelen = 0;
+    put_u16(hdr + 5, (uint16_t)(prelen + pathlen));
     hlen = 7;
+    if (port_write(s, hdr, hlen) != 0) return -1;
+    if (prelen && port_write(s, s->path_prefix, prelen) != 0) return -1;
+    if (port_write(s, path, pathlen) != 0) return -1;
+    return 0;
   }
   if (port_write(s, hdr, hlen) != 0) return -1;
-  if (path && port_write(s, path, strlen(path)) != 0) return -1;
   return 0;
 }
 
 // --- open / autodetect ------------------------------------------------------
+
+static void sleep_ms(int ms) {
+#ifdef _WIN32
+  Sleep((DWORD)ms);
+#else
+  struct timespec ts = {ms / 1000, (long)(ms % 1000) * 1000000L};
+  nanosleep(&ts, NULL);
+#endif
+}
+
 static int wait_ready(CpSerial* s, int timeout_ms) {
+  // Give the USB link a moment to settle before the first probe. Our own
+  // firmware resets on port-open and takes ~2 s to come back, so this short
+  // pause is invisible. MicroReader (usb_serial_jtag, no reset) needs it
+  // because the host-side driver may not yet have completed enumeration.
+  sleep_ms(100);
+
   uint64_t deadline = now_ms() + (uint64_t)timeout_ms;
   while (now_ms() < deadline) {
     port_flush_in(s);
     if (send_cmd_path(s, 'S', NULL) == 0) {
       char line[600];
-      if (read_until(s, "STATUS:", line, sizeof(line), 1500) == 0) return 0;
+      if (read_until(s, "STATUS:", line, sizeof(line), 2000) == 0) {
+        // Detect firmware from STATUS payload to set capabilities.
+        // MicroReader:  STATUS:free=N,largest=N  -> SD at /sdcard, no download
+        // Witchhunt:    STATUS:free=N min=N ...  -> SD is root /, download ok
+        if (strstr(line, "largest=")) {
+          // MicroReader: SD at /sdcard. Uses the same ACK-paced download
+          // protocol as Witchhunt (both send data in CHUNK-byte blocks gated
+          // by 0x06 ACKs from the host).
+          snprintf(s->path_prefix, sizeof(s->path_prefix), "/sdcard");
+          s->download_supported = 1;
+        } else {
+          // Witchhunt: SD is root /, ACK-paced download.
+          s->download_supported = 1;
+        }
+        return 0;
+      }
     }
+    // Brief pause before retrying so a slow response that arrived just after
+    // the flush is not flushed again on the very next iteration.
+    sleep_ms(50);
   }
   set_err(s, "device not responding (is the USB Transfer screen open?)");
   return -1;
@@ -512,58 +641,55 @@ int cp_list_dir(CpSerial* s, const char* path, CpEntryCb cb, void* user) {
   return 0;
 }
 
-static int cp_download_once(CpSerial* s, const char* remote, const char* local, CpProgress cb, void* user) {
+// Shared: send the T command and read READY + 4-byte size, open local file.
+// Returns file handle on success, NULL on error (err already set).
+static FILE* download_begin(CpSerial* s, const char* remote, const char* local, uint32_t* out_size) {
   port_flush_in(s);
-  if (send_cmd_path(s, 'T', remote) != 0) return -1;
+  if (send_cmd_path(s, 'T', remote) != 0) return NULL;
   char line[600];
-  if (read_until(s, "READY", line, sizeof(line), 10000) != 0) return -1;
+  if (read_until(s, "READY", line, sizeof(line), 10000) != 0) return NULL;
   uint8_t b4[4];
-  if (read_exact(s, b4, 4, 5000) != 0) return -1;
-  uint32_t size = get_u32(b4);
+  if (read_exact(s, b4, 4, 5000) != 0) return NULL;
+  *out_size = get_u32(b4);
   FILE* f = cp_fopen(local, "wb");
-  if (!f) {
-    set_err(s, "cannot create %s", local);
-    return -1;
-  }
-  // Download is ACK-paced (one 0x06 per chunk): read a chunk, ACK it, and only
-  // then will the device send the next. This caps the device to our read speed
-  // so it can never overflow the USB-CDC TX (an unpaced stream intermittently
-  // corrupts). Report progress only on a percentage change.
+  if (!f) { set_err(s, "cannot create %s", local); return NULL; }
+  return f;
+}
+
+static int progress_report(CpProgress cb, uint32_t done, uint32_t total, int* last_pct, void* user) {
+  if (!cb) return 0;
+  int pct = total ? (int)(((uint64_t)done * 100) / total) : 100;
+  if (pct == *last_pct) return 0;
+  *last_pct = pct;
+  return cb(done, total, user);
+}
+
+// ACK-paced download: host sends 0x06 after each CHUNK-byte block. Both
+// Witchhunt and MicroReader use this protocol (MicroReader firmware v? and
+// later; the pacing prevents USB-CDC TX buffer overruns and data corruption).
+static int cp_download_once(CpSerial* s, const char* remote, const char* local, CpProgress cb, void* user) {
+  uint32_t size = 0;
+  FILE* f = download_begin(s, remote, local, &size);
+  if (!f) return -1;
   uint32_t crc = 0, remaining = size;
   uint8_t buf[CHUNK];
   int last_pct = -1;
   while (remaining > 0) {
     size_t want = remaining < CHUNK ? remaining : CHUNK;
-    if (read_exact(s, buf, want, 30000) != 0) {
-      fclose(f);
-      return -1;
-    }
+    if (read_exact(s, buf, want, 30000) != 0) { fclose(f); return -1; }
     fwrite(buf, 1, want, f);
     crc = crc32_update(crc, buf, want);
     uint8_t ack = ACK;
-    if (port_write(s, &ack, 1) != 0) {  // pace the device
-      fclose(f);
-      return -1;
-    }
+    if (port_write(s, &ack, 1) != 0) { fclose(f); return -1; }
     remaining -= (uint32_t)want;
-    if (cb) {
-      int pct = size ? (int)(((uint64_t)(size - remaining) * 100) / size) : 100;
-      if (pct != last_pct) {
-        last_pct = pct;
-        if (cb(size - remaining, size, user)) {
-          fclose(f);
-          set_err(s, "aborted");
-          return -1;
-        }
-      }
+    if (progress_report(cb, size - remaining, size, &last_pct, user)) {
+      fclose(f); set_err(s, "aborted"); return -1;
     }
   }
   fclose(f);
+  uint8_t b4[4];
   if (read_exact(s, b4, 4, 5000) != 0) return -1;
-  if (get_u32(b4) != crc) {
-    set_err(s, "CRC mismatch on %s", remote);
-    return -1;
-  }
+  if (get_u32(b4) != crc) { set_err(s, "CRC mismatch on %s", remote); return -1; }
   return 0;
 }
 
@@ -595,11 +721,7 @@ int cp_upload(CpSerial* s, const char* local, const char* remote, CpProgress cb,
   }
 
   port_flush_in(s);
-  uint8_t hdr[11];
-  memcpy(hdr, "CMND", 4);
-  hdr[4] = 'W';
-  put_u16(hdr + 5, (uint16_t)strlen(remote));
-  if (port_write(s, hdr, 7) != 0 || port_write(s, remote, strlen(remote)) != 0) {
+  if (send_cmd_path(s, 'W', remote) != 0) {
     fclose(f);
     return -1;
   }
@@ -657,15 +779,23 @@ int cp_remove(CpSerial* s, const char* remote) {
 
 int cp_rename(CpSerial* s, const char* src, const char* dst) {
   port_flush_in(s);
+  size_t prelen = strlen(s->path_prefix);
+  // Avoid double prefix if path already starts with it.
+  size_t src_pre = (prelen && strncmp(src, s->path_prefix, prelen) != 0) ? prelen : 0;
+  size_t dst_pre = (prelen && strncmp(dst, s->path_prefix, prelen) != 0) ? prelen : 0;
   uint8_t hdr[5];
   memcpy(hdr, "CMND", 4);
   hdr[4] = 'N';
   uint8_t lb[2];
   if (port_write(s, hdr, 5) != 0) return -1;
-  put_u16(lb, (uint16_t)strlen(src));
-  if (port_write(s, lb, 2) != 0 || port_write(s, src, strlen(src)) != 0) return -1;
-  put_u16(lb, (uint16_t)strlen(dst));
-  if (port_write(s, lb, 2) != 0 || port_write(s, dst, strlen(dst)) != 0) return -1;
+  put_u16(lb, (uint16_t)(src_pre + strlen(src)));
+  if (port_write(s, lb, 2) != 0) return -1;
+  if (src_pre && port_write(s, s->path_prefix, src_pre) != 0) return -1;
+  if (port_write(s, src, strlen(src)) != 0) return -1;
+  put_u16(lb, (uint16_t)(dst_pre + strlen(dst)));
+  if (port_write(s, lb, 2) != 0) return -1;
+  if (dst_pre && port_write(s, s->path_prefix, dst_pre) != 0) return -1;
+  if (port_write(s, dst, strlen(dst)) != 0) return -1;
   return expect_ok(s, "rename", 10000);
 }
 

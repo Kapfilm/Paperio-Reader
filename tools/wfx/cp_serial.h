@@ -40,6 +40,8 @@ int cp_rename(CpSerial* s, const char* src, const char* dst);
 int cp_mkdir(CpSerial* s, const char* path);
 
 const char* cp_last_error(CpSerial* s);
+// Returns non-zero if the connected firmware supports file download (CMND 'T').
+int cp_download_supported(CpSerial* s);
 
 // Returns 1 if a local file at the given UTF-8 path exists (Unicode-safe on
 // Windows). Used by the plugin's overwrite check.

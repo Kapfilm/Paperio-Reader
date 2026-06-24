@@ -95,6 +95,9 @@ typedef struct {
 #define FS_COPYFLAGS_RESUME 2
 #define FS_COPYFLAGS_MOVE 4
 
+// --- FsDisconnect reason codes ---
+#define FS_DISCONNECT_CLOSE_CONNECTION 1
+
 // --- Log message types ---
 #define MSGTYPE_CONNECT 1
 #define MSGTYPE_DISCONNECT 2
