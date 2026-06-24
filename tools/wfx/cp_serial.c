@@ -12,6 +12,9 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <setupapi.h>
+#include <devguid.h>
+#include <regstr.h>
 #else
 #include <dirent.h>
 #include <errno.h>
@@ -358,14 +361,50 @@ CpSerial* cp_open(const char* port) {
   const char* env = getenv("CROSSPOINT_PORT");  // explicit override wins
   if (env && env[0]) port = env;
   if (!port || !port[0]) {
-    // Note: VID:PID matching on Windows would need SetupAPI; for now scan COM
-    // ports and take the first that opens. Use CROSSPOINT_PORT to be explicit.
-    for (int i = 1; i <= 32 && !auto_port[0]; i++) {
-      snprintf(name, sizeof(name), "\\\\.\\COM%d", i);
-      HANDLE h = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-      if (h != INVALID_HANDLE_VALUE) {
-        CloseHandle(h);
-        snprintf(auto_port, sizeof(auto_port), "COM%d", i);
+    // Use SetupAPI to find the ESP32-C3 (VID 303A, PID 1001) COM port.
+    // Walk all COM-port devices, check their hardware-ID against the known
+    // VID:PID, then read PortName from the device's registry key.
+    GUID guid_comport = {0x86E0D1E0L, 0x8089, 0x11D0,
+                         {0x9C, 0xE4, 0x08, 0x00, 0x3E, 0x30, 0x1F, 0x73}};
+    HDEVINFO devs = SetupDiGetClassDevsA(&guid_comport, NULL, NULL,
+                                          DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (devs != INVALID_HANDLE_VALUE) {
+      SP_DEVINFO_DATA di;
+      di.cbSize = sizeof(di);
+      for (DWORD idx = 0; SetupDiEnumDeviceInfo(devs, idx, &di); idx++) {
+        char hwid[512] = {0};
+        // Hardware ID looks like: USB\VID_303A&PID_1001&MI_00\...
+        if (!SetupDiGetDeviceRegistryPropertyA(devs, &di, SPDRP_HARDWAREID,
+                                               NULL, (BYTE*)hwid, sizeof(hwid) - 1, NULL))
+          continue;
+        // Case-insensitive substring match on VID_303A and PID_1001.
+        char lo[512];
+        for (int k = 0; hwid[k]; k++) lo[k] = (hwid[k] >= 'A' && hwid[k] <= 'Z') ? hwid[k] + 32 : hwid[k];
+        lo[strlen(hwid)] = '\0';
+        if (!strstr(lo, "vid_303a") || !strstr(lo, "pid_1001")) continue;
+        // Matched: read the COM port name from the device's Parameters key.
+        HKEY hk = SetupDiOpenDevRegKey(devs, &di, DICS_FLAG_GLOBAL, 0,
+                                        DIREG_DEV, KEY_READ);
+        if (hk == INVALID_HANDLE_VALUE) continue;
+        char portname[32] = {0};
+        DWORD sz = sizeof(portname) - 1, type;
+        if (RegQueryValueExA(hk, "PortName", NULL, &type,
+                             (BYTE*)portname, &sz) == ERROR_SUCCESS && portname[0])
+          snprintf(auto_port, sizeof(auto_port), "%s", portname);
+        RegCloseKey(hk);
+        if (auto_port[0]) break;
+      }
+      SetupDiDestroyDeviceInfoList(devs);
+    }
+    // Fallback: scan COM1-COM32 if SetupAPI found nothing.
+    if (!auto_port[0]) {
+      for (int i = 1; i <= 32 && !auto_port[0]; i++) {
+        snprintf(name, sizeof(name), "\\\\.\\COM%d", i);
+        HANDLE h = CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+          CloseHandle(h);
+          snprintf(auto_port, sizeof(auto_port), "COM%d", i);
+        }
       }
     }
     port = auto_port[0] ? auto_port : "COM3";

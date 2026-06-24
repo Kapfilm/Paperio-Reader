@@ -10,14 +10,27 @@ by CidVonHighwind.
 
 ## Build
 
+**On Linux / WSL:**
+
 ```sh
 make                 # native build -> crosspoint.wfx (what Double Commander loads here)
 make dist-linux      # release zip:  dist/crosspoint-usb-wfx-linux-x86_64.zip
 make dist-windows    # release zip:  dist/crosspoint-usb-wfx-windows.zip
 ```
 
-`dist-windows` needs the mingw cross-compilers — on Debian/Ubuntu:
-`sudo apt install gcc-mingw-w64`.
+`dist-windows` cross-compiles for Windows and needs the MinGW cross-compilers:
+`sudo apt install gcc-mingw-w64 make zip`
+
+**On Windows (MSYS2):**
+
+1. Install [MSYS2](https://www.msys2.org/) (default path `C:\msys64`).
+2. Open any MSYS2 shell and install the toolchains once:
+   ```sh
+   pacman -S mingw-w64-x86_64-gcc mingw-w64-i686-gcc make zip
+   ```
+3. Double-click **`build.bat`** (or run it from cmd). It produces
+   `dist\crosspoint-usb-wfx-windows.zip` containing both the 32-bit `.wfx`
+   and 64-bit `.wfx64` binaries.
 
 Files: `crosspoint.c` (the WFX plugin), `cp_serial.c/.h` (the serial transport,
 shared protocol logic), `wfxplugin.h` (trimmed WFX API + cross-platform shims),
@@ -54,22 +67,38 @@ Notes:
 
 ## Port selection
 
-The reader is found automatically by its USB id (Espressif **303a:1001**), so it
-works even with other serial gadgets plugged in. To force a specific port, in
-priority order:
+The reader is found automatically by its USB id (Espressif **303a:1001**) on
+both Windows and Linux, so it works even with other serial gadgets plugged in.
+To force a specific port, in priority order:
 
-1. **`CROSSPOINT_PORT` environment variable** — `CROSSPOINT_PORT=/dev/ttyACM1
-   doublecmd` (Linux) / `set CROSSPOINT_PORT=COM7` (Windows).
-2. **`Port=` in the plugin's ini** — add to the plugin's settings ini (the one
-   the commander assigns it; Total Commander shows it under the plugin's config):
+1. **`CROSSPOINT_PORT` environment variable** — set it before launching the
+   commander:
+   - Linux: `CROSSPOINT_PORT=/dev/ttyACM1 doublecmd`
+   - Windows: `set CROSSPOINT_PORT=COM7` in a cmd prompt, then start Total
+     Commander from that same prompt.
+
+2. **`Port=` in the plugin's ini file** — easier on Windows than environment
+   variables. The ini file is the one Total/Double Commander assigns to the
+   plugin; its path is shown in the plugin config dialog:
+   - **Total Commander:** Configuration → Options → Plugins → File system
+     plugins → select *CrossPoint USB* → the path appears next to "Ini file".
+   - **Double Commander:** Configuration → Plugins → WFX → select the plugin
+     → the ini path is shown in the details pane.
+
+   Open that file in a text editor and add (or create it if missing):
 
    ```ini
    [crosspoint]
    Port=COM7
    ```
 
-3. Otherwise: USB VID:PID auto-detect (Linux), or the first COM port that opens
-   (Windows — where `CROSSPOINT_PORT` / the ini are the reliable choice).
+   Replace `COM7` with the actual port shown in Device Manager under
+   *Ports (COM & LPT)* when the reader is plugged in and the USB Transfer
+   screen is open.
+
+3. Otherwise: USB VID:PID auto-detect picks the right port automatically on
+   both Windows and Linux. A COM-scan fallback is used only if the SetupAPI
+   lookup fails.
 
 ## Unicode
 
