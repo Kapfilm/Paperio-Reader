@@ -501,7 +501,8 @@ void WeatherActivity::render(RenderLock&&) {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   if (state == State::FETCHING && showRefreshPopup) {
-    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
+    // Full weather frame already composed into the write buffer above; overlay the popup on it.
+    GUI.drawPopup(renderer, tr(STR_LOADING_POPUP), /*overlayDisplayedFrame=*/false);
   } else {
     renderer.displayBuffer();
   }

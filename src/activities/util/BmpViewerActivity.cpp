@@ -384,14 +384,15 @@ void BmpViewerActivity::setAsSleepScreen() {
   if (!success) {
     LOG_ERR("BMP", "Failed to set %s as sleep screen", filePath.c_str());
     RenderLock lock(*this);
+    // drawPopup ships the frame; preseed its refresh mode to HALF instead of shipping twice.
+    renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
     GUI.drawPopup(renderer, tr(STR_FAILED_TO_SET_SLEEP_SCREEN));
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     return;
   }
 
   RenderLock lock(*this);
+  renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
   GUI.drawPopup(renderer, tr(STR_SLEEP_SCREEN_SET));
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 }
 
 void BmpViewerActivity::loop() {

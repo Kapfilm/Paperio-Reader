@@ -1,5 +1,10 @@
 # Background B (section pre-analysis) — handoff for another PC
 
+> **Historical.** Background B (and now A and C) is implemented and live. For the current
+> architecture of all three background mechanisms see
+> [background-rendering.md](background-rendering.md). This file is kept as the original
+> implementation handoff.
+
 Self-contained pickup note. Pairs with the full design in
 [epubreader-control-flow-refactor.md](epubreader-control-flow-refactor.md) §2.6–2.7.
 This file is the "where we are, what's verified, exactly what to do next."

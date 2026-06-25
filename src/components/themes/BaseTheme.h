@@ -156,7 +156,13 @@ class BaseTheme {
   virtual void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                               const std::function<std::string(int index)>& buttonLabel,
                               const std::function<UIIcon(int index)>& rowIcon) const;
-  virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
+  // Draws a centered message box and ships it. By default the box is overlaid on the frame that is
+  // currently on screen: displayBuffer() ends in a buffer swap, so the write buffer holds the frame
+  // from two refreshes ago, and a bare overlay would diff stale content around the box (ghosting).
+  // Syncing the write buffer from the displayed frame first fixes that. Callers that have already
+  // composed a full fresh frame into the write buffer (clearScreen + render, then popup in the same
+  // displayBuffer) must pass overlayDisplayedFrame=false so their render is not discarded.
+  virtual Rect drawPopup(const GfxRenderer& renderer, const char* message, bool overlayDisplayedFrame = true) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   virtual void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
                              const int pageCount, std::string title, const int paddingBottom = 0,

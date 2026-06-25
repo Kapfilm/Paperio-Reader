@@ -224,11 +224,14 @@ void OpdsSettingsActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+  // Full settings frame already composed into the write buffer above; overlay the popup on it.
+  // drawPopup ships the frame itself, so only display directly when no popup was drawn — calling
+  // displayBuffer() again after drawPopup would ship the stale post-swap buffer.
   if (!popupMessage.empty()) {
-    GUI.drawPopup(renderer, popupMessage.c_str());
+    GUI.drawPopup(renderer, popupMessage.c_str(), /*overlayDisplayedFrame=*/false);
   } else if (showSaveError) {
-    GUI.drawPopup(renderer, tr(STR_ERROR_GENERAL_FAILURE));
+    GUI.drawPopup(renderer, tr(STR_ERROR_GENERAL_FAILURE), /*overlayDisplayedFrame=*/false);
+  } else {
+    renderer.displayBuffer();
   }
-
-  renderer.displayBuffer();
 }

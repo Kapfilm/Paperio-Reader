@@ -731,7 +731,10 @@ void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
   }
 }
 
-Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message) const {
+Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message, const bool overlayDisplayedFrame) const {
+  // Re-seed the write buffer from the frame on screen so the box overlays current content, not the
+  // stale two-refreshes-ago frame left by the last buffer swap. Compose-then-popup callers skip this.
+  if (overlayDisplayedFrame) renderer.syncWriteBufferFromDisplayed();
   constexpr int margin = 15;
   constexpr int y = 60;
   const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, message, EpdFontFamily::BOLD);

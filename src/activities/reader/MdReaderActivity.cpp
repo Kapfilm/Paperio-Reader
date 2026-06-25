@@ -598,11 +598,7 @@ void MdReaderActivity::buildPageIndex() {
 
   LOG_DBG("MDR", "Building page index for %zu bytes...", fileSize);
 
-  // Resync the write buffer to the displayed frame so the popup overlays what's
-  // on screen rather than the stale two-refreshes-ago frame left by a partial
-  // repaint (e.g. the recent-books grid that launched us). See ReaderActivity.
-  renderer.syncWriteBufferFromDisplayed();
-  GUI.drawPopup(renderer, tr(STR_INDEXING));
+  GUI.drawPopup(renderer, tr(STR_INDEXING));  // overlays the displayed frame (drawPopup resyncs the write buffer)
 
   while (offset < fileSize) {
     std::vector<RenderedLine> tempLines;
