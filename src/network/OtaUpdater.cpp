@@ -7,16 +7,22 @@
 #include <cstdio>
 #include <cstring>
 
+// clang-format off
+// HttpDownloader.h pulls Arduino/SdFat, whose macros collide with lwip's
+// ip4_addr.h unless seen before esp_http_client (which includes lwip). Pin this
+// order; clang-format would otherwise sort the local headers last and break the
+// build.
 #include "CrossPointSettings.h"
 #include "HttpDownloader.h"
-#include "bootloader_common.h"
-#include "esp_flash_partitions.h"
-#include "esp_heap_caps.h"
-#include "esp_http_client.h"
-#include "esp_https_ota.h"
-#include "esp_ota_ops.h"
-#include "esp_partition.h"
-#include "esp_wifi.h"
+#include <bootloader_common.h>
+#include <esp_flash_partitions.h>
+#include <esp_heap_caps.h>
+#include <esp_http_client.h>
+#include <esp_https_ota.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <esp_wifi.h>
+// clang-format on
 
 namespace {
 constexpr char latestReleaseUrl[] = "https://api.github.com/repos/" CROSSPOINT_GIT_REPOSITORY "/releases/latest";
