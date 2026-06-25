@@ -933,6 +933,7 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
   RenderLock lock;
   // Re-check under the lock: the render task may have started a refresh, turned a page, or
   // finished/aborted the build between the unlocked test above and acquiring the lock.
+  // cppcheck-suppress knownConditionTrueFalse ; render task mutates these concurrently
   if (!section || !section->hasActiveBuild() || renderer.isRefreshPending()) {
     return;
   }
