@@ -15,6 +15,8 @@ class HttpDownloader {
  public:
   // Progress callback. Return false to abort the transfer.
   using ProgressCallback = std::function<bool(unsigned int downloaded, unsigned int total)>;
+  // Called with each response chunk as it arrives; return false to abort.
+  using DataCallback = std::function<bool(const uint8_t* data, size_t len)>;
 
   enum DownloadError {
     OK = 0,
@@ -58,6 +60,22 @@ class HttpDownloader {
 
   static bool fetchUrl(const std::string& url, Stream& stream, const std::string& username = "",
                        const std::string& password = "");
+
+  static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
+                       const std::string& password = "");
+
+  /**
+   * Streaming fetch variant with explicit abort semantics.
+   *
+   * When treatAbortAsSuccess is false (default behavior), a callback abort
+   * (onData returns false) is treated as failure.
+   *
+   * When treatAbortAsSuccess is true, a callback abort maps to success.
+   * This is used by metadata parsers that intentionally stop once required
+   * fields are found, to avoid depending on full-body tail reads.
+   */
+  static bool fetchUrl(const std::string& url, const DataCallback& onData, bool treatAbortAsSuccess,
+                       const std::string& username = "", const std::string& password = "");
 
   /**
    * Download a file to the SD card with optional credentials.

@@ -25,9 +25,8 @@ namespace {
 // crt_bundle's Subject-DN lookup can pick the wrong "ISRG Root X1" entry on
 // cross-signed bundles and fail signature verification ("PK verify failed
 // with error 0x4290" → MBEDTLS_ERR_X509_FATAL_ERROR -0x3000). We use this
-// pin for raw.githubusercontent.com (Let's Encrypt-issued), and fall back to
-// the default crt_bundle for all other hosts (DigiCert chain on
-// github.com/api.github.com, etc.).
+// pin for raw.githubusercontent.com (Let's Encrypt-issued), and use a separate
+// pin for github.com/api.github.com (Sectigo/USERTrust chain).
 //
 // Not-after: 2035-06-04. Update when Let's Encrypt rotates the root.
 // Source: https://letsencrypt.org/certs/isrgrootx1.pem
@@ -64,6 +63,36 @@ constexpr const char ISRG_ROOT_X1_PEM[] =
     "emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n"
     "-----END CERTIFICATE-----\n";
 
+// USERTrust ECC self-signed root (trust anchor for GitHub's Sectigo chain).
+// Used as GitHub fallback trust anchor after crt_bundle failure.
+// Not-after: 2038-01-18.
+// Source: system CA bundle (/etc/ssl/certs/USERTrust_ECC_Certification_Authority.pem).
+constexpr const char SECTIGO_GITHUB_DV_E36_PEM[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIICjzCCAhWgAwIBAgIQXIuZxVqUxdJxVt7NiYDMJjAKBggqhkjOPQQDAzCBiDEL\n"
+    "MAkGA1UEBhMCVVMxEzARBgNVBAgTCk5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNl\n"
+    "eSBDaXR5MR4wHAYDVQQKExVUaGUgVVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMT\n"
+    "JVVTRVJUcnVzdCBFQ0MgQ2VydGlmaWNhdGlvbiBBdXRob3JpdHkwHhcNMTAwMjAx\n"
+    "MDAwMDAwWhcNMzgwMTE4MjM1OTU5WjCBiDELMAkGA1UEBhMCVVMxEzARBgNVBAgT\n"
+    "Ck5ldyBKZXJzZXkxFDASBgNVBAcTC0plcnNleSBDaXR5MR4wHAYDVQQKExVUaGUg\n"
+    "VVNFUlRSVVNUIE5ldHdvcmsxLjAsBgNVBAMTJVVTRVJUcnVzdCBFQ0MgQ2VydGlm\n"
+    "aWNhdGlvbiBBdXRob3JpdHkwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAQarFRaqflo\n"
+    "I+d61SRvU8Za2EurxtW20eZzca7dnNYMYf3boIkDuAUU7FfO7l0/4iGzzvfUinng\n"
+    "o4N+LZfQYcTxmdwlkWOrfzCjtHDix6EznPO/LlxTsV+zfTJ/ijTjeXmjQjBAMB0G\n"
+    "A1UdDgQWBBQ64QmG1M8ZwpZ2dEl23OA1xmNjmjAOBgNVHQ8BAf8EBAMCAQYwDwYD\n"
+    "VR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAwNoADBlAjA2Z6EWCNzklwBBHU6+4WMB\n"
+    "zzuqQhFkoJ2UOQIReVx7Hfpkue4WQrO/isIJxOzksU0CMQDpKmFHjFJKS04YcPbW\n"
+    "RNZu9YO6bVi9JNlWSOrvxKJGgYhqOkbRqZtNyWHa0V1Xahg=\n"
+    "-----END CERTIFICATE-----\n";
+
+std::string extractHostFromUrl(const std::string& url) {
+  size_t schemeEnd = url.find("://");
+  size_t hostStart = schemeEnd == std::string::npos ? 0 : schemeEnd + 3;
+  size_t hostEnd = url.find('/', hostStart);
+  if (hostEnd == std::string::npos) hostEnd = url.size();
+  return url.substr(hostStart, hostEnd - hostStart);
+}
+
 // mbedtls rejects certs whose notBefore lies in the future of the device
 // clock, returning MBEDTLS_ERR_X509_CERT_VERIFY_FAILED (-0x2700). The
 // ESP32-C3 has no battery-backed RTC, so cold-boot clocks default to 1970
@@ -91,19 +120,34 @@ bool ensureClockForTls() {
   return true;
 }
 
+bool forceSyncClockForTls() {
+  char err[64] = {0};
+  if (!HalClock::syncNtp(err, sizeof(err))) {
+    LOG_ERR("HTTP", "Forced SNTP sync failed: %s", err);
+    return false;
+  }
+  LOG_INF("HTTP", "Forced SNTP sync complete; epoch now %ld", static_cast<long>(time(nullptr)));
+  return true;
+}
+
 // True if the URL's host is a *.githubusercontent.com host that's served by
 // Let's Encrypt — needs the ISRG pin to dodge the crt_bundle Subject-collision
 // bug. Adjust if more hosts hit the same issue.
 bool needsLetsEncryptPin(const std::string& url) {
-  // Strip scheme://, then everything from the first / onward.
-  size_t schemeEnd = url.find("://");
-  size_t hostStart = schemeEnd == std::string::npos ? 0 : schemeEnd + 3;
-  size_t hostEnd = url.find('/', hostStart);
-  if (hostEnd == std::string::npos) hostEnd = url.size();
-  const std::string host = url.substr(hostStart, hostEnd - hostStart);
+  const std::string host = extractHostFromUrl(url);
   // raw.githubusercontent.com is the only one we've seen fail today. Match
   // the suffix so codeload.githubusercontent.com / etc. get the same fix.
   static constexpr const char* kSuffix = ".githubusercontent.com";
+  const size_t suffixLen = strlen(kSuffix);
+  return host.size() >= suffixLen && host.compare(host.size() - suffixLen, suffixLen, kSuffix) == 0;
+}
+
+bool needsGithubComPin(const std::string& url) {
+  const std::string host = extractHostFromUrl(url);
+  if (host == "github.com" || host == "api.github.com") {
+    return true;
+  }
+  static constexpr const char* kSuffix = ".github.com";
   const size_t suffixLen = strlen(kSuffix);
   return host.size() >= suffixLen && host.compare(host.size() - suffixLen, suffixLen, kSuffix) == 0;
 }
@@ -116,11 +160,15 @@ bool needsLetsEncryptPin(const std::string& url) {
 // upstream PR #2075 (port of OtaUpdater's PR #2074 sizing).
 constexpr int HTTP_RX_BUF = 4096;
 constexpr int HTTP_TX_BUF = 1024;
+constexpr int HTTP_RX_BUF_LEAN = 2048;
+constexpr int HTTP_TX_BUF_LEAN = 512;
 // Per-socket-op timeout. esp_http_client's timeout_ms is uint32, so unlike
 // Arduino HTTPClient's uint16 setTimeout it doesn't silently truncate. 60s
 // gives slow servers room to send their first headers.
 constexpr int HTTP_TIMEOUT_MS = 60000;
+constexpr int HTTP_TIMEOUT_MS_LEAN = 15000;
 constexpr size_t READ_CHUNK = 2048;
+constexpr size_t READ_CHUNK_LEAN = 1024;
 
 struct Sink {
   // Returns false to abort the transfer (e.g. SD write failure or user cancel).
@@ -128,6 +176,7 @@ struct Sink {
   HttpDownloader::ProgressCallback progress;
   size_t total = 0;
   size_t downloaded = 0;
+  size_t readChunk = READ_CHUNK;
 };
 
 bool isRedirect(int status) {
@@ -138,9 +187,12 @@ bool isRedirect(int status) {
 // TLS root strategy (pinned ISRG vs default crt_bundle) based on the host.
 void configureClient(const std::string& url, esp_http_client_config_t& config) {
   config.url = url.c_str();
-  config.buffer_size = HTTP_RX_BUF;
-  config.buffer_size_tx = HTTP_TX_BUF;
-  config.timeout_ms = HTTP_TIMEOUT_MS;
+  const bool leanTlsProfile = needsGithubComPin(url);
+  // GitHub OTA checks run very close to heap limits on this device; use
+  // smaller HTTP buffers on those hosts to preserve TLS headroom.
+  config.buffer_size = leanTlsProfile ? HTTP_RX_BUF_LEAN : HTTP_RX_BUF;
+  config.buffer_size_tx = leanTlsProfile ? HTTP_TX_BUF_LEAN : HTTP_TX_BUF;
+  config.timeout_ms = leanTlsProfile ? HTTP_TIMEOUT_MS_LEAN : HTTP_TIMEOUT_MS;
   if (needsLetsEncryptPin(url)) {
     config.cert_pem = ISRG_ROOT_X1_PEM;
     config.cert_len = sizeof(ISRG_ROOT_X1_PEM);
@@ -164,17 +216,49 @@ void applyRequestHeaders(esp_http_client_handle_t client, const std::string& use
 // connection on subsequent calls per HTTP keep-alive), read headers, follow
 // redirects, then stream the body. Used by both the standalone runGet and the
 // Session-based path.
-HttpDownloader::DownloadError performGet(esp_http_client_handle_t client, Sink& sink) {
+HttpDownloader::DownloadError performGet(esp_http_client_handle_t client, Sink& sink, int* lastTlsCode = nullptr) {
+  const unsigned long startMs = millis();
+  size_t minFree = esp_get_free_heap_size();
+  size_t minLargest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+  auto sampleHeap = [&minFree, &minLargest]() {
+    const size_t freeNow = esp_get_free_heap_size();
+    const size_t largestNow = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    if (freeNow < minFree) {
+      minFree = freeNow;
+    }
+    if (largestNow < minLargest) {
+      minLargest = largestNow;
+    }
+  };
+  auto logPhase = [&sampleHeap, startMs](const char* phase) {
+    sampleHeap();
+    LOG_DBG("HTTP", "Phase %s @%lums heap=%u largest=%u", phase, millis() - startMs, esp_get_free_heap_size(),
+            heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+  };
+
+  logPhase("start");
   esp_err_t err = esp_http_client_open(client, 0);
   if (err != ESP_OK) {
     int tlsCode = 0;
     int tlsFlags = 0;
     esp_http_client_get_and_clear_last_tls_error(client, &tlsCode, &tlsFlags);
-    LOG_ERR("HTTP", "open failed: %s (tls_code=-0x%04x, tls_flags=0x%08x)", esp_err_to_name(err), -tlsCode, tlsFlags);
+    if (lastTlsCode) {
+      *lastTlsCode = tlsCode;
+    }
+    sampleHeap();
+    LOG_ERR(
+        "HTTP",
+        "open failed: %s (tls_code=-0x%04x, tls_flags=0x%08x, t=%lums, heap=%u, largest=%u, minHeap=%u, minLargest=%u)",
+        esp_err_to_name(err), -tlsCode, tlsFlags, millis() - startMs, esp_get_free_heap_size(),
+        heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT), minFree, minLargest);
     return HttpDownloader::HTTP_ERROR;
   }
+  logPhase("open_ok");
   int64_t contentLength = esp_http_client_fetch_headers(client);
   int status = esp_http_client_get_status_code(client);
+  LOG_DBG("HTTP", "Phase headers @%lums status=%d content_length=%lld", millis() - startMs, status,
+          static_cast<long long>(contentLength));
+  sampleHeap();
   for (int hop = 0; isRedirect(status) && hop < 5; ++hop) {
     if (esp_http_client_set_redirection(client) != ESP_OK) break;
     err = esp_http_client_open(client, 0);
@@ -193,15 +277,16 @@ HttpDownloader::DownloadError performGet(esp_http_client_handle_t client, Sink& 
 
   sink.total = contentLength > 0 ? static_cast<size_t>(contentLength) : 0;
 
-  std::unique_ptr<char[]> buf(new (std::nothrow) char[READ_CHUNK]);
+  std::unique_ptr<char[]> buf(new (std::nothrow) char[sink.readChunk]);
   if (!buf) {
-    LOG_ERR("HTTP", "OOM: %u byte read buffer", (unsigned)READ_CHUNK);
+    LOG_ERR("HTTP", "OOM: %u byte read buffer", static_cast<unsigned>(sink.readChunk));
     return HttpDownloader::HTTP_ERROR;
   }
 
   bool aborted = false;
   while (true) {
-    const int read = esp_http_client_read(client, buf.get(), READ_CHUNK);
+    const int read = esp_http_client_read(client, buf.get(), static_cast<int>(sink.readChunk));
+    sampleHeap();
     if (read < 0) {
       LOG_ERR("HTTP", "read error after %zu bytes", sink.downloaded);
       return HttpDownloader::HTTP_ERROR;
@@ -227,6 +312,8 @@ HttpDownloader::DownloadError performGet(esp_http_client_handle_t client, Sink& 
     LOG_ERR("HTTP", "incomplete: got %zu of %zu bytes", sink.downloaded, sink.total);
     return HttpDownloader::HTTP_ERROR;
   }
+  LOG_DBG("HTTP", "Phase complete @%lums downloaded=%zu minHeap=%u minLargest=%u", millis() - startMs, sink.downloaded,
+          minFree, minLargest);
   return HttpDownloader::OK;
 }
 
@@ -248,6 +335,10 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
                                      Sink& sink) {
   logPreCallContext(url);
 
+  if (needsGithubComPin(url)) {
+    sink.readChunk = READ_CHUNK_LEAN;
+  }
+
   esp_http_client_config_t config = {};
   configureClient(url, config);
 
@@ -257,8 +348,27 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     return HttpDownloader::HTTP_ERROR;
   }
   applyRequestHeaders(client, username, password);
-  HttpDownloader::DownloadError result = performGet(client, sink);
+  int tlsCode = 0;
+  HttpDownloader::DownloadError result = performGet(client, sink, &tlsCode);
   esp_http_client_cleanup(client);
+
+  // 0x2700 / -0x2700 is cert verification failure (sign depends on backend
+  // reporting path). If the device clock drifted but
+  // still looked "plausible", force one SNTP refresh and retry once.
+  if (result == HttpDownloader::HTTP_ERROR && sink.downloaded == 0 && (tlsCode == 0x2700 || tlsCode == -0x2700) &&
+      url.compare(0, 8, "https://") == 0) {
+    LOG_INF("HTTP", "TLS verify failed (-0x2700); forcing SNTP sync and retrying once");
+    if (forceSyncClockForTls()) {
+      esp_http_client_config_t retryConfig = {};
+      configureClient(url, retryConfig);
+      client = esp_http_client_init(&retryConfig);
+      if (client) {
+        applyRequestHeaders(client, username, password);
+        result = performGet(client, sink);
+        esp_http_client_cleanup(client);
+      }
+    }
+  }
 
   // The crt_bundle has a Subject-DN collision bug that picks the wrong ISRG
   // Root X1 on some Let's Encrypt cross-signed chains (PK verify error
@@ -267,22 +377,39 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   // and the URL is https, retry once with the pinned ISRG cert to catch any
   // LE-signed host — not just *.githubusercontent.com which is already covered
   // by needsLetsEncryptPin().
-  if (result == HttpDownloader::HTTP_ERROR && sink.downloaded == 0 && url.compare(0, 8, "https://") == 0 &&
-      !needsLetsEncryptPin(url)) {
-    LOG_INF("HTTP", "Retrying with ISRG pin (crt_bundle may have failed Let's Encrypt chain)");
-    esp_http_client_config_t isrgConfig = {};
-    isrgConfig.url = url.c_str();
-    isrgConfig.buffer_size = HTTP_RX_BUF;
-    isrgConfig.buffer_size_tx = HTTP_TX_BUF;
-    isrgConfig.timeout_ms = HTTP_TIMEOUT_MS;
-    isrgConfig.cert_pem = ISRG_ROOT_X1_PEM;
-    isrgConfig.cert_len = sizeof(ISRG_ROOT_X1_PEM);
-    isrgConfig.keep_alive_enable = true;
-    client = esp_http_client_init(&isrgConfig);
-    if (client) {
-      applyRequestHeaders(client, username, password);
-      result = performGet(client, sink);
-      esp_http_client_cleanup(client);
+  if (result == HttpDownloader::HTTP_ERROR && sink.downloaded == 0 && url.compare(0, 8, "https://") == 0) {
+    if (needsGithubComPin(url)) {
+      LOG_INF("HTTP", "Retrying with GitHub Sectigo pin after handshake failure");
+      esp_http_client_config_t githubConfig = {};
+      githubConfig.url = url.c_str();
+      githubConfig.buffer_size = HTTP_RX_BUF;
+      githubConfig.buffer_size_tx = HTTP_TX_BUF;
+      githubConfig.timeout_ms = HTTP_TIMEOUT_MS;
+      githubConfig.cert_pem = SECTIGO_GITHUB_DV_E36_PEM;
+      githubConfig.cert_len = sizeof(SECTIGO_GITHUB_DV_E36_PEM);
+      githubConfig.keep_alive_enable = true;
+      client = esp_http_client_init(&githubConfig);
+      if (client) {
+        applyRequestHeaders(client, username, password);
+        result = performGet(client, sink);
+        esp_http_client_cleanup(client);
+      }
+    } else if (!needsLetsEncryptPin(url)) {
+      LOG_INF("HTTP", "Retrying with ISRG pin (crt_bundle may have failed Let's Encrypt chain)");
+      esp_http_client_config_t isrgConfig = {};
+      isrgConfig.url = url.c_str();
+      isrgConfig.buffer_size = HTTP_RX_BUF;
+      isrgConfig.buffer_size_tx = HTTP_TX_BUF;
+      isrgConfig.timeout_ms = HTTP_TIMEOUT_MS;
+      isrgConfig.cert_pem = ISRG_ROOT_X1_PEM;
+      isrgConfig.cert_len = sizeof(ISRG_ROOT_X1_PEM);
+      isrgConfig.keep_alive_enable = true;
+      client = esp_http_client_init(&isrgConfig);
+      if (client) {
+        applyRequestHeaders(client, username, password);
+        result = performGet(client, sink);
+        esp_http_client_cleanup(client);
+      }
     }
   }
 
@@ -380,6 +507,29 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
   Sink sink;
   sink.write = [&outContent](const uint8_t* data, size_t len) { return outContent.write(data, len) == len; };
   return runGet(url, username, password, sink) == OK;
+}
+
+bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username,
+                              const std::string& password) {
+  // Preserve historic semantics: callback abort => failure.
+  return fetchUrl(url, onData, false, username, password);
+}
+
+bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, bool treatAbortAsSuccess,
+                              const std::string& username, const std::string& password) {
+  LOG_DBG("HTTP", "Fetching (stream): %s", url.c_str());
+  if (!onData) {
+    return false;
+  }
+  Sink sink;
+  sink.write = [&onData](const uint8_t* data, size_t len) { return onData(data, len); };
+  const DownloadError result = runGet(url, username, password, sink);
+  if (result == OK) {
+    return true;
+  }
+  // Optional mode for parsers that intentionally stop early once they have
+  // extracted all required fields from the stream.
+  return treatAbortAsSuccess && result == ABORTED;
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, const std::string& username,
