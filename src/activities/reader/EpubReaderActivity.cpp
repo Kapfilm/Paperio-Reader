@@ -122,6 +122,17 @@ constexpr uint32_t PRE_RENDER_MIN_FREE_HEAP_BYTES = 56 * 1024;
 #ifndef BG_BUILD_MIN_CONTIG_HEAP_BYTES
 #define BG_BUILD_MIN_CONTIG_HEAP_BYTES (24 * 1024)  // parse-phase floor; raised to ring+8 KB while extracting
 #endif
+// Extra free-heap floor for a CSS section built with the secondary buffer RESIDENT (which B
+// always is — it can't release while displaying). The runtime CSS resolver self-protects below
+// ~40 KB free (MIN_FREE_HEAP_FOR_CSS) by skipping disk lookups, producing a css-degraded cache
+// the foreground must rebuild — so B grinds for seconds then discards. The parse working set
+// peaks at ~25-28 KB, so B must start a CSS build with ≥ ~68 KB free to stay above the resolver
+// floor mid-parse. Below this, B refuses (stays in WaitHeap) and lets Background-C build the
+// section released — with ~120 KB free — when the reader navigates into it. (X3 docs note CSS
+// builds are "impossible" resident below ~68 KB free; this is that line, with a small margin.)
+#ifndef BG_BUILD_CSS_MIN_FREE_HEAP_BYTES
+#define BG_BUILD_CSS_MIN_FREE_HEAP_BYTES (72 * 1024)
+#endif
 // Per-slice time budget for a Background-B parse step. Conservative start (handoff plan
 // suggests 30–50 ms); tune from the DEBUG_BACKGROUND_WORK serial counters.
 constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
@@ -832,6 +843,12 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
         if (!Section::heapAllowsEmbeddedStyle(css ? css->ruleCount() : 0)) {
           return;
         }
+        // B builds resident, so a CSS parse below ~68 KB free would dip under the runtime
+        // CSS-resolve floor mid-parse and come out css-degraded — seconds of work B then
+        // discards. Refuse here and let Background-C build it released (clean) on navigation.
+        if (freeHeap < BG_BUILD_CSS_MIN_FREE_HEAP_BYTES) {
+          return;
+        }
       }
       backgroundBuildState_ = BackgroundBuildState::Building;
       return;
@@ -857,6 +874,19 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
           backgroundSection_->stepSectionBuild(makeSectionBuildParams(), BG_BUILD_BUDGET_MS);
       checkHeapIntegrity("after_b_slice");
       if (step == Section::BuildStep::More) {
+        // Heap can drop after the WaitHeap gate passed (an interleaved page render allocates).
+        // The moment the CSS resolver starts skipping lookups the result is doomed to be
+        // css-degraded and discarded — bail now instead of grinding through the rest of the
+        // build. Background-C will rebuild it released (clean) when the reader navigates in.
+        if (backgroundSection_->activeBuildCssDegraded()) {
+          LOG_INF("ERS", "Background build spine=%d css-degrading mid-build; aborting early for foreground rebuild",
+                  targetSpine);
+          backgroundSection_->abortSectionBuild();
+          backgroundSection_.reset();
+          backgroundBuildPercent_ = -1;
+          backgroundBuildState_ = BackgroundBuildState::Settled;
+          return;
+        }
         backgroundBuildPercent_ = static_cast<int8_t>(backgroundSection_->activeBuildPercent());
         return;
       }
@@ -2371,8 +2401,7 @@ bool EpubReaderActivity::renderBufferDisplayPass(const RenderLayout& layout) {
     requestUpdate();
   }
   LOG_DBG("ERS", "Page summary: spine=%d page=%d/%d prerendered=1 refresh=%s mode=0x%02X", currentSpineIndex,
-          section->currentPage, section->pageCount, refreshModeName(renderer.getLastRefreshMode()),
-          renderer.getLastDisplayModeByte());
+          section->currentPage, section->pageCount, refreshModeName(lastPageRefreshMode_), lastPageDisplayModeByte_);
   return true;
 }
 
@@ -2605,9 +2634,14 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   bool resumeBackgroundBuild = false;
   if (backgroundSection_ && backgroundBuildSpineIndex_ == currentSpineIndex) {
     resumeBackgroundBuild = backgroundSection_->hasActiveBuild();
+    // Distinguish the three adopt cases for an accurate log: a live partial build (resume), a
+    // B-completed section with pages (cache hit follows), or a section B only probed and parked
+    // in WaitHeap (no pages — loadSectionFile will miss and a foreground/C build follows).
+    const char* adoptKind = resumeBackgroundBuild                 ? "resuming partial build"
+                            : (backgroundSection_->pageCount > 0) ? "build complete"
+                                                                  : "probed only, will build";
     section = std::move(backgroundSection_);
-    LOG_INF("ERS", "Adopting background section for spine %d (%s)", currentSpineIndex,
-            resumeBackgroundBuild ? "resuming partial build" : "build complete");
+    LOG_INF("ERS", "Adopting background section for spine %d (%s)", currentSpineIndex, adoptKind);
   } else {
     section = std::make_unique<Section>(epub, currentSpineIndex, renderer);
   }
@@ -2820,14 +2854,15 @@ void EpubReaderActivity::renderNormalPass(RenderLock& lock, const RenderLayout& 
     const uint32_t totalFontLookups = lastRenderStats.fontCacheHits + lastRenderStats.fontCacheMisses;
     const uint32_t fontHitRatePct =
         totalFontLookups > 0 ? (lastRenderStats.fontCacheHits * 100UL) / totalFontLookups : 0UL;
-    LOG_DBG("ERS",
-            "Page summary: spine=%d page=%d/%d prerendered=0 refresh=%s mode=0x%02X renderMs=%lu prewarmMs=%lu "
-            "bwMs=%lu displayMs=%lu fontHits=%lu fontMisses=%lu fontHitPct=%lu glyphCalls=%lu glyphUs=%lu",
-            currentSpineIndex, section->currentPage, section->pageCount, refreshModeName(renderer.getLastRefreshMode()),
-            renderer.getLastDisplayModeByte(), lastRenderStats.requestRenderMs, lastRenderStats.phases.prewarmMs,
-            lastRenderStats.phases.bwRenderMs, lastRenderStats.phases.displayMs, lastRenderStats.fontCacheHits,
-            lastRenderStats.fontCacheMisses, fontHitRatePct, lastRenderStats.fontGetBitmapCalls,
-            lastRenderStats.fontGetBitmapTimeUs);
+    LOG_DBG(
+        "ERS",
+        "Page summary: spine=%d page=%d/%d prerendered=0 refresh=%s mode=0x%02X renderMs=%lu "
+        "prewarmMs=%lu bwMs=%lu displayMs=%lu fontHits=%lu fontMisses=%lu fontHitPct=%lu glyphCalls=%lu glyphUs=%lu",
+        currentSpineIndex, section->currentPage, section->pageCount, refreshModeName(lastPageRefreshMode_),
+        lastPageDisplayModeByte_, lastRenderStats.requestRenderMs, lastRenderStats.phases.prewarmMs,
+        lastRenderStats.phases.bwRenderMs, lastRenderStats.phases.displayMs, lastRenderStats.fontCacheHits,
+        lastRenderStats.fontCacheMisses, fontHitRatePct, lastRenderStats.fontGetBitmapCalls,
+        lastRenderStats.fontGetBitmapTimeUs);
 
     if (pendingScreenshot) {
       // No restoreCurrentPageToBufferIfPreRendered() needed here: we are inside renderContents()
@@ -3158,6 +3193,11 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   } else {
     ReaderUtils::triggerWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
+  // Capture this page's refresh mode/byte NOW, before the lock is released and the deferred-AA
+  // grayscale display overwrites the renderer's last-mode (which would otherwise mislabel the
+  // page summary logged afterwards).
+  lastPageRefreshMode_ = renderer.getLastRefreshMode();
+  lastPageDisplayModeByte_ = renderer.getLastDisplayModeByte();
   const auto tDisplay = millis();
 
   // Schedule a half-refresh on the next page turn after an image page to reduce ghosting.
@@ -3292,6 +3332,9 @@ void EpubReaderActivity::displayPreRenderedPage(const Page& page, const int orie
   } else {
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
+  // Capture before the AA replay below overwrites the renderer's last-mode (see renderContents).
+  lastPageRefreshMode_ = renderer.getLastRefreshMode();
+  lastPageDisplayModeByte_ = renderer.getLastDisplayModeByte();
 
   if (getEffectiveTextAntiAliasing() && renderer.hasSecondaryBuffer() && !secondaryBufferDegraded_) {
     const int fontId = getEffectiveReaderFontId();

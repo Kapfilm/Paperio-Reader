@@ -1092,6 +1092,13 @@ uint16_t Section::activeBuildPageCount() const {
   return pageCount;  // pageCount is incremented by onPageComplete() as each page is written
 }
 
+bool Section::activeBuildCssDegraded() const {
+  // Read the live CSS resolver's running stats: lowHeapSkips is incremented the moment the
+  // resolver drops a disk lookup under heap pressure (see CssParser), so it flags a degrading
+  // build mid-parse — before runBuildParse latches cssLowHeapDegraded_ at the parse end.
+  return buildState_ && buildState_->cssParser && buildState_->cssParser->getResolveStats().lowHeapSkips > 0;
+}
+
 std::unique_ptr<Page> Section::loadPageFromActiveBuild(const uint16_t pageIndex) {
   if (!buildState_ || pageIndex >= pageCount) {
     LOG_ERR("SCT", "loadPageFromActiveBuild: page %u out of range (built=%u)", pageIndex, pageCount);

@@ -157,6 +157,11 @@ class EpubReaderActivity final : public Activity {
   // Used by BTN_FORCE_REFRESH / BTN_FORCE_FAST_REFRESH so the user's manual refresh re-displays
   // the current page in the requested mode instead of raw-flushing a possibly pre-rendered buffer.
   int8_t forceRefreshModeNextRender_ = -1;
+  // Refresh mode + display-mode byte of the page just shown, captured at its triggerDisplay
+  // before the deferred-AA grayscale display overwrites the renderer's live last-mode. Logged
+  // by the page summary so it reflects the page, not the AA pass.
+  HalDisplay::RefreshMode lastPageRefreshMode_ = HalDisplay::RefreshMode::FAST_REFRESH;
+  uint8_t lastPageDisplayModeByte_ = 0;
   // True when secondary display buffer allocation failed; while set we prefer
   // conservative refresh policy and skip grayscale AA to reduce ghosting.
   bool secondaryBufferDegraded_ = false;

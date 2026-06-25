@@ -198,6 +198,11 @@ class Section {
   // True when the last build's CSS resolution hit low-heap skips (styles silently
   // missing from the cached pages). Only meaningful right after a build.
   bool isCssLowHeapDegraded() const { return cssLowHeapDegraded_; }
+  // True while an incremental build is in flight and its CSS resolver has ALREADY hit a
+  // low-heap skip — i.e. the in-progress result is going to be css-degraded. Lets a sliced
+  // caller (Background-B) abort early instead of finishing a build it will discard. False when
+  // no build is live or no skips have occurred yet.
+  bool activeBuildCssDegraded() const;
 
   // Given a page in this section, return the TOC index for that page.
   int getTocIndexForPage(int page) const;
