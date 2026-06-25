@@ -1,14 +1,14 @@
 #include "OtaUpdater.h"
 
 #include <Arduino.h>
-#include <ArduinoJson.h>
 #include <Logging.h>
+#include <ReleaseJsonParser.h>
 
 #include <cstdio>
 #include <cstring>
 
 #include "CrossPointSettings.h"
-#include "HttpClientStream.h"
+#include "HttpDownloader.h"
 #include "bootloader_common.h"
 #include "esp_flash_partitions.h"
 #include "esp_heap_caps.h"
@@ -21,8 +21,6 @@
 namespace {
 constexpr char latestReleaseUrl[] = "https://api.github.com/repos/" CROSSPOINT_GIT_REPOSITORY "/releases/latest";
 constexpr char releaseListUrl[] = "https://api.github.com/repos/" CROSSPOINT_GIT_REPOSITORY "/releases?per_page=1";
-constexpr int httpRxBufferSize = 2048;
-constexpr int httpTxBufferSize = 512;
 constexpr int otaHttpMaxAttempts = 3;
 constexpr unsigned long otaInitialRetryDelayMs = 1000;
 constexpr size_t releaseMetadataMaxBytes = 128 * 1024;
@@ -40,15 +38,6 @@ esp_err_t http_client_set_header_cb(esp_http_client_handle_t http_client) {
   return esp_http_client_set_header(http_client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
 }
 
-struct HttpClientCleaner {
-  esp_http_client_handle_t client;
-  ~HttpClientCleaner() {
-    if (client) {
-      esp_http_client_cleanup(client);
-    }
-  }
-};
-
 const char* getReleaseApiUrl() { return SETTINGS.includeBetaUpdates ? releaseListUrl : latestReleaseUrl; }
 
 void delayBeforeRetry(const char* operation, int attempt) {
@@ -57,30 +46,14 @@ void delayBeforeRetry(const char* operation, int attempt) {
   delay(delayMs);
 }
 
-JsonVariantConst selectRelease(const JsonDocument& doc) {
-  if (doc.is<JsonArrayConst>()) {
-    for (JsonObjectConst release : doc.as<JsonArrayConst>()) {
-      if (release["draft"] | false) {
-        continue;
-      }
-      return release;
-    }
-    return JsonVariantConst();
-  }
+struct WifiPowerSaveGuard {
+  WifiPowerSaveGuard() { esp_wifi_set_ps(WIFI_PS_NONE); }
+  ~WifiPowerSaveGuard() { esp_wifi_set_ps(WIFI_PS_MIN_MODEM); }
+};
 
-  if (doc.is<JsonObjectConst>()) {
-    return doc.as<JsonObjectConst>();
-  }
-
-  return JsonVariantConst();
-}
 } /* namespace */
 
 OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
-  JsonDocument filter;
-  esp_err_t esp_err;
-  JsonDocument doc;
-
   updateAvailable = false;
   latestVersion.clear();
   otaUrl.clear();
@@ -91,154 +64,70 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
 
   const char* releaseApiUrl = getReleaseApiUrl();
 
-  esp_http_client_config_t client_config = {
-      .url = releaseApiUrl,
-      .timeout_ms = 10000,
-      /* Default HTTP client buffer size 512 byte only */
-      .buffer_size = httpRxBufferSize,
-      .buffer_size_tx = httpTxBufferSize,
-      .crt_bundle_attach = esp_crt_bundle_attach,
-      .keep_alive_enable = true,
-  };
+  // Keep WiFi out of modem-sleep while doing release metadata HTTPS I/O.
+  // This mirrors installUpdate() and reduces intermittent TLS read stalls.
+  WifiPowerSaveGuard wifiPowerSaveGuard;
 
-  if (SETTINGS.includeBetaUpdates) {
-    filter[0]["tag_name"] = true;
-    filter[0]["draft"] = true;
-    filter[0]["assets"][0]["name"] = true;
-    filter[0]["assets"][0]["browser_download_url"] = true;
-    filter[0]["assets"][0]["size"] = true;
-  } else {
-    filter["tag_name"] = true;
-    filter["assets"][0]["name"] = true;
-    filter["assets"][0]["browser_download_url"] = true;
-    filter["assets"][0]["size"] = true;
-  }
-
+  // Use one streaming parser path for both stable and beta update checks to
+  // avoid holding full GitHub release JSON in memory.
+  // Adapted from crosspoint-reader/crosspoint-reader (MIT),
+  // PR #1810 by znelson and contributors.
+  LOG_DBG("OTA", "Checking for %s update at %s", SETTINGS.includeBetaUpdates ? "beta" : "stable", releaseApiUrl);
   for (int attempt = 1; attempt <= otaHttpMaxAttempts; ++attempt) {
-    doc.clear();
+    ReleaseJsonParser releaseParser;
+    size_t bytesSeen = 0;
+    const bool ok = HttpDownloader::fetchUrl(
+        releaseApiUrl,
+        [&releaseParser, &bytesSeen](const uint8_t* data, size_t len) {
+          bytesSeen += len;
+          if (bytesSeen > releaseMetadataMaxBytes) {
+            return false;
+          }
+          releaseParser.feed(reinterpret_cast<const char*>(data), len);
+          // For OTA metadata we only need tag_name and firmware.bin fields.
+          // Stop early once both are found to avoid fragile tail reads.
+          if (releaseParser.foundTag() && releaseParser.foundFirmware()) {
+            return false;
+          }
+          return true;
+        },
+        true);
 
-    esp_http_client_handle_t client_handle = esp_http_client_init(&client_config);
-    if (!client_handle) {
-      LOG_ERR("OTA", "HTTP Client Handle Failed");
-      return INTERNAL_UPDATE_ERROR;
-    }
-    HttpClientCleaner clientCleaner = {client_handle};
-
-    esp_err = esp_http_client_set_header(client_handle, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
-    if (esp_err != ESP_OK) {
-      LOG_ERR("OTA", "esp_http_client_set_header Failed : %s", esp_err_to_name(esp_err));
-      return INTERNAL_UPDATE_ERROR;
-    }
-
-    esp_err = esp_http_client_set_header(client_handle, "Accept", "application/vnd.github+json");
-    if (esp_err != ESP_OK) {
-      LOG_ERR("OTA", "esp_http_client_set_header Failed : %s", esp_err_to_name(esp_err));
-      return INTERNAL_UPDATE_ERROR;
-    }
-
-    esp_err = esp_http_client_open(client_handle, 0);
-    if (esp_err != ESP_OK) {
-      LOG_ERR("OTA", "esp_http_client_open Failed on attempt %d/%d: %s", attempt, otaHttpMaxAttempts,
-              esp_err_to_name(esp_err));
-      if (attempt < otaHttpMaxAttempts) {
-        delayBeforeRetry("Release metadata connection", attempt);
-        continue;
-      }
-      return HTTP_ERROR;
-    }
-
-    const int64_t headerContentLength = esp_http_client_fetch_headers(client_handle);
-    if (headerContentLength < 0) {
-      LOG_ERR("OTA", "esp_http_client_fetch_headers Failed on attempt %d/%d: %lld", attempt, otaHttpMaxAttempts,
-              headerContentLength);
-      if (attempt < otaHttpMaxAttempts) {
-        delayBeforeRetry("Release metadata headers", attempt);
-        continue;
-      }
-      return HTTP_ERROR;
-    }
-
-    const int statusCode = esp_http_client_get_status_code(client_handle);
-    if (statusCode != 200) {
-      LOG_ERR("OTA", "Release metadata request failed on attempt %d/%d: HTTP %d", attempt, otaHttpMaxAttempts,
-              statusCode);
-      if (statusCode >= 500 && attempt < otaHttpMaxAttempts) {
-        delayBeforeRetry("Release metadata HTTP status", attempt);
-        continue;
-      }
-      return HTTP_ERROR;
-    }
-
-    const bool chunked = esp_http_client_is_chunked_response(client_handle);
-    const int64_t contentLength = chunked ? -1 : esp_http_client_get_content_length(client_handle);
-    LOG_DBG("OTA", "Release metadata headers: content_length=%lld chunked=%s heap=%u largest=%u", contentLength,
-            chunked ? "yes" : "no", heap_caps_get_free_size(MALLOC_CAP_8BIT),
-            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-
-    if (contentLength > static_cast<int64_t>(releaseMetadataMaxBytes)) {
-      LOG_ERR("OTA", "Release metadata too large: %lld bytes", contentLength);
-      return METADATA_TOO_LARGE_ERROR;
-    }
-
-    HttpClientStream responseStream(client_handle, contentLength, releaseMetadataMaxBytes);
-    const DeserializationError error = deserializeJson(doc, responseStream, DeserializationOption::Filter(filter));
-    if (error) {
-      if (responseStream.isLimitExceeded() || error == DeserializationError::NoMemory) {
-        LOG_ERR("OTA", "Release metadata too large after %zu bytes: %s", responseStream.bytesReadCount(),
-                error.c_str());
+    if (!ok) {
+      if (bytesSeen > releaseMetadataMaxBytes) {
+        LOG_ERR("OTA", "Release metadata too large after %zu bytes", bytesSeen);
         return METADATA_TOO_LARGE_ERROR;
       }
-      if (responseStream.hasError()) {
-        LOG_ERR("OTA", "HTTP stream read failed on attempt %d/%d after %zu bytes: %d", attempt, otaHttpMaxAttempts,
-                responseStream.bytesReadCount(), responseStream.lastError());
-        if (attempt < otaHttpMaxAttempts) {
-          delayBeforeRetry("Release metadata stream", attempt);
-          continue;
-        }
-        return HTTP_ERROR;
+
+      LOG_ERR("OTA", "Release metadata stream failed on attempt %d/%d", attempt, otaHttpMaxAttempts);
+      if (attempt < otaHttpMaxAttempts) {
+        delayBeforeRetry("Release metadata stream", attempt);
+        continue;
       }
-      LOG_ERR("OTA", "JSON parse failed after %zu bytes: %s", responseStream.bytesReadCount(), error.c_str());
+      return HTTP_ERROR;
+    }
+
+    if (!releaseParser.foundTag()) {
+      LOG_ERR("OTA", "No tag_name found in release metadata");
       return JSON_PARSE_ERROR;
     }
 
-    break;
-  }
-
-  const JsonVariantConst release = selectRelease(doc);
-  if (release.isNull()) {
-    LOG_ERR("OTA", "No release found in response");
-    return NO_UPDATE;
-  }
-
-  if (!release["tag_name"].is<std::string>()) {
-    LOG_ERR("OTA", "No tag_name found");
-    return JSON_PARSE_ERROR;
-  }
-
-  if (!release["assets"].is<JsonArrayConst>()) {
-    LOG_ERR("OTA", "No assets found");
-    return JSON_PARSE_ERROR;
-  }
-
-  latestVersion = release["tag_name"].as<std::string>();
-
-  for (JsonObjectConst asset : release["assets"].as<JsonArrayConst>()) {
-    if (asset["name"] == "firmware.bin") {
-      otaUrl = asset["browser_download_url"].as<std::string>();
-      otaSize = asset["size"].as<size_t>();
-      totalSize = otaSize;
-      updateAvailable = true;
-      break;
+    if (!releaseParser.foundFirmware()) {
+      LOG_ERR("OTA", "No firmware.bin asset found");
+      return NO_UPDATE;
     }
+
+    latestVersion = releaseParser.getTagName();
+    otaUrl = releaseParser.getFirmwareUrl();
+    otaSize = releaseParser.getFirmwareSize();
+    totalSize = otaSize;
+    updateAvailable = true;
+
+    LOG_DBG("OTA", "Found %s update: %s", SETTINGS.includeBetaUpdates ? "beta" : "stable", latestVersion.c_str());
+    return OK;
   }
 
-  if (!updateAvailable) {
-    LOG_ERR("OTA", "No firmware.bin asset found");
-    return NO_UPDATE;
-  }
-
-  LOG_DBG("OTA", "Found %s update: %s", SETTINGS.includeBetaUpdates ? "beta" : "stable", latestVersion.c_str());
-  return OK;
+  return HTTP_ERROR;
 }
 
 bool OtaUpdater::isUpdateNewer() const {

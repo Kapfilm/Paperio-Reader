@@ -1,5 +1,6 @@
 #include "OtaUpdateActivity.h"
 
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <WiFi.h>
@@ -10,6 +11,20 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/OtaUpdater.h"
+
+namespace {
+// Ported from crosspoint-reader/crosspoint-reader: release large allocations
+// before TLS so mbedTLS can get contiguous buffers on constrained heaps.
+void trimMemoryBeforeTls(GfxRenderer& renderer) {
+  if (auto* cache = renderer.getFontCacheManager()) {
+    cache->clearCache();
+  }
+  if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
+    LOG_DBG("OTA", "Released secondary framebuffer before TLS (~52 KB contiguous)");
+    renderer.setSingleBufferFastDiff(true);
+  }
+}
+}  // namespace
 
 void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {
@@ -26,6 +41,8 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
   }
   requestUpdateAndWait();
 
+  trimMemoryBeforeTls(renderer);
+
   const auto res = updater.checkForUpdate();
   if (res != OtaUpdater::OK) {
     LOG_DBG("OTA", "Update check failed: %d", res);
@@ -38,7 +55,8 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
   }
 
   if (!updater.isUpdateNewer()) {
-    LOG_DBG("OTA", "No new update available");
+    LOG_DBG("OTA", "No new update available (latest=%s, current=%s)", updater.getLatestVersion().c_str(),
+            CROSSPOINT_VERSION);
     {
       RenderLock lock(*this);
       state = NO_UPDATE;
@@ -127,6 +145,11 @@ void OtaUpdateActivity::render(RenderLock&&) {
         (std::to_string(updater.getProcessedSize()) + " / " + std::to_string(updater.getTotalSize())).c_str());
   } else if (state == NO_UPDATE) {
     renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_NO_UPDATE), true, EpdFontFamily::BOLD);
+    renderer.drawText(UI_10_FONT_ID, contentRect.x + metrics.contentSidePadding, top + height + metrics.verticalSpacing,
+                      (std::string(tr(STR_CURRENT_VERSION)) + CROSSPOINT_VERSION).c_str());
+    renderer.drawText(UI_10_FONT_ID, contentRect.x + metrics.contentSidePadding,
+                      top + height * 2 + metrics.verticalSpacing * 2,
+                      (std::string(tr(STR_NEW_VERSION)) + updater.getLatestVersion()).c_str());
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state == FAILED) {
