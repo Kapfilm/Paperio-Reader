@@ -73,7 +73,13 @@ void SettingsSubmenuActivity::onActionSelected(int index) {
         needsHalfRefresh = true;
         requestUpdate();
       });
+      return;
     }
+
+    // Submenu items with no associated SettingAction still need to be routed through
+    // the parent activity by nameId.
+    setResult(MenuResult{-1, static_cast<int>(setting.nameId)});
+    finish();
     return;
   }
 
