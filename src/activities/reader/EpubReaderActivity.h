@@ -466,11 +466,21 @@ class EpubReaderActivity final : public Activity {
   // the nav target and transitions back to READING; on a failed/degraded build it latches a
   // blocking-rebuild fallback. Serialises against the render task via RenderLock.
   void stepCurrentSectionBuild();
-  // True when the current section may be built incrementally in the background (Background-C):
-  // secondary buffer present, no blocking-rebuild latch for this spine, and enough heap to build
-  // with the buffer resident — X4 uses the in-place floors, X3 the (looser) Background-B floors
-  // since X3 keeps the differential baseline in-controller and defers image decode like B.
-  bool currentSectionBuildEligible(bool embeddedStyle) const;
+  // How the current section's (re)build should run. Resident/Released are both incremental
+  // Background-C builds (responsive, build-while-you-read); they differ only in whether the
+  // secondary buffer stays in RAM or is freed for headroom on a tight heap. Blocking is the old
+  // synchronous path, used only when C can't apply (latch set, no buffer, or a CSS-fallback
+  // rebuild — decided by the caller).
+  enum class SectionBuildMode : uint8_t {
+    Blocking,             // synchronous build (no mid-build display)
+    IncrementalResident,  // Background-C, secondary buffer kept resident
+    IncrementalReleased,  // Background-C, secondary buffer released for headroom, restored after
+  };
+  // Pick the build mode (blocking-fallback latch / buffer presence aside). X3 always releases
+  // (its baseline lives in the controller, so a resident buffer only starves the build); X4
+  // releases for CSS books (resident reliably css-degrades) and for non-CSS books that don't fit
+  // the in-place floors, keeping the buffer resident only for non-CSS builds that do fit.
+  SectionBuildMode chooseSectionBuildMode(bool embeddedStyle) const;
   // Render params for a section build of `spineIndex`, identical to what buildSection()
   // passes to createSectionFile — B must build the exact variant the foreground will load.
   Section::BuildParams makeSectionBuildParams() const;

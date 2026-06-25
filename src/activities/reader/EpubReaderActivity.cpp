@@ -415,7 +415,15 @@ void EpubReaderActivity::onExit() {
   // Abort any in-flight Background-B build (deletes its partial cache file) before the
   // epub it references goes away.
   resetBackgroundBuild();
-  section.reset();
+  section.reset();  // also aborts an in-flight Background-C build of the current section
+  // Background-C may have released the secondary buffer for headroom; the build is now aborted,
+  // so restore the global "buffer resident" invariant before the next activity renders.
+  if (secondaryBufferDegraded_ && !renderer.hasSecondaryBuffer()) {
+    if (renderer.reallocSecondaryBuffer()) {
+      LOG_INF("ERS", "onExit: restored secondary buffer released by Background-C");
+    }
+    secondaryBufferDegraded_ = false;
+  }
   UITheme::getInstance().getMutableTheme().onBookWillClose(epub ? epub->getPath() : "", epub.get(), nullptr, nullptr);
   epub.reset();
   currentPageFootnotes.clear();
@@ -2242,13 +2250,22 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
 }
 
 void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
-  // Opportunistic recovery: after an OOM during chapter indexing, try to
-  // restore the secondary buffer on subsequent renders when heap may be healthier.
+  // While Background-C is building with the buffer released for headroom, leave it released —
+  // reallocating now would reclaim the ~48–52 KB the build is using. The buffer is restored here
+  // on the first render after the build ends (hasActiveBuild() goes false).
+  if (section && section->hasActiveBuild()) {
+    return;
+  }
+  // Opportunistic recovery: after an OOM during chapter indexing, or after a Background-C
+  // released build, restore the secondary buffer when heap is healthy again.
   if (secondaryBufferDegraded_ && !renderer.hasSecondaryBuffer()) {
     if (renderer.reallocSecondaryBuffer()) {
       secondaryBufferDegraded_ = false;
       if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
       LOG_INF("ERS", "Secondary display buffer restored; re-enabling normal refresh/AA paths");
+    } else {
+      LOG_ERR("ERS", "Secondary display buffer realloc failed (free=%lu); AA stays off, will retry",
+              esp_get_free_heap_size());
     }
   } else if (secondaryBufferDegraded_ && renderer.hasSecondaryBuffer()) {
     secondaryBufferDegraded_ = false;
@@ -2415,34 +2432,29 @@ bool EpubReaderActivity::heapAllowsInPlaceBuild(const bool embeddedStyle) const 
   return freeHeap >= IN_PLACE_BUILD_MIN_FREE_HEAP_BYTES && contigHeap >= IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES;
 }
 
-bool EpubReaderActivity::currentSectionBuildEligible(const bool embeddedStyle) const {
-  // Background-C builds with the secondary buffer resident: on X4 to keep the fast-refresh
-  // baseline + grayscale AA, on X3 only for AA (the differential baseline lives in the
-  // controller's DTM1, so mid-build BW draws don't need it — see docs/contributing/
-  // eink-controllers.md). The blocking-fallback latch forces the old path after a failed attempt.
-  if (forceBlockingBuildSpine_ == currentSpineIndex) return false;
-  if (!renderer.hasSecondaryBuffer()) return false;
+EpubReaderActivity::SectionBuildMode EpubReaderActivity::chooseSectionBuildMode(const bool embeddedStyle) const {
+  // A failed Background-C attempt latches the old blocking path for this spine.
+  if (forceBlockingBuildSpine_ == currentSpineIndex) return SectionBuildMode::Blocking;
+  // No secondary buffer to keep or release (already degraded): blocking path reallocs it at the end.
+  if (!renderer.hasSecondaryBuffer()) return SectionBuildMode::Blocking;
 
-  // CSS books need their selector index to fit alongside the resident buffer (same gate B uses).
-  if (embeddedStyle) {
-    const CssParser* css = epub->getCssParser();
-    if (!Section::heapAllowsEmbeddedStyle(css ? css->ruleCount() : 0)) return false;
-  }
+  // X3 → always build released. Its differential baseline lives in the controller's DTM1, so
+  // keeping the ~52 KB RAM buffer resident buys no display benefit (fast refresh works without it)
+  // and only starves the build — exactly the foreground policy (inPlace is X4-only). Releasing
+  // also keeps CSS parses above the runtime resolve floor (the resident build css-degraded
+  // on-device, then had to be rebuilt blocking). Mid-build BW draws still work off DTM1.
+  if (renderer.isX3()) return SectionBuildMode::IncrementalReleased;
 
-  if (renderer.isX3()) {
-    // X3 holds the differential baseline in-controller, so building with the buffer resident
-    // costs no display benefit — it's the exact regime Background-B already builds in on X3.
-    // Gate on B's proven floors (both defer image decode, so neither needs the foreground
-    // released path's image-decode headroom). The two-phase build self-aborts (→ blocking
-    // fallback) if a large entry's extract ring won't fit, so no ring pre-check is needed here.
-    const uint32_t freeHeap = esp_get_free_heap_size();
-    const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
-    return freeHeap >= BG_BUILD_PARSE_MIN_FREE_HEAP_BYTES && contigHeap >= BG_BUILD_MIN_CONTIG_HEAP_BYTES;
-  }
+  // X4 CSS book → released too. Built with the ~48 KB buffer resident, a CSS section reliably
+  // drops below the runtime CSS-resolve floor (MIN_FREE_HEAP_FOR_CSS ≈ 40 KB) mid-parse → lookups
+  // skip → css-degraded → a wasted resident build then a blocking rebuild. Releasing keeps it in
+  // the ~120 KB regime where the blocking path builds these clean.
+  if (embeddedStyle) return SectionBuildMode::IncrementalReleased;
 
-  // X4: keep the secondary buffer resident to preserve the fast-refresh baseline (RED RAM is
-  // re-seeded from it) and AA, so require the stricter in-place headroom.
-  return heapAllowsInPlaceBuild(embeddedStyle);
+  // X4 non-CSS book → keep the buffer resident when the in-place floors fit (fast-refresh baseline
+  // re-seeds from it, AA stays live); otherwise release for headroom.
+  return heapAllowsInPlaceBuild(/*embeddedStyle=*/false) ? SectionBuildMode::IncrementalResident
+                                                         : SectionBuildMode::IncrementalReleased;
 }
 
 EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const RenderLayout& layout,
@@ -2617,15 +2629,30 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
 
     // Background-C: build the current section incrementally on the loop task so input stays
     // responsive and pages appear as they are written. Used for the clean cases — a cache miss
-    // or a resumed partial B build — when heap allows building in place. The CSS-fallback
-    // rebuild keeps the blocking path: the section already shows usable fallback content.
-    const bool incremental =
-        (resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild && currentSectionBuildEligible(embeddedStyle);
+    // or a resumed partial B build. The CSS-fallback rebuild keeps the blocking path: the section
+    // already shows usable fallback content.
+    const SectionBuildMode mode = (resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
+                                      ? chooseSectionBuildMode(embeddedStyle)
+                                      : SectionBuildMode::Blocking;
+    const bool incremental = mode != SectionBuildMode::Blocking;
     bool runBlocking = !incremental;
 
     if (incremental) {
-      LOG_INF("ERS", "Background-C: building spine %d incrementally (free=%lu)", currentSpineIndex,
-              esp_get_free_heap_size());
+      if (mode == SectionBuildMode::IncrementalReleased) {
+        // Tight heap: free the secondary buffer (~48–52 KB) for the build. AA is off until the
+        // build ends and recoverSecondaryBufferIfNeeded() reallocates it (marked via
+        // secondaryBufferDegraded_); mid-build draws are BW. No display downside on X3 (baseline
+        // in controller); on X4 fast refresh drops to half until restored.
+        const uint32_t freeBefore = esp_get_free_heap_size();
+        renderer.releaseSecondaryBuffer();
+        secondaryBufferDegraded_ = true;
+        LOG_INF("ERS", "Background-C: building spine %d incrementally, secondary buffer RELEASED (free %lu->%lu)",
+                currentSpineIndex, freeBefore, esp_get_free_heap_size());
+      } else {
+        LOG_INF("ERS", "Background-C: building spine %d incrementally, buffer resident (free=%lu contig=%lu)",
+                currentSpineIndex, esp_get_free_heap_size(),
+                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT));
+      }
       GUI.drawPopup(renderer, tr(STR_INDEXING));  // immediate feedback before the first page lands
       renderer.clearFontAccumulation();
       readerPhase_ = ReaderPhase::PRECOMPILING;
@@ -2655,6 +2682,13 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
     }
 
     if (runBlocking) {
+      if (!incremental) {
+        // Background-C was not chosen (CSS-fallback rebuild, no secondary buffer, or the
+        // blocking-fallback latch is set for this spine) — log so the mode is visible in traces.
+        LOG_INF("ERS", "Background-C declined for spine %d (cssFallback=%d hasBuf=%d latched=%d); blocking build",
+                currentSpineIndex, cssFallbackRebuild ? 1 : 0, renderer.hasSecondaryBuffer() ? 1 : 0,
+                forceBlockingBuildSpine_ == currentSpineIndex ? 1 : 0);
+      }
       const BuildOutcome outcome = compileSectionCache(layout, embeddedStyle, imageRendering);
       if (outcome == BuildOutcome::Restarting) {
         return false;  // fragmented-heap recovery reboot in progress
