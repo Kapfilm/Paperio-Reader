@@ -124,7 +124,7 @@ STR_REFRESH_AFTER_IMAGE_PAGES: "Обновлять после страниц с 
 STR_KOREADER_SYNC: "Синхронизация KOReader"
 STR_CHECK_UPDATES: "Проверить обновления"
 STR_SYSTEM_UPDATE: "Обновление системы"
-STR_SYSTEM_UPDATE_TYPE1: "Обновления CrossPoint++"
+STR_SYSTEM_UPDATE_TYPE1: "Обновления Witch Reader"
 STR_SYSTEM_UPDATE_TYPE2: "Альтернативные обновления прошивки"
 STR_INCLUDE_BETA_UPDATES: "Включить бета-обновления"
 STR_SEND_METADATA: "Отправить метаданные документа"
