@@ -2873,8 +2873,9 @@ void GfxRenderer::preconditionGrayscale(int x, int y, int w, int h) const {
   // Rotate the logical rect's opposite corners to physical panel coords; the
   // physical bbox stays axis-aligned for all four orientations.
   int ax, ay, bx, by;
-  rotateCoordinates(orientation, x, y, &ax, &ay, panelWidth, panelHeight);
-  rotateCoordinates(orientation, x + w - 1, y + h - 1, &bx, &by, panelWidth, panelHeight);
+  const Orientation o = getOrientation();
+  rotateCoordinates(o, x, y, &ax, &ay, panelWidth, panelHeight);
+  rotateCoordinates(o, x + w - 1, y + h - 1, &bx, &by, panelWidth, panelHeight);
   int x0 = ax < bx ? ax : bx, x1 = ax > bx ? ax : bx;
   int y0 = ay < by ? ay : by, y1 = ay > by ? ay : by;
   if (x0 < 0) x0 = 0;

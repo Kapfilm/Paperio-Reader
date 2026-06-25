@@ -257,8 +257,29 @@ void XtcReaderActivity::renderPage() {
       renderer.writePhysicalPortraitPackedRow(y, row, maxSrcX, invertBits);
     }
 
-    // Display BW with conditional refresh based on pagesUntilFullRefresh
-    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    // Display the BW base frame ahead of the grayscale overlay. The default X3
+    // path uses the OEM differential grayscale pipeline (SDK AA-pre-BW); the
+    // community-fast LUT path keeps the strong-base + community gray-nudge flow
+    // it was tuned for. On X4 both branches behave as before (no-ops fall back
+    // to the same refreshes displayWithRefreshCycle issued).
+    if (renderer.getFastGrayscaleLut()) {
+      ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    } else {
+      const int freq = SETTINGS.getRefreshFrequency();
+      if (freq != 0 && pagesUntilFullRefresh <= 1) {
+        // Periodic ghost cleanup: scrub via the normal HALF path, then run the
+        // settle flavor of the grayscale base pass (DTM planes are equal after
+        // the sync, so only the gentle reinforcement cells fire).
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+        renderer.preconditionGrayscale();
+        pagesUntilFullRefresh = freq;
+      } else {
+        // Differential "AA-pre-BW(mid)" base update as the page turn on X3;
+        // plain FAST refresh on X4.
+        renderer.displayGrayscaleBase(HalDisplay::FAST_REFRESH);
+        if (freq != 0) pagesUntilFullRefresh--;
+      }
+    }
 
     // Pass 2: LSB buffer - mark DARK gray only (XTH value 1)
     // In LUT: 0 bit = apply gray effect, 1 bit = untouched

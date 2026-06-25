@@ -580,7 +580,15 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
 
   drawOverlay();
 
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  if (hasGreyscale && !renderer.getFastGrayscaleLut()) {
+    // Default X3 grayscale path: display the BW base with the OEM differential
+    // "AA-pre-BW(mid)" waveform so the panel is left in the calibrated state the
+    // gray nudge expects (no-op → plain HALF refresh on X4). The community-fast
+    // LUT path keeps the plain base refresh it was tuned for.
+    renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+  } else {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  }
 
   if (hasGreyscale) {
     bitmap.rewindToData();
