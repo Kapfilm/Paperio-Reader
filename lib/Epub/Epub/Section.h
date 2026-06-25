@@ -181,10 +181,11 @@ class Section {
   // Pages [0, activeBuildPageCount()) are safe to read via loadPageFromActiveBuild().
   uint16_t activeBuildPageCount() const;
   // Load any page that has already been written during an active build, using the
-  // in-memory LUT that grows with every onPageComplete(). Opens a temporary read
-  // handle on the same file the build is writing to; safe because both handles are
-  // used only between build slices (never concurrently). Returns nullptr on error.
-  // pageIndex must be < activeBuildPageCount().
+  // in-memory LUT that grows with every onPageComplete(). Opens a temporary read handle
+  // on the same file the build is writing to, syncing the writer first so the read handle
+  // sees the latest committed pages (the writer is not synced per page). Must be called
+  // between build slices, never concurrently with a slice on another task. Returns nullptr
+  // on error. pageIndex must be < activeBuildPageCount().
   std::unique_ptr<Page> loadPageFromActiveBuild(uint16_t pageIndex);
   // Pre-decode every image in the section into its .pxc cache while heap is
   // maximally contiguous (secondary display buffer still released). Skips images

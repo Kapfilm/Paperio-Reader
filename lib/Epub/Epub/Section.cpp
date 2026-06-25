@@ -1102,6 +1102,11 @@ std::unique_ptr<Page> Section::loadPageFromActiveBuild(const uint16_t pageIndex)
     LOG_ERR("SCT", "loadPageFromActiveBuild: bad LUT entry %u for page %u", offset, pageIndex);
     return nullptr;
   }
+  // The build writes pages to `file` without syncing per page, so its most recently written
+  // sector — and the directory-entry size — may not be on the card yet. A separate read handle
+  // only sees committed data, so flush the writer first; otherwise the read could seek past a
+  // stale EOF or deserialize a half-written sector.
+  if (file) file.flush();  // SdFat flush() == sync(): commits the cached sector + dir entry
   FsFile readHandle;
   if (!Storage.openFileForRead("SCT", filePath, readHandle)) {
     LOG_ERR("SCT", "loadPageFromActiveBuild: cannot open %s for reading", filePath.c_str());

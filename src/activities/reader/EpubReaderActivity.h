@@ -121,11 +121,14 @@ class EpubReaderActivity final : public Activity {
   // render() then dispatches to the matching helper. Replaces the former in-line
   // ladder of isPreRenderPass / isBufferDisplayPass / !section bool checks.
   enum class RenderPass : uint8_t {
-    FinishedBook,   // currentSpineIndex == spineCount: hand off to FinishedBookActivity
-    PreRender,      // Background A: render next page content into the framebuffer only
-    BufferDisplay,  // fast page-turn: framebuffer already holds content; add status bar + flush
-    BuildSection,   // no section loaded → build/load the cache, then render normally
-    Normal,         // section present → load page, render, display
+    FinishedBook,     // currentSpineIndex == spineCount: hand off to FinishedBookActivity
+    PreRender,        // Background A: render next page content into the framebuffer only
+    BufferDisplay,    // fast page-turn: framebuffer already holds content; add status bar + flush
+    BuildSection,     // no section loaded → build/load the cache, then render normally
+    SectionBuilding,  // current section is being built incrementally (Background-C): draw the
+                      // requested page from the in-progress LUT, or an "Indexing" popup if it
+                      // isn't built yet. The build itself runs on the loop task, not here.
+    Normal,           // section present → load page, render, display
   };
 
   // Resolved screen geometry for one render pass: oriented + padded margins and the
@@ -288,6 +291,21 @@ class EpubReaderActivity final : public Activity {
   //              next section in the lookahead window (or idles if the window is exhausted)
   enum class BackgroundBuildState : uint8_t { Probe, WaitHeap, Building, Settled };
   BackgroundBuildState backgroundBuildState_ = BackgroundBuildState::Probe;
+  // --- Background C (incremental build of the CURRENT section while the reader watches) ---
+  // When the spine the user just entered has no cache, buildSection() starts an in-place
+  // incremental build owned by `section` and hands the slicing to stepCurrentSectionBuild()
+  // on the loop task, so input stays responsive. The render task only ever draws (the
+  // SectionBuilding pass). State below coordinates that hand-off.
+  //
+  // Page last drawn by the SectionBuilding pass (-1 = none yet / popup showing). Stops the
+  // pass redrawing the same page every idle tick.
+  int buildDisplayedPage_ = -1;
+  // True once the "Indexing" popup has been drawn for the current pending page, so the pass
+  // doesn't re-flush it every tick. Cleared whenever a real page is drawn or the build ends.
+  bool buildingPopupShown_ = false;
+  // Spine for which the incremental build failed/degraded and must be retried with the old
+  // blocking (secondary-buffer-released) path instead of Background-C. -1 = no such latch.
+  int forceBlockingBuildSpine_ = -1;
   // Debug-only Background A glyph for the status-bar overlay. The transient flags
   // (pendingPreRender / preRenderedPage.ready) are cleared at the top of render()
   // before the status bar is drawn, so the overlay could never sample a non-idle
@@ -401,7 +419,7 @@ class EpubReaderActivity final : public Activity {
   // BuildSection pass: construct/load the section cache for currentSpineIndex and resolve the
   // nav target. Returns true if a section is ready to render; false if render() should return
   // (build failed, finished-book handoff, or a requestUpdate retry was posted).
-  bool buildSection(RenderLock& lock, const RenderLayout& layout);
+  bool buildSection(const RenderLayout& layout);
   // Outcome of compileSectionCache(). Restarting means a fragmented-heap recovery reboot was
   // triggered and the caller must return immediately without further work.
   enum class BuildOutcome : uint8_t { Built, Failed, Restarting };
@@ -411,13 +429,16 @@ class EpubReaderActivity final : public Activity {
   // heap is tight or the in-place attempt fails. On the released path it pre-decodes images
   // eagerly and reallocates the buffer (arming a half-refresh); the in-place path defers images
   // to lazy per-page decode and leaves the baseline intact for a normal fast refresh.
-  BuildOutcome compileSectionCache(RenderLock& lock, const RenderLayout& layout, bool embeddedStyle,
-                                   uint8_t imageRendering);
+  BuildOutcome compileSectionCache(const RenderLayout& layout, bool embeddedStyle, uint8_t imageRendering);
   // True when heap is ample enough to build the current section WITHOUT releasing the secondary
   // buffer (the in-place path). Reuses Section::heapAllowsEmbeddedStyle for CSS books.
   bool heapAllowsInPlaceBuild(bool embeddedStyle) const;
   // Normal pass: load the current page from the section cache, render it, persist progress.
   void renderNormalPass(RenderLock& lock, const RenderLayout& layout);
+  // SectionBuilding pass: while Background-C builds the current section, draw the requested
+  // page from the in-progress LUT once it's been written (text-only pages only), or an
+  // "Indexing" popup until then. Does no build work itself — that's stepCurrentSectionBuild().
+  void renderSectionBuildingPass(RenderLock& lock, const RenderLayout& layout);
 
   // --- idle-time background work ---
   // Called by loop() when input is idle and no page turn is pending. Dispatches the
@@ -438,6 +459,18 @@ class EpubReaderActivity final : public Activity {
   // Serialises SD access against the render task via RenderLock; skips the tick instead of
   // blocking when the render task is busy.
   void stepBackgroundSectionBuild();
+  // Background C: advance the incremental build of the CURRENT section (the one the reader is
+  // looking at) by one bounded slice. Runs only while `section` has an active build, with the
+  // highest reader-build priority (ahead of A and B). On a newly built target page or on
+  // completion it posts a requestUpdate() so the render task draws it; on completion it resolves
+  // the nav target and transitions back to READING; on a failed/degraded build it latches a
+  // blocking-rebuild fallback. Serialises against the render task via RenderLock.
+  void stepCurrentSectionBuild();
+  // True when the current section may be built incrementally in the background (Background-C):
+  // secondary buffer present, no blocking-rebuild latch for this spine, and enough heap to build
+  // with the buffer resident — X4 uses the in-place floors, X3 the (looser) Background-B floors
+  // since X3 keeps the differential baseline in-controller and defers image decode like B.
+  bool currentSectionBuildEligible(bool embeddedStyle) const;
   // Render params for a section build of `spineIndex`, identical to what buildSection()
   // passes to createSectionFile — B must build the exact variant the foreground will load.
   Section::BuildParams makeSectionBuildParams() const;
@@ -452,6 +485,10 @@ class EpubReaderActivity final : public Activity {
   // at display time with live values (clock, battery).
   void renderPageContentOnly(const Page& page, int orientedMarginTop, int orientedMarginRight, int orientedMarginBottom,
                              int orientedMarginLeft);
+  // Draws a single text-only page from an in-progress Background-C build (no AA, no pre-render
+  // arming). Releases the lock before the waveform wait (like renderContents) so a C build
+  // slice can run on the loop task during the refresh.
+  void displayBuildPage(RenderLock& lock, const Page& page, const RenderLayout& layout);
   // Draws the status bar over the current frame buffer and flushes to the display.
   // Handles the refresh cycle and grayscale AA pass. page must be the same page
   // that was last rendered into the buffer (needed for image AA re-render).
