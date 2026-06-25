@@ -1,6 +1,6 @@
 # Witch(hunt) Reader
 
-This firmware is based on the [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) for the XTEINK X§/X4, a great piece of software by Dave Allie and others.
+This firmware is based on the [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) for the XTEINK X3/X4, a great piece of software by Dave Allie and others.
 
 
 # What this reader does differently
