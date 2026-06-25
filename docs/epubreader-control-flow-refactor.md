@@ -1,5 +1,9 @@
 # EpubReader control-flow refactor & Background-B design
 
+> **Historical design doc.** The refactor and Background-B are implemented, and Background-C
+> (current-section build) has since been added. For the current architecture of all three
+> background mechanisms see [background-rendering.md](background-rendering.md).
+
 This document is a concrete, executable plan. Part 1 is a pure-restructuring
 cleanup that makes the reader's control flow read as the state machine it
 already is. Part 2 is a *design* for the new "Background B" capability

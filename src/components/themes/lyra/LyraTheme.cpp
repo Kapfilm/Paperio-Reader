@@ -689,7 +689,10 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
   }
 }
 
-Rect LyraTheme::drawPopup(const GfxRenderer& renderer, const char* message) const {
+Rect LyraTheme::drawPopup(const GfxRenderer& renderer, const char* message, const bool overlayDisplayedFrame) const {
+  // See BaseTheme::drawPopup: overlay the box on the displayed frame unless the caller composed its
+  // own full frame into the write buffer.
+  if (overlayDisplayedFrame) renderer.syncWriteBufferFromDisplayed();
   constexpr int y = 132;
   constexpr int outline = 2;
   const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, message, EpdFontFamily::REGULAR);

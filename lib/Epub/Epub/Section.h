@@ -176,6 +176,17 @@ class Section {
   // log refusals at whatever cadence suits them.
   static bool heapAllowsEmbeddedStyle(size_t cssRuleCount);
   std::unique_ptr<Page> loadPageFromSectionFile();
+  // Number of pages fully written to the section file during an active build.
+  // Increases monotonically as the build progresses; 0 when no build is live.
+  // Pages [0, activeBuildPageCount()) are safe to read via loadPageFromActiveBuild().
+  uint16_t activeBuildPageCount() const;
+  // Load any page that has already been written during an active build, using the
+  // in-memory LUT that grows with every onPageComplete(). Opens a temporary read handle
+  // on the same file the build is writing to, syncing the writer first so the read handle
+  // sees the latest committed pages (the writer is not synced per page). Must be called
+  // between build slices, never concurrently with a slice on another task. Returns nullptr
+  // on error. pageIndex must be < activeBuildPageCount().
+  std::unique_ptr<Page> loadPageFromActiveBuild(uint16_t pageIndex);
   // Pre-decode every image in the section into its .pxc cache while heap is
   // maximally contiguous (secondary display buffer still released). Skips images
   // that are already cached or would show as a placeholder. The decode writes
@@ -187,6 +198,11 @@ class Section {
   // True when the last build's CSS resolution hit low-heap skips (styles silently
   // missing from the cached pages). Only meaningful right after a build.
   bool isCssLowHeapDegraded() const { return cssLowHeapDegraded_; }
+  // True while an incremental build is in flight and its CSS resolver has ALREADY hit a
+  // low-heap skip — i.e. the in-progress result is going to be css-degraded. Lets a sliced
+  // caller (Background-B) abort early instead of finishing a build it will discard. False when
+  // no build is live or no skips have occurred yet.
+  bool activeBuildCssDegraded() const;
 
   // Given a page in this section, return the TOC index for that page.
   int getTocIndexForPage(int page) const;

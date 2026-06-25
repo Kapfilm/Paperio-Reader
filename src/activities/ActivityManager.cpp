@@ -40,8 +40,14 @@ void ActivityManager::begin() {
   renderingMutex = xSemaphoreCreateMutex();
   assert(renderingMutex != nullptr && "Failed to create rendering mutex");
 
+  // 10 KB: the render task runs the firmware's deepest call chains — page build/parse, CSS
+  // resolve, image decode (JPEG/PNG) + dither — and its stack abuts the heap top, so an
+  // overflow spills into the heap and surfaces as a corruption assert elsewhere (see the
+  // documented hazard in EpubReaderActivity). Field high-water dipped to ~1.7 KB free of the
+  // former 8 KB on a parse-on-render-task pass; +2 KB restores a safer margin. renderTaskLoop()
+  // also warns (RENDER_STACK_WARN_BYTES) if the live margin ever gets thin again.
   xTaskCreate(&renderTaskTrampoline, "ActivityManagerRender",
-              8192,              // Stack size
+              10240,             // Stack size (bytes)
               this,              // Parameters
               1,                 // Priority
               &renderTaskHandle  // Task handle
@@ -87,6 +93,22 @@ void ActivityManager::renderTaskLoop() {
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
       currentActivity->render(std::move(lock));
+      // Always-on guard (cheap; one read): warn once if the render task's stack high-water gets
+      // dangerously thin. The render task's stack abuts the heap top — an overflow spills into
+      // the heap and shows up as an unrelated corruption assert. Tracks the running minimum so
+      // it only logs when a new low crosses the threshold (no per-pass spam). uxTaskGetStack...
+      // returns bytes on the C3 (StackType_t == uint8_t).
+      {
+        static constexpr unsigned RENDER_STACK_WARN_BYTES = 1536;
+        static unsigned lowestRenderStackFree = UINT_MAX;
+        const unsigned stackFree = static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr));
+        if (stackFree < lowestRenderStackFree) {
+          lowestRenderStackFree = stackFree;
+          if (stackFree < RENDER_STACK_WARN_BYTES) {
+            LOG_ERR("MEM", "Render task stack LOW: %u bytes free (new min) — stack-into-heap overflow risk", stackFree);
+          }
+        }
+      }
 #ifdef ENABLE_BOOT_HEAP_DIAGNOSTICS
       // Render runs the deepest call chains in the firmware (page build + image
       // decode + dither) on this task's fixed 8 KB stack, which is heap-allocated

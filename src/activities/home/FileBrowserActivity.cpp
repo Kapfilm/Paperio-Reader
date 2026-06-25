@@ -777,8 +777,9 @@ void FileBrowserActivity::doSetAsSleepCover(const std::string& fullPath) {
     {
       RenderLock lock(*this);
       const char* msg = success ? tr(STR_SLEEP_SCREEN_SET) : tr(STR_FAILED_TO_SET_SLEEP_SCREEN);
+      // drawPopup ships the frame; preseed its refresh mode to HALF instead of shipping twice.
+      renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
       GUI.drawPopup(renderer, msg);
-      renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     }
     requestUpdate();
   } else {

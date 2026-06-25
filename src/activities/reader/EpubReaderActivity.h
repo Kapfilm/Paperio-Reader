@@ -121,11 +121,14 @@ class EpubReaderActivity final : public Activity {
   // render() then dispatches to the matching helper. Replaces the former in-line
   // ladder of isPreRenderPass / isBufferDisplayPass / !section bool checks.
   enum class RenderPass : uint8_t {
-    FinishedBook,   // currentSpineIndex == spineCount: hand off to FinishedBookActivity
-    PreRender,      // Background A: render next page content into the framebuffer only
-    BufferDisplay,  // fast page-turn: framebuffer already holds content; add status bar + flush
-    BuildSection,   // no section loaded → build/load the cache, then render normally
-    Normal,         // section present → load page, render, display
+    FinishedBook,     // currentSpineIndex == spineCount: hand off to FinishedBookActivity
+    PreRender,        // Background A: render next page content into the framebuffer only
+    BufferDisplay,    // fast page-turn: framebuffer already holds content; add status bar + flush
+    BuildSection,     // no section loaded → build/load the cache, then render normally
+    SectionBuilding,  // current section is being built incrementally (Background-C): draw the
+                      // requested page from the in-progress LUT, or an "Indexing" popup if it
+                      // isn't built yet. The build itself runs on the loop task, not here.
+    Normal,           // section present → load page, render, display
   };
 
   // Resolved screen geometry for one render pass: oriented + padded margins and the
@@ -154,6 +157,11 @@ class EpubReaderActivity final : public Activity {
   // Used by BTN_FORCE_REFRESH / BTN_FORCE_FAST_REFRESH so the user's manual refresh re-displays
   // the current page in the requested mode instead of raw-flushing a possibly pre-rendered buffer.
   int8_t forceRefreshModeNextRender_ = -1;
+  // Refresh mode + display-mode byte of the page just shown, captured at its triggerDisplay
+  // before the deferred-AA grayscale display overwrites the renderer's live last-mode. Logged
+  // by the page summary so it reflects the page, not the AA pass.
+  HalDisplay::RefreshMode lastPageRefreshMode_ = HalDisplay::RefreshMode::FAST_REFRESH;
+  uint8_t lastPageDisplayModeByte_ = 0;
   // True when secondary display buffer allocation failed; while set we prefer
   // conservative refresh policy and skip grayscale AA to reduce ghosting.
   bool secondaryBufferDegraded_ = false;
@@ -288,6 +296,21 @@ class EpubReaderActivity final : public Activity {
   //              next section in the lookahead window (or idles if the window is exhausted)
   enum class BackgroundBuildState : uint8_t { Probe, WaitHeap, Building, Settled };
   BackgroundBuildState backgroundBuildState_ = BackgroundBuildState::Probe;
+  // --- Background C (incremental build of the CURRENT section while the reader watches) ---
+  // When the spine the user just entered has no cache, buildSection() starts an in-place
+  // incremental build owned by `section` and hands the slicing to stepCurrentSectionBuild()
+  // on the loop task, so input stays responsive. The render task only ever draws (the
+  // SectionBuilding pass). State below coordinates that hand-off.
+  //
+  // Page last drawn by the SectionBuilding pass (-1 = none yet / popup showing). Stops the
+  // pass redrawing the same page every idle tick.
+  int buildDisplayedPage_ = -1;
+  // True once the "Indexing" popup has been drawn for the current pending page, so the pass
+  // doesn't re-flush it every tick. Cleared whenever a real page is drawn or the build ends.
+  bool buildingPopupShown_ = false;
+  // Spine for which the incremental build failed/degraded and must be retried with the old
+  // blocking (secondary-buffer-released) path instead of Background-C. -1 = no such latch.
+  int forceBlockingBuildSpine_ = -1;
   // Debug-only Background A glyph for the status-bar overlay. The transient flags
   // (pendingPreRender / preRenderedPage.ready) are cleared at the top of render()
   // before the status bar is drawn, so the overlay could never sample a non-idle
@@ -417,6 +440,10 @@ class EpubReaderActivity final : public Activity {
   bool heapAllowsInPlaceBuild(bool embeddedStyle) const;
   // Normal pass: load the current page from the section cache, render it, persist progress.
   void renderNormalPass(RenderLock& lock, const RenderLayout& layout);
+  // SectionBuilding pass: while Background-C builds the current section, draw the requested
+  // page from the in-progress LUT once it's been written (text-only pages only), or an
+  // "Indexing" popup until then. Does no build work itself — that's stepCurrentSectionBuild().
+  void renderSectionBuildingPass(RenderLock& lock, const RenderLayout& layout);
 
   // --- idle-time background work ---
   // Called by loop() when input is idle and no page turn is pending. Dispatches the
@@ -437,6 +464,28 @@ class EpubReaderActivity final : public Activity {
   // Serialises SD access against the render task via RenderLock; skips the tick instead of
   // blocking when the render task is busy.
   void stepBackgroundSectionBuild();
+  // Background C: advance the incremental build of the CURRENT section (the one the reader is
+  // looking at) by one bounded slice. Runs only while `section` has an active build, with the
+  // highest reader-build priority (ahead of A and B). On a newly built target page or on
+  // completion it posts a requestUpdate() so the render task draws it; on completion it resolves
+  // the nav target and transitions back to READING; on a failed/degraded build it latches a
+  // blocking-rebuild fallback. Serialises against the render task via RenderLock.
+  void stepCurrentSectionBuild();
+  // How the current section's (re)build should run. Resident/Released are both incremental
+  // Background-C builds (responsive, build-while-you-read); they differ only in whether the
+  // secondary buffer stays in RAM or is freed for headroom on a tight heap. Blocking is the old
+  // synchronous path, used only when C can't apply (latch set, no buffer, or a CSS-fallback
+  // rebuild — decided by the caller).
+  enum class SectionBuildMode : uint8_t {
+    Blocking,             // synchronous build (no mid-build display)
+    IncrementalResident,  // Background-C, secondary buffer kept resident
+    IncrementalReleased,  // Background-C, secondary buffer released for headroom, restored after
+  };
+  // Pick the build mode (blocking-fallback latch / buffer presence aside). X3 always releases
+  // (its baseline lives in the controller, so a resident buffer only starves the build); X4
+  // releases for CSS books (resident reliably css-degrades) and for non-CSS books that don't fit
+  // the in-place floors, keeping the buffer resident only for non-CSS builds that do fit.
+  SectionBuildMode chooseSectionBuildMode(bool embeddedStyle) const;
   // Render params for a section build of `spineIndex`, identical to what buildSection()
   // passes to createSectionFile — B must build the exact variant the foreground will load.
   Section::BuildParams makeSectionBuildParams() const;
@@ -451,6 +500,10 @@ class EpubReaderActivity final : public Activity {
   // at display time with live values (clock, battery).
   void renderPageContentOnly(const Page& page, int orientedMarginTop, int orientedMarginRight, int orientedMarginBottom,
                              int orientedMarginLeft);
+  // Draws a single text-only page from an in-progress Background-C build (no AA, no pre-render
+  // arming). Releases the lock before the waveform wait (like renderContents) so a C build
+  // slice can run on the loop task during the refresh.
+  void displayBuildPage(RenderLock& lock, const Page& page, const RenderLayout& layout);
   // Draws the status bar over the current frame buffer and flushes to the display.
   // Handles the refresh cycle and grayscale AA pass. page must be the same page
   // that was last rendered into the buffer (needed for image AA re-render).
@@ -537,6 +590,7 @@ class EpubReaderActivity final : public Activity {
   void loop() override;
   void render(RenderLock&& lock) override;
   bool isReaderActivity() const override { return true; }
+  bool preventAutoSleep() override { return section && section->hasActiveBuild(); }
   // A pending pre-render leaves the *next* page in the frame buffer; redraw the current page
   // so a screenshot (or any raw frame-buffer capture) matches what the user sees.
   void prepareFramebufferForCapture() override { restoreCurrentPageToBufferIfPreRendered(); }

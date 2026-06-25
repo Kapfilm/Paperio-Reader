@@ -562,15 +562,9 @@ void ReaderActivity::onEnter() {
     // file-existence checks (no parsing), so this is cheap.
     if (Epub(initialBookPath, "/.crosspoint").needsFirstOpenIndexing()) {
       RenderLock lock;
-      // drawPopup() overlays the indexing box on the write buffer and ships it
-      // with a differential refresh. displayBuffer() swaps buffers, so the write
-      // buffer holds the frame from two refreshes ago — and the screen we were
-      // launched from (e.g. the recent-books grid) uses a partial repaint, so
-      // that stale frame shows the previous selection. Without this resync the
-      // diff toggles the old/new selection cells back, making the highlight
-      // visibly jump before the popup appears. Sync to the displayed frame so
-      // the popup overlays what's actually on screen.
-      renderer.syncWriteBufferFromDisplayed();
+      // drawPopup() overlays the indexing box on the displayed frame (it resyncs the write buffer
+      // from the screen first), so the box lands on the launcher screen — e.g. the recent-books grid
+      // — without the stale-buffer diff toggling the old/new selection cells before the popup appears.
       GUI.drawPopup(renderer, tr(STR_INDEXING));
     }
     auto epub = loadEpub(initialBookPath);

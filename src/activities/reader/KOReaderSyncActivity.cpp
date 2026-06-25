@@ -595,8 +595,10 @@ void KOReaderSyncActivity::render(RenderLock&&) {
   }
 
   if (state == SYNCING || state == UPLOADING) {
-    GUI.drawPopup(renderer, statusMessage.c_str());
-    renderer.displayBuffer();
+    // Title frame already composed into the write buffer above (clearScreen); overlay the popup on
+    // it. drawPopup ships the frame itself — a second displayBuffer() here would ship the stale
+    // post-swap buffer.
+    GUI.drawPopup(renderer, statusMessage.c_str(), /*overlayDisplayedFrame=*/false);
     return;
   }
 
