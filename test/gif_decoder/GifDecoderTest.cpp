@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <unistd.h>  // getpid
 
 #include <algorithm>
 #include <cstdint>
@@ -16,10 +17,13 @@
 
 // Write bytes to a temp file; return the path.
 static std::string writeTempGif(const std::vector<uint8_t>& bytes) {
-  auto path = std::filesystem::temp_directory_path() / "giftest_XXXXXX.gif";
-  // Use a fixed name derived from a counter so parallel runs don't clash.
+  // Name must be unique across processes: CTest runs each test case in its own
+  // parallel process, so a per-process counter alone collides (every process
+  // starts at 1 → giftest_1.gif). Mix in the PID so parallel runs never clash.
   static int counter = 0;
-  path = std::filesystem::temp_directory_path() / ("giftest_" + std::to_string(++counter) + ".gif");
+  const std::string name =
+      "giftest_" + std::to_string(static_cast<long>(getpid())) + "_" + std::to_string(++counter) + ".gif";
+  auto path = std::filesystem::temp_directory_path() / name;
   const std::string pathStr = path.string();
   FILE* f = fopen(pathStr.c_str(), "wb");
   if (f) {
