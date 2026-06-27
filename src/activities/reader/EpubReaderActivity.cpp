@@ -696,6 +696,13 @@ void EpubReaderActivity::runDeferredGrayscalePass() {
   pendingGrayscale_.page.reset();
   LOG_DBG("ERS", "Deferred AA: planes=%lums gray=%lums restore=%lums", gt.planesMs, gt.displayMs, gt.restoreMs);
   checkHeapIntegrity("after_deferred_aa");
+  // The AA cleanup just reseeded frameBuffer from frameBufferActive (the current page),
+  // so the buffer state is now correct for a pre-render. render() holds off the PreRender
+  // pass while a deferred AA is owed (see the guard there); kick it now so a pre-render
+  // armed during that window actually runs against the freshly-settled buffer.
+  if (pendingPreRender) {
+    requestUpdate();
+  }
 }
 
 Section::BuildParams EpubReaderActivity::makeSectionBuildParams() const {
@@ -2957,6 +2964,22 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // Avoid heap walk in the hot render path; largest free block is sampled in index lifecycle logs.
   lastRenderStats.largestFreeBlockBefore = 0;
   showTruncatedSectionHintThisRender = false;
+
+  // Hold off a pure pre-render while a deferred AA pass is still owed for the
+  // CURRENT page. The pre-render writes the next page into frameBuffer, but the
+  // deferred AA's cleanup (cleanupGrayscaleWithPreviousBuffer) ends by copying
+  // frameBufferActive — the current page — back over frameBuffer. If the pre-render
+  // ran first, that copy would clobber the pre-rendered next page, and the next
+  // page turn (BufferDisplay) would then flush the stale current page with only a
+  // fresh status bar drawn over it (observed on X3 as "every second page doesn't
+  // change"). Keep pendingPreRender armed and bail; runDeferredGrayscalePass()
+  // re-requests an update once the AA pass has run, at which point the pre-render
+  // proceeds against the correct buffer state. Guard only the pre-render: a real
+  // page turn (usePreRenderedBuffer / Normal) must still render immediately.
+  if (pendingGrayscale_.active && pendingPreRender && !usePreRenderedBuffer &&
+      classifyRenderPass() == RenderPass::PreRender) {
+    return;
+  }
 
   // Classify the pass, then consume the pre-render flags.
   const RenderPass pass = classifyRenderPass();
