@@ -22,6 +22,7 @@ parser.add_argument("--2bit", dest="is2Bit", action="store_true", help="generate
 parser.add_argument("--additional-intervals", dest="additional_intervals", action="append", help="Additional code point intervals to export as min,max. This argument can be repeated.")
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
+parser.add_argument("--threshold", dest="threshold", type=float, default=0.4, help="Coverage threshold (0-1) for 1-bit black/white quantisation: pixels with greyscale coverage >= threshold become black. Lower = bolder stems. Default 0.4. Ignored for --2bit.")
 args = parser.parse_args()
 
 GlyphProps = namedtuple("GlyphProps", ["width", "height", "advance_x", "left", "top", "data_length", "data_offset", "code_point"])
@@ -30,13 +31,16 @@ font_stack = [freetype.Face(f) for f in args.fontstack]
 is2Bit = args.is2Bit
 size = args.size
 font_name = args.name
+threshold = args.threshold
 load_flags = freetype.FT_LOAD_RENDER
 if not is2Bit:
-    # 1-bit fonts: rasterise with FreeType's native monochrome renderer (hinted,
-    # drop-out controlled) instead of rendering antialiased grey and thresholding.
-    # Produces crisper, evenly-weighted stems at small UI sizes. Still 1 bit/pixel,
-    # so glyph metrics and bitmap size are unchanged.
-    load_flags |= freetype.FT_LOAD_TARGET_MONO
+    # 1-bit fonts: render antialiased greyscale with the auto-hinter forced on
+    # (it grid-snaps stems to whole pixels), then threshold coverage to black/
+    # white. This gives evenly-weighted, solid stems at small UI sizes: native
+    # mono rasterising left single-pixel stems spindly and uneven, while the old
+    # un-hinted >=~13% threshold over-inked them. Still 1 bit/pixel, so glyph
+    # metrics and bitmap size are unchanged.
+    load_flags |= freetype.FT_LOAD_FORCE_AUTOHINT
 if args.force_autohint:
     load_flags |= freetype.FT_LOAD_FORCE_AUTOHINT
 
@@ -273,17 +277,16 @@ for i_start, i_end in intervals:
             #     print(line)
             # print('')
         else:
-            # 1-bit: FreeType already rasterised this glyph in monochrome
-            # (FT_LOAD_TARGET_MONO), so every source pixel is a single bit in a
-            # row-padded, MSB-first buffer. Repack it into the firmware's
-            # continuous (non-row-padded) 1-bit bitstream.
+            # 1-bit: FreeType rasterised an 8-bit greyscale coverage map (auto-
+            # hinted). Threshold each pixel to black/white and repack it into the
+            # firmware's continuous (non-row-padded) 1-bit bitstream.
             pixelsbw = []
             px = 0
             src_pitch = abs(bitmap.pitch)
+            cutoff = int(round(threshold * 255))
             for y in range(bitmap.rows):
                 for x in range(bitmap.width):
-                    src_byte = bitmap.buffer[y * src_pitch + (x >> 3)]
-                    bit = (src_byte >> (7 - (x & 7))) & 1
+                    bit = 1 if bitmap.buffer[y * src_pitch + x] >= cutoff else 0
                     px = (px << 1) | bit
 
                     if (y * bitmap.width + x) % 8 == 7:
