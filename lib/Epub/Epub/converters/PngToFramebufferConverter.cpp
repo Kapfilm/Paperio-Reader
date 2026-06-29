@@ -12,6 +12,7 @@
 #include <memory>
 #include <new>
 
+#include "BlueNoise64.h"
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
 #include "PixelCache.h"
@@ -31,6 +32,9 @@ namespace {
 //                       optional error-diffusion ditherers behind the extension flag.
 struct DitherState {
   const RenderConfig* config{nullptr};
+  // `oneBit` marks 1-bit BW output; Atkinson backs it unless IMAGE_DITHER_BLUE_NOISE
+  // is defined, in which case the stateless blue-noise LUT is used (no object held).
+  bool oneBit{false};
   std::unique_ptr<Atkinson1BitDitherer> atkinson1Bit;
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
   std::unique_ptr<AtkinsonDitherer> atkinson4;
@@ -42,7 +46,13 @@ struct DitherState {
 // column — including off-screen ones — so error-diffusion state stays consistent
 // across the row; only the framebuffer/cache write is bounds-guarded by the caller.
 uint8_t ditherGray(DitherState& d, uint8_t gray, int localX, int outX, int outY) {
-  if (d.atkinson1Bit) return d.atkinson1Bit->processPixel(gray, localX) ? 3 : 0;
+  if (d.oneBit) {
+#ifdef IMAGE_DITHER_BLUE_NOISE
+    return blueNoise1Bit(gray, outX, outY) ? 3 : 0;
+#else
+    return d.atkinson1Bit->processPixel(gray, localX) ? 3 : 0;
+#endif
+  }
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
   if (d.config->useDithering) {
     switch (d.config->ditherMode) {
@@ -197,7 +207,14 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   DitherState dither;
   dither.config = &config;
   if (config.monochromeOutput) {
+    dither.oneBit = true;
+#ifndef IMAGE_DITHER_BLUE_NOISE
     dither.atkinson1Bit.reset(new (std::nothrow) Atkinson1BitDitherer(dstWidth));
+    if (!dither.atkinson1Bit) {
+      LOG_ERR("PNG", "Failed to allocate 1-bit Atkinson ditherer, falling back to 4-level dither");
+      dither.oneBit = false;
+    }
+#endif
   }
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
   else if (config.useDithering) {

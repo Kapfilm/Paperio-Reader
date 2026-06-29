@@ -50,11 +50,18 @@ bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str());
 
 namespace {
 
-// BW-plane cache: 1-bit Atkinson, only values 0/3, for AA-off rendering.
+// BW-plane cache: 1-bit dither, only values 0/3, for AA-off rendering.
+// The extension differs per dither algorithm so a cache from one algorithm is never
+// replayed by the other (e.g. when flipping IMAGE_DITHER_BLUE_NOISE for an A/B).
 std::string getBwCachePath(const std::string& imagePath) {
+#ifdef IMAGE_DITHER_BLUE_NOISE
+  static constexpr const char* kBwExt = ".1bitbn.pxc";  // blue-noise
+#else
+  static constexpr const char* kBwExt = ".1bit.pxc";  // Atkinson
+#endif
   size_t dot = imagePath.rfind('.');
-  if (dot != std::string::npos) return imagePath.substr(0, dot) + ".1bit.pxc";
-  return imagePath + ".1bit.pxc";
+  if (dot != std::string::npos) return imagePath.substr(0, dot) + kBwExt;
+  return imagePath + kBwExt;
 }
 
 // Grayscale cache: 4-level Bayer (0–3), replayed in GRAYSCALE_LSB/MSB passes when AA is on.

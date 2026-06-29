@@ -14,6 +14,7 @@
 #include <memory>
 #include <new>
 
+#include "BlueNoise64.h"
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
 #include "PixelCache.h"
@@ -71,8 +72,11 @@ struct JpegContext {
   PixelCache cache;
   bool caching{false};
 
-  // See PngContext for the rationale: monochromeOutput requests a 1-bit Atkinson dither
+  // See PngContext for the rationale: monochromeOutput requests a 1-bit dither
   // emitting only 0/3 so the BW DirectPixelWriter (`pixelValue < 3` rule) maps cleanly.
+  // `oneBit` marks that mode; the Atkinson ditherer backs it unless IMAGE_DITHER_BLUE_NOISE
+  // is defined, in which case the stateless blue-noise LUT is used and no object is held.
+  bool oneBit{false};
   int oneBitDitherRow{-1};
   std::unique_ptr<Atkinson1BitDitherer> atkinson1BitDitherer;
 
@@ -119,8 +123,12 @@ void prepareDitherRow(JpegContext& ctx, int dstY) {
 }
 
 uint8_t ditherGray(JpegContext& ctx, uint8_t gray, int localX, int outX, int outY) {
-  if (ctx.atkinson1BitDitherer) {
+  if (ctx.oneBit) {
+#ifdef IMAGE_DITHER_BLUE_NOISE
+    return blueNoise1Bit(gray, outX, outY) ? 3 : 0;
+#else
     return ctx.atkinson1BitDitherer->processPixel(gray, localX) ? 3 : 0;
+#endif
   }
 
   if (!ctx.config || !ctx.config->useDithering) {
@@ -148,8 +156,12 @@ uint8_t ditherGray(JpegContext& ctx, uint8_t gray, int localX, int outX, int out
 }
 #else
 uint8_t ditherGray(JpegContext& ctx, uint8_t gray, int localX, int outX, int outY) {
-  if (ctx.atkinson1BitDitherer) {
+  if (ctx.oneBit) {
+#ifdef IMAGE_DITHER_BLUE_NOISE
+    return blueNoise1Bit(gray, outX, outY) ? 3 : 0;
+#else
     return ctx.atkinson1BitDitherer->processPixel(gray, localX) ? 3 : 0;
+#endif
   }
   (void)localX;
   return applyBayerDither4Level(gray, outX, outY);
@@ -896,13 +908,17 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   // See PngToFramebufferConverter for rationale: BW-only display needs a 1-bit
   // dither so mid-grays don't collapse to black under DirectPixelWriter's `< 3` rule.
   if (config.monochromeOutput) {
+    ctx.oneBit = true;
+#ifndef IMAGE_DITHER_BLUE_NOISE
     ctx.atkinson1BitDitherer.reset(new (std::nothrow) Atkinson1BitDitherer(destWidth));
     if (!ctx.atkinson1BitDitherer) {
       LOG_ERR("JPG", "Failed to allocate 1-bit Atkinson ditherer, falling back to 4-level dither");
+      ctx.oneBit = false;
     }
+#endif
   }
 
-  if (config.useDithering && !ctx.atkinson1BitDitherer) {
+  if (config.useDithering && !ctx.oneBit) {
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
     switch (ctx.effectiveDitherMode) {
       case ImageDitherMode::Atkinson:
