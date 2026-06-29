@@ -603,7 +603,8 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
       streamFailed = true;
     }
 
-    // Book-keyed unzipped-HTML cache (adapted from crosspoint-reader PR #2452): the spine's
+    // Book-keyed unzipped-HTML cache (adapted from crosspoint-reader PR #2452 by GitHub user
+    // itsthisjustin): the spine's
     // inflated XHTML keyed on the spine alone, NOT on render properties. If a valid one exists,
     // read it directly and skip the (multi-second on a big spine) ZIP inflation — the win across
     // settings changes and rebuilds. A size mismatch means it is stale/partial (e.g. interrupted
@@ -1146,7 +1147,8 @@ uint16_t Section::estimatedTotalPages() const {
   // No build live -> the on-disk count is exact. While building, project from how much of the
   // XHTML has been consumed (activeBuildPercent), but never below what's already laid out. At
   // 100% the stream is exhausted and pageCount is final. Too early (no pages / 0%) -> fall back
-  // to the watermark. Adapted from crosspoint-reader PR #2452 ("Lazy incremental EPUB indexing").
+  // to the watermark. Adapted from crosspoint-reader PR #2452 by GitHub user itsthisjustin
+  // ("Lazy incremental EPUB indexing").
   if (!buildState_) return pageCount;
   const int pct = activeBuildPercent();
   if (pct <= 0 || pct >= 100 || pageCount == 0) return pageCount;

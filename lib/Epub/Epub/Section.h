@@ -85,7 +85,7 @@ class Section {
   std::string getSectionFilePath(uint32_t propertyHash) const;
   // Path of the book-keyed unzipped-HTML cache for this spine: the inflated XHTML keyed on the
   // spine alone (NOT on render properties), so it is reused across settings changes and rebuilds
-  // to skip ZIP inflation. Adapted from crosspoint-reader PR #2452.
+  // to skip ZIP inflation. Adapted from crosspoint-reader PR #2452 by GitHub user itsthisjustin.
   std::string getSectionHtmlCachePath() const;
   // Computes the image base path for extract images related to this specific section variant
   std::string getImageBasePath(uint32_t propertyHash) const;
@@ -187,7 +187,8 @@ class Section {
   // Best-known total page count: the exact pageCount when no build is live (finalized) or once
   // the stream is consumed, otherwise a byte-based projection (pages so far scaled by the
   // consumed fraction) so a "page X of ~Y" display doesn't read off the small build watermark.
-  // Never reports fewer than the pages already built. Adapted from crosspoint-reader PR #2452.
+  // Never reports fewer than the pages already built. Adapted from crosspoint-reader PR #2452 by
+  // GitHub user itsthisjustin.
   uint16_t estimatedTotalPages() const;
   // Load any page that has already been written during an active build, using the
   // in-memory LUT that grows with every onPageComplete(). Opens a temporary read handle

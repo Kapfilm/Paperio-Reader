@@ -145,8 +145,9 @@ constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 // while one big chapter already covers the budget on its own. Bounds continuous CPU/SD cost on a
 // battery e-reader (vs. indexing the whole book up front).
 //
-// Adapted from crosspoint-reader's BUILD_WINDOW_AHEAD (PR #2452, "Lazy incremental EPUB section
-// indexing"); here the window is a page budget that spans spines rather than a per-section count.
+// Adapted from crosspoint-reader's BUILD_WINDOW_AHEAD (PR #2452 by GitHub user itsthisjustin,
+// "Lazy incremental EPUB section indexing"); here the window is a page budget that spans spines
+// rather than a per-section count.
 #ifndef BG_BUILD_LOOKAHEAD_PAGES
 #define BG_BUILD_LOOKAHEAD_PAGES 50
 #endif
