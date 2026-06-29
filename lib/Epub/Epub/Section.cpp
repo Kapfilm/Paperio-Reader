@@ -1092,6 +1092,18 @@ uint16_t Section::activeBuildPageCount() const {
   return pageCount;  // pageCount is incremented by onPageComplete() as each page is written
 }
 
+uint16_t Section::estimatedTotalPages() const {
+  // No build live -> the on-disk count is exact. While building, project from how much of the
+  // XHTML has been consumed (activeBuildPercent), but never below what's already laid out. At
+  // 100% the stream is exhausted and pageCount is final. Too early (no pages / 0%) -> fall back
+  // to the watermark. Adapted from crosspoint-reader PR #2452 ("Lazy incremental EPUB indexing").
+  if (!buildState_) return pageCount;
+  const int pct = activeBuildPercent();
+  if (pct <= 0 || pct >= 100 || pageCount == 0) return pageCount;
+  const uint32_t projected = static_cast<uint32_t>(pageCount) * 100u / static_cast<uint32_t>(pct);
+  return projected > pageCount ? static_cast<uint16_t>(projected) : pageCount;
+}
+
 bool Section::activeBuildCssDegraded() const {
   // Read the live CSS resolver's running stats: lowHeapSkips is incremented the moment the
   // resolver drops a disk lookup under heap pressure (see CssParser), so it flags a degrading

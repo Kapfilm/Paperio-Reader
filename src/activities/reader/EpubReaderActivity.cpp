@@ -3438,10 +3438,13 @@ void EpubReaderActivity::restoreCurrentPageToBufferIfPreRendered() {
 
 void EpubReaderActivity::renderStatusBar() const {
   // Calculate progress in book. During an active section build pageCount only reflects pages
-  // built so far, not the final chapter length — pass 0 to suppress the fraction and book
-  // progress rather than showing a misleading "3/3" when the chapter has 40 pages total.
+  // built so far, not the final chapter length, so show a byte-based estimate ("page X of ~Y")
+  // instead of the misleading watermark. estimatedTotalPages() returns 0 while it's still too
+  // early to project, which suppresses the fraction/progress (same as a plain pageCount of 0).
+  const bool building = section->hasActiveBuild();
   const int currentPage = section->currentPage + 1;
-  const float pageCount = (section->hasActiveBuild()) ? 0.0f : static_cast<float>(section->pageCount);
+  const int displayPageCount = building ? section->estimatedTotalPages() : section->pageCount;
+  const float pageCount = static_cast<float>(displayPageCount);
   const float sectionChapterProg = (pageCount > 0) ? (static_cast<float>(currentPage) / pageCount) : 0;
   const float bookProgress = epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100;
 
@@ -3476,7 +3479,8 @@ void EpubReaderActivity::renderStatusBar() const {
       printedPageLabel = std::string("(") + *nearest + ")";
     }
   }
-  GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, isStarred, printedPageLabel);
+  GUI.drawStatusBar(renderer, bookProgress, currentPage, displayPageCount, title, 0, isStarred, printedPageLabel,
+                    /*fillMargin=*/true, /*pageCountApproximate=*/building);
 
 #if DEBUG_BACKGROUND_WORK
   renderBackgroundDebugOverlay();
