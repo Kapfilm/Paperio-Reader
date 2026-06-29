@@ -1,0 +1,20 @@
+diff --git a/lib/uzlib/src/tinflate.c b/lib/uzlib/src/tinflate.c
+index 310f8b54..2d42da67 100644
+--- a/lib/uzlib/src/tinflate.c
++++ b/lib/uzlib/src/tinflate.c
+@@ -510,6 +510,15 @@ static int tinf_inflate_block_data(TINF_DATA *d, TINF_TREE *lt, TINF_TREE *dt)
+     if (to_copy > dest_len) {
+         to_copy = dest_len;
+     }
++    /* memcpy() requires non-overlapping ranges, and LZ77 run-fills (e.g.
++       distance 1) rely on byte propagation that memcpy() does not provide.
++       The source sits offs == -lzOff bytes behind dest, so only the first
++       offs bytes are safe to bulk-copy; the rest of the run is finished on
++       the next call(s), by which point those bytes have been materialised. */
++    const unsigned int dist = (unsigned int)(-d->lzOff);
++    if (to_copy > dist) {
++        to_copy = dist;
++    }
+     memcpy(d->dest, d->dest + d->lzOff, to_copy);
+     d->dest += to_copy;
+     d->curlen -= to_copy;
