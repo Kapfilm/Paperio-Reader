@@ -184,7 +184,9 @@ bool isRedirect(int status) {
 }
 
 // Builds the esp_http_client_config_t for a given URL, picking the appropriate
-// TLS root strategy (pinned ISRG vs default crt_bundle) based on the host.
+// TLS root strategy by host: pinned ISRG (Let's Encrypt hosts), pinned GitHub
+// root (github.com/api.github.com — avoids the heap-heavy CA bundle), or the
+// default crt_bundle for everything else.
 void configureClient(const std::string& url, esp_http_client_config_t& config) {
   config.url = url.c_str();
   const bool leanTlsProfile = needsGithubComPin(url);
@@ -196,6 +198,16 @@ void configureClient(const std::string& url, esp_http_client_config_t& config) {
   if (needsLetsEncryptPin(url)) {
     config.cert_pem = ISRG_ROOT_X1_PEM;
     config.cert_len = sizeof(ISRG_ROOT_X1_PEM);
+  } else if (needsGithubComPin(url)) {
+    // Pin GitHub's USERTrust ECC root directly instead of attaching the
+    // ~200-cert crt_bundle. The bundle's per-handshake heap cost (scanning the
+    // bundle + parsing the matched CA + the ECDSA-P384 chain verify) was
+    // starving the heap during OTA checks and failing with
+    // MBEDTLS_ERR_MPI_ALLOC_FAILED (crt-bundle log: "PK verify failed with
+    // error 0x10"). A single pinned root needs a fraction of that. The
+    // crt_bundle retry below still covers a GitHub root rotation.
+    config.cert_pem = SECTIGO_GITHUB_DV_E36_PEM;
+    config.cert_len = sizeof(SECTIGO_GITHUB_DV_E36_PEM);
   } else {
     config.crt_bundle_attach = esp_crt_bundle_attach;
   }
@@ -379,15 +391,17 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   // by needsLetsEncryptPin().
   if (result == HttpDownloader::HTTP_ERROR && sink.downloaded == 0 && url.compare(0, 8, "https://") == 0) {
     if (needsGithubComPin(url)) {
-      LOG_INF("HTTP", "Retrying with GitHub Sectigo pin after handshake failure");
+      LOG_INF("HTTP", "Retrying GitHub with full CA bundle after pin failure");
+      // Primary GitHub attempt uses the pinned root (see configureClient) to
+      // keep handshake heap low. If that fails (e.g. GitHub rotated to a root
+      // not covered by the pin), fall back to the full crt_bundle — heavier on
+      // heap, but the widest trust set. Reuse configureClient for the same lean
+      // buffer/timeout profile, then swap the pin for the bundle.
       esp_http_client_config_t githubConfig = {};
-      githubConfig.url = url.c_str();
-      githubConfig.buffer_size = HTTP_RX_BUF;
-      githubConfig.buffer_size_tx = HTTP_TX_BUF;
-      githubConfig.timeout_ms = HTTP_TIMEOUT_MS;
-      githubConfig.cert_pem = SECTIGO_GITHUB_DV_E36_PEM;
-      githubConfig.cert_len = sizeof(SECTIGO_GITHUB_DV_E36_PEM);
-      githubConfig.keep_alive_enable = true;
+      configureClient(url, githubConfig);
+      githubConfig.cert_pem = nullptr;
+      githubConfig.cert_len = 0;
+      githubConfig.crt_bundle_attach = esp_crt_bundle_attach;
       client = esp_http_client_init(&githubConfig);
       if (client) {
         applyRequestHeaders(client, username, password);
@@ -397,13 +411,10 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
     } else if (!needsLetsEncryptPin(url)) {
       LOG_INF("HTTP", "Retrying with ISRG pin (crt_bundle may have failed Let's Encrypt chain)");
       esp_http_client_config_t isrgConfig = {};
-      isrgConfig.url = url.c_str();
-      isrgConfig.buffer_size = HTTP_RX_BUF;
-      isrgConfig.buffer_size_tx = HTTP_TX_BUF;
-      isrgConfig.timeout_ms = HTTP_TIMEOUT_MS;
+      configureClient(url, isrgConfig);
+      isrgConfig.crt_bundle_attach = nullptr;
       isrgConfig.cert_pem = ISRG_ROOT_X1_PEM;
       isrgConfig.cert_len = sizeof(ISRG_ROOT_X1_PEM);
-      isrgConfig.keep_alive_enable = true;
       client = esp_http_client_init(&isrgConfig);
       if (client) {
         applyRequestHeaders(client, username, password);
