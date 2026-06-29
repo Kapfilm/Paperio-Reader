@@ -322,6 +322,7 @@ void EpubReaderActivity::onEnter() {
   // target with Kind::Page from progress.bin, which is why XPath-precision sync
   // silently degraded to the rough page estimate.
   FsFile f;
+  bool hadSavedProgress = false;
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
     uint8_t data[6];
     int dataSize = f.read(data, 6);
@@ -329,6 +330,7 @@ void EpubReaderActivity::onEnter() {
       currentSpineIndex = data[0] + (data[1] << 8);
       navTarget = NavigationTarget::makePage(data[2] + (data[3] << 8));
       navTarget.cachedSpineIdx = currentSpineIndex;
+      hadSavedProgress = true;
       LOG_DBG("ERS", "Loaded cache: %d, %d", currentSpineIndex, navTarget.page);
     }
     if (dataSize == 6) {
@@ -336,8 +338,6 @@ void EpubReaderActivity::onEnter() {
     }
     f.close();
   }
-  // We may want a better condition to detect if we are opening for the first time.
-  // This will trigger if the book is re-opened at Chapter 0.
   if (currentSpineIndex < 0 || currentSpineIndex >= epub->getSpineItemsCount()) {
     LOG_ERR("ERS", "Invalid saved spine index %d (valid 0..%d), resetting to start", currentSpineIndex,
             epub->getSpineItemsCount() > 0 ? epub->getSpineItemsCount() - 1 : 0);
@@ -349,7 +349,11 @@ void EpubReaderActivity::onEnter() {
   applyPendingBookmarkJump();
   logReaderMemSnapshot("onEnter_after_pending_sync");
 
-  if (currentSpineIndex == 0) {
+  // True first open only: no progress.bin record. Skip the front matter to the text reference.
+  // A saved position of spine 0 (reading the cover/chapter 0) must NOT be overridden — the old
+  // `currentSpineIndex == 0` test couldn't tell "never opened" from "saved at chapter 0" and
+  // bounced the reader to the text start on every reopen at the cover.
+  if (!hadSavedProgress && currentSpineIndex == 0) {
     int textSpineIndex = epub->getSpineIndexForTextReference();
     if (textSpineIndex != 0) {
       currentSpineIndex = textSpineIndex;
