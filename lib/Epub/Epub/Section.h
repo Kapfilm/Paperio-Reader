@@ -83,6 +83,10 @@ class Section {
 
   // Computes the active file path for this section based on rendering properties
   std::string getSectionFilePath(uint32_t propertyHash) const;
+  // Path of the book-keyed unzipped-HTML cache for this spine: the inflated XHTML keyed on the
+  // spine alone (NOT on render properties), so it is reused across settings changes and rebuilds
+  // to skip ZIP inflation. Adapted from crosspoint-reader PR #2452.
+  std::string getSectionHtmlCachePath() const;
   // Computes the image base path for extract images related to this specific section variant
   std::string getImageBasePath(uint32_t propertyHash) const;
   // Garbage collection: Keep only the most recent N variants per chapter
