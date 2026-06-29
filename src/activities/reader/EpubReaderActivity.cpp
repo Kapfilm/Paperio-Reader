@@ -165,6 +165,18 @@ constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 #ifndef IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES
 #define IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES (28 * 1024)
 #endif
+// CSS books need more margin to build in place: the parse resolves embedded styles, which
+// self-degrade below the runtime CSS-resolve floor (CSS_MIN_FREE_HEAP_FOR_CSS ≈ 40 KB). Since
+// every build is now two-phase (the inflate ring is released BEFORE the CSS-resolving parse),
+// the resolve runs with the ring gone, so a higher free floor keeps it clear of 40 KB; contig is
+// pinned at the inflate-ring size (≤32 KB) for the extraction phase. A miss is still caught by
+// isCssLowHeapDegraded() and rebuilt with the buffer released.
+#ifndef IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES
+#define IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES (66 * 1024)
+#endif
+#ifndef IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES
+#define IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES (32 * 1024)
+#endif
 
 constexpr uint8_t TRUNCATED_SECTION_HINT_RENDER_COUNT = 2;
 constexpr const char* TRUNCATED_SECTION_HINT_LINE_1 = "Chapter may be truncated (low memory).";
@@ -2486,9 +2498,13 @@ bool EpubReaderActivity::heapAllowsInPlaceBuild(const bool embeddedStyle) const 
       return false;
     }
   }
+  const uint32_t freeFloor =
+      embeddedStyle ? IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES : IN_PLACE_BUILD_MIN_FREE_HEAP_BYTES;
+  const uint32_t contigFloor =
+      embeddedStyle ? IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES : IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES;
   const uint32_t freeHeap = esp_get_free_heap_size();
   const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
-  return freeHeap >= IN_PLACE_BUILD_MIN_FREE_HEAP_BYTES && contigHeap >= IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES;
+  return freeHeap >= freeFloor && contigHeap >= contigFloor;
 }
 
 EpubReaderActivity::SectionBuildMode EpubReaderActivity::chooseSectionBuildMode(const bool embeddedStyle) const {
@@ -2504,16 +2520,16 @@ EpubReaderActivity::SectionBuildMode EpubReaderActivity::chooseSectionBuildMode(
   // on-device, then had to be rebuilt blocking). Mid-build BW draws still work off DTM1.
   if (renderer.isX3()) return SectionBuildMode::IncrementalReleased;
 
-  // X4 CSS book → released too. Built with the ~48 KB buffer resident, a CSS section reliably
-  // drops below the runtime CSS-resolve floor (MIN_FREE_HEAP_FOR_CSS ≈ 40 KB) mid-parse → lookups
-  // skip → css-degraded → a wasted resident build then a blocking rebuild. Releasing keeps it in
-  // the ~120 KB regime where the blocking path builds these clean.
-  if (embeddedStyle) return SectionBuildMode::IncrementalReleased;
-
-  // X4 non-CSS book → keep the buffer resident when the in-place floors fit (fast-refresh baseline
-  // re-seeds from it, AA stays live); otherwise release for headroom.
-  return heapAllowsInPlaceBuild(/*embeddedStyle=*/false) ? SectionBuildMode::IncrementalResident
-                                                         : SectionBuildMode::IncrementalReleased;
+  // X4 → keep the secondary buffer resident when the in-place floors fit (fast-refresh baseline
+  // re-seeds from it, AA stays live during the build); otherwise release for headroom. This now
+  // applies to CSS books too: every build is two-phase, so the inflate ring is released BEFORE the
+  // CSS-resolving parse, keeping the resolve clear of the ~40 KB floor when the (higher) CSS
+  // in-place floor is met. A resident CSS build that still degrades is caught by
+  // isCssLowHeapDegraded() and rebuilt with the buffer released — so this gates "try in place"
+  // rather than guaranteeing it. (Historically CSS books always released, from before the build
+  // was two-phase, when the ring + parser + resolver were all live at once.)
+  return heapAllowsInPlaceBuild(embeddedStyle) ? SectionBuildMode::IncrementalResident
+                                               : SectionBuildMode::IncrementalReleased;
 }
 
 EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const RenderLayout& layout,
