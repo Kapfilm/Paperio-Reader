@@ -267,12 +267,18 @@ class EpubReaderActivity final : public Activity {
   int8_t backgroundBuildPercent_ = -1;
   // --- Background B (idle build of the next consecutive sections' caches) ---
   // Lookahead cursor: spine index the B state below currently targets; -1 when B has no
-  // target. Walks forward through [currentSpineIndex+1 .. +BG_BUILD_LOOKAHEAD] as each
-  // target settles, then idles until navigation re-anchors the window.
+  // target. Walks forward from currentSpineIndex+1 toward the book end as each target settles,
+  // stopping once BG_BUILD_LOOKAHEAD_PAGES of runway is built ahead (see below), then idles
+  // until navigation re-anchors the window.
   int backgroundBuildSpineIndex_ = -1;
   // Reading position the lookahead window is anchored at. When it no longer matches
   // currentSpineIndex (any navigation) the held B state is stale and the window restarts.
   int backgroundBuildBaseSpine_ = -1;
+  // Pages B has laid out ahead in the current window (sum of pageCounts of the subsequent
+  // sections built/cached since the last re-anchor). Combined with the current section's unread
+  // tail, this is the runway the page-budget gate compares against BG_BUILD_LOOKAHEAD_PAGES.
+  // Reset only on re-anchor; preserved across the per-target resetBackgroundBuild() in Settled.
+  int backgroundWindowPagesBuilt_ = 0;
   // Section being built (or already built) for backgroundBuildSpineIndex_. Owned here
   // until buildSection() adopts it on a consecutive boundary cross or discards it on any
   // other navigation. Its destructor aborts a partial build and deletes the partial file.

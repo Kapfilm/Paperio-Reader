@@ -137,12 +137,18 @@ constexpr uint32_t PRE_RENDER_MIN_FREE_HEAP_BYTES = 56 * 1024;
 // suggests 30–50 ms); tune from the DEBUG_BACKGROUND_WORK serial counters.
 constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 
-// How many consecutive sections ahead of the reading position B keeps indexed. After the
-// immediate next section settles, the cursor walks forward to index up to this many spines
-// ahead, then idles until navigation re-anchors the window. Bounds the continuous CPU/SD
-// cost on a battery e-reader (vs. indexing the whole book on first open).
-#ifndef BG_BUILD_LOOKAHEAD
-#define BG_BUILD_LOOKAHEAD 3
+// Background-B keeps a page-budgeted window of layout ready ahead of the reading position rather
+// than a fixed number of sections: it pre-builds whole subsequent spines until roughly this many
+// pages of runway exist (counting the current section's unread tail plus the subsequent sections
+// built so far), then idles until the reader advances and the window re-anchors. A page budget
+// spans spine boundaries naturally — front matter of many tiny one-page spines gets several built,
+// while one big chapter already covers the budget on its own. Bounds continuous CPU/SD cost on a
+// battery e-reader (vs. indexing the whole book up front).
+//
+// Adapted from crosspoint-reader's BUILD_WINDOW_AHEAD (PR #2452, "Lazy incremental EPUB section
+// indexing"); here the window is a page budget that spans spines rather than a per-section count.
+#ifndef BG_BUILD_LOOKAHEAD_PAGES
+#define BG_BUILD_LOOKAHEAD_PAGES 50
 #endif
 
 // Foreground in-place section build (the "keep the secondary buffer" path). When heap is
@@ -785,13 +791,24 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
     resetBackgroundBuild();
     backgroundBuildBaseSpine_ = currentSpineIndex;
     backgroundBuildSpineIndex_ = currentSpineIndex + 1;
+    backgroundWindowPagesBuilt_ = 0;
   }
-  // Index up to BG_BUILD_LOOKAHEAD sections ahead. The cursor advances as each target
-  // settles (Settled case below); already-cached spines settle for free in Probe. Once the
-  // cursor passes the window end or the book end, idle until the next navigation re-anchors.
-  const int windowEnd = std::min(currentSpineIndex + BG_BUILD_LOOKAHEAD, spineCount - 1);
-  if (backgroundBuildSpineIndex_ < currentSpineIndex + 1 || backgroundBuildSpineIndex_ > windowEnd) {
+  // Walk forward from currentSpineIndex+1 to the book end. The cursor advances as each target
+  // settles (Settled case below); already-cached spines settle for free in Probe.
+  if (backgroundBuildSpineIndex_ < currentSpineIndex + 1 || backgroundBuildSpineIndex_ >= spineCount) {
     return;
+  }
+  // Page-budget gate: stop pre-building once ~BG_BUILD_LOOKAHEAD_PAGES of runway is laid out ahead
+  // of the reader — the current section's unread tail plus the subsequent sections built so far.
+  // Only gate at a section boundary (state==Probe, no build in flight) so a section in progress is
+  // never abandoned mid-build; the runway shrinks as the reader advances, re-opening the window.
+  if (backgroundBuildState_ == BackgroundBuildState::Probe) {
+    const int currentTailPages = (section && section->pageCount > 0)
+                                     ? std::max(0, static_cast<int>(section->pageCount) - 1 - section->currentPage)
+                                     : 0;
+    if (currentTailPages + backgroundWindowPagesBuilt_ >= BG_BUILD_LOOKAHEAD_PAGES) {
+      return;
+    }
   }
   const int targetSpine = backgroundBuildSpineIndex_;
 
@@ -814,6 +831,7 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
           p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment, p.viewportWidth, p.viewportHeight,
           p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled, p.imageRendering);
       if (cached && !backgroundSection_->isEmbeddedStyleFallback()) {
+        backgroundWindowPagesBuilt_ += backgroundSection_->pageCount;  // already-built runway counts toward the budget
         backgroundSection_.reset();
         backgroundBuildState_ = BackgroundBuildState::Settled;
       } else {
@@ -915,6 +933,7 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
 #if DEBUG_BACKGROUND_WORK
           bgCounters_.bCompletes++;
 #endif
+          backgroundWindowPagesBuilt_ += backgroundSection_->pageCount;  // count this section toward the page budget
           LOG_INF("ERS", "Background build spine=%d complete: %u pages", targetSpine, backgroundSection_->pageCount);
         }
       } else {
