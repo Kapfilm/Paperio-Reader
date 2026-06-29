@@ -13,6 +13,22 @@
 class EpubReaderActivity final : public Activity {
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
+  // Cross-section lookahead: the next spine is built in the background once the visible
+  // section is fully laid out, so crossing into it (a chapter end, or the next of many tiny
+  // front-matter spine items) is a cache hit -- no INDEXING popup, instant turn. The build is
+  // adopted purely via the on-disk .bin cache (the cross path's loadSectionFile picks it up),
+  // so no pointer hand-off is needed. aheadSpineIndex_ is the target spine and also acts as a
+  // "done" marker once its cache exists, so we don't re-probe it every tick. Driven by
+  // pumpLookaheadBuild() from loop(); see also resetLookahead().
+  std::unique_ptr<Section> aheadSection_ = nullptr;
+  int aheadSpineIndex_ = -1;
+  // True once aheadSpineIndex_'s .bin cache is confirmed on disk (we built it, or it was already
+  // cached). Stops the pump re-probing a finished target every tick; cleared on re-anchor.
+  bool aheadReady_ = false;
+  // Viewport last used by render(), captured so the lookahead build keys its cache exactly the
+  // way the eventual cross will look it up. A mismatch would make the cross miss and rebuild.
+  uint16_t lastViewportWidth_ = 0;
+  uint16_t lastViewportHeight_ = 0;
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
   std::optional<uint16_t> pendingPageJump;
@@ -81,10 +97,25 @@ class EpubReaderActivity final : public Activity {
   // whole HTML must be inflated before page 1 can lay out (the giant single-spine case), which is
   // a multi-second wait. Normal chapters are well under this and stay popup-free.
   static constexpr size_t BUILD_POPUP_BYTE_THRESHOLD = 96 * 1024;
+  // Heap floors for the next-section lookahead build (pumpLookaheadBuild). A background build
+  // holds a live parser + page LUT + inflate state concurrently with the resident visible
+  // section, so it only runs with comfortable headroom and stands down under pressure. These are
+  // deliberately conservative on this no-PSRAM part and want on-device tuning; see the SDK-gap
+  // note in pumpLookaheadBuild() about the (unavailable here) secondary-framebuffer release.
+  static constexpr uint32_t LOOKAHEAD_MIN_FREE_HEAP_BYTES = 72 * 1024;
+  static constexpr uint32_t LOOKAHEAD_MIN_CONTIG_HEAP_BYTES = 40 * 1024;
   // Remap the cached relative reading position once the section's real page count is known
   // (used after a settings change re-paginates a chapter). Returns true if currentPage moved.
   // No-op while the section is still building or when the pagination is unchanged (plain resume).
   bool applyDeferredReposition();
+  // Build the next spine in the background (one chunk per call) so a forward cross is a cache
+  // hit. Self-gates on the visible section's build (it has priority), the render mutex, and heap
+  // headroom; re-anchors to currentSpineIndex+1 whenever the reading position moves. Called from
+  // loop() after the visible section's own build pump.
+  void pumpLookaheadBuild();
+  // Drop any in-flight lookahead build (the partial .bin is sentinel-headered, so loadSectionFile
+  // ignores it) and clear the target. Called on navigation re-anchor and on exit.
+  void resetLookahead();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);

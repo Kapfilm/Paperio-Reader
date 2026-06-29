@@ -219,6 +219,7 @@ void EpubReaderActivity::onExit() {
   }
 
   section.reset();
+  resetLookahead();
   if (pendingReadFolderMove && epub) {
     const std::string srcPath = epub->getPath();
     const std::string oldCachePath = epub->getCachePath();
@@ -261,6 +262,12 @@ void EpubReaderActivity::loop() {
       }
     }
   }
+
+  // With the visible section laid out (or idle), build the *next* spine in the background so a
+  // forward cross is a cache hit -- no INDEXING popup for the next chapter or the next of many
+  // tiny front-matter spine items. Runs after (and yields priority to) the visible section's own
+  // build pump above.
+  pumpLookaheadBuild();
 
   // End-of-Book screen reached (currentSpineIndex == spine count) means the book is
   // finished. Two independent finished-book features key off this same condition.
@@ -490,6 +497,107 @@ void EpubReaderActivity::loop() {
     pageTurn(false);
   } else {
     pageTurn(true);
+  }
+}
+
+void EpubReaderActivity::resetLookahead() {
+  // The ~Section dtor calls abandonBuild(); the partial .bin carries the incomplete-version
+  // sentinel header, so loadSectionFile would reject it anyway -- leaving it is harmless and it
+  // gets overwritten on the next attempt. Closing the Section's SD handle is itself SD access, so
+  // callers that may hold a live aheadSection_ run this under the RenderLock.
+  aheadSection_.reset();
+  aheadSpineIndex_ = -1;
+  aheadReady_ = false;
+}
+
+void EpubReaderActivity::pumpLookaheadBuild() {
+  // Need a real render first (for the viewport cache key) and a next spine to aim at.
+  if (!epub || lastViewportWidth_ == 0) {
+    return;
+  }
+  const int target = currentSpineIndex + 1;
+
+  // Cheap, lock-free early-out: this spine's cache is already on disk, so a cross will hit it.
+  // Nothing to do until the reading position moves and we re-anchor.
+  if (aheadReady_ && aheadSpineIndex_ == target) {
+    return;
+  }
+
+  // The visible section has priority: don't start/continue a lookahead while it's still laying
+  // itself out (its own pump in loop() drives it). Also stay off the render/input critical path.
+  if (section && section->isBuilding()) {
+    return;
+  }
+  if (RenderLock::peek()) {
+    return;
+  }
+
+  // Everything below mutates aheadSection_ (SD + shared glyph metrics), so it runs under the lock.
+  RenderLock lock;
+  // Re-check under the lock: render() may have started the visible section building between the
+  // outer guard and acquiring the lock here.
+  // cppcheck-suppress knownConditionTrueFalse
+  if (section && section->isBuilding()) {
+    return;
+  }
+
+  // No next spine, or the reading position moved: drop any stale/in-flight ahead build (its SD
+  // handle is closed here, under the lock) and re-aim.
+  if (target >= epub->getSpineItemsCount() || aheadSpineIndex_ != target) {
+    resetLookahead();
+    if (target >= epub->getSpineItemsCount()) {
+      return;
+    }
+    aheadSpineIndex_ = target;
+  }
+
+  // Heap gate: a background build holds a parser + page LUT + inflate state alongside the resident
+  // visible section, so only run with comfortable headroom and stand down (discarding any partial)
+  // under pressure -- a truncated low-memory build would be useless anyway.
+  //
+  // NOTE: in our (witchhunt) tree the foreground rebuild fallback temporarily releases the ~52 KB
+  // secondary framebuffer via the display HAL to gain headroom for a build under memory pressure.
+  // This SDK doesn't expose a secondary-buffer release yet, so this background lookahead must live
+  // entirely within current headroom -- hence the conservative floors. If the SDK gains that
+  // release, these floors can drop and the lookahead can run more aggressively (and a low-heap
+  // cross could fall back to a buffer-released foreground build).
+  if (ESP.getFreeHeap() < LOOKAHEAD_MIN_FREE_HEAP_BYTES || ESP.getMaxAllocHeap() < LOOKAHEAD_MIN_CONTIG_HEAP_BYTES) {
+    resetLookahead();
+    return;
+  }
+
+  if (!aheadSection_) {
+    aheadSection_ = std::unique_ptr<Section>(new Section(epub, target, renderer));
+    // Already cached (same settings/viewport)? Then the cross is already free -- mark done and
+    // release the object (and its SD handle).
+    if (aheadSection_->loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, lastViewportWidth_,
+                                       lastViewportHeight_, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
+                                       SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+      aheadSection_.reset();
+      aheadReady_ = true;
+      return;
+    }
+    if (!aheadSection_->startBuild(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+                                   SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, lastViewportWidth_,
+                                   lastViewportHeight_, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
+                                   SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+      LOG_ERR("ERS", "Lookahead build start failed for spine %d", target);
+      resetLookahead();
+    }
+    return;  // first probe consumed this tick; the build advances on following ticks
+  }
+
+  if (aheadSection_->isBuilding()) {
+    if (!aheadSection_->buildSomeMore(BACKGROUND_BUILD_PAGES_PER_TICK)) {
+      LOG_ERR("ERS", "Lookahead build failed for spine %d", target);
+      resetLookahead();
+    } else if (aheadSection_->isBuildComplete()) {
+      // finalizeBuild() committed the .bin; the cross will hit the cache. Free the RAM (and SD
+      // handle) now, and mark done so we don't re-probe this spine every tick.
+      aheadSection_.reset();
+      aheadReady_ = true;
+    }
   }
 }
 
@@ -870,6 +978,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
   const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+  // Capture for the next-section lookahead so it keys its cache identically to this render's
+  // layout; otherwise the eventual cross would miss and rebuild. See pumpLookaheadBuild().
+  lastViewportWidth_ = viewportWidth;
+  lastViewportHeight_ = viewportHeight;
 
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
