@@ -697,10 +697,12 @@ void EpubReaderActivity::runDeferredGrayscalePass() {
   LOG_DBG("ERS", "Deferred AA: planes=%lums gray=%lums restore=%lums", gt.planesMs, gt.displayMs, gt.restoreMs);
   checkHeapIntegrity("after_deferred_aa");
   // The AA cleanup just reseeded frameBuffer from frameBufferActive (the current page),
-  // so the buffer state is now correct for a pre-render. render() holds off the PreRender
-  // pass while a deferred AA is owed (see the guard there); kick it now so a pre-render
-  // armed during that window actually runs against the freshly-settled buffer.
-  if (pendingPreRender) {
+  // so the buffer state is now correct for a pre-render. On X3, render() holds off the
+  // PreRender pass while a deferred AA is owed (see the guard there); kick it now so a
+  // pre-render armed during that window actually runs against the freshly-settled buffer.
+  // X4 never holds off the pre-render (the guard is X3-only there), so this re-request
+  // would just be a redundant trigger — skip it to keep X4's refresh sequence unchanged.
+  if (renderer.isX3() && pendingPreRender) {
     requestUpdate();
   }
 }
@@ -2976,7 +2978,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // re-requests an update once the AA pass has run, at which point the pre-render
   // proceeds against the correct buffer state. Guard only the pre-render: a real
   // page turn (usePreRenderedBuffer / Normal) must still render immediately.
-  if (pendingGrayscale_.active && pendingPreRender && !usePreRenderedBuffer &&
+  //
+  // X3 only: this ordering hazard exists because X3 keeps _refreshPending asserted
+  // for the whole multi-second waveform, which blocks runDeferredGrayscalePass()
+  // (it self-gates on !isRefreshPending()) and lets the pre-render slip in ahead of
+  // the AA. X4 clears _refreshPending inline in triggerDisplay(), so the deferred AA
+  // — which serviceBackgroundWork() runs first — always completes before any
+  // pre-render; the guard is unnecessary there and reordering its differential
+  // refresh / RED-RAM baseline only reintroduces ghosting.
+  if (renderer.isX3() && pendingGrayscale_.active && pendingPreRender && !usePreRenderedBuffer &&
       classifyRenderPass() == RenderPass::PreRender) {
     return;
   }
