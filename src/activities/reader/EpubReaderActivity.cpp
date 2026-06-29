@@ -177,6 +177,18 @@ constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 #ifndef IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES
 #define IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES (32 * 1024)
 #endif
+// Proactive low-heap guard for a resident (AA-buffer-kept) Background-C build. The in-place start
+// floors can't bound the parse's transient working set, which can ride free heap well down on a
+// big chapter (a 123 KB CSS section was observed dipping to ~24 KB). If the between-slice baseline
+// falls below these, abandon the resident build and rebuild on the released path (frees the
+// ~48 KB buffer) before an allocation fails. Pinned below typical mid-build baselines so a build
+// that is coping is not aborted, but above the ~13-15 KB zone where heap-pressure faults appear.
+#ifndef RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES
+#define RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES (30 * 1024)
+#endif
+#ifndef RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES
+#define RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES (16 * 1024)
+#endif
 
 constexpr uint8_t TRUNCATED_SECTION_HINT_RENDER_COUNT = 2;
 constexpr const char* TRUNCATED_SECTION_HINT_LINE_1 = "Chapter may be truncated (low memory).";
@@ -979,6 +991,21 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     return;
   }
 
+  // Discard the in-flight build and re-render: buildSection then takes the blocking path (latched
+  // by forceBlockingBuildSpine_), which builds with the secondary buffer released (~52 KB more
+  // headroom). Shared by the low-heap guard and the failure/degrade handling below.
+  const auto fallbackToReleasedRebuild = [&](const char* reason) {
+    LOG_ERR("ERS", "Background-C spine=%d %s; falling back to released rebuild", currentSpineIndex, reason);
+    section->clearCache();
+    section.reset();
+    forceBlockingBuildSpine_ = currentSpineIndex;
+    readerPhase_ = ReaderPhase::READING;
+    buildingPopupShown_ = false;
+    buildDisplayedPage_ = -1;
+    backgroundBuildPercent_ = -1;
+    requestUpdate();  // -> BuildSection -> blocking (released) build
+  };
+
   // Layout needs glyph metrics only; reset accumulation so the next prewarm re-wires the
   // flash-resident metric tables rather than the page-scoped bitmap cache (see
   // stepBackgroundSectionBuild for the full rationale).
@@ -990,6 +1017,15 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
   checkHeapIntegrity("after_c_slice");
 
   if (step == Section::BuildStep::More) {
+    // Proactive low-heap guard: while the build is resident (AA buffer kept), bail to the released
+    // path before heap reaches the fault zone. Only meaningful when the buffer is still resident —
+    // a build already running released has that headroom and should ride it out.
+    if (!secondaryBufferDegraded_ && (esp_get_free_heap_size() < RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES ||
+                                      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT) <
+                                          RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES)) {
+      fallbackToReleasedRebuild("low heap mid-build");
+      return;
+    }
     backgroundBuildPercent_ = static_cast<int8_t>(section->activeBuildPercent());
     // If the page the user is waiting on just became readable, ask the render task to draw it.
     const int want = section->currentPage;
@@ -1002,19 +1038,10 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
 
   backgroundBuildPercent_ = -1;
 
-  // Failed, or finished but truncated / CSS-degraded: discard and retry on the blocking path,
-  // which builds with the secondary buffer released (~52 KB more headroom). The latch stops
-  // buildSection from re-entering Background-C for this spine.
+  // Failed, or finished but truncated / CSS-degraded: discard and retry on the released path. The
+  // latch (set inside the helper) stops buildSection from re-entering Background-C for this spine.
   if (step == Section::BuildStep::Failed || section->isTruncatedCache() || section->isCssLowHeapDegraded()) {
-    LOG_ERR("ERS", "Background-C spine=%d %s; falling back to blocking rebuild", currentSpineIndex,
-            step == Section::BuildStep::Failed ? "failed" : "incomplete");
-    section->clearCache();
-    section.reset();
-    forceBlockingBuildSpine_ = currentSpineIndex;
-    readerPhase_ = ReaderPhase::READING;
-    buildingPopupShown_ = false;
-    buildDisplayedPage_ = -1;
-    requestUpdate();  // -> BuildSection -> blocking build
+    fallbackToReleasedRebuild(step == Section::BuildStep::Failed ? "failed" : "incomplete");
     return;
   }
 
