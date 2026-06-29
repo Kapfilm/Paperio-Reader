@@ -132,6 +132,12 @@ std::string Section::getSectionFilePath(uint32_t propertyHash) const {
   return epub->getCachePath() + "/sections/" + buf + ".bin";
 }
 
+std::string Section::getSectionHtmlCachePath() const {
+  char buf[32];
+  snprintf(buf, sizeof(buf), "html_%d", spineIndex);
+  return epub->getCachePath() + "/sections/" + buf + ".bin";
+}
+
 std::string Section::getImageBasePath(uint32_t propertyHash) const {
   char buf[32];
   snprintf(buf, sizeof(buf), "img_%d_%08x_", spineIndex, propertyHash);
@@ -431,6 +437,9 @@ struct Section::BuildState {
   // extra SD round-trip.
   bool useTempExtract = false;
   bool extractDone = false;
+  // True when tempPath is the book-keyed HTML cache opened for READ (reused, not produced this
+  // build): phase (a) is skipped and the cache is kept on cleanup rather than deleted.
+  bool reusedHtml = false;
   FsFile tempFile;
   std::string tempPath;
   size_t tempBytesFed = 0;
@@ -586,29 +595,63 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
 
   if (!st.parseStarted) {
     st.parseStarted = true;
-    st.useTempExtract = budgetMs != 0;
-    // Heap, not stack: these must survive across slices. Ring (≤32 KB, sized to the
-    // entry) + 2× PARSE_CHUNK_BYTES scratch — the same buffers readFileToStream held
-    // for the whole stream, so net-neutral vs the old one-shot path.
-    st.zip.reset(new (std::nothrow) ZipFile(epub->getPath()));
+    // The parse always feeds the visitor from a temp SD file (phase b); chunkBuf is its read
+    // buffer, so allocate it whether the cached HTML is reused or produced now.
     st.chunkBuf.reset(new (std::nothrow) uint8_t[PARSE_CHUNK_BYTES]);
-    if (st.zip && st.chunkBuf) {
-      st.reader.reset(new (std::nothrow) ZipFile::EntryReader(*st.zip, PARSE_CHUNK_BYTES));
-    }
-    if (!st.reader) {
-      LOG_ERR("SCT", "Failed to allocate entry reader (%u bytes scratch, free=%lu)",
-              static_cast<uint32_t>(PARSE_CHUNK_BYTES), esp_get_free_heap_size());
+    if (!st.chunkBuf) {
+      LOG_ERR("SCT", "Failed to allocate parse chunk buffer (free=%lu)", esp_get_free_heap_size());
       streamFailed = true;
-    } else {
-      const std::string entryPath = FsHelpers::normalisePath(st.localPath);
-      if (!st.reader->open(entryPath.c_str())) {
-        streamFailed = true;  // EntryReader::open already logged the cause
+    }
+
+    // Book-keyed unzipped-HTML cache (adapted from crosspoint-reader PR #2452 by GitHub user
+    // itsthisjustin): the spine's
+    // inflated XHTML keyed on the spine alone, NOT on render properties. If a valid one exists,
+    // read it directly and skip the (multi-second on a big spine) ZIP inflation — the win across
+    // settings changes and rebuilds. A size mismatch means it is stale/partial (e.g. interrupted
+    // by power loss); drop it and re-inflate.
+    const std::string htmlCachePath = getSectionHtmlCachePath();
+    if (!streamFailed && st.inflatedSize > 0 && Storage.exists(htmlCachePath.c_str()) &&
+        Storage.openFileForRead("SCT", htmlCachePath, st.tempFile)) {
+      if (st.tempFile.size() == st.inflatedSize) {
+        st.useTempExtract = true;
+        st.extractDone = true;  // phase (a) inflation skipped
+        st.reusedHtml = true;   // keep the cache on cleanup rather than deleting it
+        st.tempPath = htmlCachePath;
+        LOG_INF("SCT", "createSectionFile spine=%d reusing cached HTML (%u bytes, free=%lu)", spineIndex,
+                static_cast<uint32_t>(st.inflatedSize), esp_get_free_heap_size());
+      } else {
+        st.tempFile.close();
+        Storage.remove(htmlCachePath.c_str());
       }
     }
-    if (!streamFailed && st.useTempExtract) {
-      st.tempPath = filePath + ".xtmp";
-      if (!Storage.openFileForWrite("SCT", st.tempPath, st.tempFile)) {
+
+    // No usable cache: inflate the entry to the book-level HTML cache (phase a) so it is produced
+    // once and reused thereafter. Always two-phase now (even the blocking path) so every build
+    // populates the cache; the inflate ring is released before parsing, so the blocking path —
+    // which runs with the secondary framebuffer released — stays within heap.
+    if (!streamFailed && !st.reusedHtml) {
+      st.useTempExtract = true;
+      // Heap, not stack: must survive across slices. Ring (≤32 KB, sized to the entry) +
+      // PARSE_CHUNK_BYTES scratch — net-neutral vs the old one-shot path.
+      st.zip.reset(new (std::nothrow) ZipFile(epub->getPath()));
+      if (st.zip) {
+        st.reader.reset(new (std::nothrow) ZipFile::EntryReader(*st.zip, PARSE_CHUNK_BYTES));
+      }
+      if (!st.reader) {
+        LOG_ERR("SCT", "Failed to allocate entry reader (%u bytes scratch, free=%lu)",
+                static_cast<uint32_t>(PARSE_CHUNK_BYTES), esp_get_free_heap_size());
         streamFailed = true;
+      } else {
+        const std::string entryPath = FsHelpers::normalisePath(st.localPath);
+        if (!st.reader->open(entryPath.c_str())) {
+          streamFailed = true;  // EntryReader::open already logged the cause
+        }
+      }
+      if (!streamFailed) {
+        st.tempPath = htmlCachePath;
+        if (!Storage.openFileForWrite("SCT", st.tempPath, st.tempFile)) {
+          streamFailed = true;
+        }
       }
     }
   }
@@ -716,7 +759,13 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
     st.tempFile.close();
   }
   if (!st.tempPath.empty()) {
-    Storage.remove(st.tempPath.c_str());
+    // tempPath is the book-keyed HTML cache. Keep it so later rebuilds skip inflation: when we
+    // reused it, and when we produced a complete one (stream OK). Only delete a cache WE produced
+    // if the stream failed — it may be partial/corrupt (a leftover is otherwise caught by the
+    // size check on the next reuse, so it would just be re-inflated).
+    if (!st.reusedHtml && streamFailed) {
+      Storage.remove(st.tempPath.c_str());
+    }
     st.tempPath.clear();
   }
   st.streamOk = !streamFailed;
@@ -1047,11 +1096,13 @@ void Section::abortSectionBuild() {
   if (!buildState_) {
     return;
   }
-  // Drop the extraction temp file alongside the partial cache file.
+  // Drop the extraction temp file alongside the partial cache file. tempPath is the book-keyed
+  // HTML cache: delete it only if WE were producing it (a partial inflate). When it was reused
+  // (read-only), it is a complete valid cache — keep it so the next build still skips inflation.
   if (buildState_->tempFile) {
     buildState_->tempFile.close();
   }
-  if (!buildState_->tempPath.empty()) {
+  if (!buildState_->reusedHtml && !buildState_->tempPath.empty()) {
     Storage.remove(buildState_->tempPath.c_str());
   }
   // During a live build, `file` is the build's write handle and filePath its cache path
@@ -1090,6 +1141,19 @@ std::unique_ptr<Page> Section::loadPageFromSectionFile() {
 uint16_t Section::activeBuildPageCount() const {
   if (!buildState_) return 0;
   return pageCount;  // pageCount is incremented by onPageComplete() as each page is written
+}
+
+uint16_t Section::estimatedTotalPages() const {
+  // No build live -> the on-disk count is exact. While building, project from how much of the
+  // XHTML has been consumed (activeBuildPercent), but never below what's already laid out. At
+  // 100% the stream is exhausted and pageCount is final. Too early (no pages / 0%) -> fall back
+  // to the watermark. Adapted from crosspoint-reader PR #2452 by GitHub user itsthisjustin
+  // ("Lazy incremental EPUB indexing").
+  if (!buildState_) return pageCount;
+  const int pct = activeBuildPercent();
+  if (pct <= 0 || pct >= 100 || pageCount == 0) return pageCount;
+  const uint32_t projected = static_cast<uint32_t>(pageCount) * 100u / static_cast<uint32_t>(pct);
+  return projected > pageCount ? static_cast<uint16_t>(projected) : pageCount;
 }
 
 bool Section::activeBuildCssDegraded() const {

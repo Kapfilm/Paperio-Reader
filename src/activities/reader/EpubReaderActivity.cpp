@@ -137,12 +137,19 @@ constexpr uint32_t PRE_RENDER_MIN_FREE_HEAP_BYTES = 56 * 1024;
 // suggests 30–50 ms); tune from the DEBUG_BACKGROUND_WORK serial counters.
 constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 
-// How many consecutive sections ahead of the reading position B keeps indexed. After the
-// immediate next section settles, the cursor walks forward to index up to this many spines
-// ahead, then idles until navigation re-anchors the window. Bounds the continuous CPU/SD
-// cost on a battery e-reader (vs. indexing the whole book on first open).
-#ifndef BG_BUILD_LOOKAHEAD
-#define BG_BUILD_LOOKAHEAD 3
+// Background-B keeps a page-budgeted window of layout ready ahead of the reading position rather
+// than a fixed number of sections: it pre-builds whole subsequent spines until roughly this many
+// pages of runway exist (counting the current section's unread tail plus the subsequent sections
+// built so far), then idles until the reader advances and the window re-anchors. A page budget
+// spans spine boundaries naturally — front matter of many tiny one-page spines gets several built,
+// while one big chapter already covers the budget on its own. Bounds continuous CPU/SD cost on a
+// battery e-reader (vs. indexing the whole book up front).
+//
+// Adapted from crosspoint-reader's BUILD_WINDOW_AHEAD (PR #2452 by GitHub user itsthisjustin,
+// "Lazy incremental EPUB section indexing"); here the window is a page budget that spans spines
+// rather than a per-section count.
+#ifndef BG_BUILD_LOOKAHEAD_PAGES
+#define BG_BUILD_LOOKAHEAD_PAGES 50
 #endif
 
 // Foreground in-place section build (the "keep the secondary buffer" path). When heap is
@@ -157,6 +164,30 @@ constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 #endif
 #ifndef IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES
 #define IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES (28 * 1024)
+#endif
+// CSS books need more margin to build in place: the parse resolves embedded styles, which
+// self-degrade below the runtime CSS-resolve floor (CSS_MIN_FREE_HEAP_FOR_CSS ≈ 40 KB). Since
+// every build is now two-phase (the inflate ring is released BEFORE the CSS-resolving parse),
+// the resolve runs with the ring gone, so a higher free floor keeps it clear of 40 KB; contig is
+// pinned at the inflate-ring size (≤32 KB) for the extraction phase. A miss is still caught by
+// isCssLowHeapDegraded() and rebuilt with the buffer released.
+#ifndef IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES
+#define IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES (66 * 1024)
+#endif
+#ifndef IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES
+#define IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES (32 * 1024)
+#endif
+// Proactive low-heap guard for a resident (AA-buffer-kept) Background-C build. The in-place start
+// floors can't bound the parse's transient working set, which can ride free heap well down on a
+// big chapter (a 123 KB CSS section was observed dipping to ~24 KB). If the between-slice baseline
+// falls below these, abandon the resident build and rebuild on the released path (frees the
+// ~48 KB buffer) before an allocation fails. Pinned below typical mid-build baselines so a build
+// that is coping is not aborted, but above the ~13-15 KB zone where heap-pressure faults appear.
+#ifndef RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES
+#define RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES (30 * 1024)
+#endif
+#ifndef RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES
+#define RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES (16 * 1024)
 #endif
 
 constexpr uint8_t TRUNCATED_SECTION_HINT_RENDER_COUNT = 2;
@@ -789,13 +820,24 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
     resetBackgroundBuild();
     backgroundBuildBaseSpine_ = currentSpineIndex;
     backgroundBuildSpineIndex_ = currentSpineIndex + 1;
+    backgroundWindowPagesBuilt_ = 0;
   }
-  // Index up to BG_BUILD_LOOKAHEAD sections ahead. The cursor advances as each target
-  // settles (Settled case below); already-cached spines settle for free in Probe. Once the
-  // cursor passes the window end or the book end, idle until the next navigation re-anchors.
-  const int windowEnd = std::min(currentSpineIndex + BG_BUILD_LOOKAHEAD, spineCount - 1);
-  if (backgroundBuildSpineIndex_ < currentSpineIndex + 1 || backgroundBuildSpineIndex_ > windowEnd) {
+  // Walk forward from currentSpineIndex+1 to the book end. The cursor advances as each target
+  // settles (Settled case below); already-cached spines settle for free in Probe.
+  if (backgroundBuildSpineIndex_ < currentSpineIndex + 1 || backgroundBuildSpineIndex_ >= spineCount) {
     return;
+  }
+  // Page-budget gate: stop pre-building once ~BG_BUILD_LOOKAHEAD_PAGES of runway is laid out ahead
+  // of the reader — the current section's unread tail plus the subsequent sections built so far.
+  // Only gate at a section boundary (state==Probe, no build in flight) so a section in progress is
+  // never abandoned mid-build; the runway shrinks as the reader advances, re-opening the window.
+  if (backgroundBuildState_ == BackgroundBuildState::Probe) {
+    const int currentTailPages = (section && section->pageCount > 0)
+                                     ? std::max(0, static_cast<int>(section->pageCount) - 1 - section->currentPage)
+                                     : 0;
+    if (currentTailPages + backgroundWindowPagesBuilt_ >= BG_BUILD_LOOKAHEAD_PAGES) {
+      return;
+    }
   }
   const int targetSpine = backgroundBuildSpineIndex_;
 
@@ -818,6 +860,7 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
           p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment, p.viewportWidth, p.viewportHeight,
           p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled, p.imageRendering);
       if (cached && !backgroundSection_->isEmbeddedStyleFallback()) {
+        backgroundWindowPagesBuilt_ += backgroundSection_->pageCount;  // already-built runway counts toward the budget
         backgroundSection_.reset();
         backgroundBuildState_ = BackgroundBuildState::Settled;
       } else {
@@ -919,6 +962,7 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
 #if DEBUG_BACKGROUND_WORK
           bgCounters_.bCompletes++;
 #endif
+          backgroundWindowPagesBuilt_ += backgroundSection_->pageCount;  // count this section toward the page budget
           LOG_INF("ERS", "Background build spine=%d complete: %u pages", targetSpine, backgroundSection_->pageCount);
         }
       } else {
@@ -951,6 +995,21 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     return;
   }
 
+  // Discard the in-flight build and re-render: buildSection then takes the blocking path (latched
+  // by forceBlockingBuildSpine_), which builds with the secondary buffer released (~52 KB more
+  // headroom). Shared by the low-heap guard and the failure/degrade handling below.
+  const auto fallbackToReleasedRebuild = [&](const char* reason) {
+    LOG_ERR("ERS", "Background-C spine=%d %s; falling back to released rebuild", currentSpineIndex, reason);
+    section->clearCache();
+    section.reset();
+    forceBlockingBuildSpine_ = currentSpineIndex;
+    readerPhase_ = ReaderPhase::READING;
+    buildingPopupShown_ = false;
+    buildDisplayedPage_ = -1;
+    backgroundBuildPercent_ = -1;
+    requestUpdate();  // -> BuildSection -> blocking (released) build
+  };
+
   // Layout needs glyph metrics only; reset accumulation so the next prewarm re-wires the
   // flash-resident metric tables rather than the page-scoped bitmap cache (see
   // stepBackgroundSectionBuild for the full rationale).
@@ -962,6 +1021,15 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
   checkHeapIntegrity("after_c_slice");
 
   if (step == Section::BuildStep::More) {
+    // Proactive low-heap guard: while the build is resident (AA buffer kept), bail to the released
+    // path before heap reaches the fault zone. Only meaningful when the buffer is still resident —
+    // a build already running released has that headroom and should ride it out.
+    if (!secondaryBufferDegraded_ && (esp_get_free_heap_size() < RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES ||
+                                      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT) <
+                                          RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES)) {
+      fallbackToReleasedRebuild("low heap mid-build");
+      return;
+    }
     backgroundBuildPercent_ = static_cast<int8_t>(section->activeBuildPercent());
     // If the page the user is waiting on just became readable, ask the render task to draw it.
     const int want = section->currentPage;
@@ -974,19 +1042,10 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
 
   backgroundBuildPercent_ = -1;
 
-  // Failed, or finished but truncated / CSS-degraded: discard and retry on the blocking path,
-  // which builds with the secondary buffer released (~52 KB more headroom). The latch stops
-  // buildSection from re-entering Background-C for this spine.
+  // Failed, or finished but truncated / CSS-degraded: discard and retry on the released path. The
+  // latch (set inside the helper) stops buildSection from re-entering Background-C for this spine.
   if (step == Section::BuildStep::Failed || section->isTruncatedCache() || section->isCssLowHeapDegraded()) {
-    LOG_ERR("ERS", "Background-C spine=%d %s; falling back to blocking rebuild", currentSpineIndex,
-            step == Section::BuildStep::Failed ? "failed" : "incomplete");
-    section->clearCache();
-    section.reset();
-    forceBlockingBuildSpine_ = currentSpineIndex;
-    readerPhase_ = ReaderPhase::READING;
-    buildingPopupShown_ = false;
-    buildDisplayedPage_ = -1;
-    requestUpdate();  // -> BuildSection -> blocking build
+    fallbackToReleasedRebuild(step == Section::BuildStep::Failed ? "failed" : "incomplete");
     return;
   }
 
@@ -2470,9 +2529,13 @@ bool EpubReaderActivity::heapAllowsInPlaceBuild(const bool embeddedStyle) const 
       return false;
     }
   }
+  const uint32_t freeFloor =
+      embeddedStyle ? IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES : IN_PLACE_BUILD_MIN_FREE_HEAP_BYTES;
+  const uint32_t contigFloor =
+      embeddedStyle ? IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES : IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES;
   const uint32_t freeHeap = esp_get_free_heap_size();
   const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
-  return freeHeap >= IN_PLACE_BUILD_MIN_FREE_HEAP_BYTES && contigHeap >= IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES;
+  return freeHeap >= freeFloor && contigHeap >= contigFloor;
 }
 
 EpubReaderActivity::SectionBuildMode EpubReaderActivity::chooseSectionBuildMode(const bool embeddedStyle) const {
@@ -2488,16 +2551,16 @@ EpubReaderActivity::SectionBuildMode EpubReaderActivity::chooseSectionBuildMode(
   // on-device, then had to be rebuilt blocking). Mid-build BW draws still work off DTM1.
   if (renderer.isX3()) return SectionBuildMode::IncrementalReleased;
 
-  // X4 CSS book → released too. Built with the ~48 KB buffer resident, a CSS section reliably
-  // drops below the runtime CSS-resolve floor (MIN_FREE_HEAP_FOR_CSS ≈ 40 KB) mid-parse → lookups
-  // skip → css-degraded → a wasted resident build then a blocking rebuild. Releasing keeps it in
-  // the ~120 KB regime where the blocking path builds these clean.
-  if (embeddedStyle) return SectionBuildMode::IncrementalReleased;
-
-  // X4 non-CSS book → keep the buffer resident when the in-place floors fit (fast-refresh baseline
-  // re-seeds from it, AA stays live); otherwise release for headroom.
-  return heapAllowsInPlaceBuild(/*embeddedStyle=*/false) ? SectionBuildMode::IncrementalResident
-                                                         : SectionBuildMode::IncrementalReleased;
+  // X4 → keep the secondary buffer resident when the in-place floors fit (fast-refresh baseline
+  // re-seeds from it, AA stays live during the build); otherwise release for headroom. This now
+  // applies to CSS books too: every build is two-phase, so the inflate ring is released BEFORE the
+  // CSS-resolving parse, keeping the resolve clear of the ~40 KB floor when the (higher) CSS
+  // in-place floor is met. A resident CSS build that still degrades is caught by
+  // isCssLowHeapDegraded() and rebuilt with the buffer released — so this gates "try in place"
+  // rather than guaranteeing it. (Historically CSS books always released, from before the build
+  // was two-phase, when the ring + parser + resolver were all live at once.)
+  return heapAllowsInPlaceBuild(embeddedStyle) ? SectionBuildMode::IncrementalResident
+                                               : SectionBuildMode::IncrementalReleased;
 }
 
 EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const RenderLayout& layout,
@@ -3423,10 +3486,13 @@ void EpubReaderActivity::restoreCurrentPageToBufferIfPreRendered() {
 
 void EpubReaderActivity::renderStatusBar() const {
   // Calculate progress in book. During an active section build pageCount only reflects pages
-  // built so far, not the final chapter length — pass 0 to suppress the fraction and book
-  // progress rather than showing a misleading "3/3" when the chapter has 40 pages total.
+  // built so far, not the final chapter length, so show a byte-based estimate ("page X of ~Y")
+  // instead of the misleading watermark. estimatedTotalPages() returns 0 while it's still too
+  // early to project, which suppresses the fraction/progress (same as a plain pageCount of 0).
+  const bool building = section->hasActiveBuild();
   const int currentPage = section->currentPage + 1;
-  const float pageCount = (section->hasActiveBuild()) ? 0.0f : static_cast<float>(section->pageCount);
+  const int displayPageCount = building ? section->estimatedTotalPages() : section->pageCount;
+  const float pageCount = static_cast<float>(displayPageCount);
   const float sectionChapterProg = (pageCount > 0) ? (static_cast<float>(currentPage) / pageCount) : 0;
   const float bookProgress = epub->calculateProgress(currentSpineIndex, sectionChapterProg) * 100;
 
@@ -3461,7 +3527,8 @@ void EpubReaderActivity::renderStatusBar() const {
       printedPageLabel = std::string("(") + *nearest + ")";
     }
   }
-  GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, isStarred, printedPageLabel);
+  GUI.drawStatusBar(renderer, bookProgress, currentPage, displayPageCount, title, 0, isStarred, printedPageLabel,
+                    /*fillMargin=*/true, /*pageCountApproximate=*/building);
 
 #if DEBUG_BACKGROUND_WORK
   renderBackgroundDebugOverlay();
