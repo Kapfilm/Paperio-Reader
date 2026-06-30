@@ -72,6 +72,13 @@ bool RecentBooksActivity::loadNextCover() {
   if (pngSession) {
     constexpr uint32_t ROWS_PER_TICK = 6;
     const auto status = pngSession->continueRows(ROWS_PER_TICK);
+    // Progress evidence (throttled): proves the sliced decode is advancing rather than stalled.
+    const uint32_t now = millis();
+    if (now - lastCoverProgressLogMs_ >= 1000) {
+      lastCoverProgressLogMs_ = now;
+      LOG_DBG("RBA", "PNG cover decode: %u/%u rows for %s", pngSession->rowsDone(), pngSession->totalRows(),
+              recentBooks[nextCoverIndex].path.c_str());
+    }
     if (status == PngDecodeSession::Status::Running) {
       return false;  // not done yet — render() will requestUpdate() and call us again
     }
@@ -108,12 +115,34 @@ bool RecentBooksActivity::loadNextCover() {
     const std::string placeholder = ReaderActivity::coverThumbPlaceholder(book.path);
     const std::string thumbPath = gridThumbPath(placeholder, tw, th);
 
-    FsFile thumbFile;
-    const bool valid = Storage.openFileForRead("RBA", thumbPath, thumbFile) && thumbFile.size() > 0;
-    thumbFile.close();
+    // A 0-byte file is a "no extractable cover" sentinel left by a previous pass. Skip it cheaply:
+    // without this we re-open the EPUB three times per scan (generateThumbBmp + beginPngThumbSession
+    // + beginCoverExtractSession all load it) just to rediscover it has no cover — the "read again
+    // and again" seen for cover-less books like test_jpeg_images.epub.
+    {
+      FsFile tf;
+      bool noCoverSentinel = false;
+      if (Storage.openFileForRead("RBA", thumbPath, tf)) {
+        noCoverSentinel = (tf.size() == 0);
+        tf.close();
+      }
+      if (noCoverSentinel) {
+        if (!book.coverBmpPath.empty()) {
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
+          book.coverBmpPath.clear();
+        }
+        continue;  // no cover — advance to the next book without touching the EPUB
+      }
+    }
+
+    // size>0 is not enough: a thumbnail truncated by an interrupted write passes it but fails to
+    // draw partway. Require all pixel rows to be present, else regenerate (isCoverThumbComplete).
+    const bool valid = ReaderActivity::isCoverThumbComplete(thumbPath);
     if (!valid) {
       const bool ok = ReaderActivity::ensureCoverThumb(book.path, tw, th);
-      if (!ok && !pngSessionFailed) {
+      const bool wasPostFailure = pngSessionFailed;
+      pngSessionFailed = false;  // consumed
+      if (!ok && !wasPostFailure) {
         pngSession = ReaderActivity::beginPngThumbSession(book.path, tw, th, pngSessionFiles);
         if (!pngSession) {
           extractSession = ReaderActivity::beginCoverExtractSession(book.path);
@@ -122,12 +151,18 @@ bool RecentBooksActivity::loadNextCover() {
                     extractSession->totalBytes());
             return false;
           }
+          // No thumb produced AND no decode/extract session could start → the book genuinely has no
+          // extractable cover. Drop a 0-byte sentinel so the cheap skip above short-circuits future
+          // scans instead of re-opening the EPUB each time. (A transient post-failure retry —
+          // wasPostFailure — is NOT sentinelled: the session error handler already cleaned up.)
+          FsFile sentinel;
+          if (Storage.openFileForWrite("RBA", thumbPath, sentinel)) sentinel.close();
+          LOG_DBG("RBA", "No extractable cover for %s — wrote no-cover sentinel", book.path.c_str());
         } else {
           LOG_DBG("RBA", "Started PNG session for %s (%u rows)", book.path.c_str(), pngSession->totalRows());
           return false;
         }
       }
-      pngSessionFailed = false;  // consumed
       RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, ok ? placeholder : "");
       book.coverBmpPath = ok ? placeholder : "";
       nextCoverIndex++;
@@ -334,23 +369,58 @@ void RecentBooksActivity::render(RenderLock&& lock) {
   // jump to a stale buffer position during the transition.
   if (openingBook) return;
 
-  if (APP_STATE.recentBooksGridView) {
-    renderGridView(std::move(lock));
-    if (!firstRenderDone) {
-      firstRenderDone = true;
-      requestUpdate();
-    } else if (!coversLoaded && !coversLoading) {
-      coversLoading = true;
-      if (loadNextCover()) {
-        coversLoaded = true;
-      } else {
-        fullRedrawNeeded = true;
-        requestUpdate();
-      }
-      coversLoading = false;
-    }
-  } else {
+  if (!APP_STATE.recentBooksGridView) {
     renderListView(std::move(lock));
+    return;
+  }
+
+  // After the first paint, generate covers in time-bounded bursts. A cover slice (a PNG-decode
+  // row batch or a ZIP-extract chunk) only writes SD files — it does NOT change the screen — so we
+  // must NOT repaint per slice. Doing so turned every 6-row slice into a full ~2 s e-ink refresh,
+  // so a 1848-row cover needed 300+ refreshes (~10 min, and brutal on the panel). Instead drive
+  // slices here until a cover actually finishes (repaint once to show it), or until input is
+  // pending / a small time budget elapses (return WITHOUT repainting and resume on the next tick).
+  if (firstRenderDone && !coversLoaded && !coversLoading) {
+    // The cursor moved while a cover is still decoding: repaint the selection NOW (cheap two-cell
+    // partial) and resume decoding next tick. Otherwise the budget loop below would swallow the
+    // move and the highlight would only jump once the cover finished (seen as a frozen cursor).
+    if (prevSelectorIndex != selectorIndex) {
+      requestUpdate();
+      renderGridView(std::move(lock));  // partial path: fullRedrawNeeded stays false
+      return;
+    }
+
+    constexpr uint32_t COVER_SLICE_BUDGET_MS = 150;
+    coversLoading = true;
+    const size_t startIdx = nextCoverIndex;
+    const uint32_t deadline = millis() + COVER_SLICE_BUDGET_MS;
+    bool coverFinished = false;
+    while (true) {
+      if (loadNextCover()) {  // all covers resolved
+        coversLoaded = true;
+        coverFinished = true;
+        break;
+      }
+      if (nextCoverIndex != startIdx) {  // a book's cover just completed → worth showing now
+        coverFinished = true;
+        break;
+      }
+      if (mappedInput.hasPendingInput() || static_cast<int32_t>(millis() - deadline) >= 0) break;
+    }
+    coversLoading = false;
+
+    if (!coverFinished) {
+      requestUpdate();  // still slicing one cover — come back and continue, no repaint
+      return;
+    }
+    if (!coversLoaded) requestUpdate();  // more covers remain — continue after this repaint
+    fullRedrawNeeded = true;
+  }
+
+  renderGridView(std::move(lock));
+  if (!firstRenderDone) {
+    firstRenderDone = true;
+    requestUpdate();  // kick off cover generation now that the grid is on screen
   }
 }
 
@@ -418,7 +488,9 @@ void RecentBooksActivity::renderGridCell(int index, bool selected, int cellX, in
     bool thumbDrawn = false;
     if (Storage.openFileForRead("RBA", thumbPath, file)) {
       Bitmap bmp(file);
-      if (bmp.parseHeaders() == BmpReaderError::Ok) {
+      // Skip a truncated thumbnail (interrupted write): its header parses but readNextRow() fails
+      // partway, leaving a half-drawn cover and a GFX error. The validity check above regenerates it.
+      if (bmp.parseHeaders() == BmpReaderError::Ok && bmp.isComplete()) {
         const int imgW = bmp.getWidth();
         const int imgH = bmp.getHeight();
         const int innerW = tw - 2;

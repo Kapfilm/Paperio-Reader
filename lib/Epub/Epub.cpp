@@ -1,5 +1,6 @@
 #include "Epub.h"
 
+#include <Bitmap.h>
 #include <CooperativeAbort.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -955,8 +956,30 @@ bool Epub::ensureCoverImageCached() const {
   return true;
 }
 
+namespace {
+// A cover/thumbnail BMP whose write was interrupted (reboot/abort mid-decode) is left truncated:
+// the header is intact but the pixel rows are short, so it passes a size>0 / exists check yet
+// cannot be drawn (GFX "Failed to read row N"). Reuse a cached BMP only if it actually holds all
+// its declared rows; otherwise the caller must regenerate it. Returns false for a 0-byte sentinel
+// too (callers handle that separately as a permanent-failure marker).
+bool coverBmpComplete(const std::string& path) {
+  FsFile f;
+  if (!Storage.openFileForRead("EBP", path, f)) return false;
+  if (f.size() == 0) {
+    f.close();
+    return false;
+  }
+  Bitmap bmp(f);
+  const bool ok = bmp.parseHeaders() == BmpReaderError::Ok && bmp.isComplete();
+  f.close();
+  return ok;
+}
+}  // namespace
+
 bool Epub::generateCoverBmp(bool cropped) const {
-  if (Storage.exists(getCoverBmpPath(cropped).c_str())) return true;
+  // Reuse only a COMPLETE cached BMP; a truncated one (interrupted write) must be regenerated.
+  if (coverBmpComplete(getCoverBmpPath(cropped))) return true;
+  Storage.remove(getCoverBmpPath(cropped).c_str());  // drop any partial before regenerating
 
   if (!ensureCoverImageCached()) return false;
 
@@ -1010,11 +1033,17 @@ bool Epub::generateThumbBmp(int height, bool allowExtract) const {
   {
     FsFile existing;
     if (Storage.openFileForRead("EBP", getThumbBmpPath(height), existing)) {
-      const bool valid = existing.size() > 0;
+      const uint32_t sz = existing.size();
       existing.close();
-      if (valid) return true;
-      LOG_DBG("EBP", "Sentinel found for h=%d thumb, skipping retry", height);
-      return false;
+      if (sz == 0) {  // 0-byte sentinel — permanent failure, don't retry
+        LOG_DBG("EBP", "Sentinel found for h=%d thumb, skipping retry", height);
+        return false;
+      }
+      // size>0 is not "done": a thumb truncated by an interrupted write must be regenerated, not
+      // returned as valid (the caller's completeness check would otherwise reject it forever and
+      // loop). Reuse only a complete BMP; else fall through (openFileForWrite below truncates it).
+      if (coverBmpComplete(getThumbBmpPath(height))) return true;
+      LOG_DBG("EBP", "Existing h=%d thumb is truncated — regenerating", height);
     }
   }
 
@@ -1078,12 +1107,17 @@ bool Epub::generateThumbBmp(int width, int height, bool allowExtract) const {
   {
     FsFile existing;
     if (Storage.openFileForRead("EBP", getThumbBmpPath(width, height), existing)) {
-      const bool valid = existing.size() > 0;
+      const uint32_t sz = existing.size();
       existing.close();
-      if (valid) return true;
-      // 0-byte sentinel — permanent failure, don't retry.
-      LOG_DBG("EBP", "Sentinel found for %dx%d thumb, skipping retry", width, height);
-      return false;
+      if (sz == 0) {  // 0-byte sentinel — permanent failure, don't retry
+        LOG_DBG("EBP", "Sentinel found for %dx%d thumb, skipping retry", width, height);
+        return false;
+      }
+      // size>0 is not "done": a thumb truncated by an interrupted write must be regenerated, not
+      // returned as valid (the caller's completeness check would otherwise reject it forever and
+      // loop). Reuse only a complete BMP; else fall through (openFileForWrite below truncates it).
+      if (coverBmpComplete(getThumbBmpPath(width, height))) return true;
+      LOG_DBG("EBP", "Existing %dx%d thumb is truncated — regenerating", width, height);
     }
   }
 

@@ -44,6 +44,11 @@ class ReaderActivity final : public Activity {
   static std::string coverThumbPlaceholder(const std::string& bookPath);
   static bool ensureCoverThumb(const std::string& bookPath, int width, int height);
   static bool ensureCoverThumb(const std::string& bookPath, int height);
+  // True only if a cover thumbnail BMP exists AND holds all its declared pixel rows. A thumbnail
+  // whose write was interrupted (reboot/abort mid-decode) is left truncated on the SD card; it
+  // passes a naive size>0 check but fails to draw partway (GFX "Failed to read row N"). Treating
+  // such a file as invalid lets the caller regenerate it instead of drawing/keeping it forever.
+  static bool isCoverThumbComplete(const std::string& path);
 
   // Sliced extraction of a ZIP entry to a file, one chunk per continueStep() call.
   // Used to extract an embedded PNG cover (cover.img) without blocking loop() for

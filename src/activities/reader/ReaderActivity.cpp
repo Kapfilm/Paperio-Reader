@@ -1,5 +1,6 @@
 #include "ReaderActivity.h"
 
+#include <Bitmap.h>
 #include <CooperativeAbort.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -186,11 +187,14 @@ std::string ReaderActivity::convertSidecarToBmp(const std::string& cacheDir, con
   if (!Storage.exists(cacheDir.c_str())) Storage.mkdir(cacheDir.c_str());
   const std::string bmpPath = cacheDir + "/" + fileName;
   if (Storage.exists(bmpPath.c_str())) {
-    FsFile existing;
-    const uint32_t existingSize = Storage.openFileForRead("COVER", bmpPath, existing) ? (uint32_t)existing.size() : 0;
-    existing.close();
-    LOG_DBG("COVER", "convertSidecarToBmp: BMP already exists path=%s size=%u", bmpPath.c_str(), existingSize);
-    return bmpPath;
+    // Reuse only a COMPLETE BMP. A previous conversion truncated by an interrupted write would
+    // otherwise be returned and drawn forever (fails partway); remove it and reconvert instead.
+    if (isCoverThumbComplete(bmpPath)) {
+      LOG_DBG("COVER", "convertSidecarToBmp: BMP already exists (complete) path=%s", bmpPath.c_str());
+      return bmpPath;
+    }
+    LOG_DBG("COVER", "convertSidecarToBmp: existing BMP truncated, regenerating path=%s", bmpPath.c_str());
+    Storage.remove(bmpPath.c_str());
   }
 
   FsFile src;
@@ -227,15 +231,26 @@ std::string ReaderActivity::coverThumbPlaceholder(const std::string& bookPath) {
   return bookCacheDir(bookPath) + "/thumb_[HEIGHT].bmp";
 }
 
-namespace {
-// True if a thumbnail file exists and is non-empty (a 0-byte sentinel left by a prior failed
-// extraction must be treated as missing so regeneration retries).
-bool thumbFileValid(const std::string& path) {
+bool ReaderActivity::isCoverThumbComplete(const std::string& path) {
   FsFile f;
-  const bool ok = Storage.openFileForRead("COVER", path, f) && f.size() > 0;
+  if (!Storage.openFileForRead("COVER", path, f)) return false;
+  if (f.size() == 0) {  // 0-byte sentinel from a prior failed extraction → treat as missing
+    f.close();
+    return false;
+  }
+  Bitmap bmp(f);
+  // Header intact but pixel data short → truncated by an interrupted write; treat as invalid so
+  // the caller regenerates rather than keeping the unrenderable partial forever.
+  const bool ok = bmp.parseHeaders() == BmpReaderError::Ok && bmp.isComplete();
   f.close();
   return ok;
 }
+
+namespace {
+// True if a thumbnail file exists and is usable. A 0-byte sentinel left by a prior failed
+// extraction, OR a partial BMP left truncated by an interrupted write, must be treated as missing
+// so regeneration retries (see ReaderActivity::isCoverThumbComplete).
+bool thumbFileValid(const std::string& path) { return ReaderActivity::isCoverThumbComplete(path); }
 }  // namespace
 
 bool ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, int height) {

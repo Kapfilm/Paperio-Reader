@@ -306,11 +306,10 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       for (size_t i = nextThumbSizeIndex; i < thumbSizes.size(); i++) {
         const auto& sz = thumbSizes[i];
         const std::string path = UITheme::getCoverThumbPath(placeholder, sz.first, sz.second);
-        FsFile thumbFile;
-        const bool validThumb = Storage.openFileForRead("HOME", path, thumbFile) && thumbFile.size() > 0;
-        LOG_DBG("HOME", "Cover check [%dx%d] path=%s valid=%d size=%u", sz.first, sz.second, path.c_str(),
-                validThumb ? 1 : 0, (unsigned)thumbFile.size());
-        thumbFile.close();
+        // Require a complete BMP (all pixel rows present), not just size>0: a thumbnail truncated by
+        // an interrupted write passes size>0 but fails to draw, and would never be regenerated.
+        const bool validThumb = ReaderActivity::isCoverThumbComplete(path);
+        LOG_DBG("HOME", "Cover check [%dx%d] path=%s valid=%d", sz.first, sz.second, path.c_str(), validThumb ? 1 : 0);
 
         if (!validThumb) {
           // Button input has priority: never start a fresh decode while a press is
@@ -405,11 +404,10 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     } else {
       // Single-height path (non-carousel themes).
       const std::string path = UITheme::getCoverThumbPath(placeholder, coverHeight);
-      FsFile thumbFile;
-      const bool validThumb = Storage.openFileForRead("HOME", path, thumbFile) && thumbFile.size() > 0;
-      LOG_DBG("HOME", "Cover check [h=%d] path=%s valid=%d size=%u", coverHeight, path.c_str(), validThumb ? 1 : 0,
-              (unsigned)thumbFile.size());
-      thumbFile.close();
+      // Require a complete BMP (all pixel rows present), not just size>0: a thumbnail truncated by
+      // an interrupted write passes size>0 but fails to draw, and would never be regenerated.
+      const bool validThumb = ReaderActivity::isCoverThumbComplete(path);
+      LOG_DBG("HOME", "Cover check [h=%d] path=%s valid=%d", coverHeight, path.c_str(), validThumb ? 1 : 0);
 
       LOG_DBG("HOME", "loadRecentCovers[%zu]: coverBmpPath=%s placeholder=%s anyMissing=%d", nextRecentCoverIndex,
               book.coverBmpPath.c_str(), placeholder.c_str(), validThumb ? 0 : 1);
