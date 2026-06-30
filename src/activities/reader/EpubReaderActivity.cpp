@@ -32,6 +32,7 @@
 #include <esp_system.h>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -1989,14 +1990,97 @@ int EpubReaderActivity::getEffectiveReaderFontId() const {
   return SETTINGS.getReaderFontId();
 }
 
+bool EpubReaderActivity::getEffectiveBuiltinFamilyAndSize(uint8_t& outFamily, uint8_t& outSize) const {
+  const uint8_t fontSize = (bookFontSizeOverride >= 0) ? static_cast<uint8_t>(bookFontSizeOverride) : SETTINGS.fontSize;
+  // SD font overrides (book-level or global) mean no built-in ladder is available.
+  if (bookFontFamilyOverride < 0 && !bookSdFontFamilyOverride.empty()) return false;
+  if (bookFontFamilyOverride < 0 && SETTINGS.sdFontFamilyName[0] != '\0') return false;
+  outFamily = (bookFontFamilyOverride >= 0) ? static_cast<uint8_t>(bookFontFamilyOverride) : SETTINGS.fontFamily;
+  outSize = fontSize;
+  return true;
+}
+
+// Fill heading/small font IDs from a sorted list of available pt sizes and a lookup
+// function that maps pt → fontId (returns 0 if unavailable). bodyPt is the body size.
+static void fillFontsFromPtList(Section::HeadingFonts& hf, float bodyPt, const uint8_t* pts, int nPts, int bodyIdx,
+                                std::function<int(uint8_t)> getId) {
+  static constexpr float kDesired[3] = {1.6f, 1.4f, 1.2f};
+
+  for (int level = 0; level < 3; ++level) {
+    int bestIdx = bodyIdx;
+    for (int i = bodyIdx + 1; i < nPts; ++i) {
+      const float ratio = static_cast<float>(pts[i]) / bodyPt;
+      if (ratio <= kDesired[level] + 0.001f) bestIdx = i;
+    }
+    if (bestIdx == bodyIdx) {
+      hf.fontId[level] = 0;
+      hf.residual[level] = kDesired[level];
+    } else {
+      const float achievedRatio = static_cast<float>(pts[bestIdx]) / bodyPt;
+      hf.fontId[level] = getId(pts[bestIdx]);
+      hf.residual[level] = kDesired[level] / achievedRatio;
+    }
+  }
+
+  // <small>: one step down, or 0.8× scale at the floor.
+  if (bodyIdx > 0) {
+    hf.smallFontId = getId(pts[bodyIdx - 1]);
+    hf.smallResidual = static_cast<float>(pts[bodyIdx - 1]) / bodyPt;
+  } else {
+    hf.smallFontId = 0;
+    hf.smallResidual = 0.8f;
+  }
+}
+
 Section::HeadingFonts EpubReaderActivity::buildHeadingFonts() const {
-  // Headings render by SCALING the body font (nearest-neighbor upscale in renderCharAtScale),
-  // not by switching to a taller built-in font. The taller-font approach was tried and dropped:
-  // it put a second font on chapter-opener pages, which thrashed the limited glyph-cache slots
-  // (multi-second page stalls), and only delivered quantized 2pt steps capped at 18pt for
-  // built-in fonts. Scaling gives the exact 1.6/1.4/1.2 ratios at any body size with one font
-  // per page (no cache pressure). Defaults already encode that: fontId all 0 = scale fallback.
-  return Section::HeadingFonts{};
+  Section::HeadingFonts hf;  // defaults: fontId all 0, residual 1.6/1.4/1.2 = scale fallback
+
+  uint8_t family, size;
+  if (!getEffectiveBuiltinFamilyAndSize(family, size)) {
+    // SD font path: use the sizes actually loaded in the flash partition.
+    const char* sdFamily =
+        !bookSdFontFamilyOverride.empty() ? bookSdFontFamilyOverride.c_str() : SETTINGS.sdFontFamilyName;
+    const std::vector<uint8_t> sizes = sdFontSystem.loadedSizes();
+    if (sizes.empty()) return hf;
+
+    const uint8_t bodyPtSd = sdFontSystem.primaryPointSize();
+    int bodyIdxSd = -1;
+    for (int i = 0; i < static_cast<int>(sizes.size()); ++i) {
+      if (sizes[i] == bodyPtSd) {
+        bodyIdxSd = i;
+        break;
+      }
+    }
+    if (bodyIdxSd < 0) return hf;
+
+    fillFontsFromPtList(hf, static_cast<float>(bodyPtSd), sizes.data(), static_cast<int>(sizes.size()), bodyIdxSd,
+                        [&](uint8_t pt) { return sdFontSystem.resolveFontIdForPt(sdFamily, pt); });
+    return hf;
+  }
+
+  // Built-in font path.
+  static constexpr uint8_t kLadderPt[] = {10, 12, 14, 16, 18};
+  static constexpr uint8_t kLadder[] = {CrossPointSettings::TINY, CrossPointSettings::SMALL, CrossPointSettings::MEDIUM,
+                                        CrossPointSettings::LARGE, CrossPointSettings::EXTRA_LARGE};
+  constexpr int kLen = 5;
+
+  int bodyIdx = -1;
+  for (int i = 0; i < kLen; ++i) {
+    if (kLadder[i] == size) {
+      bodyIdx = i;
+      break;
+    }
+  }
+  if (bodyIdx < 0) return hf;
+
+  fillFontsFromPtList(hf, static_cast<float>(kLadderPt[bodyIdx]), kLadderPt, kLen, bodyIdx, [&](uint8_t pt) {
+    // Find ladder index for this pt size and look up font ID.
+    for (int i = 0; i < kLen; ++i) {
+      if (kLadderPt[i] == pt) return CrossPointSettings::getBuiltinReaderFontId(family, kLadder[i]);
+    }
+    return 0;
+  });
+  return hf;
 }
 
 void EpubReaderActivity::NavigationTarget::resolveInto(Section& sec, int spineIndex) const {

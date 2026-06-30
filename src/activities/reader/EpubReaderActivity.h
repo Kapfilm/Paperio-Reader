@@ -570,6 +570,9 @@ class EpubReaderActivity final : public Activity {
   // taller loaded size (crisp glyphs); SD fonts / over-cap fall back to scaling. Passed to
   // createSectionFile so the layout bakes the right per-block font.
   Section::HeadingFonts buildHeadingFonts() const;
+  // Returns the effective built-in font family and size enums for the current session.
+  // Returns false when an SD card font is active (family/size are then undefined).
+  bool getEffectiveBuiltinFamilyAndSize(uint8_t& outFamily, uint8_t& outSize) const;
   float getEffectiveReaderLineCompression() const;
   bool stepPageState(bool isForwardTurn);
   void pageTurn(bool isForwardTurn);

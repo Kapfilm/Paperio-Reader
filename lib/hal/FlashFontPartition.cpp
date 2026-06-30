@@ -269,6 +269,70 @@ bool mmap(const char* familyName, uint8_t pointSize, const uint8_t** outPtr, siz
   return true;
 }
 
+int mmapAll(const char* familyName, MappedEntry* outEntries, int maxEntries) {
+  if (s_mmapPtr) {
+    LOG_ERR("FFP", "mmapAll: partition already mmap'd — call unmap() first");
+    return 0;
+  }
+  if (s_ws.active) {
+    LOG_ERR("FFP", "mmapAll: write session still active");
+    return 0;
+  }
+
+  const esp_partition_t* part = findPartition();
+  if (!part) return 0;
+
+  Entry entries[MAX_ENTRIES];
+  uint8_t count = 0;
+  if (!readIndex(part, entries, count)) {
+    LOG_ERR("FFP", "mmapAll: no valid index in partition");
+    return 0;
+  }
+
+  // Find all entries for this family and compute the end of the last one so we
+  // can map the minimal contiguous range that covers all of them.
+  size_t mapEnd = 0;
+  int found = 0;
+  for (uint8_t i = 0; i < count; i++) {
+    if (strncmp(entries[i].familyName, familyName, 31) != 0) continue;
+    const size_t entryEnd = static_cast<size_t>(entries[i].dataOffset) + entries[i].dataSize;
+    if (entryEnd > mapEnd) mapEnd = entryEnd;
+    found++;
+  }
+  if (found == 0) {
+    LOG_DBG("FFP", "mmapAll: no entries for family %s", familyName);
+    return 0;
+  }
+
+  // Round up to 64 KB mmap alignment.
+  size_t mapBytes = (mapEnd + 0xFFFF) & ~static_cast<size_t>(0xFFFF);
+  if (mapBytes > part->size) mapBytes = part->size;
+
+  const void* rawPtr = nullptr;
+  if (esp_partition_mmap(part, 0, mapBytes, ESP_PARTITION_MMAP_DATA, &rawPtr, &s_mmapHandle) != ESP_OK) {
+    LOG_ERR("FFP", "mmapAll: esp_partition_mmap failed (size=%u)", static_cast<unsigned>(mapBytes));
+    return 0;
+  }
+  s_mmapPtr = static_cast<const uint8_t*>(rawPtr);
+
+  // Populate output, sorted ascending by pointSize.
+  int out = 0;
+  for (uint8_t i = 0; i < count && out < maxEntries; i++) {
+    if (strncmp(entries[i].familyName, familyName, 31) != 0) continue;
+    // Insert sorted by pointSize.
+    int ins = out;
+    while (ins > 0 && outEntries[ins - 1].pointSize > entries[i].pointSize) {
+      if (ins < maxEntries) outEntries[ins] = outEntries[ins - 1];
+      ins--;
+    }
+    outEntries[ins] = {entries[i].pointSize, s_mmapPtr + entries[i].dataOffset, entries[i].dataSize};
+    out++;
+  }
+
+  LOG_DBG("FFP", "mmapAll: %s → %d sizes mapped (%u B)", familyName, out, static_cast<unsigned>(mapBytes));
+  return out;
+}
+
 void unmap() {
   if (!s_mmapPtr) return;
   esp_partition_munmap(s_mmapHandle);

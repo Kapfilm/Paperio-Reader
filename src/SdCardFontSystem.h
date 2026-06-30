@@ -4,6 +4,7 @@
 #include <SdCardFontRegistry.h>
 
 #include <functional>
+#include <vector>
 
 class GfxRenderer;
 
@@ -34,6 +35,16 @@ class SdCardFontSystem {
   /// Resolve an SD card font ID from family name + fontSize enum.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
   int resolveFontId(const char* familyName, uint8_t fontSizeEnum) const;
+
+  /// Resolve an SD card font ID for an exact point size within a loaded family.
+  /// Returns 0 if the family isn't loaded or that point size isn't available.
+  int resolveFontIdForPt(const char* familyName, uint8_t pt) const;
+
+  /// All point sizes currently loaded for the active SD family, sorted ascending.
+  std::vector<uint8_t> loadedSizes() const { return manager_.loadedSizes(); }
+
+  /// Primary (body) point size for the active SD family (closest match to user target). 0 if none loaded.
+  uint8_t primaryPointSize() const { return manager_.currentPointSize(); }
 
   /// Unload any currently loaded SD font family, freeing its heap (intervals,
   /// kern/ligature tables, glyph cache — typically 24-60KB). The registry is

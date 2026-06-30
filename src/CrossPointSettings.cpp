@@ -206,6 +206,27 @@ int CrossPointSettings::getTallerBuiltinReaderFontId(const uint8_t family, const
   return getBuiltinReaderFontId(family, kLadder[target]);
 }
 
+int CrossPointSettings::getSmallerBuiltinReaderFontId(const uint8_t family, const uint8_t size, const uint8_t stepDown,
+                                                      uint8_t* const actualStep) {
+  static constexpr uint8_t kLadder[] = {TINY, SMALL, MEDIUM, LARGE, EXTRA_LARGE};
+  constexpr int kLadderLen = static_cast<int>(sizeof(kLadder) / sizeof(kLadder[0]));
+
+  int idx = -1;
+  for (int i = 0; i < kLadderLen; ++i) {
+    if (kLadder[i] == size) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0) {
+    if (actualStep) *actualStep = 0;
+    return 0;
+  }
+  const int target = std::max(idx - static_cast<int>(stepDown), 0);
+  if (actualStep) *actualStep = static_cast<uint8_t>(idx - target);
+  return getBuiltinReaderFontId(family, kLadder[target]);
+}
+
 int CrossPointSettings::getReaderFontId() const {
   // SD card font takes priority when one is selected globally.
   // resolveSdCardFontId() returns 0 if the named family isn't loaded

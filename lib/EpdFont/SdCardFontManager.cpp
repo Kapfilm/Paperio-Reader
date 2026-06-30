@@ -113,77 +113,102 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
     return false;
   }
 
-  auto* font = new (std::nothrow) SdCardFont();
-  if (!font) {
-    LOG_ERR("SDMGR", "OOM allocating SdCardFont for %s", selected->path.c_str());
-    return false;
+  // Ensure all sizes are cached in the flash partition.
+  if (FlashFontPartition::isMapped()) FlashFontPartition::unmap();
+  const bool alreadyCached = FlashFontPartition::hasEntry(family.name.c_str(), selected->pointSize);
+  if (!alreadyCached) {
+    if (onColdLoad) onColdLoad();
+    if (!writeFamily(family, selected->pointSize)) {
+      LOG_ERR("SDMGR", "Flash write failed for %s", family.name.c_str());
+      // Fall through to SD-only load of the primary size below.
+    }
+  } else {
+    LOG_DBG("SDMGR", "Flash cache hit for %s@%u", family.name.c_str(), selected->pointSize);
   }
 
-  // --- Flash partition cache ---
-  // If the partition already has this exact entry, mmap directly — no write
-  // needed. Otherwise write the family (or single file) and then mmap.
-  bool loadedFromMmap = false;
+  // Try to map all available sizes at once from the flash partition.
+  // Each entry gets its own SdCardFont aliasing the single mmap region.
+  bool primaryLoaded = false;
   {
-    if (FlashFontPartition::isMapped()) FlashFontPartition::unmap();
+    static constexpr int kMaxSizes = 8;
+    FlashFontPartition::MappedEntry mapped[kMaxSizes];
+    const int nMapped = FlashFontPartition::mmapAll(family.name.c_str(), mapped, kMaxSizes);
 
-    const bool alreadyCached = FlashFontPartition::hasEntry(family.name.c_str(), selected->pointSize);
+    if (nMapped > 0) {
+      for (int i = 0; i < nMapped; i++) {
+        // Find the SD path for this size (needed by loadFromMmap for logging).
+        const SdCardFontFileInfo* fi = family.findFile(mapped[i].pointSize);
+        const char* sdPath = fi ? fi->path.c_str() : selected->path.c_str();
 
-    bool readyToMmap = alreadyCached;
-    if (!alreadyCached) {
-      // Genuine first load: writing the family into the flash partition takes
-      // a noticeable moment — let the caller advertise it before we start.
-      if (onColdLoad) onColdLoad();
-      readyToMmap = writeFamily(family, selected->pointSize);
-      if (!readyToMmap) {
-        LOG_ERR("SDMGR", "Flash write failed for %s, falling back to SD load", family.name.c_str());
-      }
-    } else {
-      LOG_DBG("SDMGR", "Flash cache hit for %s@%u", family.name.c_str(), selected->pointSize);
-    }
-
-    if (readyToMmap) {
-      const uint8_t* mmapPtr = nullptr;
-      size_t mmapSize = 0;
-      if (FlashFontPartition::mmap(family.name.c_str(), selected->pointSize, &mmapPtr, &mmapSize)) {
-        if (font->loadFromMmap(mmapPtr, mmapSize, selected->path.c_str())) {
-          loadedFromMmap = true;
-          LOG_INF("SDMGR", "Font loaded from flash: %s@%u", family.name.c_str(), selected->pointSize);
-        } else {
-          LOG_ERR("SDMGR", "loadFromMmap failed, falling back to SD");
-          FlashFontPartition::unmap();
+        auto* font = new (std::nothrow) SdCardFont();
+        if (!font) {
+          LOG_ERR("SDMGR", "OOM for %s@%u", family.name.c_str(), mapped[i].pointSize);
+          continue;
         }
-      } else {
-        LOG_ERR("SDMGR", "mmap failed for %s@%u, falling back to SD", family.name.c_str(), selected->pointSize);
+        if (!font->loadFromMmap(mapped[i].ptr, mapped[i].size, sdPath)) {
+          LOG_ERR("SDMGR", "loadFromMmap failed for %s@%u", family.name.c_str(), mapped[i].pointSize);
+          delete font;
+          continue;
+        }
+
+        const int fontId = computeFontId(font->contentHash(), family.name.c_str(), mapped[i].pointSize);
+        if (renderer.getFontMap().count(fontId) != 0) {
+          LOG_ERR("SDMGR", "Font ID collision for %s@%u, skipping", family.name.c_str(), mapped[i].pointSize);
+          delete font;
+          continue;
+        }
+
+        renderer.registerSdCardFont(fontId, font);
+        loaded_.push_back({font, fontId, mapped[i].pointSize});
+        EpdFontFamily fontFamily(font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2), font->getEpdFont(3));
+        renderer.insertFont(fontId, fontFamily);
+        LOG_INF("SDMGR", "Loaded %s@%u from flash (id=%d)", family.name.c_str(), mapped[i].pointSize, fontId);
+
+        if (mapped[i].pointSize == selected->pointSize) primaryLoaded = true;
       }
     }
   }
 
-  if (!loadedFromMmap) {
+  // Fall back to SD load of just the primary size if flash path failed.
+  if (!primaryLoaded) {
+    if (FlashFontPartition::isMapped()) FlashFontPartition::unmap();
+    auto* font = new (std::nothrow) SdCardFont();
+    if (!font) {
+      LOG_ERR("SDMGR", "OOM allocating SdCardFont for %s", selected->path.c_str());
+      return false;
+    }
     if (!font->load(selected->path.c_str())) {
-      LOG_ERR("SDMGR", "Failed to load %s", selected->path.c_str());
+      LOG_ERR("SDMGR", "Failed to load %s from SD", selected->path.c_str());
       delete font;
       return false;
     }
+    const int fontId = computeFontId(font->contentHash(), family.name.c_str(), selected->pointSize);
+    renderer.registerSdCardFont(fontId, font);
+    loaded_.push_back({font, fontId, selected->pointSize});
+    EpdFontFamily fontFamily(font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2), font->getEpdFont(3));
+    renderer.insertFont(fontId, fontFamily);
+    LOG_INF("SDMGR", "Loaded %s@%u from SD (flash fallback)", family.name.c_str(), selected->pointSize);
   }
-
-  int fontId = computeFontId(font->contentHash(), family.name.c_str(), selected->pointSize);
-  if (renderer.getFontMap().count(fontId) != 0) {
-    LOG_ERR("SDMGR", "Font ID %d collides with existing font, skipping %s", fontId, selected->path.c_str());
-    delete font;
-    return false;
-  }
-  renderer.registerSdCardFont(fontId, font);
-  loaded_.push_back({font, fontId, selected->pointSize});
-
-  LOG_DBG("SDMGR", "Loaded %s size=%u id=%d styles=%u (target=%u)", selected->path.c_str(), selected->pointSize, fontId,
-          font->styleCount(), targetPtSize);
-
-  EpdFontFamily fontFamily(font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2), font->getEpdFont(3));
-  renderer.insertFont(fontId, fontFamily);
 
   loadedFamilyName_ = family.name;
   loadedPointSize_ = selected->pointSize;
   return true;
+}
+
+int SdCardFontManager::getFontIdForPt(const std::string& familyName, uint8_t pt) const {
+  if (familyName != loadedFamilyName_) return 0;
+  for (const auto& lf : loaded_) {
+    if (lf.size == pt) return lf.fontId;
+  }
+  return 0;
+}
+
+std::vector<uint8_t> SdCardFontManager::loadedSizes() const {
+  std::vector<uint8_t> sizes;
+  sizes.reserve(loaded_.size());
+  for (const auto& lf : loaded_) sizes.push_back(lf.size);
+  std::sort(sizes.begin(), sizes.end());
+  return sizes;
 }
 
 void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
@@ -201,5 +226,6 @@ void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
 
 int SdCardFontManager::getFontId(const std::string& familyName) const {
   if (familyName != loadedFamilyName_ || loaded_.empty()) return 0;
-  return loaded_.front().fontId;
+  // Return the font ID for the primary (body) size — the closest to the user's target.
+  return getFontIdForPt(familyName, loadedPointSize_);
 }

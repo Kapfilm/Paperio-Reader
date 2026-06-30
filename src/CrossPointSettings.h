@@ -415,6 +415,11 @@ class CrossPointSettings {
   // (out) receives how many steps were actually taken before the cap (so the caller can
   // compute a residual multiplier when clamped). Returns 0 for unknown families.
   static int getTallerBuiltinReaderFontId(uint8_t family, uint8_t size, uint8_t stepUp, uint8_t* actualStep = nullptr);
+  // Smaller sizing: return the built-in fontId `stepDown` sizes smaller than `size` for
+  // `family`, clamped at the smallest available size. Returns 0 for unknown families.
+  // `actualStep` receives the steps actually taken (may be less than requested at the floor).
+  static int getSmallerBuiltinReaderFontId(uint8_t family, uint8_t size, uint8_t stepDown,
+                                           uint8_t* actualStep = nullptr);
 
   bool saveToFile() const;
   bool loadFromFile();

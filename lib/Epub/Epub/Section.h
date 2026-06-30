@@ -103,6 +103,9 @@ class Section {
     // heading font lookup fails and headings render nothing. 0 = scale-fallback for that level.
     int32_t fontId[3] = {0, 0, 0};
     float residual[3] = {1.6f, 1.4f, 1.2f};
+    // <small> element: smaller built-in font (0 = fall back to 0.8× scale of body font).
+    int32_t smallFontId = 0;
+    float smallResidual = 1.0f;
   };
 
   // Render parameters that determine a section-cache variant. Bundles the long argument

@@ -1557,6 +1557,21 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     }
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
+  } else if (strcmp(name, "small") == 0) {
+    if (self->partWordBufferIndex > 0) {
+      if (!self->flushPartWordBuffer()) return;
+    }
+    const float prevMultiplier =
+        self->currentTextBlock ? self->currentTextBlock->getBlockStyle().fontSizeMultiplier : 1.0f;
+    self->smallFontSizeStack.push_back(prevMultiplier);
+    BlockStyle smallStyle = self->currentTextBlock ? self->currentTextBlock->getBlockStyle() : BlockStyle{};
+    if (self->smallFontId_ != 0) {
+      smallStyle.headingFontId = self->smallFontId_;
+      smallStyle.fontSizeMultiplier = self->smallResidual_;
+    } else {
+      smallStyle.fontSizeMultiplier = prevMultiplier * 0.8f;
+    }
+    self->startNewTextBlock(smallStyle);
   } else if (strcmp(name, "span") == 0 || !isHeaderOrBlock(name)) {
     // Handle span and other inline elements for CSS styling
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
@@ -1895,11 +1910,11 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
     // Flush if style will change OR if we're closing a block/structural element
     const bool isInlineTag =
         !headerOrBlockTag && !tableStructuralTag && !matches(name, IMAGE_TAGS, NUM_IMAGE_TAGS) && self->depth != 1;
-    const bool shouldFlush = styleWillChange || headerOrBlockTag || matches(name, BOLD_TAGS, NUM_BOLD_TAGS) ||
-                             matches(name, ITALIC_TAGS, NUM_ITALIC_TAGS) ||
-                             matches(name, UNDERLINE_TAGS, NUM_UNDERLINE_TAGS) ||
-                             matches(name, STRIKETHROUGH_TAGS, NUM_STRIKETHROUGH_TAGS) || tableStructuralTag ||
-                             matches(name, IMAGE_TAGS, NUM_IMAGE_TAGS) || self->depth == 1;
+    const bool shouldFlush =
+        styleWillChange || headerOrBlockTag || matches(name, BOLD_TAGS, NUM_BOLD_TAGS) ||
+        matches(name, ITALIC_TAGS, NUM_ITALIC_TAGS) || matches(name, UNDERLINE_TAGS, NUM_UNDERLINE_TAGS) ||
+        matches(name, STRIKETHROUGH_TAGS, NUM_STRIKETHROUGH_TAGS) || tableStructuralTag ||
+        matches(name, IMAGE_TAGS, NUM_IMAGE_TAGS) || strcmp(name, "small") == 0 || self->depth == 1;
 
     if (shouldFlush) {
       const bool endsAtDashBreak = bufferEndsWithBreakableDash(self->partWordBuffer, self->partWordBufferIndex);
@@ -2010,6 +2025,19 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
   // Leaving pre tag
   if (self->preUntilDepth == self->depth) {
     self->preUntilDepth = INT_MAX;
+  }
+
+  // Leaving <small>: restore the previous font size multiplier
+  if (strcmp(name, "small") == 0 && !self->smallFontSizeStack.empty()) {
+    if (self->partWordBufferIndex > 0) {
+      if (!self->flushPartWordBuffer()) return;
+    }
+    const float restoredMultiplier = self->smallFontSizeStack.back();
+    self->smallFontSizeStack.pop_back();
+    BlockStyle restoredStyle = self->currentTextBlock ? self->currentTextBlock->getBlockStyle() : BlockStyle{};
+    restoredStyle.headingFontId = 0;  // clear the small font; restored block uses body font
+    restoredStyle.fontSizeMultiplier = restoredMultiplier;
+    self->startNewTextBlock(restoredStyle);
   }
 
   // Pop from inline style stack if we pushed an entry at this depth

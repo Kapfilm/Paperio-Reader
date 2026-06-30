@@ -558,6 +558,7 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
       st.cssParser, epub->getImageManifest());
   st.visitor->setExternalPageBreakAnchors(std::move(externalPageBreakAnchors));
   st.visitor->setHeadingFonts(p.headingFonts.fontId, p.headingFonts.residual);
+  st.visitor->setSmallFont(p.headingFonts.smallFontId, p.headingFonts.smallResidual);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
 
   if (!st.visitor->setup(st.inflatedSize)) {

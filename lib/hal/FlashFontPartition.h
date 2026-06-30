@@ -80,6 +80,18 @@ bool finaliseWrite();
 // The map is valid until unmap() is called.
 bool mmap(const char* familyName, uint8_t pointSize, const uint8_t** outPtr, size_t* outSize);
 
+// Map the full used partition range once, then return pointers for every entry
+// belonging to familyName. outEntries is filled with (pointSize, ptr, size)
+// tuples for each matching entry, sorted by pointSize ascending.
+// Returns the number of entries found (0 on error or no match).
+// The map is valid until unmap() is called — all returned pointers alias it.
+struct MappedEntry {
+  uint8_t pointSize;
+  const uint8_t* ptr;
+  size_t size;
+};
+int mmapAll(const char* familyName, MappedEntry* outEntries, int maxEntries);
+
 // Release the current mmap. No-op if not mapped.
 void unmap();
 

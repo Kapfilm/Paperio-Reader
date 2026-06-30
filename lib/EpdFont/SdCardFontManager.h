@@ -30,16 +30,24 @@ class SdCardFontManager {
   // Unload everything, unregister from renderer.
   void unloadAll(GfxRenderer& renderer);
 
-  // Look up the font ID for the loaded family. Returns 0 if nothing loaded
-  // or familyName doesn't match.
+  // Look up the font ID for the loaded family at the primary (body) size.
+  // Returns 0 if nothing loaded or familyName doesn't match.
   int getFontId(const std::string& familyName) const;
+
+  // Look up the font ID for a specific point size within the loaded family.
+  // Returns 0 if that size is not loaded or familyName doesn't match.
+  int getFontIdForPt(const std::string& familyName, uint8_t pt) const;
 
   // Get name of currently loaded family (empty if none).
   const std::string& currentFamilyName() const { return loadedFamilyName_; };
 
-  // Point size that was actually loaded (closest match to targetPtSize).
+  // Point size of the primary (body) loaded entry — closest match to targetPtSize.
   // 0 if nothing loaded.
   uint8_t currentPointSize() const { return loadedPointSize_; };
+
+  // All point sizes currently loaded for the active family, sorted ascending.
+  // Empty if nothing loaded.
+  std::vector<uint8_t> loadedSizes() const;
 
  private:
   struct LoadedFont {

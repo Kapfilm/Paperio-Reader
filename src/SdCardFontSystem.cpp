@@ -198,11 +198,18 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, const char* wantedFam
 }
 
 int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t fontSizeEnum) const {
-  // The manager loads exactly one size for the active SD family. Resolve only
-  // if the requested family matches the loaded family and the requested size
-  // matches the loaded size. otherwise return 0 so callers can fall back.
   if (!familyName || familyName[0] == '\0') return 0;
   if (manager_.currentFamilyName() != familyName) return 0;
-  if (manager_.currentPointSize() != targetPtSizeFromEnum(fontSizeEnum)) return 0;
+  // Primary body size: return the ID for the loaded point size closest to the target.
+  // With multi-size loading the manager may have several sizes; getFontId returns the
+  // primary (body) one that was selected as the closest match at load time.
+  const uint8_t targetPt = targetPtSizeFromEnum(fontSizeEnum);
+  (void)targetPt;  // getFontId uses loadedPointSize_ which was set to the closest match
   return manager_.getFontId(familyName);
+}
+
+int SdCardFontSystem::resolveFontIdForPt(const char* familyName, uint8_t pt) const {
+  if (!familyName || familyName[0] == '\0') return 0;
+  if (manager_.currentFamilyName() != familyName) return 0;
+  return manager_.getFontIdForPt(familyName, pt);
 }

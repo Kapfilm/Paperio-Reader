@@ -87,6 +87,9 @@ class ChapterHtmlSlimParser final : public Print {
   // setHeadingFonts(); defaults preserve the legacy scale-only behavior.
   int32_t headingFontId_[3] = {0, 0, 0};
   float headingResidual_[3] = {1.6f, 1.4f, 1.2f};
+  // <small> element sizing: smaller built-in font (0 = fall back to 0.8× scale).
+  int32_t smallFontId_ = 0;
+  float smallResidual_ = 1.0f;
   float lineCompression;
   bool extraParagraphSpacing;
   uint8_t paragraphAlignment;
@@ -101,6 +104,7 @@ class ChapterHtmlSlimParser final : public Print {
   std::string imageBasePath;
   int imageCounter = 0;
   bool lowMemoryImageFallback = false;
+  std::vector<float> smallFontSizeStack;  // saved fontSizeMultiplier values for nested <small> elements
 
   // Style tracking (replaces depth-based approach)
   struct StyleStackEntry {
@@ -324,6 +328,11 @@ class ChapterHtmlSlimParser final : public Print {
       headingFontId_[i] = fontId[i];
       headingResidual_[i] = residual[i];
     }
+  }
+  // Supplies the resolved font for <small> elements. fontId==0 falls back to 0.8× scale.
+  void setSmallFont(int32_t fontId, float residual) {
+    smallFontId_ = fontId;
+    smallResidual_ = residual;
   }
 
  private:
