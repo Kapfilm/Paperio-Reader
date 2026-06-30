@@ -151,6 +151,13 @@ class GfxRenderer {
   int getScreenHeight() const;
   void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
   void setNextDisplayRefreshMode(HalDisplay::RefreshMode refreshMode) const;
+  // True if a setNextDisplayRefreshMode() override is armed but not yet consumed. Peek only —
+  // does NOT consume it (unlike consumeRefreshOverride). Lets a caller that is about to issue an
+  // intermediate refresh (which would consume the override) detect that a deliberate-transition
+  // override is pending and react accordingly.
+  bool hasRefreshOverridePending() const {
+    return refreshOverride.load(std::memory_order_acquire) != REFRESH_OVERRIDE_NONE;
+  }
   // Make the write framebuffer match the currently displayed frame. Call before
   // a partial repaint that patches a few regions and re-displays without
   // re-rendering the full frame: displayBuffer() ends with swapBuffers(), so

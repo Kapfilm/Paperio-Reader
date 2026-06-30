@@ -175,30 +175,26 @@ class EpubReaderActivity final : public Activity {
   // stepBackgroundSectionBuild() and stepCurrentSectionBuild() before they start any
   // heap-hungry work.
   bool imageProcessingActive_ = false;
-  // True only for the FIRST section build of this reader session (set in onEnter(), cleared the
-  // first time buildSection()'s incremental popup branch runs — whether or not that build needed
-  // the popup). Gates forceHalfRefreshAfterPopup_ below: a build resumed mid-session (Background-B
-  // was still working when the reader caught up to a new section during normal forward reading)
-  // shows the same popup but is a routine, frequent event — forcing HALF there made every section
-  // traversal pay a slow refresh. The dramatic case this guards against (text popup -> photographic
-  // cover, diffed via FAST, leaving a ghost outline) only really matters on the cold-cache first
-  // open of a book, so only that gets the HALF treatment.
-  bool firstSectionBuildThisSession_ = true;
-  // True after the "Indexing..." popup is drawn for the session's first build, until the first
-  // real page replaces it on screen. That first page is forced to HALF_REFRESH instead of the
-  // normal FAST cadence, establishing a clean baseline for the popup -> content transition (see
-  // firstSectionBuildThisSession_ for why this is scoped to the first build only). Consumed by
-  // whichever path shows the first real page: displayBuildPage() for a multi-slice build, or
-  // renderContents() directly when the build finishes in a single slice (e.g. a one-page cover)
-  // and never goes through displayBuildPage at all.
+  // Arms forceHalfRefreshAfterPopup_ for the NEXT incremental section build, marking that build's
+  // popup -> content transition as "dramatic" and worth a clean HALF baseline (vs. the routine,
+  // frequent forward-reading crossing into a still-building Background-B section, where forcing
+  // HALF made every section traversal pay a slow refresh). Two dramatic cases set it:
+  //   - cold open of a book (set in onEnter()); valid only for the FIRST section entry, so any
+  //     non-incremental entry — a cache hit or a blocking build — clears it (see buildSection),
+  //     ensuring a cached re-open's first uncached forward crossing is NOT treated as dramatic.
+  //   - a deliberate jump to a possibly-uncached section (chapter/percent/footnote): those sites
+  //     arm a HALF refresh override via ReaderUtils::enforceExitFullRefresh(), which the indexing
+  //     popup would otherwise consume, leaving the content page a FAST diff. buildSection detects
+  //     that pending override (renderer.hasRefreshOverridePending()) and arms the post-popup HALF
+  //     too, so the override paints the popup and the flag paints the content — both clean.
+  bool coldOpenHalfRefreshArmed_ = true;
+  // True after the "Indexing..." popup is drawn for a build flagged as a dramatic transition (see
+  // coldOpenHalfRefreshArmed_), until the first real page replaces it on screen. That first page is
+  // forced to HALF_REFRESH instead of the normal FAST cadence, establishing a clean baseline for the
+  // popup -> content transition. Consumed by whichever path shows the first real page:
+  // displayBuildPage() for a multi-slice build, or renderContents() directly when the build finishes
+  // in a single slice (e.g. a one-page cover) and never goes through displayBuildPage at all.
   bool forceHalfRefreshAfterPopup_ = false;
-  // TEMPORARY DIAGNOSTIC (remove after gathering field data): tracks the lowest free/contig
-  // heap observed across the slices of the CURRENT resident (buffer-kept) Background-C build,
-  // to measure real headroom against IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES / RESIDENT_BUILD_
-  // ABORT_FREE_HEAP_BYTES. Reset when a new resident build starts; logged on completion/abort.
-  uint32_t residentBuildMinFreeHeap_ = 0xFFFFFFFFu;
-  uint32_t residentBuildMinContigHeap_ = 0xFFFFFFFFu;
-  int residentBuildMinFreeSpine_ = -1;
   // When true, large images on the current page are decoded instead of shown as placeholders.
   // Reset to false on every page turn so the next image page starts with a placeholder again.
   bool forceLoadLargeImages = false;

@@ -314,7 +314,11 @@ void EpubReaderActivity::onEnter() {
   // the long-standing "heap may be corrupt after image decode failures" note below).
   checkHeapIntegrity("reader_onEnter");
   secondaryBufferDegraded_ = !renderer.hasSecondaryBuffer();
-  firstSectionBuildThisSession_ = true;
+  // Cold open: arm the dramatic-transition HALF for the first section entry only (cleared by any
+  // non-incremental entry in buildSection). Also clear any stale post-popup HALF left armed if the
+  // previous reader session was abandoned mid-build.
+  coldOpenHalfRefreshArmed_ = true;
+  forceHalfRefreshAfterPopup_ = false;
   // Start the refresh cadence at the configured frequency so the first page uses a fast
   // differential. RED RAM is valid: the previous activity's last displayBuffer() called
   // syncRedRamFromFrameBuffer(). If the previous activity set a HALF_REFRESH override via
@@ -1030,26 +1034,8 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
 #if DEBUG_BACKGROUND_WORK
   bgCounters_.bRuns++;
 #endif
-  // TEMPORARY DIAGNOSTIC: track the lowest free/contig heap seen across this resident build's
-  // slices (see residentBuildMinFreeHeap_ in the header) to measure real headroom against
-  // IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES / RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES. Reset when a
-  // new resident build starts for a different spine; irrelevant once the build runs released
-  // (that path already has the buffer's ~48 KB headroom, not what we're measuring here).
-  if (!secondaryBufferDegraded_ && residentBuildMinFreeSpine_ != currentSpineIndex) {
-    residentBuildMinFreeSpine_ = currentSpineIndex;
-    residentBuildMinFreeHeap_ = 0xFFFFFFFFu;
-    residentBuildMinContigHeap_ = 0xFFFFFFFFu;
-  }
-
   const Section::BuildStep step = section->stepSectionBuild(makeSectionBuildParams(), BG_BUILD_BUDGET_MS);
   checkHeapIntegrity("after_c_slice");
-
-  if (!secondaryBufferDegraded_) {
-    const uint32_t freeNow = esp_get_free_heap_size();
-    const uint32_t contigNow = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
-    residentBuildMinFreeHeap_ = std::min(residentBuildMinFreeHeap_, freeNow);
-    residentBuildMinContigHeap_ = std::min(residentBuildMinContigHeap_, contigNow);
-  }
 
   if (step == Section::BuildStep::More) {
     // Proactive low-heap guard: while the build is resident (AA buffer kept), bail to the released
@@ -1058,8 +1044,6 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     if (!secondaryBufferDegraded_ && (esp_get_free_heap_size() < RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES ||
                                       heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT) <
                                           RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES)) {
-      LOG_INF("ERS", "DIAG resident-build min observed before abort: spine=%d free=%lu contig=%lu", currentSpineIndex,
-              residentBuildMinFreeHeap_, residentBuildMinContigHeap_);
       fallbackToReleasedRebuild("low heap mid-build");
       return;
     }
@@ -1074,11 +1058,6 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
   }
 
   backgroundBuildPercent_ = -1;
-
-  if (!secondaryBufferDegraded_ && residentBuildMinFreeSpine_ == currentSpineIndex) {
-    LOG_INF("ERS", "DIAG resident-build min observed at finish: spine=%d free=%lu contig=%lu step=%d",
-            currentSpineIndex, residentBuildMinFreeHeap_, residentBuildMinContigHeap_, static_cast<int>(step));
-  }
 
   // Failed, or finished but truncated / CSS-degraded: discard and retry on the released path. The
   // latch (set inside the helper) stops buildSection from re-entering Background-C for this spine.
@@ -2294,6 +2273,18 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   // Cancel any pending deferred AA pass — it belongs to the page we're leaving.
   pendingGrayscale_ = {};
 
+  // If the "Indexing..." popup is currently on screen and the user turns the page/section now, the
+  // destination page replaces a dark popup box on the X4 baseline. Whether it lands via a now-built
+  // page (displayBuildPage) or by abandoning the build to an adjacent cached section (renderContents
+  // Normal pass), a FAST diff against the popup frame leaves a ghost outline. Arm the post-popup HALF
+  // so the replacing page establishes a clean baseline. This is a deliberate navigation away from the
+  // popup — NOT the routine forward-reading crossing the cold-open/deliberate-jump gating protects —
+  // so it doesn't reintroduce the "every section traversal pays a slow refresh" cost. X3's fast
+  // differential reads the controller's DTM1 (drawPopup updated it correctly), so it never ghosts.
+  if (!renderer.isX3() && buildingPopupShown_) {
+    forceHalfRefreshAfterPopup_ = true;
+  }
+
   auto logPageTurnWindowIfReady = [this]() {
     if (pageTurnStatsWindow.turns < PAGE_TURN_STATS_WINDOW_SIZE) {
       return;
@@ -2731,6 +2722,12 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
       }
     } else {
       secondaryBufferDegraded_ = false;
+      // Symmetric with recoverSecondaryBufferIfNeeded(): a prior IncrementalReleased build may have
+      // left single-buffer fast-diff opted in, and a failed opportunistic realloc could route the
+      // re-render here instead. Clear it now that the double buffer is back so the next FAST refresh
+      // uses the normal host-reseeded baseline, not a stale controller-retained one. No-op if it was
+      // never set.
+      renderer.setSingleBufferFastDiff(false);
       if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
       LOG_DBG("ERS", "Index end mem (after fb realloc): free=%lu", esp_get_free_heap_size());
     }
@@ -2829,25 +2826,31 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
                 currentSpineIndex, esp_get_free_heap_size(),
                 heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT));
       }
+      // Decide BEFORE drawPopup whether this build's popup -> content transition is "dramatic" and
+      // deserves a clean HALF baseline (see coldOpenHalfRefreshArmed_). Two signals, captured here
+      // because the popup's own refresh would consume the second one:
+      //   - cold open of this book (coldOpenHalfRefreshArmed_), or
+      //   - a pending exit-full-refresh override left by a deliberate jump (chapter/percent/footnote)
+      //     to a possibly-uncached section. drawPopup() consumes that override (so the popup itself
+      //     paints HALF); without capturing it now, the content page would fall back to a FAST diff
+      //     against the popup frame and ghost its outline.
+      const bool dramaticTransition = coldOpenHalfRefreshArmed_ || renderer.hasRefreshOverridePending();
+      coldOpenHalfRefreshArmed_ = false;
       GUI.drawPopup(renderer, tr(STR_INDEXING));  // immediate feedback before the first page lands
-      // The popup just issued one FAST refresh (BaseTheme::drawPopup defaults to FAST). Force the
-      // first REAL page that replaces it — whether shown by displayBuildPage() (multi-slice build)
-      // or directly by renderContents() (build finishes in one slice, e.g. a one-page cover) — to
-      // HALF, so a dramatic content change (text popup -> photo) doesn't leave a ghost outline of
-      // the popup box, and so released-buffer builds don't compound that ghosting across many
-      // subsequent FAST mid-build pages before the periodic full-resync cadence cleans it up.
-      // X4 only: its FAST refresh needs a host-side previous-frame copy (or the single-buffer-
-      // fast-diff opt-in above) to diff against, so a dramatic frame change can under-drive
-      // pixels. X3's fast differential reads the controller's own DTM1 RAM, which drawPopup()'s
-      // displayBuffer() call already updated correctly — no host-side baseline gap to paper over,
-      // so forcing HALF there is pure unnecessary cost. Scoped to the session's first build only
-      // (see firstSectionBuildThisSession_) — a build resumed mid-session because Background-B was
-      // still working is routine and frequent during normal forward reading; forcing HALF there
-      // made every section traversal pay a slow refresh.
-      if (!renderer.isX3() && firstSectionBuildThisSession_) {
+      // Force the first REAL page that replaces the popup — whether shown by displayBuildPage()
+      // (multi-slice build) or directly by renderContents() (build finishes in one slice, e.g. a
+      // one-page cover) — to HALF, so a dramatic content change (text popup -> photo) doesn't leave
+      // a ghost outline of the popup box, and so released-buffer builds don't compound that ghosting
+      // across many subsequent FAST mid-build pages before the periodic full-resync cadence cleans
+      // it up. X4 only: its FAST refresh needs a host-side previous-frame copy (or the single-buffer-
+      // fast-diff opt-in above) to diff against, so a dramatic frame change can under-drive pixels.
+      // X3's fast differential reads the controller's own DTM1 RAM, which drawPopup()'s displayBuffer()
+      // call already updated correctly — no host-side baseline gap to paper over, so forcing HALF
+      // there is pure unnecessary cost. A routine forward-reading crossing into a still-building
+      // Background-B section is NOT dramatic (neither signal is set), so it keeps the fast cadence.
+      if (!renderer.isX3() && dramaticTransition) {
         forceHalfRefreshAfterPopup_ = true;
       }
-      firstSectionBuildThisSession_ = false;
       renderer.clearFontAccumulation();
       readerPhase_ = ReaderPhase::PRECOMPILING;
       // Seed the display cursor so the SectionBuilding pass knows which page to show first. For a
@@ -2909,6 +2912,12 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   } else {
     LOG_DBG("ERS", "Cache found, skipping build...");
   }
+  // Any section entry that resolved here without an ongoing incremental build (cache hit, blocking
+  // build, or a tiny incremental build that finished in one slice) spends the cold-open arm: it is
+  // valid for the FIRST section entry only, so a cached re-open's later forward crossings into
+  // still-building sections are not mistaken for the dramatic cold-open transition. A multi-slice
+  // incremental build returns earlier and has already consumed the arm in its popup branch.
+  coldOpenHalfRefreshArmed_ = false;
   lastRenderStats.sectionLoadMs = millis() - sectionStart;
 
   if (section->isTruncatedCache() && currentSpineIndex != lastWarnedTruncatedSpineIndex) {
@@ -3385,7 +3394,10 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     renderer.triggerDisplay(HalDisplay::FULL_REFRESH);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else if (forceRefreshModeNextRender_ >= 0) {
-    // Manual force-refresh button: apply the requested mode for this one render.
+    // Manual force-refresh button: apply the requested mode for this one render. A manual refresh
+    // gives its own clean baseline, so consume any armed post-popup HALF too rather than letting it
+    // carry over and force an unrelated later page to HALF.
+    forceHalfRefreshAfterPopup_ = false;
     renderer.triggerDisplay(static_cast<HalDisplay::RefreshMode>(forceRefreshModeNextRender_));
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     forceRefreshModeNextRender_ = -1;
@@ -3402,6 +3414,10 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   } else {
     ReaderUtils::triggerWithRefreshCycle(renderer, pagesUntilFullRefresh);
   }
+  // Real content is now on screen; any indexing popup it replaced is gone. Clear the flag for the
+  // abandon-to-adjacent-section path, which reaches this Normal pass without going through
+  // renderSectionBuildingPass()/displayBuildPage() where buildingPopupShown_ is otherwise reset.
+  buildingPopupShown_ = false;
   // Capture this page's refresh mode/byte NOW, before the lock is released and the deferred-AA
   // grayscale display overwrites the renderer's last-mode (which would otherwise mislabel the
   // page summary logged afterwards).
