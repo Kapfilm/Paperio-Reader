@@ -434,9 +434,34 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           recentsLoading = false;
           return;
         }
-        RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, success ? placeholder : "");
-        book.coverBmpPath = success ? placeholder : "";
-        LOG_DBG("HOME", "After generate: stored coverBmpPath=%s", book.coverBmpPath.c_str());
+        if (success) {
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
+          book.coverBmpPath = placeholder;
+          LOG_DBG("HOME", "After generate: stored coverBmpPath=%s", placeholder.c_str());
+          yieldAfterDecode();
+          return;
+        }
+
+        // ensureCoverThumb() decodes an already-extracted cover.img only (allowExtract=false keeps
+        // the multi-second ZIP inflate off the per-tick path), so its first failure for an embedded
+        // cover usually just means cover.img isn't extracted yet. Start the sliced extractor (the
+        // same one the multi-size carousel path uses); the drain at the top of loadRecentCovers
+        // caches cover.img across ticks and the next pass re-runs ensureCoverThumb against it.
+        // beginCoverExtractSession() returns null when cover.img is already cached (so an
+        // undecodable cover can't re-trigger extraction) or there is nothing to extract (no embedded
+        // cover / not an EPUB). In that case the cover is genuinely unavailable: record an empty
+        // path AND advance past this book — without the advance, the missing thumb keeps failing the
+        // validThumb check and the same book is retried every render, forever (the bug this fixes).
+        extractSession = ReaderActivity::beginCoverExtractSession(book.path);
+        if (extractSession) {
+          LOG_DBG("HOME", "Started cover extract session for %s (single-height)", book.path.c_str());
+          recentsLoading = false;
+          return;
+        }
+        RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
+        book.coverBmpPath = "";
+        LOG_DBG("HOME", "No extractable cover for %s; storing empty and advancing", book.path.c_str());
+        nextRecentCoverIndex++;
         yieldAfterDecode();
         return;
       }
