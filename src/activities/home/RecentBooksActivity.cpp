@@ -115,28 +115,10 @@ bool RecentBooksActivity::loadNextCover() {
     const std::string placeholder = ReaderActivity::coverThumbPlaceholder(book.path);
     const std::string thumbPath = gridThumbPath(placeholder, tw, th);
 
-    // A 0-byte file is a "no extractable cover" sentinel left by a previous pass. Skip it cheaply:
-    // without this we re-open the EPUB three times per scan (generateThumbBmp + beginPngThumbSession
-    // + beginCoverExtractSession all load it) just to rediscover it has no cover — the "read again
-    // and again" seen for cover-less books like test_jpeg_images.epub.
-    {
-      FsFile tf;
-      bool noCoverSentinel = false;
-      if (Storage.openFileForRead("RBA", thumbPath, tf)) {
-        noCoverSentinel = (tf.size() == 0);
-        tf.close();
-      }
-      if (noCoverSentinel) {
-        if (!book.coverBmpPath.empty()) {
-          RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
-          book.coverBmpPath.clear();
-        }
-        continue;  // no cover — advance to the next book without touching the EPUB
-      }
-    }
-
-    // size>0 is not enough: a thumbnail truncated by an interrupted write passes it but fails to
-    // draw partway. Require all pixel rows to be present, else regenerate (isCoverThumbComplete).
+    // Require a COMPLETE BMP (all pixel rows present), not just size>0: a thumbnail truncated by an
+    // interrupted write passes size>0 but fails to draw partway, so regenerate it. A no-cover book's
+    // placeholder BMP (written below) is also a complete BMP, so it passes here and is treated as a
+    // resolved cover — no re-opening the EPUB three times per scan to rediscover it has no cover.
     const bool valid = ReaderActivity::isCoverThumbComplete(thumbPath);
     if (!valid) {
       const bool ok = ReaderActivity::ensureCoverThumb(book.path, tw, th);
@@ -144,22 +126,27 @@ bool RecentBooksActivity::loadNextCover() {
       pngSessionFailed = false;  // consumed
       if (!ok && !wasPostFailure) {
         pngSession = ReaderActivity::beginPngThumbSession(book.path, tw, th, pngSessionFiles);
-        if (!pngSession) {
-          extractSession = ReaderActivity::beginCoverExtractSession(book.path);
-          if (extractSession) {
-            LOG_DBG("RBA", "Started cover extract session for %s (%zu bytes)", book.path.c_str(),
-                    extractSession->totalBytes());
-            return false;
-          }
-          // No thumb produced AND no decode/extract session could start → the book genuinely has no
-          // extractable cover. Drop a 0-byte sentinel so the cheap skip above short-circuits future
-          // scans instead of re-opening the EPUB each time. (A transient post-failure retry —
-          // wasPostFailure — is NOT sentinelled: the session error handler already cleaned up.)
-          FsFile sentinel;
-          if (Storage.openFileForWrite("RBA", thumbPath, sentinel)) sentinel.close();
-          LOG_DBG("RBA", "No extractable cover for %s — wrote no-cover sentinel", book.path.c_str());
-        } else {
+        if (pngSession) {
           LOG_DBG("RBA", "Started PNG session for %s (%u rows)", book.path.c_str(), pngSession->totalRows());
+          return false;
+        }
+        extractSession = ReaderActivity::beginCoverExtractSession(book.path);
+        if (extractSession) {
+          LOG_DBG("RBA", "Started cover extract session for %s (%zu bytes)", book.path.c_str(),
+                  extractSession->totalBytes());
+          return false;
+        }
+        // No thumb produced AND no decode/extract session could start → genuinely no extractable
+        // cover. But NOT if a sidecar image exists: that is a real cover source that simply failed
+        // to convert this pass (e.g. tight heap) and should be retried, not permanently placeholdered.
+        // Otherwise write a valid placeholder BMP so future scans treat the book as resolved and stop
+        // re-opening the EPUB. (A transient post-failure retry — wasPostFailure — is skipped here too.)
+        if (ReaderActivity::sidecarCoverPath(book.path).empty() &&
+            ReaderActivity::writeCoverPlaceholderBmp(thumbPath, tw, th)) {
+          LOG_DBG("RBA", "No extractable cover for %s — wrote placeholder", book.path.c_str());
+          RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
+          book.coverBmpPath = placeholder;
+          nextCoverIndex++;
           return false;
         }
       }

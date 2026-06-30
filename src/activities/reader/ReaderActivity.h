@@ -49,6 +49,11 @@ class ReaderActivity final : public Activity {
   // passes a naive size>0 check but fails to draw partway (GFX "Failed to read row N"). Treating
   // such a file as invalid lets the caller regenerate it instead of drawing/keeping it forever.
   static bool isCoverThumbComplete(const std::string& path);
+  // Write a minimal but VALID 1-bit BMP (white box with a black frame) at the thumbnail path, used
+  // to mark a book that has no extractable cover. Being a complete BMP it passes
+  // isCoverThumbComplete(), so the cover loops treat the book as resolved and never re-open the EPUB
+  // to rediscover the absence — without the 0-byte-file "mess" (we now treat empty files as invalid).
+  static bool writeCoverPlaceholderBmp(const std::string& path, int width, int height);
 
   // Sliced extraction of a ZIP entry to a file, one chunk per continueStep() call.
   // Used to extract an embedded PNG cover (cover.img) without blocking loop() for

@@ -495,12 +495,12 @@ void HomeActivity::restoreSecondaryBuffer(bool callerHoldsRenderLock) {
       // Two-buffer differential is available again — turn off the single-buffer
       // RED-RAM-baseline mode so normal fast refresh resumes against the secondary.
       renderer.setSingleBufferFastDiff(false);
-      // reallocSecondaryBuffer() fills the new secondary with WHITE. Reseed RED RAM from
-      // the last displayed frame so the next fast differential has the correct baseline.
-      // No-op on X3: its differential lives in the controller, not the secondary buffer.
-      if (!renderer.isX3()) {
-        renderer.syncRedRamFromFrameBuffer();
-      }
+      // Do NOT syncRedRamFromFrameBuffer() here: reallocSecondaryBuffer() fills the new secondary
+      // with WHITE, and syncRedRamFromFrameBuffer() copies that white buffer into RED RAM —
+      // overwriting the correct baseline. RED already holds the home frame (synced before the
+      // release; the controller retains it through release/realloc, which don't touch RED). The
+      // white reseed made the next FAST refresh (e.g. Home->Settings) diff against white, ghosting
+      // the home screen through. Leave RED intact.
       LOG_DBG("HOME", "Restored secondary framebuffer after cover loading (free=%lu)",
               static_cast<unsigned long>(esp_get_free_heap_size()));
     }

@@ -246,6 +246,62 @@ bool ReaderActivity::isCoverThumbComplete(const std::string& path) {
   return ok;
 }
 
+bool ReaderActivity::writeCoverPlaceholderBmp(const std::string& path, int width, int height) {
+  if (width <= 0 || height <= 0) return false;
+  const int rowBytes = ((width + 31) / 32) * 4;  // 1-bit rows padded to 4 bytes
+  uint8_t row[256];                              // cover thumbs are <=464px wide (rowBytes<=60)
+  if (rowBytes > static_cast<int>(sizeof(row))) return false;
+  const uint32_t imageSize = static_cast<uint32_t>(rowBytes) * static_cast<uint32_t>(height);
+  const uint32_t offBits = 14 + 40 + 8;  // file header + info header + 2-entry palette
+
+  FsFile f;
+  if (!Storage.openFileForWrite("COVER", path, f)) return false;
+  auto w16 = [&](uint16_t v) {
+    const uint8_t b[2] = {static_cast<uint8_t>(v), static_cast<uint8_t>(v >> 8)};
+    f.write(b, 2);
+  };
+  auto w32 = [&](uint32_t v) {
+    const uint8_t b[4] = {static_cast<uint8_t>(v), static_cast<uint8_t>(v >> 8), static_cast<uint8_t>(v >> 16),
+                          static_cast<uint8_t>(v >> 24)};
+    f.write(b, 4);
+  };
+  f.write(reinterpret_cast<const uint8_t*>("BM"), 2);
+  w32(offBits + imageSize);                     // bfSize
+  w16(0);                                       // reserved1
+  w16(0);                                       // reserved2
+  w32(offBits);                                 // bfOffBits
+  w32(40);                                      // biSize
+  w32(static_cast<uint32_t>(width));            // biWidth
+  w32(static_cast<uint32_t>(-height));          // biHeight (negative => top-down)
+  w16(1);                                       // biPlanes
+  w16(1);                                       // biBitCount
+  w32(0);                                       // biCompression = BI_RGB
+  w32(imageSize);                               // biSizeImage
+  w32(0);                                       // biXPelsPerMeter
+  w32(0);                                       // biYPelsPerMeter
+  w32(2);                                       // biClrUsed (black, white)
+  w32(0);                                       // biClrImportant
+  const uint8_t black[4] = {0, 0, 0, 0};        // palette index 0 = black
+  const uint8_t white[4] = {255, 255, 255, 0};  // palette index 1 = white
+  f.write(black, 4);
+  f.write(white, 4);
+  // Pixel rows (top-down): white interior (bit 1) with a 1px black frame (bit 0). A 1-bit BMP draws
+  // only its dark pixels, so this renders as an empty framed box — a clear "no cover" placeholder.
+  const int lastBit = width - 1;
+  for (int y = 0; y < height; y++) {
+    if (y == 0 || y == height - 1) {
+      memset(row, 0x00, rowBytes);  // full black border row
+    } else {
+      memset(row, 0xFF, rowBytes);                                                           // white
+      row[0] = static_cast<uint8_t>(row[0] & 0x7F);                                          // black left edge (col 0)
+      row[lastBit / 8] = static_cast<uint8_t>(row[lastBit / 8] & ~(0x80 >> (lastBit % 8)));  // right edge
+    }
+    f.write(row, rowBytes);
+  }
+  f.close();
+  return true;
+}
+
 namespace {
 // True if a thumbnail file exists and is usable. A 0-byte sentinel left by a prior failed
 // extraction, OR a partial BMP left truncated by an interrupted write, must be treated as missing

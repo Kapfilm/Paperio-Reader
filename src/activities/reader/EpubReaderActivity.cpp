@@ -2403,7 +2403,10 @@ void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
       // otherwise leave RED RAM reseeding skipped on the normal path. No-op if it was never set
       // (e.g. recovering from an indexing OOM instead of a released build).
       renderer.setSingleBufferFastDiff(false);
-      if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
+      // Do NOT syncRedRamFromFrameBuffer() here: reallocSecondaryBuffer() whitened the new secondary,
+      // and syncRedRamFromFrameBuffer() would copy that white into RED RAM, destroying the baseline.
+      // RED already holds the last displayed page (kept current by the released build's FAST refreshes;
+      // the controller retains it through realloc). Reseeding from white ghosted the next page.
       LOG_INF("ERS", "Secondary display buffer restored; re-enabling normal refresh/AA paths");
     } else {
       const uint32_t freeHeap = esp_get_free_heap_size();
@@ -2728,7 +2731,10 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
       // uses the normal host-reseeded baseline, not a stale controller-retained one. No-op if it was
       // never set.
       renderer.setSingleBufferFastDiff(false);
-      if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
+      // Do NOT syncRedRamFromFrameBuffer() here: reallocSecondaryBuffer() whitened the new secondary,
+      // and syncRedRamFromFrameBuffer() would copy that white into RED RAM, destroying the baseline.
+      // RED already holds the frame displayed before the build (the popup); reseeding from white made
+      // the first page after the build diff against white and ghost.
       LOG_DBG("ERS", "Index end mem (after fb realloc): free=%lu", esp_get_free_heap_size());
     }
   }
@@ -3320,11 +3326,15 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
         imageProcessingActive_ = false;
         return;  // fragmented-heap recovery reboot in progress
       }
-    } else if (!renderer.isX3()) {
-      // The realloc whitened the secondary buffer. Reseed RED RAM from the last displayed frame
-      // so the next fast differential diffs against the correct baseline, not the white new buffer.
-      renderer.syncRedRamFromFrameBuffer();
     }
+    // NOTE: do NOT syncRedRamFromFrameBuffer() here. reallocSecondaryBuffer() fills the new
+    // secondary with WHITE, and syncRedRamFromFrameBuffer() copies frameBufferActive (that white
+    // buffer) into RED RAM — which DESTROYS the correct baseline: RED already holds the previously
+    // displayed frame (the page under this one) from its own post-display sync, and _redRamSynced
+    // survives release/realloc. Reseeding from the white buffer made the next FAST differential diff
+    // the new page against white, so the previous page (e.g. the cover) bled through ("next page
+    // overloaded over the cover"). The displayed frame is gone from both host buffers after the
+    // release, so the controller's retained RED RAM is the only correct baseline — leave it intact.
   }
   imageProcessingActive_ = false;
   renderer.clearScreen();
