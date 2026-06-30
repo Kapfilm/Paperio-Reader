@@ -1,6 +1,8 @@
 #include <BootHeapProbe.h>
 #include <HalDisplay.h>
 #include <HalGPIO.h>
+#include <Logging.h>
+#include <esp_heap_caps.h>
 
 // Global HalDisplay instance, bracketed by static-init heap probes (slots 0/1).
 static BootHeapProbe s_probePreDisplay(0);
@@ -110,13 +112,34 @@ void HalDisplay::syncWriteBufferFromActive() const { einkDisplay.syncWriteBuffer
 
 void HalDisplay::releaseBuffers() { einkDisplay.releaseBuffers(); }
 
-bool HalDisplay::releaseSecondaryBuffer() { return einkDisplay.releaseSecondaryBuffer(); }
+// FBUF: centralized framebuffer-state trace. Every secondary-buffer / RED-RAM / single-buffer
+// transition logs here so a ghosting regression can be tracked to the exact op that left the panel
+// diffing against the wrong baseline. free=largest contiguous 8-bit block (what a realloc needs).
+static uint32_t fbufContig() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT); }
 
-bool HalDisplay::reallocSecondaryBuffer() { return einkDisplay.reallocSecondaryBuffer(); }
+bool HalDisplay::releaseSecondaryBuffer() {
+  const bool ok = einkDisplay.releaseSecondaryBuffer();
+  LOG_INF("FBUF", "releaseSecondary -> %d (hasSecondary=%d redSynced=%d contig=%lu)", ok ? 1 : 0,
+          einkDisplay.hasSecondaryBuffer() ? 1 : 0, einkDisplay.isRedRamSynced() ? 1 : 0,
+          static_cast<unsigned long>(fbufContig()));
+  return ok;
+}
+
+bool HalDisplay::reallocSecondaryBuffer() {
+  const bool ok = einkDisplay.reallocSecondaryBuffer();
+  LOG_INF("FBUF", "reallocSecondary -> %d (hasSecondary=%d redSynced=%d contig=%lu)", ok ? 1 : 0,
+          einkDisplay.hasSecondaryBuffer() ? 1 : 0, einkDisplay.isRedRamSynced() ? 1 : 0,
+          static_cast<unsigned long>(fbufContig()));
+  return ok;
+}
 
 bool HalDisplay::hasSecondaryBuffer() const { return einkDisplay.hasSecondaryBuffer(); }
 
-void HalDisplay::setSingleBufferFastDiff(bool enabled) { einkDisplay.setSingleBufferFastDiff(enabled); }
+void HalDisplay::setSingleBufferFastDiff(bool enabled) {
+  LOG_INF("FBUF", "singleBufferFastDiff=%d (hasSecondary=%d redSynced=%d)", enabled ? 1 : 0,
+          einkDisplay.hasSecondaryBuffer() ? 1 : 0, einkDisplay.isRedRamSynced() ? 1 : 0);
+  einkDisplay.setSingleBufferFastDiff(enabled);
+}
 
 void HalDisplay::triggerDisplay(RefreshMode mode, bool turnOffScreen) {
   einkDisplay.triggerDisplay(static_cast<EInkDisplay::RefreshMode>(mode), turnOffScreen);
@@ -139,7 +162,11 @@ void HalDisplay::copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) { einkDisplay
 
 void HalDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) { einkDisplay.copyGrayscaleMsbBuffers(msbBuffer); }
 
-void HalDisplay::syncRedRamFromFrameBuffer() { einkDisplay.syncRedRamFromFrameBuffer(); }
+void HalDisplay::syncRedRamFromFrameBuffer() {
+  einkDisplay.syncRedRamFromFrameBuffer();
+  LOG_INF("FBUF", "syncRedRamFromFrameBuffer (hasSecondary=%d redSynced=%d)", einkDisplay.hasSecondaryBuffer() ? 1 : 0,
+          einkDisplay.isRedRamSynced() ? 1 : 0);
+}
 
 void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.cleanupGrayscaleBuffers(bwBuffer); }
 
