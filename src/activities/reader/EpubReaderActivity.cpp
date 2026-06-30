@@ -314,6 +314,7 @@ void EpubReaderActivity::onEnter() {
   // the long-standing "heap may be corrupt after image decode failures" note below).
   checkHeapIntegrity("reader_onEnter");
   secondaryBufferDegraded_ = !renderer.hasSecondaryBuffer();
+  firstSectionBuildThisSession_ = true;
   // Start the refresh cadence at the configured frequency so the first page uses a fast
   // differential. RED RAM is valid: the previous activity's last displayBuffer() called
   // syncRedRamFromFrameBuffer(). If the previous activity set a HALF_REFRESH override via
@@ -785,6 +786,13 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
   if (renderer.isRefreshPending() || RenderLock::peek()) {
     return;
   }
+  // Don't start a heap-hungry build slice while the render task is decoding an image:
+  // both compete for the same ~48-52 KB contiguous block. RenderLock::peek() above already
+  // excludes this in practice (renderContents() holds the lock for the whole warm pass), but
+  // check explicitly too — see the comment on imageProcessingActive_.
+  if (imageProcessingActive_) {
+    return;
+  }
   // One lock for the whole step: every branch below touches the SD (even discarding a
   // stale build removes its partial file) and the parse slice reads glyph metrics from
   // the shared renderer, so all of it must be serialised against the render task.
@@ -987,6 +995,11 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
   if (renderer.isRefreshPending() || RenderLock::peek()) {
     return;
   }
+  // Don't start a build slice while the render task is mid image-decode — see the comment
+  // on imageProcessingActive_ in renderContents().
+  if (imageProcessingActive_) {
+    return;
+  }
   RenderLock lock;
   // Re-check under the lock: the render task may have started a refresh, turned a page, or
   // finished/aborted the build between the unlocked test above and acquiring the lock.
@@ -1017,8 +1030,26 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
 #if DEBUG_BACKGROUND_WORK
   bgCounters_.bRuns++;
 #endif
+  // TEMPORARY DIAGNOSTIC: track the lowest free/contig heap seen across this resident build's
+  // slices (see residentBuildMinFreeHeap_ in the header) to measure real headroom against
+  // IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES / RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES. Reset when a
+  // new resident build starts for a different spine; irrelevant once the build runs released
+  // (that path already has the buffer's ~48 KB headroom, not what we're measuring here).
+  if (!secondaryBufferDegraded_ && residentBuildMinFreeSpine_ != currentSpineIndex) {
+    residentBuildMinFreeSpine_ = currentSpineIndex;
+    residentBuildMinFreeHeap_ = 0xFFFFFFFFu;
+    residentBuildMinContigHeap_ = 0xFFFFFFFFu;
+  }
+
   const Section::BuildStep step = section->stepSectionBuild(makeSectionBuildParams(), BG_BUILD_BUDGET_MS);
   checkHeapIntegrity("after_c_slice");
+
+  if (!secondaryBufferDegraded_) {
+    const uint32_t freeNow = esp_get_free_heap_size();
+    const uint32_t contigNow = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+    residentBuildMinFreeHeap_ = std::min(residentBuildMinFreeHeap_, freeNow);
+    residentBuildMinContigHeap_ = std::min(residentBuildMinContigHeap_, contigNow);
+  }
 
   if (step == Section::BuildStep::More) {
     // Proactive low-heap guard: while the build is resident (AA buffer kept), bail to the released
@@ -1027,6 +1058,8 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     if (!secondaryBufferDegraded_ && (esp_get_free_heap_size() < RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES ||
                                       heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT) <
                                           RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES)) {
+      LOG_INF("ERS", "DIAG resident-build min observed before abort: spine=%d free=%lu contig=%lu", currentSpineIndex,
+              residentBuildMinFreeHeap_, residentBuildMinContigHeap_);
       fallbackToReleasedRebuild("low heap mid-build");
       return;
     }
@@ -1041,6 +1074,11 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
   }
 
   backgroundBuildPercent_ = -1;
+
+  if (!secondaryBufferDegraded_ && residentBuildMinFreeSpine_ == currentSpineIndex) {
+    LOG_INF("ERS", "DIAG resident-build min observed at finish: spine=%d free=%lu contig=%lu step=%d",
+            currentSpineIndex, residentBuildMinFreeHeap_, residentBuildMinContigHeap_, static_cast<int>(step));
+  }
 
   // Failed, or finished but truncated / CSS-degraded: discard and retry on the released path. The
   // latch (set inside the helper) stops buildSection from re-entering Background-C for this spine.
@@ -1162,6 +1200,11 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, path, spineIdx, tocIdx),
           [this](const ActivityResult& result) {
             if (result.isCancelled) return;
+            // The chapter list's own paint consumed the override armed before it launched
+            // (one-shot, see consumeRefreshOverride); arm a fresh one here so the resumed
+            // reader page gets a clean HALF_REFRESH instead of a FAST diff against RED RAM
+            // that still holds the chapter list's last frame.
+            ReaderUtils::enforceExitFullRefresh(renderer);
             RenderLock lock(*this);
             const auto& chapter = std::get<ChapterResult>(result.data);
             auto resolvedPage = (chapter.tocIndex && chapter.spineIndex == currentSpineIndex && section)
@@ -2364,14 +2407,24 @@ void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
   if (secondaryBufferDegraded_ && !renderer.hasSecondaryBuffer()) {
     if (renderer.reallocSecondaryBuffer()) {
       secondaryBufferDegraded_ = false;
+      // Undo the IncrementalReleased opt-in (see chooseSectionBuildMode/buildSection): once the
+      // secondary buffer is back, double-buffer fast-diff is correct again and this flag would
+      // otherwise leave RED RAM reseeding skipped on the normal path. No-op if it was never set
+      // (e.g. recovering from an indexing OOM instead of a released build).
+      renderer.setSingleBufferFastDiff(false);
       if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
       LOG_INF("ERS", "Secondary display buffer restored; re-enabling normal refresh/AA paths");
     } else {
-      LOG_ERR("ERS", "Secondary display buffer realloc failed (free=%lu); AA stays off, will retry",
-              esp_get_free_heap_size());
+      const uint32_t freeHeap = esp_get_free_heap_size();
+      LOG_ERR("ERS", "Secondary display buffer realloc failed (free=%lu); AA stays off, will retry", freeHeap);
+      // Opportunistic retries alone never recover from a fragmented heap (no allocation
+      // pattern here returns memory to the heap), so escalate to a recovery reboot once
+      // free heap is plentiful but a 52 KB contiguous block still can't be found.
+      maybeRestartForFragmentedHeap(freeHeap, 0);
     }
   } else if (secondaryBufferDegraded_ && renderer.hasSecondaryBuffer()) {
     secondaryBufferDegraded_ = false;
+    renderer.setSingleBufferFastDiff(false);
   }
 }
 
@@ -2753,9 +2806,21 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
         // Tight heap: free the secondary buffer (~48–52 KB) for the build. AA is off until the
         // build ends and recoverSecondaryBufferIfNeeded() reallocates it (marked via
         // secondaryBufferDegraded_); mid-build draws are BW. No display downside on X3 (baseline
-        // in controller); on X4 fast refresh drops to half until restored.
+        // in controller).
+        //
+        // X4: a long chapter can keep this build running for many page turns (10s of seconds),
+        // and displayBuildPage() requests FAST refreshes via the normal cadence the whole time —
+        // without the opt-in below, EInkDisplay::triggerDisplay() silently downgrades every one
+        // of those to HALF (no host-side previous-frame copy to diff against), so every mid-build
+        // page turn pays the slow waveform. Seed RED RAM from the page still on screen (the
+        // pre-release frame) BEFORE releasing, then opt in to single-buffer fast differential so
+        // FAST refreshes keep diffing against the controller's retained RED RAM copy. Symmetric
+        // setSingleBufferFastDiff(false) lives in recoverSecondaryBufferIfNeeded(), the one place
+        // this released state gets cleanly restored.
         const uint32_t freeBefore = esp_get_free_heap_size();
+        if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
         renderer.releaseSecondaryBuffer();
+        renderer.setSingleBufferFastDiff(true);
         secondaryBufferDegraded_ = true;
         LOG_INF("ERS", "Background-C: building spine %d incrementally, secondary buffer RELEASED (free %lu->%lu)",
                 currentSpineIndex, freeBefore, esp_get_free_heap_size());
@@ -2765,6 +2830,24 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
                 heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT));
       }
       GUI.drawPopup(renderer, tr(STR_INDEXING));  // immediate feedback before the first page lands
+      // The popup just issued one FAST refresh (BaseTheme::drawPopup defaults to FAST). Force the
+      // first REAL page that replaces it — whether shown by displayBuildPage() (multi-slice build)
+      // or directly by renderContents() (build finishes in one slice, e.g. a one-page cover) — to
+      // HALF, so a dramatic content change (text popup -> photo) doesn't leave a ghost outline of
+      // the popup box, and so released-buffer builds don't compound that ghosting across many
+      // subsequent FAST mid-build pages before the periodic full-resync cadence cleans it up.
+      // X4 only: its FAST refresh needs a host-side previous-frame copy (or the single-buffer-
+      // fast-diff opt-in above) to diff against, so a dramatic frame change can under-drive
+      // pixels. X3's fast differential reads the controller's own DTM1 RAM, which drawPopup()'s
+      // displayBuffer() call already updated correctly — no host-side baseline gap to paper over,
+      // so forcing HALF there is pure unnecessary cost. Scoped to the session's first build only
+      // (see firstSectionBuildThisSession_) — a build resumed mid-session because Background-B was
+      // still working is routine and frequent during normal forward reading; forcing HALF there
+      // made every section traversal pay a slow refresh.
+      if (!renderer.isX3() && firstSectionBuildThisSession_) {
+        forceHalfRefreshAfterPopup_ = true;
+      }
+      firstSectionBuildThisSession_ = false;
       renderer.clearFontAccumulation();
       readerPhase_ = ReaderPhase::PRECOMPILING;
       // Seed the display cursor so the SectionBuilding pass knows which page to show first. For a
@@ -3199,7 +3282,14 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   // This mirrors the same technique used during section indexing (createSectionFile).
   const bool warmForceLoad = forceLoadLargeImages || !SETTINGS.largeImagePlaceholder;
   bool releasedSecondaryForWarm = false;
-  if (page->hasUncachedImages(warmForceLoad, imageMonochrome) && renderer.hasSecondaryBuffer()) {
+  // Set for the whole warm pass (decode included, not just the release/realloc bracket):
+  // stepBackgroundSectionBuild()/stepCurrentSectionBuild() check this and refuse to start
+  // heap-hungry work while it's true. RenderLock already excludes them structurally (both
+  // bail on RenderLock::peek(), and this whole pass runs under the lock the render task took
+  // before calling renderContents()) — this flag is a second, explicit guard against that
+  // invariant silently breaking if a future change adds a yield point in here.
+  imageProcessingActive_ = page->hasUncachedImages(warmForceLoad, imageMonochrome);
+  if (imageProcessingActive_ && renderer.hasSecondaryBuffer()) {
     renderer.releaseSecondaryBuffer();
     releasedSecondaryForWarm = true;
     LOG_DBG("ERS", "Released secondary buffer for image warm pass");
@@ -3214,12 +3304,20 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     if (!renderer.reallocSecondaryBuffer()) {
       LOG_ERR("ERS", "Failed to reallocate secondary buffer after image warm — display quality degraded");
       secondaryBufferDegraded_ = true;
+      const uint32_t freeAfterWarm = esp_get_free_heap_size();
+      // See the matching comment in compileSectionCache: do not walk the TLSF free-block
+      // list here either, for the same post-decode-failure corruption risk.
+      if (maybeRestartForFragmentedHeap(freeAfterWarm, 0)) {
+        imageProcessingActive_ = false;
+        return;  // fragmented-heap recovery reboot in progress
+      }
     } else if (!renderer.isX3()) {
       // The realloc whitened the secondary buffer. Reseed RED RAM from the last displayed frame
       // so the next fast differential diffs against the correct baseline, not the white new buffer.
       renderer.syncRedRamFromFrameBuffer();
     }
   }
+  imageProcessingActive_ = false;
   renderer.clearScreen();
 
   logReaderMemSnapshot("prewarm_begin");
@@ -3281,6 +3379,9 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   // Trigger the display refresh — sends pixel data, issues CMD_DISPLAY_REFRESH,
   // swaps buffers, and returns immediately without waiting for the waveform.
   if (secondaryBufferDegraded_) {
+    // FULL_REFRESH already gives a clean baseline, same goal as forceHalfRefreshAfterPopup_;
+    // consume it here too so it doesn't carry over and force an unrelated later page to HALF.
+    forceHalfRefreshAfterPopup_ = false;
     renderer.triggerDisplay(HalDisplay::FULL_REFRESH);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else if (forceRefreshModeNextRender_ >= 0) {
@@ -3288,6 +3389,13 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     renderer.triggerDisplay(static_cast<HalDisplay::RefreshMode>(forceRefreshModeNextRender_));
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     forceRefreshModeNextRender_ = -1;
+  } else if (forceHalfRefreshAfterPopup_) {
+    // First real page after the indexing popup, shown directly here because the build finished
+    // in a single slice (e.g. a one-page cover) and never went through displayBuildPage(). See
+    // forceHalfRefreshAfterPopup_.
+    forceHalfRefreshAfterPopup_ = false;
+    renderer.triggerDisplay(HalDisplay::HALF_REFRESH);
+    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else if (forceHalfRefreshThisPage) {
     renderer.triggerDisplay(HalDisplay::HALF_REFRESH);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
@@ -3378,7 +3486,15 @@ void EpubReaderActivity::displayBuildPage(RenderLock& lock, const Page& page, co
   page.render(renderer, getEffectiveReaderFontId(), layout.marginLeft, contentTop, /*forceLoadLargeImages=*/false,
               /*monochromeOutput=*/true);
   renderStatusBar();
-  ReaderUtils::triggerWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  if (forceHalfRefreshAfterPopup_) {
+    // First real page after the indexing popup: establish a clean baseline (see
+    // forceHalfRefreshAfterPopup_) instead of compounding onto the popup's FAST refresh.
+    forceHalfRefreshAfterPopup_ = false;
+    renderer.triggerDisplay(HalDisplay::HALF_REFRESH);
+    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+  } else {
+    ReaderUtils::triggerWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  }
   // Release the lock before the (blocking) waveform wait so stepCurrentSectionBuild() can run a
   // build slice on the loop task while the panel refreshes — the same hand-off renderContents()
   // uses for Background-A.
@@ -3903,6 +4019,10 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
                                                                                     epub->getPath(), spineIdx, tocIdx),
                                [this](const ActivityResult& result) {
                                  if (result.isCancelled) return;
+                                 // See the matching comment in onReaderMenuConfirm's SELECT_CHAPTER
+                                 // case: the override armed before launch was already consumed by
+                                 // the chapter list's own paint, so arm a fresh one for the resumed page.
+                                 ReaderUtils::enforceExitFullRefresh(renderer);
                                  RenderLock lock(*this);
                                  const auto& chapter = std::get<ChapterResult>(result.data);
                                  auto resolvedPage =
