@@ -8,6 +8,7 @@
 
 #include "../Activity.h"
 #include "./FileBrowserActivity.h"
+#include "SilentRestart.h"
 #include "activities/reader/ReaderActivity.h"
 #include "components/UITheme.h"
 #include "util/ButtonNavigator.h"
@@ -80,6 +81,13 @@ class HomeActivity final : public Activity {
   bool restoreCoverBuffer();
   void freeCoverBuffer();
   void restoreSecondaryBuffer(bool callerHoldsRenderLock = false);
+  // Safety net before handing over to another activity: the next activity must get an intact
+  // secondary framebuffer. We released it for cover decoding and may not be able to realloc it
+  // if the heap is fragmented. Returns true if the caller should proceed with the in-process
+  // launch (buffer present, or a reboot was suppressed → degraded but ghost-free). Otherwise
+  // silently reboots straight into `target` (does not return); `beforeReboot` persists any state
+  // the target's boot routing needs (e.g. the EPUB path for Reader).
+  bool ensureFramebufferOrReboot(SilentBootTarget target, const std::function<void()>& beforeReboot = {});
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
 

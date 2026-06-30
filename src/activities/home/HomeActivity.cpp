@@ -552,6 +552,19 @@ void HomeActivity::onExit() {
   // onExit runs under the RenderLock held by ActivityManager::exitActivity, so we must
   // NOT take another (non-recursive → self-deadlock); pass callerHoldsRenderLock=true.
   restoreSecondaryBuffer(/*callerHoldsRenderLock=*/true);
+  // If the realloc above failed (heap still fragmented after cover decoding — the exact
+  // condition the buffer was released for), the secondary buffer is still gone but
+  // single-buffer fast-diff is still ON (it's only cleared on the realloc-success path).
+  // Handing that to the next activity is the ghosting bug: with no secondary buffer, its FAST
+  // refreshes take the single-buffer path and diff against the controller's stale RED-RAM
+  // baseline (our last home/cover frame, never resynced here), so that frame bleeds through —
+  // visible immediately on X4 in Settings, which always refreshes FAST. Force it off so
+  // EInkDisplay instead downgrades those FAST refreshes to a clean HALF until some activity
+  // reallocs the buffer. (On success, restoreSecondaryBuffer already cleared it.)
+  if (secondaryBufferReleased) {
+    renderer.setSingleBufferFastDiff(false);
+    LOG_ERR("HOME", "Secondary framebuffer not restored on exit; disabled single-buffer fast-diff to avoid ghosting");
+  }
 }
 
 bool HomeActivity::storeCoverBuffer() {
@@ -761,7 +774,28 @@ void HomeActivity::render(RenderLock&&) {
   }
 }
 
+bool HomeActivity::ensureFramebufferOrReboot(SilentBootTarget target, const std::function<void()>& beforeReboot) {
+  if (renderer.hasSecondaryBuffer()) return true;
+  restoreSecondaryBuffer();  // best-effort realloc; may now succeed if cover loading freed heap
+  if (renderer.hasSecondaryBuffer()) return true;
+  LOG_ERR("HOME", "Secondary framebuffer unrecoverable at handover; silent reboot to target=%d",
+          static_cast<int>(target));
+  if (beforeReboot) beforeReboot();
+  // Reboots straight into target (does not return). Only returns if suppressed by the single-shot
+  // latch or a deep sleep — then we fall through and launch in degraded mode, which the onExit
+  // single-buffer-fast-diff reset already keeps ghost-free.
+  trySilentRestartForHomeHandover(target);
+  return true;
+}
+
 void HomeActivity::onSelectBook(const std::string& path) {
+  // Reader's boot routing reads APP_STATE.openEpubPath, so persist it before any reboot.
+  if (!ensureFramebufferOrReboot(SilentBootTarget::Reader, [&path]() {
+        APP_STATE.openEpubPath = path;
+        APP_STATE.saveToFile();
+      })) {
+    return;  // rebooting
+  }
   ReturnHint hint;
   hint.target = ReturnTo::Home;
   hint.selectName = path;  // used to re-focus the book in the recents strip after return
@@ -769,6 +803,40 @@ void HomeActivity::onSelectBook(const std::string& path) {
 }
 
 void HomeActivity::dispatchMenuAction(MenuAction action) {
+  SilentBootTarget target;
+  switch (action) {
+    case MenuAction::FileBrowser:
+      target = SilentBootTarget::FileBrowser;
+      break;
+    case MenuAction::Recents:
+      target = SilentBootTarget::RecentBooks;
+      break;
+    case MenuAction::GlobalBookmarks:
+      target = SilentBootTarget::GlobalBookmarks;
+      break;
+    case MenuAction::OpdsBrowser:
+      target = SilentBootTarget::Browser;
+      break;
+    case MenuAction::FileTransfer:
+      target = SilentBootTarget::FileTransfer;
+      break;
+    case MenuAction::Weather:
+      target = SilentBootTarget::Weather;
+      break;
+    case MenuAction::Settings:
+      target = SilentBootTarget::Settings;
+      break;
+    default:
+      LOG_ERR("HOME", "Unexpected menu action: %d", static_cast<int>(action));
+      return;
+  }
+
+  // Safety net: never hand the launched activity a degraded framebuffer; reboot straight into
+  // it if the heap is too fragmented to restore the buffer (see ensureFramebufferOrReboot).
+  if (!ensureFramebufferOrReboot(target)) {
+    return;  // rebooting
+  }
+
   // Record where the menu entry was focused so that when the launched activity exits
   // (via returnFromChild() or an empty-stack finish()), we come back to the same row.
   ReturnHint hint;
@@ -799,7 +867,6 @@ void HomeActivity::dispatchMenuAction(MenuAction action) {
       activityManager.goToSettings();
       break;
     default:
-      LOG_ERR("HOME", "Unexpected menu action: %d", static_cast<int>(action));
       break;
   }
 }

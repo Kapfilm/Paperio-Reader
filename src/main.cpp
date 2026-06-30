@@ -142,23 +142,18 @@ EpdFontFamily ui12FontFamily(&ui12RegularFont, &ui12BoldFont);
 
 // SilentRestart.h definitions. RTC_NOINIT survives ESP.restart() but not power loss.
 RTC_NOINIT_ATTR uint32_t silentRebootMagic;
-RTC_NOINIT_ATTR uint32_t silentRebootTarget;
+RTC_NOINIT_ATTR uint32_t silentRebootTarget;  // a SilentBootTarget value (see SilentRestart.h)
 RTC_NOINIT_ATTR uint32_t heapRecoveryRestartLatch;
 // Single-shot latch for the boot-time heap integrity recovery restart.
 // Prevents an infinite reset loop if the heap is still corrupt after one clean restart.
 RTC_NOINIT_ATTR uint32_t heapCorruptionBootLatch;
+// Single-shot latch for HomeActivity's framebuffer-handover recovery reboot
+// (trySilentRestartForHomeHandover). Same anti-loop guarantee as heapRecoveryRestartLatch:
+// cleared on any non-silent boot.
+RTC_NOINIT_ATTR uint32_t homeHandoverRebootLatch;
 constexpr uint32_t SILENT_REBOOT_MAGIC = 0xC1EAB007;
-constexpr uint32_t SILENT_REBOOT_TARGET_HOME = 0;
-constexpr uint32_t SILENT_REBOOT_TARGET_READER = 1;
-// Boot straight back into the USB serial file-transfer activity. Armed (without
-// restarting) while that activity is open, so the unavoidable C3 USB-Serial/JTAG
-// reset that fires when a host opens the port lands back in the activity instead
-// of Home — making the transfer reset-tolerant. See armSerialTransferReboot().
-constexpr uint32_t SILENT_REBOOT_TARGET_SERIAL_TRANSFER = 2;
-// Boot into the clock settings screen after a timezone-detection WiFi session
-// (WiFi teardown fragments the heap; need a clean reboot before re-entering the UI).
-constexpr uint32_t SILENT_REBOOT_TARGET_CLOCK_SETTINGS = 3;
 constexpr uint32_t HEAP_RECOVERY_RESTART_LATCH_MAGIC = 0x48EA9C01;
+constexpr uint32_t HOME_HANDOVER_RESTART_LATCH_MAGIC = 0x48EA9C02;
 
 // How the device is coming back to life, resolved once at boot. Both resume
 // flows suppress the splash and leave the panel holding its pre-boot frame; a
@@ -177,37 +172,21 @@ enum class BootResume : uint8_t {
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
 
-void silentRestart() {
+void silentRestartTo(SilentBootTarget target) {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
   // ESP.restart() bypasses activity onExit(), so flush any in-flight reading
   // session manually — otherwise a heap-defrag reboot mid-read loses the session.
   globalReadingSessionTracker().end();
-  silentRebootTarget = SILENT_REBOOT_TARGET_HOME;
+  silentRebootTarget = static_cast<uint32_t>(target);
   silentRebootMagic = SILENT_REBOOT_MAGIC;
-  LOG_DBG("MAIN", "Silent restart (target=home)");
+  LOG_DBG("MAIN", "Silent restart (target=%d)", static_cast<int>(target));
   delay(50);
   ESP.restart();
 }
 
-void silentRestartToReader() {
-  if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
-  globalReadingSessionTracker().end();
-  silentRebootTarget = SILENT_REBOOT_TARGET_READER;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
-  LOG_DBG("MAIN", "Silent restart (target=reader)");
-  delay(50);
-  ESP.restart();
-}
-
-void silentRestartToClockSettings() {
-  if (deepSleepInProgress) return;
-  globalReadingSessionTracker().end();
-  silentRebootTarget = SILENT_REBOOT_TARGET_CLOCK_SETTINGS;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
-  LOG_DBG("MAIN", "Silent restart (target=clock-settings)");
-  delay(50);
-  ESP.restart();
-}
+void silentRestart() { silentRestartTo(SilentBootTarget::Home); }
+void silentRestartToReader() { silentRestartTo(SilentBootTarget::Reader); }
+void silentRestartToClockSettings() { silentRestartTo(SilentBootTarget::ClockSettings); }
 
 bool trySilentRestartToReaderForHeapRecovery() {
   if (deepSleepInProgress) return false;  // sleeping supersedes the heap-defrag reboot
@@ -216,12 +195,20 @@ bool trySilentRestartToReaderForHeapRecovery() {
     return false;
   }
   heapRecoveryRestartLatch = HEAP_RECOVERY_RESTART_LATCH_MAGIC;
-  globalReadingSessionTracker().end();
-  silentRebootTarget = SILENT_REBOOT_TARGET_READER;
-  silentRebootMagic = SILENT_REBOOT_MAGIC;
   LOG_ERR("MAIN", "Silent restart (target=reader, heap recovery)");
-  delay(50);
-  ESP.restart();
+  silentRestartTo(SilentBootTarget::Reader);  // does not return
+  return true;
+}
+
+bool trySilentRestartForHomeHandover(SilentBootTarget target) {
+  if (deepSleepInProgress) return false;  // sleeping supersedes the recovery reboot
+  if (homeHandoverRebootLatch == HOME_HANDOVER_RESTART_LATCH_MAGIC) {
+    LOG_ERR("MAIN", "Home-handover restart suppressed by safety latch");
+    return false;
+  }
+  homeHandoverRebootLatch = HOME_HANDOVER_RESTART_LATCH_MAGIC;
+  LOG_ERR("MAIN", "Silent restart (home handover, target=%d)", static_cast<int>(target));
+  silentRestartTo(target);  // does not return
   return true;
 }
 
@@ -230,16 +217,59 @@ void armSerialTransferReboot() {
   // (the C3 hardware reset that fires when a host opens the USB serial port),
   // setup() routes straight back into the serial-transfer activity. Re-armed on
   // every entry into that activity (setup() read-and-clears the magic).
-  silentRebootTarget = SILENT_REBOOT_TARGET_SERIAL_TRANSFER;
+  silentRebootTarget = static_cast<uint32_t>(SilentBootTarget::SerialTransfer);
   silentRebootMagic = SILENT_REBOOT_MAGIC;
 }
 
 void disarmSerialTransferReboot() {
   // Clear the arm on a clean exit so the next plain reboot shows Home as usual.
-  if (silentRebootMagic == SILENT_REBOOT_MAGIC && silentRebootTarget == SILENT_REBOOT_TARGET_SERIAL_TRANSFER) {
+  if (silentRebootMagic == SILENT_REBOOT_MAGIC &&
+      silentRebootTarget == static_cast<uint32_t>(SilentBootTarget::SerialTransfer)) {
     silentRebootMagic = 0;
     silentRebootTarget = 0;
   }
+}
+
+// Map a persisted SilentBootTarget to its activity launch. Returns false for Home/unknown
+// (and for Reader with no saved book) so the caller falls back to goHome(). This is the single
+// place to extend when a new silent-reboot target is added (see SilentBootTarget).
+static bool routeSilentBootTarget(ActivityManager& am, SilentBootTarget target) {
+  switch (target) {
+    case SilentBootTarget::Reader:
+      if (APP_STATE.openEpubPath.empty()) return false;  // no book to resume → home
+      am.goToReader(APP_STATE.openEpubPath);
+      return true;
+    case SilentBootTarget::SerialTransfer:
+      am.goToSerialTransfer();
+      return true;
+    case SilentBootTarget::ClockSettings:
+      am.goToClockSettings();
+      return true;
+    case SilentBootTarget::Settings:
+      am.goToSettings();
+      return true;
+    case SilentBootTarget::FileBrowser:
+      am.goToFileBrowser();
+      return true;
+    case SilentBootTarget::RecentBooks:
+      am.goToRecentBooks();
+      return true;
+    case SilentBootTarget::GlobalBookmarks:
+      am.goToGlobalBookmarks();
+      return true;
+    case SilentBootTarget::Browser:
+      am.goToBrowser();
+      return true;
+    case SilentBootTarget::FileTransfer:
+      am.goToFileTransfer();
+      return true;
+    case SilentBootTarget::Weather:  // == SilentBootTarget::Last
+      am.goToWeather();
+      return true;
+    case SilentBootTarget::Home:
+      return false;  // home is the fallback, handled by the caller
+  }
+  return false;
 }
 
 // ---- Quick Resume framebuffer persistence ----
@@ -515,18 +545,19 @@ void setup() {
   // Bound the target range too — RTC_NOINIT memory is uninitialized on cold boot.
   const bool isSilentReboot = (silentRebootMagic == SILENT_REBOOT_MAGIC);
   const uint32_t silentRebootTargetSnapshot =
-      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_CLOCK_SETTINGS) ? silentRebootTarget : 0;
+      (isSilentReboot && silentRebootTarget <= static_cast<uint32_t>(SilentBootTarget::Last)) ? silentRebootTarget : 0;
   silentRebootMagic = 0;
   silentRebootTarget = 0;
   if (!isSilentReboot) {
     heapRecoveryRestartLatch = 0;
+    homeHandoverRebootLatch = 0;
   }
 
   // When rebooting back into the USB serial-transfer activity (after the host's
   // open-triggered reset), keep all boot LOG_* off the wire so the reconnecting
   // host sees a clean binary protocol stream, not interleaved boot logs. The
   // activity unmutes on exit; a plain boot is unaffected.
-  if (silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SERIAL_TRANSFER) {
+  if (silentRebootTargetSnapshot == static_cast<uint32_t>(SilentBootTarget::SerialTransfer)) {
     setSerialWireMuted(true);
   }
 
@@ -690,7 +721,8 @@ void setup() {
   // Booting straight into the USB serial-transfer activity? Skip SD-font
   // discovery (only built-in UI fonts are used there) to shorten the reboot the
   // host is waiting through. Safe because that activity reboots on exit.
-  const bool bootToSerialTransfer = (silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SERIAL_TRANSFER);
+  const bool bootToSerialTransfer =
+      (silentRebootTargetSnapshot == static_cast<uint32_t>(SilentBootTarget::SerialTransfer));
   setupDisplayAndFonts(resume != BootResume::Splash, bootToSerialTransfer);
   logStartupMemory("after_display_fonts");
 
@@ -732,15 +764,11 @@ void setup() {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
     activityManager.replaceActivity(
         std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInputManager, /*recoveryMode=*/true));
-  } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SERIAL_TRANSFER) {
-    // Reset fired while the USB transfer screen was open (host opened the port):
-    // land straight back in it so the host's retried command is served.
-    activityManager.goToSerialTransfer();
-  } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_READER &&
-             !APP_STATE.openEpubPath.empty()) {
-    activityManager.goToReader(APP_STATE.openEpubPath);
-  } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_CLOCK_SETTINGS) {
-    activityManager.goToClockSettings();
+  } else if (resume == BootResume::Silent &&
+             routeSilentBootTarget(activityManager, static_cast<SilentBootTarget>(silentRebootTargetSnapshot))) {
+    // Routed straight into the silent-reboot target (serial-transfer reset, reader heap
+    // recovery, clock-settings after timezone detect, or a Home framebuffer-handover reboot).
+    // See routeSilentBootTarget().
   } else if (resume == BootResume::Silent) {
     // target == home (or reader with no open book): land on home — don't fall
     // through to the sleep-wake "resume reader" logic, which fires on stale
