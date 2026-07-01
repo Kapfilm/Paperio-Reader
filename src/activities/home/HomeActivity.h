@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "../Activity.h"
@@ -58,6 +59,17 @@ class HomeActivity final : public Activity {
   ReaderActivity::PngThumbFiles pngSessionFiles;  // open FsFiles borrowed by pngSession
   bool pngSessionFailed = false;                  // set on error; triggers empty-path store same as sync failure
 
+  // Session-scoped transient-failure counter, keyed by book path. A cover can fail to load for
+  // transient reasons (OOM under heap pressure, an interrupted write, an extraction that could not
+  // start). We retry such a book on later passes, but bounded: after COVER_MAX_TRANSIENT_ATTEMPTS
+  // transient failures in one Home session we stop retrying it THIS session (store an empty cover
+  // and advance) so a persistently-failing book can't starve the others. No persistent sentinel is
+  // written for transient failures — a reboot resets the map and gives every book a fresh chance;
+  // only a structurally-absent cover (no cover item / unsupported format) earns a permanent sentinel
+  // (written by generateThumbBmp). Cleared in onEnter().
+  static constexpr uint8_t COVER_MAX_TRANSIENT_ATTEMPTS = 2;
+  std::unordered_map<std::string, uint8_t> coverTransientAttempts;
+
   uint8_t* coverBuffer = nullptr;
   size_t coverBufferSize = 0;
   int coverRectX = 0;
@@ -82,6 +94,11 @@ class HomeActivity final : public Activity {
   void restoreSecondaryBuffer(bool callerHoldsRenderLock = false);
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
+  // Give up on a book's cover for now: store an empty cover path and, for a transient failure,
+  // bump the session retry counter. Shared by the single-height and multi-size cover paths.
+  void giveUpCover(RecentBook& book, ThumbResult res);
+  // True once a book has burned COVER_MAX_TRANSIENT_ATTEMPTS transient failures this session.
+  bool coverAttemptsExhausted(const std::string& path) const;
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string focusBookPath = {},

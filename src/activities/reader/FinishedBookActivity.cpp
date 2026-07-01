@@ -184,7 +184,7 @@ NextBookMetadata loadNextBookMetadata(const std::string& nextBookPath) {
       if (!metadata.series.empty() && !epub.getSeriesIndex().empty()) {
         metadata.series += " #" + epub.getSeriesIndex();
       }
-      if (epub.generateThumbBmp(kFinishedBookCoverMaxWidth, kFinishedBookCoverHeight)) {
+      if (epub.generateThumbBmp(kFinishedBookCoverMaxWidth, kFinishedBookCoverHeight) == ThumbResult::Ok) {
         metadata.coverPath = epub.getThumbBmpPath(kFinishedBookCoverMaxWidth, kFinishedBookCoverHeight);
       } else {
         metadata.coverPath = getSidecarCoverBmpPath(nextBookPath, kFinishedBookCoverMaxWidth, kFinishedBookCoverHeight);

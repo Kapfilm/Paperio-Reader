@@ -121,7 +121,7 @@ bool RecentBooksActivity::loadNextCover() {
     // resolved cover — no re-opening the EPUB three times per scan to rediscover it has no cover.
     const bool valid = ReaderActivity::isCoverThumbComplete(thumbPath);
     if (!valid) {
-      const bool ok = ReaderActivity::ensureCoverThumb(book.path, tw, th);
+      const bool ok = (ReaderActivity::ensureCoverThumb(book.path, tw, th) == ThumbResult::Ok);
       const bool wasPostFailure = pngSessionFailed;
       pngSessionFailed = false;  // consumed
       if (!ok && !wasPostFailure) {

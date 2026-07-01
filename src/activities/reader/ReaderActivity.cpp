@@ -307,13 +307,36 @@ namespace {
 // extraction, OR a partial BMP left truncated by an interrupted write, must be treated as missing
 // so regeneration retries (see ReaderActivity::isCoverThumbComplete).
 bool thumbFileValid(const std::string& path) { return ReaderActivity::isCoverThumbComplete(path); }
+
+// Migration heal for stale sentinels written by an older build's blunt failure policy (any
+// extraction/decode failure — even a transient one — used to leave a permanent 0-byte sentinel).
+// Under the current policy a sentinel means "structurally absent"; if one exists yet the book's
+// cover.img is present AND a valid image format, the sentinel is stale — clear it so the normal
+// generateThumbBmp path gets a fresh chance. No-op unless BOTH a sentinel and a valid cover.img
+// exist, so a legitimately-absent cover keeps its sentinel.
+void healStaleEpubSentinel(const std::string& bookPath, const std::string& thumbFile) {
+  if (!FsHelpers::hasEpubExtension(bookPath)) return;
+  FsFile sentinel;
+  if (!Storage.openFileForRead("COVER", thumbFile, sentinel)) return;
+  const bool isSentinel = sentinel.size() == 0;
+  sentinel.close();
+  if (!isSentinel) return;
+
+  // coverImageCachedValidOnly() checks cover.img exists + non-empty + a known image format,
+  // without triggering any extraction — exactly the "sentinel is stale" condition.
+  Epub epub(bookPath, "/.crosspoint");
+  if (epub.load(true, true) && epub.coverImageCachedValidOnly()) {
+    LOG_DBG("COVER", "Healing stale sentinel %s (cover.img present & valid)", thumbFile.c_str());
+    Storage.remove(thumbFile.c_str());
+  }
+}
 }  // namespace
 
-bool ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, int height) {
+ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, int height) {
   const std::string dir = bookCacheDir(bookPath);
   const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
   const std::string file = dir + "/" + name;
-  if (thumbFileValid(file)) return true;
+  if (thumbFileValid(file)) return ThumbResult::Ok;
 
   // Source preference: a sidecar image beside the book wins over the embedded cover.
   const std::string sidecar = sidecarCoverPath(bookPath);
@@ -324,40 +347,44 @@ bool ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, in
     const std::string result = convertSidecarToBmp(dir, sidecar, width, height, name);
     LOG_DBG("COVER", "convertSidecarToBmp(%dx%d) sidecar=%s result=%s", width, height, sidecar.c_str(),
             result.empty() ? "FAILED" : result.c_str());
-    if (!result.empty()) return true;
-    // Sidecar conversion bailed mid-decode for pending input — don't pay for an
-    // embedded-cover parse now; let the caller retry once the press is serviced.
-    if (CooperativeAbort::wasAborted()) return false;
+    if (!result.empty()) return ThumbResult::Ok;
+    // Sidecar conversion failed (bailed for input, OOM, decode error) — transient. Let the
+    // caller retry; don't fall through to an embedded-cover parse this pass.
+    return ThumbResult::TransientFail;
   }
 
   // No usable sidecar — fall back to the embedded cover.  generateThumbBmp() only
   // DECODES an already-extracted cover.img (abortable, ≤~1 s); it no longer inflates
-  // the cover from the ZIP itself.  If cover.img isn't cached yet it returns false
+  // the cover from the ZIP itself.  If cover.img isn't cached yet it reports TransientFail
   // without a sentinel, and the caller's sliced beginCoverExtractSession extracts it
   // across ticks before a later pass decodes it.  This keeps the 35 s ZIP inflate off
   // the per-tick path while still covering both embedded JPEG and PNG covers.
   if (FsHelpers::hasEpubExtension(bookPath)) {
+    // Clear any sentinel left permanent by an older build for what was only a transient failure,
+    // so a book whose cover.img is actually present & valid gets decoded instead of skipped.
+    healStaleEpubSentinel(bookPath, file);
     Epub epub(bookPath, "/.crosspoint");
     // allowExtract=false: decode only an already-cached cover.img; the sliced
     // beginCoverExtractSession owns the (potentially multi-second) ZIP inflate.
-    return epub.load(true, true) && epub.generateThumbBmp(width, height, /*allowExtract=*/false);
+    if (!epub.load(true, true)) return ThumbResult::TransientFail;
+    return epub.generateThumbBmp(width, height, /*allowExtract=*/false);
   }
   if (FsHelpers::hasXtcExtension(bookPath)) {
     Xtc xtc(bookPath, "/.crosspoint");
-    return xtc.load() && xtc.generateThumbBmp(width, height);
+    return (xtc.load() && xtc.generateThumbBmp(width, height)) ? ThumbResult::Ok : ThumbResult::TransientFail;
   }
   if (FsHelpers::hasTxtExtension(bookPath) || FsHelpers::hasMarkdownExtension(bookPath)) {
     Txt txt(bookPath, "/.crosspoint");
-    return txt.generateThumbBmp(width, height);
+    return txt.generateThumbBmp(width, height) ? ThumbResult::Ok : ThumbResult::TransientFail;
   }
-  return false;
+  return ThumbResult::TransientFail;
 }
 
-bool ReaderActivity::ensureCoverThumb(const std::string& bookPath, int height) {
+ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int height) {
   const std::string dir = bookCacheDir(bookPath);
   const std::string name = "thumb_" + std::to_string(height) + ".bmp";
   const std::string file = dir + "/" + name;
-  if (thumbFileValid(file)) return true;
+  if (thumbFileValid(file)) return ThumbResult::Ok;
 
   // Embedded single-height thumbnails scale to height*0.6 wide; mirror that for the sidecar.
   const std::string sidecar = sidecarCoverPath(bookPath);
@@ -367,30 +394,33 @@ bool ReaderActivity::ensureCoverThumb(const std::string& bookPath, int height) {
     const std::string result = convertSidecarToBmp(dir, sidecar, height * 6 / 10, height, name);
     LOG_DBG("COVER", "convertSidecarToBmp(h=%d) sidecar=%s result=%s", height, sidecar.c_str(),
             result.empty() ? "FAILED" : result.c_str());
-    if (!result.empty()) return true;
-    // Sidecar conversion bailed mid-decode for pending input — don't pay for an
-    // embedded-cover parse now; let the caller retry once the press is serviced.
-    if (CooperativeAbort::wasAborted()) return false;
+    if (!result.empty()) return ThumbResult::Ok;
+    // Sidecar conversion failed (bailed for input, OOM, decode error) — transient. Let the
+    // caller retry; don't fall through to an embedded-cover parse this pass.
+    return ThumbResult::TransientFail;
   }
 
   // Embedded EPUB cover: generateThumbBmp() decodes an already-extracted cover.img only
   // (see the width/height overload) — the sliced beginCoverExtractSession handles the
   // ZIP inflate so the 35 s stall stays off the per-tick path.
   if (FsHelpers::hasEpubExtension(bookPath)) {
+    // Clear any sentinel left permanent by an older build for what was only a transient failure.
+    healStaleEpubSentinel(bookPath, file);
     Epub epub(bookPath, "/.crosspoint");
     // allowExtract=false: decode only an already-cached cover.img; the sliced
     // beginCoverExtractSession owns the (potentially multi-second) ZIP inflate.
-    return epub.load(true, true) && epub.generateThumbBmp(height, /*allowExtract=*/false);
+    if (!epub.load(true, true)) return ThumbResult::TransientFail;
+    return epub.generateThumbBmp(height, /*allowExtract=*/false);
   }
   if (FsHelpers::hasXtcExtension(bookPath)) {
     Xtc xtc(bookPath, "/.crosspoint");
-    return xtc.load() && xtc.generateThumbBmp(height);
+    return (xtc.load() && xtc.generateThumbBmp(height)) ? ThumbResult::Ok : ThumbResult::TransientFail;
   }
   if (FsHelpers::hasTxtExtension(bookPath) || FsHelpers::hasMarkdownExtension(bookPath)) {
     Txt txt(bookPath, "/.crosspoint");
-    return txt.generateThumbBmp(height);
+    return txt.generateThumbBmp(height) ? ThumbResult::Ok : ThumbResult::TransientFail;
   }
-  return false;
+  return ThumbResult::TransientFail;
 }
 
 std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int width,

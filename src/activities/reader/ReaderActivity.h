@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "../Activity.h"
+#include "Epub/ThumbResult.h"
 #include "activities/home/FileBrowserActivity.h"
 
 class Epub;
@@ -42,8 +43,12 @@ class ReaderActivity final : public Activity {
   // returns. A sidecar image beside the book always takes precedence over the embedded cover
   // as the *source*; the embedded cover is only parsed when no sidecar exists.
   static std::string coverThumbPlaceholder(const std::string& bookPath);
-  static bool ensureCoverThumb(const std::string& bookPath, int width, int height);
-  static bool ensureCoverThumb(const std::string& bookPath, int height);
+  // Produce (or reuse) the cover thumbnail BMP for a book. Returns ThumbResult so the caller can
+  // tell a structural absence (no cover / unsupported — safe to record permanently) from a
+  // transient failure (retry next pass/boot). A sidecar image beside the book, when present and
+  // convertible, always yields Ok and clears any stale sentinel first.
+  static ThumbResult ensureCoverThumb(const std::string& bookPath, int width, int height);
+  static ThumbResult ensureCoverThumb(const std::string& bookPath, int height);
   // True only if a cover thumbnail BMP exists AND holds all its declared pixel rows. A thumbnail
   // whose write was interrupted (reboot/abort mid-decode) is left truncated on the SD card; it
   // passes a naive size>0 check but fails to draw partway (GFX "Failed to read row N"). Treating
