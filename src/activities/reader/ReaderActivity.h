@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "../Activity.h"
+#include "Epub/ThumbResult.h"
 #include "activities/home/FileBrowserActivity.h"
 
 class Epub;
@@ -42,8 +43,22 @@ class ReaderActivity final : public Activity {
   // returns. A sidecar image beside the book always takes precedence over the embedded cover
   // as the *source*; the embedded cover is only parsed when no sidecar exists.
   static std::string coverThumbPlaceholder(const std::string& bookPath);
-  static bool ensureCoverThumb(const std::string& bookPath, int width, int height);
-  static bool ensureCoverThumb(const std::string& bookPath, int height);
+  // Produce (or reuse) the cover thumbnail BMP for a book. Returns ThumbResult so the caller can
+  // tell a structural absence (no cover / unsupported — safe to record permanently) from a
+  // transient failure (retry next pass/boot). A sidecar image beside the book, when present and
+  // convertible, always yields Ok and clears any stale sentinel first.
+  static ThumbResult ensureCoverThumb(const std::string& bookPath, int width, int height);
+  static ThumbResult ensureCoverThumb(const std::string& bookPath, int height);
+  // True only if a cover thumbnail BMP exists AND holds all its declared pixel rows. A thumbnail
+  // whose write was interrupted (reboot/abort mid-decode) is left truncated on the SD card; it
+  // passes a naive size>0 check but fails to draw partway (GFX "Failed to read row N"). Treating
+  // such a file as invalid lets the caller regenerate it instead of drawing/keeping it forever.
+  static bool isCoverThumbComplete(const std::string& path);
+  // Write a minimal but VALID 1-bit BMP (white box with a black frame) at the thumbnail path, used
+  // to mark a book that has no extractable cover. Being a complete BMP it passes
+  // isCoverThumbComplete(), so the cover loops treat the book as resolved and never re-open the EPUB
+  // to rediscover the absence — without the 0-byte-file "mess" (we now treat empty files as invalid).
+  static bool writeCoverPlaceholderBmp(const std::string& path, int width, int height);
 
   // Sliced extraction of a ZIP entry to a file, one chunk per continueStep() call.
   // Used to extract an embedded PNG cover (cover.img) without blocking loop() for
@@ -89,12 +104,17 @@ class ReaderActivity final : public Activity {
     }
   };
 
-  // Start a sliced PNG decode for bookPath at the given thumb dimensions.
-  // Returns nullptr if the cover is not a PNG, is already cached, or setup fails.
-  // On success, *filesOut owns the open FsFiles; caller must keep them alive until
-  // the session completes and then close them.
+  // Start a sliced PNG decode for bookPath at the given thumb dimensions. Writes the
+  // "thumb_<W>x<H>.bmp" (multi-size) form. Returns nullptr if the cover is not a PNG, is already
+  // cached, or setup fails. On success, *filesOut owns the open FsFiles; caller must keep them
+  // alive until the session completes and then close them.
   // On failure (nullptr return), the thumb file is left as a 0-byte sentinel.
   static std::unique_ptr<PngDecodeSession> beginPngThumbSession(const std::string& bookPath, int width, int height,
+                                                                PngThumbFiles& filesOut);
+
+  // Single-height variant: writes the "thumb_<H>.bmp" form used by the non-carousel themes, at
+  // width = H*0.6 (matching the synchronous single-height decode). Same contract as above.
+  static std::unique_ptr<PngDecodeSession> beginPngThumbSession(const std::string& bookPath, int height,
                                                                 PngThumbFiles& filesOut);
 
   // Render a sidecar image (or copy a sidecar BMP) into a scaled 1-bit BMP at

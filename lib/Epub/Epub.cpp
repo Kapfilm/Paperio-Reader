@@ -1,5 +1,6 @@
 #include "Epub.h"
 
+#include <Bitmap.h>
 #include <CooperativeAbort.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -955,8 +956,30 @@ bool Epub::ensureCoverImageCached() const {
   return true;
 }
 
+namespace {
+// A cover/thumbnail BMP whose write was interrupted (reboot/abort mid-decode) is left truncated:
+// the header is intact but the pixel rows are short, so it passes a size>0 / exists check yet
+// cannot be drawn (GFX "Failed to read row N"). Reuse a cached BMP only if it actually holds all
+// its declared rows; otherwise the caller must regenerate it. Returns false for a 0-byte sentinel
+// too (callers handle that separately as a permanent-failure marker).
+bool coverBmpComplete(const std::string& path) {
+  FsFile f;
+  if (!Storage.openFileForRead("EBP", path, f)) return false;
+  if (f.size() == 0) {
+    f.close();
+    return false;
+  }
+  Bitmap bmp(f);
+  const bool ok = bmp.parseHeaders() == BmpReaderError::Ok && bmp.isComplete();
+  f.close();
+  return ok;
+}
+}  // namespace
+
 bool Epub::generateCoverBmp(bool cropped) const {
-  if (Storage.exists(getCoverBmpPath(cropped).c_str())) return true;
+  // Reuse only a COMPLETE cached BMP; a truncated one (interrupted write) must be regenerated.
+  if (coverBmpComplete(getCoverBmpPath(cropped))) return true;
+  Storage.remove(getCoverBmpPath(cropped).c_str());  // drop any partial before regenerating
 
   if (!ensureCoverImageCached()) return false;
 
@@ -1006,45 +1029,62 @@ std::string Epub::getThumbBmpPath(int width, int height) const {
   return cachePath + "/thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
 }
 
-bool Epub::generateThumbBmp(int height, bool allowExtract) const {
+void Epub::writeThumbSentinel(const std::string& thumbPath) {
+  FsFile thumbBmp;
+  Storage.openFileForWrite("EBP", thumbPath, thumbBmp);
+  thumbBmp.close();
+}
+
+ThumbResult Epub::generateThumbBmp(int height, bool allowExtract) const {
   {
     FsFile existing;
     if (Storage.openFileForRead("EBP", getThumbBmpPath(height), existing)) {
-      const bool valid = existing.size() > 0;
+      const uint32_t sz = existing.size();
       existing.close();
-      if (valid) return true;
-      LOG_DBG("EBP", "Sentinel found for h=%d thumb, skipping retry", height);
-      return false;
+      if (sz == 0) {  // 0-byte sentinel — a prior pass proved this cover structurally absent.
+        LOG_DBG("EBP", "Sentinel found for h=%d thumb, skipping retry", height);
+        return ThumbResult::StructurallyAbsent;
+      }
+      // size>0 is not "done": a thumb truncated by an interrupted write must be regenerated, not
+      // returned as valid (the caller's completeness check would otherwise reject it forever and
+      // loop). Reuse only a complete BMP; else fall through (openFileForWrite below truncates it).
+      if (coverBmpComplete(getThumbBmpPath(height))) return ThumbResult::Ok;
+      LOG_DBG("EBP", "Existing h=%d thumb is truncated — regenerating", height);
     }
+  }
+
+  // No cover item at all is structural — record a sentinel now regardless of allowExtract,
+  // since no amount of extraction or retry can conjure a cover that the OPF doesn't declare.
+  if (getCoverItemHref().empty()) {
+    LOG_DBG("EBP", "No cover item for h=%d — writing structural sentinel", height);
+    writeThumbSentinel(getThumbBmpPath(height));
+    return ThumbResult::StructurallyAbsent;
   }
 
   if (!coverImageCachedAndValid(allowExtract)) {
-    if (!allowExtract) {
-      // cover.img not yet extracted — no sentinel, let the sliced extractor produce it.
-      LOG_DBG("EBP", "cover.img not cached for h=%d (no extract) — deferring to sliced extractor", height);
-      return false;
-    }
-    // Write an empty sentinel so we don't retry on every call
-    FsFile thumbBmp;
-    Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp);
-    thumbBmp.close();
-    return false;
+    // cover.img not yet extracted (or extraction failed transiently). No sentinel — let the
+    // sliced extractor produce it, or retry next pass/boot. The caller counts these.
+    LOG_DBG("EBP", "cover.img not cached/valid for h=%d — transient, deferring", height);
+    return ThumbResult::TransientFail;
   }
 
   FsFile coverImage;
-  if (!Storage.openFileForRead("EBP", getCoverImageCachePath(), coverImage)) return false;
+  if (!Storage.openFileForRead("EBP", getCoverImageCachePath(), coverImage)) return ThumbResult::TransientFail;
 
   const auto detectedFormat = detectCoverImageFormat(coverImage);
   if (detectedFormat == CoverImageFormat::Unknown) {
-    LOG_ERR("EBP", "Cached cover image is not a supported format");
+    // Cover extracted but its format is unsupported — structural, re-extraction yields the same
+    // bytes. Sentinel so we stop trying.
+    LOG_ERR("EBP", "Cached cover image is not a supported format — writing structural sentinel");
     coverImage.close();
-    return false;
+    writeThumbSentinel(getThumbBmpPath(height));
+    return ThumbResult::StructurallyAbsent;
   }
 
   FsFile thumbBmp;
   if (!Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp)) {
     coverImage.close();
-    return false;
+    return ThumbResult::TransientFail;
   }
 
   const int thumbW = static_cast<int>(height * 0.6f);
@@ -1060,60 +1100,67 @@ bool Epub::generateThumbBmp(int height, bool allowExtract) const {
   coverImage.close();
   thumbBmp.close();
 
-  // A decode that bailed mid-loop for pending input is not a real failure — drop the
-  // partial thumb (no sentinel) so it's retried once input is serviced.
-  if (!success && CooperativeAbort::wasAborted()) {
-    LOG_DBG("EBP", "Thumb decode aborted for input — removing partial, will retry");
+  if (!success) {
+    // Whether aborted for input or a plain decode failure, this is transient: drop the partial
+    // thumb (never leave it as a false sentinel) and let the caller retry / count it.
+    LOG_DBG("EBP", "Thumb decode for h=%d did not complete — removing partial, transient", height);
     Storage.remove(getThumbBmpPath(height).c_str());
-    return false;
+    return ThumbResult::TransientFail;
   }
-
-  // Leave 0-byte sentinel on failure so we don't retry a known-failing decode.
-  if (!success) LOG_DBG("EBP", "Leaving 0-byte sentinel for h=%d — will not retry", height);
-  LOG_DBG("EBP", "Generated thumb BMP from cover image, success: %s", success ? "yes" : "no");
-  return success;
+  LOG_DBG("EBP", "Generated thumb BMP from cover image (h=%d)", height);
+  return ThumbResult::Ok;
 }
 
-bool Epub::generateThumbBmp(int width, int height, bool allowExtract) const {
+ThumbResult Epub::generateThumbBmp(int width, int height, bool allowExtract) const {
   {
     FsFile existing;
     if (Storage.openFileForRead("EBP", getThumbBmpPath(width, height), existing)) {
-      const bool valid = existing.size() > 0;
+      const uint32_t sz = existing.size();
       existing.close();
-      if (valid) return true;
-      // 0-byte sentinel — permanent failure, don't retry.
-      LOG_DBG("EBP", "Sentinel found for %dx%d thumb, skipping retry", width, height);
-      return false;
+      if (sz == 0) {  // 0-byte sentinel — a prior pass proved this cover structurally absent.
+        LOG_DBG("EBP", "Sentinel found for %dx%d thumb, skipping retry", width, height);
+        return ThumbResult::StructurallyAbsent;
+      }
+      // size>0 is not "done": a thumb truncated by an interrupted write must be regenerated, not
+      // returned as valid (the caller's completeness check would otherwise reject it forever and
+      // loop). Reuse only a complete BMP; else fall through (openFileForWrite below truncates it).
+      if (coverBmpComplete(getThumbBmpPath(width, height))) return ThumbResult::Ok;
+      LOG_DBG("EBP", "Existing %dx%d thumb is truncated — regenerating", width, height);
     }
+  }
+
+  // No cover item at all is structural — record a sentinel now regardless of allowExtract,
+  // since no amount of extraction or retry can conjure a cover that the OPF doesn't declare.
+  if (getCoverItemHref().empty()) {
+    LOG_DBG("EBP", "No cover item for %dx%d — writing structural sentinel", width, height);
+    writeThumbSentinel(getThumbBmpPath(width, height));
+    return ThumbResult::StructurallyAbsent;
   }
 
   if (!coverImageCachedAndValid(allowExtract)) {
-    if (!allowExtract) {
-      // cover.img not yet extracted — no sentinel, let the sliced extractor produce it.
-      LOG_DBG("EBP", "cover.img not cached for %dx%d (no extract) — deferring to sliced extractor", width, height);
-      return false;
-    }
-    // Write an empty sentinel so we don't retry on every call
-    FsFile thumbBmp;
-    Storage.openFileForWrite("EBP", getThumbBmpPath(width, height), thumbBmp);
-    thumbBmp.close();
-    return false;
+    // cover.img not yet extracted (or extraction failed transiently). No sentinel — let the
+    // sliced extractor produce it, or retry next pass/boot. The caller counts these.
+    LOG_DBG("EBP", "cover.img not cached/valid for %dx%d — transient, deferring", width, height);
+    return ThumbResult::TransientFail;
   }
 
   FsFile coverImage;
-  if (!Storage.openFileForRead("EBP", getCoverImageCachePath(), coverImage)) return false;
+  if (!Storage.openFileForRead("EBP", getCoverImageCachePath(), coverImage)) return ThumbResult::TransientFail;
 
   const auto detectedFormat = detectCoverImageFormat(coverImage);
   if (detectedFormat == CoverImageFormat::Unknown) {
-    LOG_ERR("EBP", "Cached cover image is not a supported format");
+    // Cover extracted but its format is unsupported — structural, re-extraction yields the same
+    // bytes. Sentinel so we stop trying.
+    LOG_ERR("EBP", "Cached cover image is not a supported format — writing structural sentinel");
     coverImage.close();
-    return false;
+    writeThumbSentinel(getThumbBmpPath(width, height));
+    return ThumbResult::StructurallyAbsent;
   }
 
   FsFile thumbBmp;
   if (!Storage.openFileForWrite("EBP", getThumbBmpPath(width, height), thumbBmp)) {
     coverImage.close();
-    return false;
+    return ThumbResult::TransientFail;
   }
 
   bool success = false;
@@ -1128,23 +1175,15 @@ bool Epub::generateThumbBmp(int width, int height, bool allowExtract) const {
   coverImage.close();
   thumbBmp.close();
 
-  // A decode that genuinely bailed mid-loop for pending button input is NOT a real
-  // failure — remove the partial/empty thumb so it isn't mistaken for a permanent-
-  // failure sentinel and is retried once input is serviced. wasAborted() is true only
-  // when a decode row loop actually broke for input (markAborted), so a plain failure
-  // (e.g. an oversize image rejected before any rows) still falls through to the sentinel.
-  if (!success && CooperativeAbort::wasAborted()) {
-    LOG_DBG("EBP", "Thumb decode aborted for input — removing partial, will retry");
+  if (!success) {
+    // Whether aborted for input or a plain decode failure, this is transient: drop the partial
+    // thumb (never leave it as a false sentinel) and let the caller retry / count it.
+    LOG_DBG("EBP", "Thumb decode for %dx%d did not complete — removing partial, transient", width, height);
     Storage.remove(getThumbBmpPath(width, height).c_str());
-    return false;
+    return ThumbResult::TransientFail;
   }
-
-  // On failure, leave the 0-byte sentinel so generateThumbBmp won't be retried on every
-  // homescreen load.  The sentinel is removed by ensureCoverThumb when a cache-clear or
-  // sidecar update makes a retry worthwhile.
-  if (!success) LOG_DBG("EBP", "Leaving 0-byte sentinel for %dx%d — will not retry", width, height);
-  LOG_DBG("EBP", "Generated %dx%d thumb BMP from cover image, success: %s", width, height, success ? "yes" : "no");
-  return success;
+  LOG_DBG("EBP", "Generated %dx%d thumb BMP from cover image", width, height);
+  return ThumbResult::Ok;
 }
 
 uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size, const bool trailingNullByte) const {

@@ -1,5 +1,6 @@
 #include "ReaderActivity.h"
 
+#include <Bitmap.h>
 #include <CooperativeAbort.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
@@ -186,11 +187,14 @@ std::string ReaderActivity::convertSidecarToBmp(const std::string& cacheDir, con
   if (!Storage.exists(cacheDir.c_str())) Storage.mkdir(cacheDir.c_str());
   const std::string bmpPath = cacheDir + "/" + fileName;
   if (Storage.exists(bmpPath.c_str())) {
-    FsFile existing;
-    const uint32_t existingSize = Storage.openFileForRead("COVER", bmpPath, existing) ? (uint32_t)existing.size() : 0;
-    existing.close();
-    LOG_DBG("COVER", "convertSidecarToBmp: BMP already exists path=%s size=%u", bmpPath.c_str(), existingSize);
-    return bmpPath;
+    // Reuse only a COMPLETE BMP. A previous conversion truncated by an interrupted write would
+    // otherwise be returned and drawn forever (fails partway); remove it and reconvert instead.
+    if (isCoverThumbComplete(bmpPath)) {
+      LOG_DBG("COVER", "convertSidecarToBmp: BMP already exists (complete) path=%s", bmpPath.c_str());
+      return bmpPath;
+    }
+    LOG_DBG("COVER", "convertSidecarToBmp: existing BMP truncated, regenerating path=%s", bmpPath.c_str());
+    Storage.remove(bmpPath.c_str());
   }
 
   FsFile src;
@@ -227,22 +231,112 @@ std::string ReaderActivity::coverThumbPlaceholder(const std::string& bookPath) {
   return bookCacheDir(bookPath) + "/thumb_[HEIGHT].bmp";
 }
 
-namespace {
-// True if a thumbnail file exists and is non-empty (a 0-byte sentinel left by a prior failed
-// extraction must be treated as missing so regeneration retries).
-bool thumbFileValid(const std::string& path) {
+bool ReaderActivity::isCoverThumbComplete(const std::string& path) {
   FsFile f;
-  const bool ok = Storage.openFileForRead("COVER", path, f) && f.size() > 0;
+  if (!Storage.openFileForRead("COVER", path, f)) return false;
+  if (f.size() == 0) {  // 0-byte sentinel from a prior failed extraction → treat as missing
+    f.close();
+    return false;
+  }
+  Bitmap bmp(f);
+  // Header intact but pixel data short → truncated by an interrupted write; treat as invalid so
+  // the caller regenerates rather than keeping the unrenderable partial forever.
+  const bool ok = bmp.parseHeaders() == BmpReaderError::Ok && bmp.isComplete();
   f.close();
   return ok;
 }
+
+bool ReaderActivity::writeCoverPlaceholderBmp(const std::string& path, int width, int height) {
+  if (width <= 0 || height <= 0) return false;
+  const int rowBytes = ((width + 31) / 32) * 4;  // 1-bit rows padded to 4 bytes
+  uint8_t row[256];                              // cover thumbs are <=464px wide (rowBytes<=60)
+  if (rowBytes > static_cast<int>(sizeof(row))) return false;
+  const uint32_t imageSize = static_cast<uint32_t>(rowBytes) * static_cast<uint32_t>(height);
+  const uint32_t offBits = 14 + 40 + 8;  // file header + info header + 2-entry palette
+
+  FsFile f;
+  if (!Storage.openFileForWrite("COVER", path, f)) return false;
+  auto w16 = [&](uint16_t v) {
+    const uint8_t b[2] = {static_cast<uint8_t>(v), static_cast<uint8_t>(v >> 8)};
+    f.write(b, 2);
+  };
+  auto w32 = [&](uint32_t v) {
+    const uint8_t b[4] = {static_cast<uint8_t>(v), static_cast<uint8_t>(v >> 8), static_cast<uint8_t>(v >> 16),
+                          static_cast<uint8_t>(v >> 24)};
+    f.write(b, 4);
+  };
+  f.write(reinterpret_cast<const uint8_t*>("BM"), 2);
+  w32(offBits + imageSize);                     // bfSize
+  w16(0);                                       // reserved1
+  w16(0);                                       // reserved2
+  w32(offBits);                                 // bfOffBits
+  w32(40);                                      // biSize
+  w32(static_cast<uint32_t>(width));            // biWidth
+  w32(static_cast<uint32_t>(-height));          // biHeight (negative => top-down)
+  w16(1);                                       // biPlanes
+  w16(1);                                       // biBitCount
+  w32(0);                                       // biCompression = BI_RGB
+  w32(imageSize);                               // biSizeImage
+  w32(0);                                       // biXPelsPerMeter
+  w32(0);                                       // biYPelsPerMeter
+  w32(2);                                       // biClrUsed (black, white)
+  w32(0);                                       // biClrImportant
+  const uint8_t black[4] = {0, 0, 0, 0};        // palette index 0 = black
+  const uint8_t white[4] = {255, 255, 255, 0};  // palette index 1 = white
+  f.write(black, 4);
+  f.write(white, 4);
+  // Pixel rows (top-down): white interior (bit 1) with a 1px black frame (bit 0). A 1-bit BMP draws
+  // only its dark pixels, so this renders as an empty framed box — a clear "no cover" placeholder.
+  const int lastBit = width - 1;
+  for (int y = 0; y < height; y++) {
+    if (y == 0 || y == height - 1) {
+      memset(row, 0x00, rowBytes);  // full black border row
+    } else {
+      memset(row, 0xFF, rowBytes);                                                           // white
+      row[0] = static_cast<uint8_t>(row[0] & 0x7F);                                          // black left edge (col 0)
+      row[lastBit / 8] = static_cast<uint8_t>(row[lastBit / 8] & ~(0x80 >> (lastBit % 8)));  // right edge
+    }
+    f.write(row, rowBytes);
+  }
+  f.close();
+  return true;
+}
+
+namespace {
+// True if a thumbnail file exists and is usable. A 0-byte sentinel left by a prior failed
+// extraction, OR a partial BMP left truncated by an interrupted write, must be treated as missing
+// so regeneration retries (see ReaderActivity::isCoverThumbComplete).
+bool thumbFileValid(const std::string& path) { return ReaderActivity::isCoverThumbComplete(path); }
+
+// Migration heal for stale sentinels written by an older build's blunt failure policy (any
+// extraction/decode failure — even a transient one — used to leave a permanent 0-byte sentinel).
+// Under the current policy a sentinel means "structurally absent"; if one exists yet the book's
+// cover.img is present AND a valid image format, the sentinel is stale — clear it so the normal
+// generateThumbBmp path gets a fresh chance. No-op unless BOTH a sentinel and a valid cover.img
+// exist, so a legitimately-absent cover keeps its sentinel.
+void healStaleEpubSentinel(const std::string& bookPath, const std::string& thumbFile) {
+  if (!FsHelpers::hasEpubExtension(bookPath)) return;
+  FsFile sentinel;
+  if (!Storage.openFileForRead("COVER", thumbFile, sentinel)) return;
+  const bool isSentinel = sentinel.size() == 0;
+  sentinel.close();
+  if (!isSentinel) return;
+
+  // coverImageCachedValidOnly() checks cover.img exists + non-empty + a known image format,
+  // without triggering any extraction — exactly the "sentinel is stale" condition.
+  Epub epub(bookPath, "/.crosspoint");
+  if (epub.load(true, true) && epub.coverImageCachedValidOnly()) {
+    LOG_DBG("COVER", "Healing stale sentinel %s (cover.img present & valid)", thumbFile.c_str());
+    Storage.remove(thumbFile.c_str());
+  }
+}
 }  // namespace
 
-bool ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, int height) {
+ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, int height) {
   const std::string dir = bookCacheDir(bookPath);
   const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
   const std::string file = dir + "/" + name;
-  if (thumbFileValid(file)) return true;
+  if (thumbFileValid(file)) return ThumbResult::Ok;
 
   // Source preference: a sidecar image beside the book wins over the embedded cover.
   const std::string sidecar = sidecarCoverPath(bookPath);
@@ -253,40 +347,44 @@ bool ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, in
     const std::string result = convertSidecarToBmp(dir, sidecar, width, height, name);
     LOG_DBG("COVER", "convertSidecarToBmp(%dx%d) sidecar=%s result=%s", width, height, sidecar.c_str(),
             result.empty() ? "FAILED" : result.c_str());
-    if (!result.empty()) return true;
-    // Sidecar conversion bailed mid-decode for pending input — don't pay for an
-    // embedded-cover parse now; let the caller retry once the press is serviced.
-    if (CooperativeAbort::wasAborted()) return false;
+    if (!result.empty()) return ThumbResult::Ok;
+    // Sidecar conversion failed (bailed for input, OOM, decode error) — transient. Let the
+    // caller retry; don't fall through to an embedded-cover parse this pass.
+    return ThumbResult::TransientFail;
   }
 
   // No usable sidecar — fall back to the embedded cover.  generateThumbBmp() only
   // DECODES an already-extracted cover.img (abortable, ≤~1 s); it no longer inflates
-  // the cover from the ZIP itself.  If cover.img isn't cached yet it returns false
+  // the cover from the ZIP itself.  If cover.img isn't cached yet it reports TransientFail
   // without a sentinel, and the caller's sliced beginCoverExtractSession extracts it
   // across ticks before a later pass decodes it.  This keeps the 35 s ZIP inflate off
   // the per-tick path while still covering both embedded JPEG and PNG covers.
   if (FsHelpers::hasEpubExtension(bookPath)) {
+    // Clear any sentinel left permanent by an older build for what was only a transient failure,
+    // so a book whose cover.img is actually present & valid gets decoded instead of skipped.
+    healStaleEpubSentinel(bookPath, file);
     Epub epub(bookPath, "/.crosspoint");
     // allowExtract=false: decode only an already-cached cover.img; the sliced
     // beginCoverExtractSession owns the (potentially multi-second) ZIP inflate.
-    return epub.load(true, true) && epub.generateThumbBmp(width, height, /*allowExtract=*/false);
+    if (!epub.load(true, true)) return ThumbResult::TransientFail;
+    return epub.generateThumbBmp(width, height, /*allowExtract=*/false);
   }
   if (FsHelpers::hasXtcExtension(bookPath)) {
     Xtc xtc(bookPath, "/.crosspoint");
-    return xtc.load() && xtc.generateThumbBmp(width, height);
+    return (xtc.load() && xtc.generateThumbBmp(width, height)) ? ThumbResult::Ok : ThumbResult::TransientFail;
   }
   if (FsHelpers::hasTxtExtension(bookPath) || FsHelpers::hasMarkdownExtension(bookPath)) {
     Txt txt(bookPath, "/.crosspoint");
-    return txt.generateThumbBmp(width, height);
+    return txt.generateThumbBmp(width, height) ? ThumbResult::Ok : ThumbResult::TransientFail;
   }
-  return false;
+  return ThumbResult::TransientFail;
 }
 
-bool ReaderActivity::ensureCoverThumb(const std::string& bookPath, int height) {
+ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int height) {
   const std::string dir = bookCacheDir(bookPath);
   const std::string name = "thumb_" + std::to_string(height) + ".bmp";
   const std::string file = dir + "/" + name;
-  if (thumbFileValid(file)) return true;
+  if (thumbFileValid(file)) return ThumbResult::Ok;
 
   // Embedded single-height thumbnails scale to height*0.6 wide; mirror that for the sidecar.
   const std::string sidecar = sidecarCoverPath(bookPath);
@@ -296,44 +394,51 @@ bool ReaderActivity::ensureCoverThumb(const std::string& bookPath, int height) {
     const std::string result = convertSidecarToBmp(dir, sidecar, height * 6 / 10, height, name);
     LOG_DBG("COVER", "convertSidecarToBmp(h=%d) sidecar=%s result=%s", height, sidecar.c_str(),
             result.empty() ? "FAILED" : result.c_str());
-    if (!result.empty()) return true;
-    // Sidecar conversion bailed mid-decode for pending input — don't pay for an
-    // embedded-cover parse now; let the caller retry once the press is serviced.
-    if (CooperativeAbort::wasAborted()) return false;
+    if (!result.empty()) return ThumbResult::Ok;
+    // Sidecar conversion failed (bailed for input, OOM, decode error) — transient. Let the
+    // caller retry; don't fall through to an embedded-cover parse this pass.
+    return ThumbResult::TransientFail;
   }
 
   // Embedded EPUB cover: generateThumbBmp() decodes an already-extracted cover.img only
   // (see the width/height overload) — the sliced beginCoverExtractSession handles the
   // ZIP inflate so the 35 s stall stays off the per-tick path.
   if (FsHelpers::hasEpubExtension(bookPath)) {
+    // Clear any sentinel left permanent by an older build for what was only a transient failure.
+    healStaleEpubSentinel(bookPath, file);
     Epub epub(bookPath, "/.crosspoint");
     // allowExtract=false: decode only an already-cached cover.img; the sliced
     // beginCoverExtractSession owns the (potentially multi-second) ZIP inflate.
-    return epub.load(true, true) && epub.generateThumbBmp(height, /*allowExtract=*/false);
+    if (!epub.load(true, true)) return ThumbResult::TransientFail;
+    return epub.generateThumbBmp(height, /*allowExtract=*/false);
   }
   if (FsHelpers::hasXtcExtension(bookPath)) {
     Xtc xtc(bookPath, "/.crosspoint");
-    return xtc.load() && xtc.generateThumbBmp(height);
+    return (xtc.load() && xtc.generateThumbBmp(height)) ? ThumbResult::Ok : ThumbResult::TransientFail;
   }
   if (FsHelpers::hasTxtExtension(bookPath) || FsHelpers::hasMarkdownExtension(bookPath)) {
     Txt txt(bookPath, "/.crosspoint");
-    return txt.generateThumbBmp(height);
+    return txt.generateThumbBmp(height) ? ThumbResult::Ok : ThumbResult::TransientFail;
   }
-  return false;
+  return ThumbResult::TransientFail;
 }
 
-std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int width,
-                                                                       int height, PngThumbFiles& filesOut) {
-  const std::string dir = bookCacheDir(bookPath);
-  const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
+namespace {
+// Shared core: start a sliced PNG decode into an explicitly-named thumb file. The two public
+// overloads differ only in that name ("thumb_<W>x<H>.bmp" vs "thumb_<H>.bmp"), so they both
+// funnel through here to avoid duplicating the sidecar/cover.img source selection and setup.
+std::unique_ptr<PngDecodeSession> beginPngThumbSessionImpl(const std::string& bookPath, int width, int height,
+                                                           const std::string& name,
+                                                           ReaderActivity::PngThumbFiles& filesOut) {
+  const std::string dir = ReaderActivity::bookCacheDir(bookPath);
   const std::string bmpPath = dir + "/" + name;
 
   // Already cached (valid) — caller should have checked, but be safe.
-  if (thumbFileValid(bmpPath)) return nullptr;
+  if (ReaderActivity::isCoverThumbComplete(bmpPath)) return nullptr;
 
   // Sidecar PNG takes priority over embedded cover.
   std::string srcPath;
-  const std::string sidecar = sidecarCoverPath(bookPath);
+  const std::string sidecar = ReaderActivity::sidecarCoverPath(bookPath);
   bool isSidecar = false;
   if (!sidecar.empty() && FsHelpers::hasPngExtension(sidecar)) {
     srcPath = sidecar;
@@ -388,6 +493,20 @@ std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std
   LOG_DBG("PNG", "beginPngThumbSession: started sliced decode for %s -> %s (%dx%d)", srcPath.c_str(), bmpPath.c_str(),
           width, height);
   return session;
+}
+}  // namespace
+
+std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int width,
+                                                                       int height, PngThumbFiles& filesOut) {
+  const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
+  return beginPngThumbSessionImpl(bookPath, width, height, name, filesOut);
+}
+
+std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int height,
+                                                                       PngThumbFiles& filesOut) {
+  // Single-height thumbs scale to height*0.6 wide (mirrors the synchronous single-height decode).
+  const std::string name = "thumb_" + std::to_string(height) + ".bmp";
+  return beginPngThumbSessionImpl(bookPath, height * 6 / 10, height, name, filesOut);
 }
 
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {

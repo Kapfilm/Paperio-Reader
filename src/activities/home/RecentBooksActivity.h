@@ -47,6 +47,8 @@ class RecentBooksActivity final : public Activity {
   std::unique_ptr<PngDecodeSession> pngSession;
   ReaderActivity::PngThumbFiles pngSessionFiles;
   bool pngSessionFailed = false;
+  // Throttle for the cover-decode progress log (millis() of the last line emitted).
+  uint32_t lastCoverProgressLogMs_ = 0;
 
   // Partial selection repaint: track previous index so we only redraw two cells
   int prevSelectorIndex = -1;

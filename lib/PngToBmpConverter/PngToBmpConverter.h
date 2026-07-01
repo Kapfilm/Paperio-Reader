@@ -30,9 +30,13 @@ class PngDecodeSession {
 
   // Open pngFile and bmpFile (already opened for read/write respectively),
   // parse the PNG header, write the BMP header, allocate buffers.
-  // targetWidth/targetHeight: desired output size (fit, not crop).
+  // targetWidth/targetHeight: desired output size. crop=true fills the target (scale to the
+  // LARGER fit factor, overflow kept) so the binding dimension matches the target exactly —
+  // this mirrors the synchronous pngFileTo1BitBmpStreamWithSize (crop=true) so cover thumbnails
+  // are drawn 1:1 with no rescale (a fractional rescale of an already-dithered 1-bit image
+  // produces a moiré grid). crop=false fits inside the target (scale to the SMALLER factor).
   // Returns false on any setup failure; the session must not be used after a false return.
-  bool begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, int targetHeight);
+  bool begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, int targetHeight, bool crop = true);
 
   // Decode up to maxSourceRows scanlines and write the corresponding BMP rows.
   // Returns Running if more rows remain, Done when the image is complete, Error on failure.
@@ -76,8 +80,14 @@ class PngDecodeSession {
 };
 
 class PngToBmpConverter {
+  // enforceSizeCap: reject sources above MAX_PNG_PIXELS before decoding. This guards the ~10 s
+  // full-resolution decode stall on the per-tick thumbnail path (whose callers recover via the
+  // sliced PngDecodeSession). One-shot, stall-tolerant callers (generateCoverBmp for the sleep /
+  // finished-book / OPDS screens, which have no sliced fallback) pass false so a large but
+  // otherwise-decodable cover still renders. The per-dimension safety bound in PngStreamDecoder
+  // (2048x3072) always applies regardless.
   static bool pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight, bool oneBit,
-                                         bool crop = true);
+                                         bool crop = true, bool enforceSizeCap = true);
 
  public:
   static bool pngFileToBmpStream(FsFile& pngFile, Print& bmpOut, bool crop = true);

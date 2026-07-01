@@ -76,6 +76,14 @@ class Bitmap {
   int getRowBytes() const { return rowBytes; }
   bool is1Bit() const { return bpp == 1; }
   uint16_t getBpp() const { return bpp; }
+  // True if the file actually contains every declared pixel row, i.e. it was not truncated by an
+  // interrupted/aborted write (a partial thumbnail left on the SD card after a reboot mid-decode).
+  // Call after parseHeaders() returns Ok. Cheap: compares file size against the pixel-data offset
+  // plus rowBytes*height; readNextRow() would otherwise fail with ShortReadRow partway through.
+  bool isComplete() const {
+    const long need = static_cast<long>(bfOffBits) + static_cast<long>(rowBytes) * static_cast<long>(height);
+    return static_cast<long>(file.size()) >= need;
+  }
 
  private:
   static uint16_t readLE16(FsFile& f);

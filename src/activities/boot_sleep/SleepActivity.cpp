@@ -618,53 +618,41 @@ void SleepActivity::renderCoverSleepScreen() const {
   }
 
   std::string coverBmpPath;
-  bool cropped = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
+  const bool cropped = SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP;
 
-  // Check if the current book is XTC, TXT, or EPUB
+  // generateCoverBmp() runs the full-size PNG/JPEG decoder, whose inflate ring and pixel buffers
+  // need a large contiguous block; on a big cover (e.g. a 1200x1848 PNG) that malloc fails under
+  // sleep-time heap pressure and the cover silently falls back to /sleep.bmp. Free the ~52 KB
+  // secondary framebuffer for headroom (same lever the Home cover loader uses). No realloc: the
+  // sleep render below draws via the grayscale planes / controller RAM, not the secondary buffer,
+  // and enterDeepSleep() tears everything down (chip reset on wake) immediately after.
+  if (renderer.hasSecondaryBuffer()) renderer.releaseSecondaryBuffer();
+
   if (FsHelpers::hasXtcExtension(APP_STATE.openEpubPath)) {
-    // Handle XTC file
     Xtc lastXtc(APP_STATE.openEpubPath, "/.crosspoint");
-    if (!lastXtc.load()) {
-      LOG_ERR("SLP", "Failed to load last XTC");
-      return (this->*renderNoCoverSleepScreen)();
+    if (lastXtc.load() && lastXtc.generateCoverBmp()) {
+      coverBmpPath = lastXtc.getCoverBmpPath();
+    } else {
+      LOG_ERR("SLP", "Failed to load/generate XTC cover bmp");
     }
-
-    if (!lastXtc.generateCoverBmp()) {
-      LOG_ERR("SLP", "Failed to generate XTC cover bmp");
-      return (this->*renderNoCoverSleepScreen)();
-    }
-
-    coverBmpPath = lastXtc.getCoverBmpPath();
   } else if (FsHelpers::hasTxtExtension(APP_STATE.openEpubPath)) {
-    // Handle TXT file - looks for cover image in the same folder
     Txt lastTxt(APP_STATE.openEpubPath, "/.crosspoint");
-    if (!lastTxt.load()) {
-      LOG_ERR("SLP", "Failed to load last TXT");
-      return (this->*renderNoCoverSleepScreen)();
-    }
-
-    if (!lastTxt.generateCoverBmp()) {
+    if (lastTxt.load() && lastTxt.generateCoverBmp()) {
+      coverBmpPath = lastTxt.getCoverBmpPath();
+    } else {
       LOG_ERR("SLP", "No cover image found for TXT file");
-      return (this->*renderNoCoverSleepScreen)();
     }
-
-    coverBmpPath = lastTxt.getCoverBmpPath();
   } else if (FsHelpers::hasEpubExtension(APP_STATE.openEpubPath)) {
-    // Handle EPUB file
     Epub lastEpub(APP_STATE.openEpubPath, "/.crosspoint");
-    // Skip loading css since we only need metadata here
-    if (!lastEpub.load(true, true)) {
-      LOG_ERR("SLP", "Failed to load last epub");
-      return (this->*renderNoCoverSleepScreen)();
+    // Skip loading css since we only need metadata here.
+    if (lastEpub.load(true, true) && lastEpub.generateCoverBmp(cropped)) {
+      coverBmpPath = lastEpub.getCoverBmpPath(cropped);
+    } else {
+      LOG_ERR("SLP", "Failed to load/generate EPUB cover bmp");
     }
+  }
 
-    if (!lastEpub.generateCoverBmp(cropped)) {
-      LOG_ERR("SLP", "Failed to generate cover bmp");
-      return (this->*renderNoCoverSleepScreen)();
-    }
-
-    coverBmpPath = lastEpub.getCoverBmpPath(cropped);
-  } else {
+  if (coverBmpPath.empty()) {
     return (this->*renderNoCoverSleepScreen)();
   }
 

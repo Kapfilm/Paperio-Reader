@@ -9,6 +9,7 @@
 
 #include "Epub/BookMetadataCache.h"
 #include "Epub/EpubImageManifest.h"
+#include "Epub/ThumbResult.h"
 #include "Epub/css/CssParser.h"
 
 class ZipFile;
@@ -88,14 +89,22 @@ class Epub {
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   std::string getThumbBmpPath(int width, int height) const;
+  // Write the 0-byte "structurally absent" sentinel at a thumb path (see ThumbResult): the book
+  // has no usable cover, so generateThumbBmp() stops retrying. Best-effort; ignores write errors.
+  static void writeThumbSentinel(const std::string& thumbPath);
   // allowExtract=true: synchronously inflate the embedded cover.img from the ZIP if it
   // isn't cached yet (can stall for seconds on a large cover — fine for one-off callers
   // like the book-info / finished-book screens). allowExtract=false: decode ONLY an
-  // already-cached cover.img and return false (no sentinel) if it's missing, so a sliced
-  // extractor (ReaderActivity::beginCoverExtractSession) can do the inflate off the hot
-  // loop path. The home cover loader passes false.
-  bool generateThumbBmp(int height, bool allowExtract = true) const;
-  bool generateThumbBmp(int width, int height, bool allowExtract = true) const;
+  // already-cached cover.img and report TransientFail (no sentinel) if it's missing, so a
+  // sliced extractor (ReaderActivity::beginCoverExtractSession) can do the inflate off the
+  // hot loop path. The home cover loader passes false.
+  //
+  // A 0-byte sentinel is written ONLY for a StructurallyAbsent outcome (no cover item, or a
+  // cover present but in an unsupported format). Every transient failure returns TransientFail
+  // WITHOUT a sentinel so the next pass — or the next boot — retries; the caller (HomeActivity)
+  // owns a session-scoped counter that promotes a repeatedly-transient book to a sentinel.
+  ThumbResult generateThumbBmp(int height, bool allowExtract = true) const;
+  ThumbResult generateThumbBmp(int width, int height, bool allowExtract = true) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
   bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize) const;

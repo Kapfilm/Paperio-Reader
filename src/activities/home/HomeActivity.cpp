@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -171,6 +172,49 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
   }
 }
 
+bool HomeActivity::coverAttemptsExhausted(const std::string& path) const {
+  const auto it = coverTransientAttempts.find(path);
+  return it != coverTransientAttempts.end() && it->second >= COVER_MAX_TRANSIENT_ATTEMPTS;
+}
+
+void HomeActivity::giveUpCover(RecentBook& book, ThumbResult res, const std::vector<ThumbSlot>& slots) {
+  // Only transient failures count toward the session budget; a structural absence is already
+  // permanent (generateThumbBmp wrote a sentinel) and needs no retry accounting.
+  if (res == ThumbResult::TransientFail) {
+    const uint8_t n = ++coverTransientAttempts[book.path];
+    LOG_DBG("HOME", "Transient cover failure %u/%u for %s", n, COVER_MAX_TRANSIENT_ATTEMPTS, book.path.c_str());
+  }
+
+  // Permanent give-up = structurally absent, or transient failures past this session's budget
+  // (e.g. an embedded cover the decoder rejects every time — oversize PNG, corrupt image). Mirror
+  // RecentBooksActivity: write a valid placeholder BMP at each thumb slot so isCoverThumbComplete()
+  // treats the book as resolved on disk and it is never re-decoded on the next boot. A still-retryable
+  // transient failure records an empty cover instead, so it gets a fresh attempt next session.
+  const bool permanent = (res == ThumbResult::StructurallyAbsent) || coverAttemptsExhausted(book.path);
+
+  if (permanent) {
+    bool allWritten = !slots.empty();
+    for (const auto& slot : slots) {
+      if (!ReaderActivity::isCoverThumbComplete(slot.path) &&
+          !ReaderActivity::writeCoverPlaceholderBmp(slot.path, slot.width, slot.height)) {
+        allWritten = false;
+      }
+    }
+    if (allWritten) {
+      const std::string placeholder = ReaderActivity::coverThumbPlaceholder(book.path);
+      LOG_DBG("HOME", "Wrote cover placeholder(s) for %s — resolved, will not re-decode", book.path.c_str());
+      RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
+      book.coverBmpPath = placeholder;
+      return;
+    }
+    // Placeholder write failed (e.g. tight heap) — fall through to empty; retry next pass.
+    LOG_DBG("HOME", "Placeholder write failed for %s — recording empty, will retry", book.path.c_str());
+  }
+
+  RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
+  book.coverBmpPath = "";
+}
+
 void HomeActivity::loadRecentCovers(int coverHeight) {
   recentsLoading = true;
 
@@ -199,6 +243,22 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
   const auto thumbSizes = GUI.getCoverThumbSizes(coverHeight);
 
+  // Build the placeholder slots for a book on give-up. Multi-size themes placeholder every
+  // WxH thumb; the single-height path placeholders its one thumb_<h>.bmp (width = h*0.6, matching
+  // the decode). Each slot's path is exactly what the loader's isCoverThumbComplete() checks.
+  const auto slotsForBook = [&](const std::string& placeholder) {
+    std::vector<ThumbSlot> slots;
+    if (!thumbSizes.empty()) {
+      slots.reserve(thumbSizes.size());
+      std::transform(thumbSizes.begin(), thumbSizes.end(), std::back_inserter(slots), [&](const auto& sz) {
+        return ThumbSlot{UITheme::getCoverThumbPath(placeholder, sz.first, sz.second), sz.first, sz.second};
+      });
+    } else {
+      slots.push_back({UITheme::getCoverThumbPath(placeholder, coverHeight), coverHeight * 6 / 10, coverHeight});
+    }
+    return slots;
+  };
+
   // HomeActivity::loop runs on the main task while rendering runs on the render task.
   // Invalidate the Lyra frame cache under the render lock to avoid freeing cached
   // frames while tryFastHomeRender is copying from them.
@@ -220,14 +280,34 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     requestUpdate();
   };
 
+  // Time budget for a single loadRecentCovers() call. Rather than advancing a session by
+  // one small slice per loop() tick (a 1200x1848 PNG cover needs ~940 ZIP-inflate chunks +
+  // ~308 decode-row batches ≈ 1250 ticks — minutes of wall-clock), we drain slices in a
+  // burst until this budget elapses or button input arrives. Mirrors RecentBooksActivity's
+  // COVER_SLICE_BUDGET_MS burst driver. A slice only writes SD files (no screen change), so
+  // bursting costs nothing visually; we still yield promptly to keep input responsive.
+  constexpr uint32_t COVER_SLICE_BUDGET_MS = 150;
+  // Larger ZIP-inflate chunk than the per-tick 4 KB: with the ~48 KB secondary framebuffer
+  // released during loading (see above) there is headroom, and 16 KB cuts the inflate
+  // iteration count 4× on the multi-MB cover.img. The session reuses one malloc'd buffer of
+  // this size across all continueStep() calls (realloc only if the size changes).
+  constexpr size_t COVER_EXTRACT_CHUNK = 16384;
+
   // ── Cover extract session drain ──────────────────────────────────────────────
-  // Sliced ZIP extraction of cover.img for a large embedded PNG cover.
-  // One 4 KB chunk per loop() tick; when done, fall through to beginPngThumbSession.
+  // Sliced ZIP extraction of cover.img for a large embedded PNG cover. Burst-drain
+  // chunks within the time budget; when done, fall through to beginPngThumbSession.
   if (extractSession) {
-    const auto status = extractSession->continueStep(4096);
-    if (status == ReaderActivity::CoverExtractSession::Status::Running) {
-      recentsLoading = false;
-      return;
+    const uint32_t deadline = millis() + COVER_SLICE_BUDGET_MS;
+    auto status = ReaderActivity::CoverExtractSession::Status::Running;
+    while (status == ReaderActivity::CoverExtractSession::Status::Running) {
+      status = extractSession->continueStep(COVER_EXTRACT_CHUNK);
+      // Stop the burst (but keep the session alive) when input is waiting or the budget
+      // is spent — resume from where we left off on the next loadRecentCovers() call.
+      if (status == ReaderActivity::CoverExtractSession::Status::Running &&
+          (mappedInput.hasPendingInput() || static_cast<int32_t>(millis() - deadline) >= 0)) {
+        recentsLoading = false;
+        return;
+      }
     }
     extractSession.reset();
     if (status == ReaderActivity::CoverExtractSession::Status::Error) {
@@ -241,14 +321,20 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   }
 
   // ── PNG session drain ────────────────────────────────────────────────────────
-  // A sliced PNG decode was started in a previous loop() call.  Drive it a few
-  // rows at a time so button input stays responsive between calls.
+  // A sliced PNG decode was started in a previous loadRecentCovers() call. Burst-drain
+  // row batches within the time budget so a tall cover finishes in a few ticks instead
+  // of hundreds, while still yielding promptly for button input between batches.
   if (pngSession) {
-    constexpr uint32_t ROWS_PER_TICK = 6;
-    const auto status = pngSession->continueRows(ROWS_PER_TICK);
-    if (status == PngDecodeSession::Status::Running) {
-      recentsLoading = false;  // allow a brief pause for input between ticks
-      return;
+    constexpr uint32_t ROWS_PER_BATCH = 6;
+    const uint32_t deadline = millis() + COVER_SLICE_BUDGET_MS;
+    auto status = PngDecodeSession::Status::Running;
+    while (status == PngDecodeSession::Status::Running) {
+      status = pngSession->continueRows(ROWS_PER_BATCH);
+      if (status == PngDecodeSession::Status::Running &&
+          (mappedInput.hasPendingInput() || static_cast<int32_t>(millis() - deadline) >= 0)) {
+        recentsLoading = false;  // pause between batches; resume on the next call
+        return;
+      }
     }
     // Session finished (done or error) — close files.
     pngSessionFiles.close();
@@ -258,12 +344,14 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       // Remove the partially-written BMP and leave no sentinel — ensureCoverThumb will retry.
       // (If the cover is permanently undecodable, generateThumbBmp will write a fresh sentinel.)
       const auto& failBook = recentBooks[nextRecentCoverIndex];
-      if (nextThumbSizeIndex < thumbSizes.size()) {
-        const std::string placeholder = ReaderActivity::coverThumbPlaceholder(failBook.path);
-        const auto& sz = thumbSizes[nextThumbSizeIndex];
-        const std::string failPath = UITheme::getCoverThumbPath(placeholder, sz.first, sz.second);
-        Storage.remove(failPath.c_str());
-      }
+      const std::string placeholder = ReaderActivity::coverThumbPlaceholder(failBook.path);
+      const std::string failPath =
+          thumbSizes.empty() ? UITheme::getCoverThumbPath(placeholder, coverHeight)
+                             : (nextThumbSizeIndex < thumbSizes.size()
+                                    ? UITheme::getCoverThumbPath(placeholder, thumbSizes[nextThumbSizeIndex].first,
+                                                                 thumbSizes[nextThumbSizeIndex].second)
+                                    : std::string());
+      if (!failPath.empty()) Storage.remove(failPath.c_str());
       LOG_ERR("HOME", "PNG session failed for %s", failBook.path.c_str());
       // Fall through to the for-loop where the normal failure path stores empty-path and continues.
     } else {
@@ -306,11 +394,10 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       for (size_t i = nextThumbSizeIndex; i < thumbSizes.size(); i++) {
         const auto& sz = thumbSizes[i];
         const std::string path = UITheme::getCoverThumbPath(placeholder, sz.first, sz.second);
-        FsFile thumbFile;
-        const bool validThumb = Storage.openFileForRead("HOME", path, thumbFile) && thumbFile.size() > 0;
-        LOG_DBG("HOME", "Cover check [%dx%d] path=%s valid=%d size=%u", sz.first, sz.second, path.c_str(),
-                validThumb ? 1 : 0, (unsigned)thumbFile.size());
-        thumbFile.close();
+        // Require a complete BMP (all pixel rows present), not just size>0: a thumbnail truncated by
+        // an interrupted write passes size>0 but fails to draw, and would never be regenerated.
+        const bool validThumb = ReaderActivity::isCoverThumbComplete(path);
+        LOG_DBG("HOME", "Cover check [%dx%d] path=%s valid=%d", sz.first, sz.second, path.c_str(), validThumb ? 1 : 0);
 
         if (!validThumb) {
           // Button input has priority: never start a fresh decode while a press is
@@ -321,15 +408,28 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
             return;
           }
 
+          // This book already burned its transient-failure budget this session — stop retrying it
+          // (a reboot resets the counter and tries again) so it can't starve the others.
+          if (coverAttemptsExhausted(book.path)) {
+            LOG_DBG("HOME", "Cover attempts exhausted for %s this session — writing placeholder", book.path.c_str());
+            // Already counted to the budget; don't re-count. coverAttemptsExhausted() makes this
+            // a permanent give-up inside giveUpCover(), so a durable placeholder BMP is written.
+            giveUpCover(book, ThumbResult::StructurallyAbsent, slotsForBook(placeholder));
+            allValid = false;
+            break;
+          }
+
           // Cover decode needs ~42 KB contiguous heap — free the frame cache first.
           invalidateFrameCacheSafely();
 
           // Try synchronous decode first (handles JPEG and cached covers).
           CooperativeAbort::clearAborted();
-          const bool ok = ReaderActivity::ensureCoverThumb(book.path, sz.first, sz.second);
+          const ThumbResult res = ReaderActivity::ensureCoverThumb(book.path, sz.first, sz.second);
           LOG_DBG("HOME", "ensureCoverThumb(%dx%d) for %s: %s", sz.first, sz.second, book.path.c_str(),
-                  ok ? "ok" : "FAILED");
-          if (!ok) {
+                  res == ThumbResult::Ok                   ? "ok"
+                  : res == ThumbResult::StructurallyAbsent ? "absent"
+                                                           : "transient");
+          if (res != ThumbResult::Ok) {
             // A decode that genuinely bailed mid-loop for pending input is not a real
             // failure: retry the same size later instead of recording an empty cover.
             // consumeAborted() is true only when a decode row loop broke for input, so a
@@ -341,7 +441,10 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               recentsLoading = false;
               return;
             }
-            if (!pngSessionFailed) {
+            // Structural absence is permanent (generateThumbBmp already wrote a sentinel): don't
+            // waste EPUB opens trying to start a PNG/extract session that can't succeed. Only a
+            // transient failure walks the session ladder.
+            if (res == ThumbResult::TransientFail && !pngSessionFailed) {
               // Try sliced PNG decode (succeeds when cover.img is already cached).
               pngSession = ReaderActivity::beginPngThumbSession(book.path, sz.first, sz.second, pngSessionFiles);
               if (!pngSession) {
@@ -364,10 +467,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
               recentsLoading = false;
               return;
             }
-            // No session available — record empty path and move on.
-            RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
-            book.coverBmpPath = "";
-            LOG_DBG("HOME", "After generate: stored coverBmpPath=<empty>");
+            // No session could be started — give up on this book for now (counts the transient;
+            // writes a durable placeholder once the budget is spent).
+            giveUpCover(book, res, slotsForBook(placeholder));
             allValid = false;
             break;
           }
@@ -386,7 +488,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
 
       LOG_DBG("HOME", "loadRecentCovers[%zu]: coverBmpPath=%s placeholder=%s", nextRecentCoverIndex,
               book.coverBmpPath.c_str(), placeholder.c_str());
-      if (!allValid) continue;  // decode failed — empty path already stored, advance to next book
+      if (!allValid) continue;  // gave up on this book — giveUpCover() already stored empty/placeholder
       // All sizes valid or just completed — store canonical placeholder and yield if a decode happened.
       if (book.coverBmpPath != placeholder) {
         LOG_DBG("HOME", "Self-heal/store: coverBmpPath -> placeholder=%s", placeholder.c_str());
@@ -405,11 +507,10 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     } else {
       // Single-height path (non-carousel themes).
       const std::string path = UITheme::getCoverThumbPath(placeholder, coverHeight);
-      FsFile thumbFile;
-      const bool validThumb = Storage.openFileForRead("HOME", path, thumbFile) && thumbFile.size() > 0;
-      LOG_DBG("HOME", "Cover check [h=%d] path=%s valid=%d size=%u", coverHeight, path.c_str(), validThumb ? 1 : 0,
-              (unsigned)thumbFile.size());
-      thumbFile.close();
+      // Require a complete BMP (all pixel rows present), not just size>0: a thumbnail truncated by
+      // an interrupted write passes size>0 but fails to draw, and would never be regenerated.
+      const bool validThumb = ReaderActivity::isCoverThumbComplete(path);
+      LOG_DBG("HOME", "Cover check [h=%d] path=%s valid=%d", coverHeight, path.c_str(), validThumb ? 1 : 0);
 
       LOG_DBG("HOME", "loadRecentCovers[%zu]: coverBmpPath=%s placeholder=%s anyMissing=%d", nextRecentCoverIndex,
               book.coverBmpPath.c_str(), placeholder.c_str(), validThumb ? 0 : 1);
@@ -422,19 +523,34 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           return;
         }
 
+        // This book already burned its transient-failure budget this session — stop retrying it
+        // (a reboot resets the counter) and advance.
+        if (coverAttemptsExhausted(book.path)) {
+          LOG_DBG("HOME", "Cover attempts exhausted for %s this session — writing placeholder", book.path.c_str());
+          // Already counted to the budget; don't re-count. coverAttemptsExhausted() makes this a
+          // permanent give-up inside giveUpCover(), so a durable placeholder BMP is written.
+          giveUpCover(book, ThumbResult::StructurallyAbsent, slotsForBook(placeholder));
+          nextRecentCoverIndex++;
+          yieldAfterDecode();
+          return;
+        }
+
         // Cover decode needs ~42 KB contiguous heap — free the frame cache first.
         invalidateFrameCacheSafely();
         CooperativeAbort::clearAborted();
-        const bool success = ReaderActivity::ensureCoverThumb(book.path, coverHeight);
-        LOG_DBG("HOME", "ensureCoverThumb(h=%d) for %s: %s", coverHeight, book.path.c_str(), success ? "ok" : "FAILED");
+        const ThumbResult res = ReaderActivity::ensureCoverThumb(book.path, coverHeight);
+        LOG_DBG("HOME", "ensureCoverThumb(h=%d) for %s: %s", coverHeight, book.path.c_str(),
+                res == ThumbResult::Ok                   ? "ok"
+                : res == ThumbResult::StructurallyAbsent ? "absent"
+                                                         : "transient");
         // A decode that genuinely bailed mid-loop for pending input is not a real failure
         // — retry this book later rather than recording an empty cover path.
-        if (!success && CooperativeAbort::consumeAborted()) {
+        if (res != ThumbResult::Ok && CooperativeAbort::consumeAborted()) {
           LOG_DBG("HOME", "Cover decode for %s yielded to input — will retry", book.path.c_str());
           recentsLoading = false;
           return;
         }
-        if (success) {
+        if (res == ThumbResult::Ok) {
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
           book.coverBmpPath = placeholder;
           LOG_DBG("HOME", "After generate: stored coverBmpPath=%s", placeholder.c_str());
@@ -442,25 +558,36 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           return;
         }
 
-        // ensureCoverThumb() decodes an already-extracted cover.img only (allowExtract=false keeps
-        // the multi-second ZIP inflate off the per-tick path), so its first failure for an embedded
-        // cover usually just means cover.img isn't extracted yet. Start the sliced extractor (the
-        // same one the multi-size carousel path uses); the drain at the top of loadRecentCovers
-        // caches cover.img across ticks and the next pass re-runs ensureCoverThumb against it.
-        // beginCoverExtractSession() returns null when cover.img is already cached (so an
-        // undecodable cover can't re-trigger extraction) or there is nothing to extract (no embedded
-        // cover / not an EPUB). In that case the cover is genuinely unavailable: record an empty
-        // path AND advance past this book — without the advance, the missing thumb keeps failing the
-        // validThumb check and the same book is retried every render, forever (the bug this fixes).
-        extractSession = ReaderActivity::beginCoverExtractSession(book.path);
-        if (extractSession) {
-          LOG_DBG("HOME", "Started cover extract session for %s (single-height)", book.path.c_str());
-          recentsLoading = false;
-          return;
+        // Transient failure — walk the same session ladder as the multi-size path (skip it for a
+        // structural absence: nothing to extract, and generateThumbBmp already wrote a sentinel).
+        // (1) Sliced PNG decode: succeeds when cover.img is already cached, and unlike the
+        //     synchronous decoder it has no ~960k-px area cap — it decodes large covers (e.g.
+        //     1200x1848) across ticks. This is why the synchronous ensureCoverThumb "too large"
+        //     rejection is only transient: the sliced path below can still produce the thumb.
+        // (2) Sliced ZIP extract: when cover.img isn't cached yet, extract it across ticks; the
+        //     drain at the top of loadRecentCovers re-runs this ladder once it lands.
+        if (res == ThumbResult::TransientFail) {
+          if (!pngSessionFailed) {
+            pngSession = ReaderActivity::beginPngThumbSession(book.path, coverHeight, pngSessionFiles);
+            if (pngSession) {
+              LOG_DBG("HOME", "Started PNG session for %s (single-height, %u rows)", book.path.c_str(),
+                      pngSession->totalRows());
+              recentsLoading = false;
+              return;
+            }
+            extractSession = ReaderActivity::beginCoverExtractSession(book.path);
+            if (extractSession) {
+              LOG_DBG("HOME", "Started cover extract session for %s (single-height)", book.path.c_str());
+              recentsLoading = false;
+              return;
+            }
+          }
+          pngSessionFailed = false;  // consumed
         }
-        RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
-        book.coverBmpPath = "";
-        LOG_DBG("HOME", "No extractable cover for %s; storing empty and advancing", book.path.c_str());
+        // No session could be started — give up on this book for now (counts the transient;
+        // writes a durable placeholder once the budget is spent).
+        giveUpCover(book, res, slotsForBook(placeholder));
+        LOG_DBG("HOME", "No cover for %s; advancing", book.path.c_str());
         nextRecentCoverIndex++;
         yieldAfterDecode();
         return;
@@ -497,12 +624,12 @@ void HomeActivity::restoreSecondaryBuffer(bool callerHoldsRenderLock) {
       // Two-buffer differential is available again — turn off the single-buffer
       // RED-RAM-baseline mode so normal fast refresh resumes against the secondary.
       renderer.setSingleBufferFastDiff(false);
-      // reallocSecondaryBuffer() fills the new secondary with WHITE. Reseed RED RAM from
-      // the last displayed frame so the next fast differential has the correct baseline.
-      // No-op on X3: its differential lives in the controller, not the secondary buffer.
-      if (!renderer.isX3()) {
-        renderer.syncRedRamFromFrameBuffer();
-      }
+      // Do NOT syncRedRamFromFrameBuffer() here: reallocSecondaryBuffer() fills the new secondary
+      // with WHITE, and syncRedRamFromFrameBuffer() copies that white buffer into RED RAM —
+      // overwriting the correct baseline. RED already holds the home frame (synced before the
+      // release; the controller retains it through release/realloc, which don't touch RED). The
+      // white reseed made the next FAST refresh (e.g. Home->Settings) diff against white, ghosting
+      // the home screen through. Leave RED intact.
       LOG_DBG("HOME", "Restored secondary framebuffer after cover loading (free=%lu)",
               static_cast<unsigned long>(esp_get_free_heap_size()));
     }
@@ -530,6 +657,7 @@ void HomeActivity::onEnter() {
   pngSession.reset();
   pngSessionFiles.close();
   pngSessionFailed = false;
+  coverTransientAttempts.clear();
   coverRendered = false;
   secondaryBufferReleased = false;
   freeCoverBuffer();
@@ -787,6 +915,11 @@ void HomeActivity::render(RenderLock&&) {
 }
 
 void HomeActivity::onSelectBook(const std::string& path) {
+  // Arm a clean HALF baseline for the reader's first page. It diffs against whatever RED RAM holds
+  // — this home frame — and a FAST diff of a dramatic home->page change leaves the home screen
+  // ghosting through. The reader's onEnter expects the launching activity to arm this (FileBrowser
+  // does via enforceExitFullRefresh; Home didn't, so books opened from Home ghosted on entry).
+  renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
   ReturnHint hint;
   hint.target = ReturnTo::Home;
   hint.selectName = path;  // used to re-focus the book in the recents strip after return
