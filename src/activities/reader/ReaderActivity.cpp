@@ -423,18 +423,22 @@ ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int he
   return ThumbResult::TransientFail;
 }
 
-std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int width,
-                                                                       int height, PngThumbFiles& filesOut) {
-  const std::string dir = bookCacheDir(bookPath);
-  const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
+namespace {
+// Shared core: start a sliced PNG decode into an explicitly-named thumb file. The two public
+// overloads differ only in that name ("thumb_<W>x<H>.bmp" vs "thumb_<H>.bmp"), so they both
+// funnel through here to avoid duplicating the sidecar/cover.img source selection and setup.
+std::unique_ptr<PngDecodeSession> beginPngThumbSessionImpl(const std::string& bookPath, int width, int height,
+                                                           const std::string& name,
+                                                           ReaderActivity::PngThumbFiles& filesOut) {
+  const std::string dir = ReaderActivity::bookCacheDir(bookPath);
   const std::string bmpPath = dir + "/" + name;
 
   // Already cached (valid) — caller should have checked, but be safe.
-  if (thumbFileValid(bmpPath)) return nullptr;
+  if (ReaderActivity::isCoverThumbComplete(bmpPath)) return nullptr;
 
   // Sidecar PNG takes priority over embedded cover.
   std::string srcPath;
-  const std::string sidecar = sidecarCoverPath(bookPath);
+  const std::string sidecar = ReaderActivity::sidecarCoverPath(bookPath);
   bool isSidecar = false;
   if (!sidecar.empty() && FsHelpers::hasPngExtension(sidecar)) {
     srcPath = sidecar;
@@ -489,6 +493,20 @@ std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std
   LOG_DBG("PNG", "beginPngThumbSession: started sliced decode for %s -> %s (%dx%d)", srcPath.c_str(), bmpPath.c_str(),
           width, height);
   return session;
+}
+}  // namespace
+
+std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int width,
+                                                                       int height, PngThumbFiles& filesOut) {
+  const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
+  return beginPngThumbSessionImpl(bookPath, width, height, name, filesOut);
+}
+
+std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int height,
+                                                                       PngThumbFiles& filesOut) {
+  // Single-height thumbs scale to height*0.6 wide (mirrors the synchronous single-height decode).
+  const std::string name = "thumb_" + std::to_string(height) + ".bmp";
+  return beginPngThumbSessionImpl(bookPath, height * 6 / 10, height, name, filesOut);
 }
 
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {

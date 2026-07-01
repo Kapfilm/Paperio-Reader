@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -94,9 +95,19 @@ class HomeActivity final : public Activity {
   void restoreSecondaryBuffer(bool callerHoldsRenderLock = false);
   void loadRecentBooks(int maxBooks);
   void loadRecentCovers(int coverHeight);
-  // Give up on a book's cover for now: store an empty cover path and, for a transient failure,
-  // bump the session retry counter. Shared by the single-height and multi-size cover paths.
-  void giveUpCover(RecentBook& book, ThumbResult res);
+  // One thumbnail slot to placeholder on a permanent give-up: the exact on-disk path the cover
+  // loader checks, plus the (w,h) the placeholder BMP should be written at.
+  struct ThumbSlot {
+    std::string path;
+    int width;
+    int height;
+  };
+  // Give up on a book's cover for this pass. Bumps the session retry counter for a transient
+  // failure. When the failure is permanent — structurally absent, or transient but past the
+  // session retry budget — writes a valid placeholder BMP at each slot (like RecentBooksActivity)
+  // so the book reads as resolved on disk and is not re-decoded on the next boot; otherwise just
+  // records an empty cover so it retries next session. Shared by both cover paths.
+  void giveUpCover(RecentBook& book, ThumbResult res, const std::vector<ThumbSlot>& slots);
   // True once a book has burned COVER_MAX_TRANSIENT_ATTEMPTS transient failures this session.
   bool coverAttemptsExhausted(const std::string& path) const;
 

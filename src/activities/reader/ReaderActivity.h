@@ -104,12 +104,17 @@ class ReaderActivity final : public Activity {
     }
   };
 
-  // Start a sliced PNG decode for bookPath at the given thumb dimensions.
-  // Returns nullptr if the cover is not a PNG, is already cached, or setup fails.
-  // On success, *filesOut owns the open FsFiles; caller must keep them alive until
-  // the session completes and then close them.
+  // Start a sliced PNG decode for bookPath at the given thumb dimensions. Writes the
+  // "thumb_<W>x<H>.bmp" (multi-size) form. Returns nullptr if the cover is not a PNG, is already
+  // cached, or setup fails. On success, *filesOut owns the open FsFiles; caller must keep them
+  // alive until the session completes and then close them.
   // On failure (nullptr return), the thumb file is left as a 0-byte sentinel.
   static std::unique_ptr<PngDecodeSession> beginPngThumbSession(const std::string& bookPath, int width, int height,
+                                                                PngThumbFiles& filesOut);
+
+  // Single-height variant: writes the "thumb_<H>.bmp" form used by the non-carousel themes, at
+  // width = H*0.6 (matching the synchronous single-height decode). Same contract as above.
+  static std::unique_ptr<PngDecodeSession> beginPngThumbSession(const std::string& bookPath, int height,
                                                                 PngThumbFiles& filesOut);
 
   // Render a sidecar image (or copy a sidecar BMP) into a scaled 1-bit BMP at

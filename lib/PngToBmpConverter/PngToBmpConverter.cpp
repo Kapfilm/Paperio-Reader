@@ -410,7 +410,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
 // PngDecodeSession — sliced 1-bit PNG decode for use in loop()-driven contexts
 // ============================================================================
 
-bool PngDecodeSession::begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, int targetHeight) {
+bool PngDecodeSession::begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, int targetHeight, bool crop) {
   bmpOut_ = &bmpFile;
 
   PngStreamDecoder::Info info;
@@ -421,7 +421,10 @@ bool PngDecodeSession::begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, 
   width_ = info.width;
   height_ = info.height;
 
-  // Output dimensions (fit, no crop — same as pngFileTo1BitBmpStreamWithSize)
+  // Output dimensions — same policy as pngFileTo1BitBmpStreamWithSize. crop=true scales to the
+  // LARGER fit factor (fill), so the binding dimension lands exactly on the target and the caller
+  // draws the thumb 1:1 (no fractional rescale of a 1-bit dithered image → no moiré). crop=false
+  // scales to the SMALLER factor (fit inside).
   outWidth_ = static_cast<int>(width_);
   outHeight_ = static_cast<int>(height_);
   scaleX_fp_ = 65536;
@@ -431,7 +434,7 @@ bool PngDecodeSession::begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, 
   if (targetWidth > 0 && targetHeight > 0 && (outWidth_ != targetWidth || outHeight_ != targetHeight)) {
     const float sw = static_cast<float>(targetWidth) / width_;
     const float sh = static_cast<float>(targetHeight) / height_;
-    const float scale = (sw < sh) ? sw : sh;
+    const float scale = crop ? ((sw > sh) ? sw : sh) : ((sw < sh) ? sw : sh);
     outWidth_ = static_cast<int>(width_ * scale);
     outHeight_ = static_cast<int>(height_ * scale);
     if (outWidth_ < 1) outWidth_ = 1;

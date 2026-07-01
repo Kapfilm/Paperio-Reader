@@ -30,9 +30,13 @@ class PngDecodeSession {
 
   // Open pngFile and bmpFile (already opened for read/write respectively),
   // parse the PNG header, write the BMP header, allocate buffers.
-  // targetWidth/targetHeight: desired output size (fit, not crop).
+  // targetWidth/targetHeight: desired output size. crop=true fills the target (scale to the
+  // LARGER fit factor, overflow kept) so the binding dimension matches the target exactly —
+  // this mirrors the synchronous pngFileTo1BitBmpStreamWithSize (crop=true) so cover thumbnails
+  // are drawn 1:1 with no rescale (a fractional rescale of an already-dithered 1-bit image
+  // produces a moiré grid). crop=false fits inside the target (scale to the SMALLER factor).
   // Returns false on any setup failure; the session must not be used after a false return.
-  bool begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, int targetHeight);
+  bool begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, int targetHeight, bool crop = true);
 
   // Decode up to maxSourceRows scanlines and write the corresponding BMP rows.
   // Returns Running if more rows remain, Done when the image is complete, Error on failure.
