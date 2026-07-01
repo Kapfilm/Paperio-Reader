@@ -89,6 +89,9 @@ class Epub {
   std::string getThumbBmpPath() const;
   std::string getThumbBmpPath(int height) const;
   std::string getThumbBmpPath(int width, int height) const;
+  // Write the 0-byte "structurally absent" sentinel at a thumb path (see ThumbResult): the book
+  // has no usable cover, so generateThumbBmp() stops retrying. Best-effort; ignores write errors.
+  static void writeThumbSentinel(const std::string& thumbPath);
   // allowExtract=true: synchronously inflate the embedded cover.img from the ZIP if it
   // isn't cached yet (can stall for seconds on a large cover — fine for one-off callers
   // like the book-info / finished-book screens). allowExtract=false: decode ONLY an

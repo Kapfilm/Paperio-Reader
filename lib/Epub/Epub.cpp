@@ -1029,6 +1029,12 @@ std::string Epub::getThumbBmpPath(int width, int height) const {
   return cachePath + "/thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
 }
 
+void Epub::writeThumbSentinel(const std::string& thumbPath) {
+  FsFile thumbBmp;
+  Storage.openFileForWrite("EBP", thumbPath, thumbBmp);
+  thumbBmp.close();
+}
+
 ThumbResult Epub::generateThumbBmp(int height, bool allowExtract) const {
   {
     FsFile existing;
@@ -1051,9 +1057,7 @@ ThumbResult Epub::generateThumbBmp(int height, bool allowExtract) const {
   // since no amount of extraction or retry can conjure a cover that the OPF doesn't declare.
   if (getCoverItemHref().empty()) {
     LOG_DBG("EBP", "No cover item for h=%d — writing structural sentinel", height);
-    FsFile thumbBmp;
-    Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp);
-    thumbBmp.close();
+    writeThumbSentinel(getThumbBmpPath(height));
     return ThumbResult::StructurallyAbsent;
   }
 
@@ -1073,9 +1077,7 @@ ThumbResult Epub::generateThumbBmp(int height, bool allowExtract) const {
     // bytes. Sentinel so we stop trying.
     LOG_ERR("EBP", "Cached cover image is not a supported format — writing structural sentinel");
     coverImage.close();
-    FsFile thumbBmp;
-    Storage.openFileForWrite("EBP", getThumbBmpPath(height), thumbBmp);
-    thumbBmp.close();
+    writeThumbSentinel(getThumbBmpPath(height));
     return ThumbResult::StructurallyAbsent;
   }
 
@@ -1131,9 +1133,7 @@ ThumbResult Epub::generateThumbBmp(int width, int height, bool allowExtract) con
   // since no amount of extraction or retry can conjure a cover that the OPF doesn't declare.
   if (getCoverItemHref().empty()) {
     LOG_DBG("EBP", "No cover item for %dx%d — writing structural sentinel", width, height);
-    FsFile thumbBmp;
-    Storage.openFileForWrite("EBP", getThumbBmpPath(width, height), thumbBmp);
-    thumbBmp.close();
+    writeThumbSentinel(getThumbBmpPath(width, height));
     return ThumbResult::StructurallyAbsent;
   }
 
@@ -1153,9 +1153,7 @@ ThumbResult Epub::generateThumbBmp(int width, int height, bool allowExtract) con
     // bytes. Sentinel so we stop trying.
     LOG_ERR("EBP", "Cached cover image is not a supported format — writing structural sentinel");
     coverImage.close();
-    FsFile thumbBmp;
-    Storage.openFileForWrite("EBP", getThumbBmpPath(width, height), thumbBmp);
-    thumbBmp.close();
+    writeThumbSentinel(getThumbBmpPath(width, height));
     return ThumbResult::StructurallyAbsent;
   }
 
