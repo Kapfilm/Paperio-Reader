@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -249,9 +250,9 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     std::vector<ThumbSlot> slots;
     if (!thumbSizes.empty()) {
       slots.reserve(thumbSizes.size());
-      for (const auto& sz : thumbSizes) {
-        slots.push_back({UITheme::getCoverThumbPath(placeholder, sz.first, sz.second), sz.first, sz.second});
-      }
+      std::transform(thumbSizes.begin(), thumbSizes.end(), std::back_inserter(slots), [&](const auto& sz) {
+        return ThumbSlot{UITheme::getCoverThumbPath(placeholder, sz.first, sz.second), sz.first, sz.second};
+      });
     } else {
       slots.push_back({UITheme::getCoverThumbPath(placeholder, coverHeight), coverHeight * 6 / 10, coverHeight});
     }
