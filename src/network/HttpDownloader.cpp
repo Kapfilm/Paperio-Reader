@@ -13,14 +13,30 @@
 #include <string>
 #include <utility>
 
+#if defined(FREEINK_NET_WOLFSSL)
+#include <CrossPointRoots.h>
+#include <SecureHttpClient.h>
+#endif
+
+// Route HTTPS through the wolfSSL-backed SecureNet stack when built with
+// -DFREEINK_NET_WOLFSSL. Plain http still uses the SecureNet WiFiClient
+// passthrough. Set HTTPDOWNLOADER_FORCE_MBEDTLS=1 to keep the legacy
+// esp_http_client path (for A/B heap comparison during the migration).
+#if defined(FREEINK_NET_WOLFSSL) && !defined(HTTPDOWNLOADER_FORCE_MBEDTLS)
+#define HTTPDOWNLOADER_USE_SECURENET 1
+#endif
+
+#if !defined(HTTPDOWNLOADER_USE_SECURENET)
 // OtaUpdater workaround: the Arduino framework ships a stub esp_crt_bundle.h
 // inside WiFiClientSecure that hides the real ESP-IDF symbol. Forward-declare
 // the IDF entry point instead of including the header — see OtaUpdater.cpp.
 extern "C" {
 extern esp_err_t esp_crt_bundle_attach(void* conf);
 }
+#endif
 
 namespace {
+#if !defined(HTTPDOWNLOADER_USE_SECURENET)
 // ISRG Root X1 — Let's Encrypt's root CA. Pinned here because the Espressif
 // crt_bundle's Subject-DN lookup can pick the wrong "ISRG Root X1" entry on
 // cross-signed bundles and fail signature verification ("PK verify failed
@@ -84,6 +100,7 @@ constexpr const char SECTIGO_GITHUB_DV_E36_PEM[] =
     "zzuqQhFkoJ2UOQIReVx7Hfpkue4WQrO/isIJxOzksU0CMQDpKmFHjFJKS04YcPbW\n"
     "RNZu9YO6bVi9JNlWSOrvxKJGgYhqOkbRqZtNyWHa0V1Xahg=\n"
     "-----END CERTIFICATE-----\n";
+#endif  // !HTTPDOWNLOADER_USE_SECURENET
 
 std::string extractHostFromUrl(const std::string& url) {
   size_t schemeEnd = url.find("://");
@@ -102,15 +119,35 @@ std::string extractHostFromUrl(const std::string& url) {
 // runGet() is called, so this is essentially free. Subsequent calls reuse
 // whatever the first attempt produced.
 constexpr time_t MIN_PLAUSIBLE_EPOCH = 1735689600;  // 2025-01-01 00:00:00 UTC
+// Upper bound: a clock far in the future also fails cert notAfter checks. Our
+// curated roots' latest notAfter is 2038; cap at 2037 so a wildly-wrong future
+// clock still triggers SNTP rather than silently breaking verification.
+constexpr time_t MAX_PLAUSIBLE_EPOCH = 2114380800;  // 2037-01-01 00:00:00 UTC
+bool clockPlausibleForTls() {
+  const time_t now = time(nullptr);
+  return now >= MIN_PLAUSIBLE_EPOCH && now < MAX_PLAUSIBLE_EPOCH;
+}
+
 bool ensureClockForTls() {
   static bool attempted = false;
-  if (attempted) return time(nullptr) >= MIN_PLAUSIBLE_EPOCH;
+  if (attempted) return clockPlausibleForTls();
   attempted = true;
 
-  if (HalClock::now() >= MIN_PLAUSIBLE_EPOCH && !HalClock::isApproximate()) {
+  // A plausible epoch is sufficient for TLS cert-date validation even if
+  // HalClock flags it "approximate" (restored from NVS on this RTC-less C3):
+  // wolfSSL's notBefore/notAfter check passes for any time within the certs'
+  // validity window, so an approximate-but-in-range clock verifies fine. This
+  // avoids a 5 s SNTP round-trip (and its intermittent timeouts) on every cold
+  // start when NVS already holds a good-enough time. Only sync when the clock
+  // is genuinely unset or out of the plausible range.
+  if (clockPlausibleForTls()) {
+    if (HalClock::isApproximate()) {
+      LOG_INF("HTTP", "Clock approximate but plausible (epoch %ld); skipping SNTP for TLS",
+              static_cast<long>(time(nullptr)));
+    }
     return true;
   }
-  LOG_INF("HTTP", "Clock looks unset/stale (epoch %ld); running SNTP before TLS", static_cast<long>(time(nullptr)));
+  LOG_INF("HTTP", "Clock unset/implausible (epoch %ld); running SNTP before TLS", static_cast<long>(time(nullptr)));
   char err[64] = {0};
   if (!HalClock::syncNtp(err, sizeof(err))) {
     LOG_ERR("HTTP", "SNTP sync failed: %s — TLS verification may fail until clock is set", err);
@@ -130,6 +167,7 @@ bool forceSyncClockForTls() {
   return true;
 }
 
+#if !defined(HTTPDOWNLOADER_USE_SECURENET)
 // True if the URL's host is a *.githubusercontent.com host that's served by
 // Let's Encrypt — needs the ISRG pin to dodge the crt_bundle Subject-collision
 // bug. Adjust if more hosts hit the same issue.
@@ -151,6 +189,7 @@ bool needsGithubComPin(const std::string& url) {
   const size_t suffixLen = strlen(kSuffix);
   return host.size() >= suffixLen && host.compare(host.size() - suffixLen, suffixLen, kSuffix) == 0;
 }
+#endif  // !HTTPDOWNLOADER_USE_SECURENET
 
 // RX holds the response headers. 4096 fits real OPDS servers; GitHub's release
 // CDN sends more and logs HTTP_HEADER "Buffer length is small", but that's
@@ -158,17 +197,20 @@ bool needsGithubComPin(const std::string& url) {
 // survive. Smaller keeps contiguous heap free while WiFi and TLS are up. TX
 // only carries our GET; the body streams in READ_CHUNK pieces. Matches
 // upstream PR #2075 (port of OtaUpdater's PR #2074 sizing).
+// Per-socket-op timeout. 60s gives slow servers room to send their first
+// headers. Shared by both TLS backends. READ_CHUNK is the Sink's default read
+// size (also shared, though the SecureNet path uses SecureHttpClient's own).
+constexpr int HTTP_TIMEOUT_MS = 60000;
+constexpr size_t READ_CHUNK = 2048;
+#if !defined(HTTPDOWNLOADER_USE_SECURENET)
+// esp_http_client buffer/timeout/chunk sizing (mbedtls path only).
 constexpr int HTTP_RX_BUF = 4096;
 constexpr int HTTP_TX_BUF = 1024;
 constexpr int HTTP_RX_BUF_LEAN = 2048;
 constexpr int HTTP_TX_BUF_LEAN = 512;
-// Per-socket-op timeout. esp_http_client's timeout_ms is uint32, so unlike
-// Arduino HTTPClient's uint16 setTimeout it doesn't silently truncate. 60s
-// gives slow servers room to send their first headers.
-constexpr int HTTP_TIMEOUT_MS = 60000;
 constexpr int HTTP_TIMEOUT_MS_LEAN = 15000;
-constexpr size_t READ_CHUNK = 2048;
 constexpr size_t READ_CHUNK_LEAN = 1024;
+#endif
 
 struct Sink {
   // Returns false to abort the transfer (e.g. SD write failure or user cancel).
@@ -183,6 +225,7 @@ bool isRedirect(int status) {
   return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
+#if !defined(HTTPDOWNLOADER_USE_SECURENET)
 // Builds the esp_http_client_config_t for a given URL, picking the appropriate
 // TLS root strategy by host: pinned ISRG (Let's Encrypt hosts), pinned GitHub
 // root (github.com/api.github.com — avoids the heap-heavy CA bundle), or the
@@ -329,9 +372,11 @@ HttpDownloader::DownloadError performGet(esp_http_client_handle_t client, Sink& 
   return HttpDownloader::OK;
 }
 
+#endif  // !HTTPDOWNLOADER_USE_SECURENET
+
 // Runs once per http call (or once per session for reused sessions): logs
 // heap stats and ensures the wall clock is set so TLS cert-date validation
-// can succeed.
+// can succeed. Shared by both TLS backends.
 void logPreCallContext(const std::string& url) {
   LOG_DBG("HTTP", "Heap free: %u, largest block: %u", esp_get_free_heap_size(),
           heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
@@ -340,6 +385,7 @@ void logPreCallContext(const std::string& url) {
   }
 }
 
+#if !defined(HTTPDOWNLOADER_USE_SECURENET)
 // Streams a GET body through sink.write in READ_CHUNK pieces. One-shot client:
 // creates a fresh esp_http_client per call. See HttpDownloader::Session for
 // the reusable variant that keeps the TLS handshake alive across files.
@@ -426,11 +472,95 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
 
   return result;
 }
+#endif  // !HTTPDOWNLOADER_USE_SECURENET
+
+#if defined(HTTPDOWNLOADER_USE_SECURENET)
+// SecureNet (wolfSSL) implementation of a one-shot streaming GET. Mirrors
+// runGet()'s Sink contract and emits the same "Phase open_ok"/"Phase complete"
+// heap telemetry so on-device numbers are directly comparable to the mbedtls
+// path. TLS verification uses the curated CrossPoint roots; verified-first with
+// insecure fallback (except where the caller disables it).
+HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
+                                           const std::string& password, Sink& sink, bool allowInsecureFallback) {
+  logPreCallContext(url);
+  const unsigned long startMs = millis();
+  LOG_DBG("HTTP", "Phase start @%lums heap=%u largest=%u", millis() - startMs, esp_get_free_heap_size(),
+          heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+
+  crosspoint::SecureHttpClient http;
+  http.setCACert(CROSSPOINT_ROOTS_PEM);
+  http.setAllowInsecureFallback(allowInsecureFallback);
+  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setUserAgent("WitchReader-ESP32-" CROSSPOINT_VERSION);
+  if (!username.empty() && !password.empty()) {
+    http.setBasicAuth(username, password);
+  }
+
+  bool openLogged = false;
+  auto bodySink = [&](const uint8_t* data, size_t len) -> bool {
+    if (!openLogged) {
+      openLogged = true;
+      LOG_DBG("HTTP", "Phase open_ok @%lums heap=%u largest=%u", millis() - startMs, esp_get_free_heap_size(),
+              heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
+    }
+    if (!sink.write(data, len)) return false;  // abort
+    sink.downloaded += len;
+    if (sink.progress && sink.total > 0) {
+      if (!sink.progress(sink.downloaded, sink.total)) return false;
+    }
+    return true;
+  };
+  auto progress = [&](size_t downloaded, size_t total) -> bool {
+    sink.total = total;
+    return true;
+  };
+
+  const int rc = http.get(url, bodySink, progress);
+  // Log the handshake heap trough on EVERY path (incl. early abort via
+  // treatAbortAsSuccess) so the TLS-specific low-water is always captured,
+  // distinct from the all-time ESP.getMinFreeHeap() figure.
+  LOG_DBG("HTTP", "Phase done @%lums rc=%d downloaded=%zu (insecure=%d) handshakeMinFree=%u handshakeMinLargest=%u",
+          millis() - startMs, rc, sink.downloaded, static_cast<int>(http.lastConnectionWasInsecure()),
+          static_cast<unsigned>(http.lastHandshakeMinFree()), static_cast<unsigned>(http.lastHandshakeMinLargest()));
+  if (rc == crosspoint::SecureHttpClient::ERR_ABORTED) {
+    return HttpDownloader::ABORTED;
+  }
+  if (rc < 0) {
+    LOG_ERR("HTTP", "SecureNet GET failed: rc=%d url=%s", rc, url.c_str());
+    return HttpDownloader::HTTP_ERROR;
+  }
+  if (rc != 200) {
+    LOG_ERR("HTTP", "SecureNet unexpected status: %d", rc);
+    return HttpDownloader::HTTP_ERROR;
+  }
+  return HttpDownloader::OK;
+}
+#endif  // HTTPDOWNLOADER_USE_SECURENET
+
+// Dispatch: SecureNet when built with wolfSSL, else the legacy esp_http_client
+// path. Keeps every fetchUrl/downloadToFile overload backend-agnostic.
+HttpDownloader::DownloadError runGetDispatch(const std::string& url, const std::string& username,
+                                             const std::string& password, Sink& sink,
+                                             bool allowInsecureFallback = true) {
+#if defined(HTTPDOWNLOADER_USE_SECURENET)
+  return runGetSecure(url, username, password, sink, allowInsecureFallback);
+#else
+  (void)allowInsecureFallback;
+  return runGet(url, username, password, sink);
+#endif
+}
 }  // namespace
 
 // ---- Session implementation ----
 
 struct HttpDownloader::Session::Impl {
+#if defined(HTTPDOWNLOADER_USE_SECURENET)
+  // SecureNet keeps its own keep-alive connection alive internally (reuses the
+  // open SecureClient when host/port match), so the Session just owns one
+  // persistent SecureHttpClient across downloadToFile(session, ...) calls.
+  std::unique_ptr<crosspoint::SecureHttpClient> http;
+  bool preCallLogged = false;
+#else
   esp_http_client_handle_t client = nullptr;
   std::string host;  // scheme+authority of the first request; used to detect cross-host reuse
 
@@ -439,12 +569,14 @@ struct HttpDownloader::Session::Impl {
       esp_http_client_cleanup(client);
     }
   }
+#endif
 };
 
 HttpDownloader::Session::Session() : impl_(std::make_unique<Impl>()) {}
 HttpDownloader::Session::~Session() = default;
 
 namespace {
+#if !defined(HTTPDOWNLOADER_USE_SECURENET)
 // Extract "scheme://host[:port]" from a URL — used to detect when a Session
 // is asked to reuse across hosts (esp_http_client supports it via set_url but
 // it tears down and reopens the TLS connection, losing the heap win).
@@ -468,9 +600,58 @@ bool initSessionClient(HttpDownloader::Session::Impl* impl, const std::string& u
   impl->host = schemeAuthority(url);
   return true;
 }
+#endif  // !HTTPDOWNLOADER_USE_SECURENET
+
+#if defined(HTTPDOWNLOADER_USE_SECURENET)
+// SecureNet session GET: reuse one persistent SecureHttpClient. Its internal
+// keep-alive reuses the open TLS connection when the host/port match, so
+// back-to-back files on the same host share a single handshake (the Session
+// heap win). Cross-host requests transparently reopen inside SecureHttpClient.
+HttpDownloader::DownloadError runGetSecureOnSession(HttpDownloader::Session& session, const std::string& url,
+                                                    const std::string& username, const std::string& password,
+                                                    Sink& sink, bool allowInsecureFallback) {
+  auto* impl = session.impl();
+  if (!impl->http) {
+    logPreCallContext(url);
+    impl->http = std::make_unique<crosspoint::SecureHttpClient>();
+    impl->http->setCACert(CROSSPOINT_ROOTS_PEM);
+    impl->http->setTimeout(HTTP_TIMEOUT_MS);
+    impl->http->setUserAgent("WitchReader-ESP32-" CROSSPOINT_VERSION);
+  }
+  impl->http->setAllowInsecureFallback(allowInsecureFallback);
+  impl->http->clearHeaders();
+  if (!username.empty() && !password.empty()) {
+    impl->http->setBasicAuth(username, password);
+  }
+
+  auto bodySink = [&](const uint8_t* data, size_t len) -> bool {
+    if (!sink.write(data, len)) return false;
+    sink.downloaded += len;
+    if (sink.progress && sink.total > 0) {
+      if (!sink.progress(sink.downloaded, sink.total)) return false;
+    }
+    return true;
+  };
+  auto progress = [&](size_t, size_t total) -> bool {
+    sink.total = total;
+    return true;
+  };
+
+  const int rc = impl->http->get(url, bodySink, progress);
+  if (rc == crosspoint::SecureHttpClient::ERR_ABORTED) return HttpDownloader::ABORTED;
+  if (rc < 0 || rc != 200) {
+    LOG_ERR("HTTP", "SecureNet session GET failed: rc=%d url=%s", rc, url.c_str());
+    return HttpDownloader::HTTP_ERROR;
+  }
+  return HttpDownloader::OK;
+}
+#endif  // HTTPDOWNLOADER_USE_SECURENET
 
 HttpDownloader::DownloadError runGetOnSession(HttpDownloader::Session& session, const std::string& url,
                                               const std::string& username, const std::string& password, Sink& sink) {
+#if defined(HTTPDOWNLOADER_USE_SECURENET)
+  return runGetSecureOnSession(session, url, username, password, sink, /*allowInsecureFallback=*/true);
+#else
   auto* impl = session.impl();
 
   if (impl->client == nullptr) {
@@ -509,6 +690,7 @@ HttpDownloader::DownloadError runGetOnSession(HttpDownloader::Session& session, 
     result = performGet(impl->client, sink);
   }
   return result;
+#endif
 }
 }  // namespace
 
@@ -517,7 +699,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, Stream& outContent, const 
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
   Sink sink;
   sink.write = [&outContent](const uint8_t* data, size_t len) { return outContent.write(data, len) == len; };
-  return runGet(url, username, password, sink) == OK;
+  return runGetDispatch(url, username, password, sink) == OK;
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username,
@@ -534,7 +716,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
   }
   Sink sink;
   sink.write = [&onData](const uint8_t* data, size_t len) { return onData(data, len); };
-  const DownloadError result = runGet(url, username, password, sink);
+  const DownloadError result = runGetDispatch(url, username, password, sink);
   if (result == OK) {
     return true;
   }
@@ -552,7 +734,7 @@ bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, c
     outContent.append(reinterpret_cast<const char*>(data), len);
     return true;
   };
-  return runGet(url, username, password, sink) == OK;
+  return runGetDispatch(url, username, password, sink) == OK;
 }
 
 namespace {
@@ -596,7 +778,7 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   sink.progress = std::move(progress);
   sink.write = [&file](const uint8_t* data, size_t len) { return file.write(data, len) == len; };
 
-  const DownloadError result = runGet(url, username, password, sink);
+  const DownloadError result = runGetDispatch(url, username, password, sink);
   return finishFileDownload(result, destPath, file, sink.downloaded);
 }
 

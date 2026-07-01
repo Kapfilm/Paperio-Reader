@@ -48,6 +48,13 @@ class OtaUpdater {
 
   bool isUpdateInProgress() const { return otaHandle != nullptr; }
 
+  // Called periodically during the streaming install with (processed, total)
+  // so the host can redraw progress and poll for cancel. Return false to abort
+  // the install (e.g. Back pressed). Optional; if unset, the install runs to
+  // completion without per-chunk UI updates.
+  using InstallProgressFn = std::function<bool(size_t processed, size_t total)>;
+  void setInstallProgressCallback(InstallProgressFn cb) { installProgressCb = std::move(cb); }
+
   OtaUpdater() = default;
   bool isUpdateNewer() const;
   const std::string& getLatestVersion() const;
@@ -59,4 +66,10 @@ class OtaUpdater {
 
  private:
   static int forceSetOtaBootPartition();
+  InstallProgressFn installProgressCb;
+  // Opaque esp_ota handle for the streaming install (void* avoids including
+  // esp_ota_ops.h in the header). Set by beginInstallUpdate, consumed by the step.
+  void* otaWriteHandle = nullptr;
+  bool installDone = false;
+  OtaUpdaterError installResult = OK;
 };

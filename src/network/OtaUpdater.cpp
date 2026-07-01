@@ -236,39 +236,30 @@ OtaUpdater::OtaUpdaterError OtaUpdater::beginInstallUpdate() {
   cleanupUpdate();
   render = false;
   cancelRequested = false;
+  installDone = false;
+  installResult = OK;
+  processedSize = 0;
 
-  esp_http_client_config_t client_config = {
-      .url = otaUrl.c_str(),
-      .timeout_ms = 10000,
-      .max_redirection_count = 5,
-      .buffer_size = 8192,
-      .buffer_size_tx = 8192,
-      .crt_bundle_attach = esp_crt_bundle_attach,
-      .keep_alive_enable = true,
-  };
-
-  esp_https_ota_config_t ota_config = {
-      .http_config = &client_config,
-      .http_client_init_cb = http_client_set_header_cb,
-  };
-
-  for (int attempt = 1; attempt <= otaHttpMaxAttempts; ++attempt) {
-    /* For better timing and connectivity, we disable power saving for WiFi */
-    esp_wifi_set_ps(WIFI_PS_NONE);
-
-    esp_err_t esp_err = esp_https_ota_begin(&ota_config, &otaHandle);
-    if (esp_err == ESP_OK) {
-      return UPDATE_IN_PROGRESS;
-    }
-
-    LOG_ERR("OTA", "HTTP OTA Begin Failed on attempt %d/%d: %s", attempt, otaHttpMaxAttempts, esp_err_to_name(esp_err));
-    cleanupUpdate();
-    if (attempt < otaHttpMaxAttempts) {
-      delayBeforeRetry("Firmware OTA connection", attempt);
-    }
+  // Open the next OTA partition for streaming writes. The actual firmware
+  // download runs in performInstallUpdateStep() via the wolfSSL HttpDownloader,
+  // so no mbedtls esp_https_ota is involved.
+  const esp_partition_t* updatePartition = esp_ota_get_next_update_partition(nullptr);
+  if (updatePartition == nullptr) {
+    LOG_ERR("OTA", "no next OTA partition");
+    return INTERNAL_UPDATE_ERROR;
   }
 
-  return INTERNAL_UPDATE_ERROR;
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  esp_ota_handle_t handle = 0;
+  const esp_err_t err = esp_ota_begin(updatePartition, OTA_SIZE_UNKNOWN, &handle);
+  if (err != ESP_OK) {
+    LOG_ERR("OTA", "esp_ota_begin failed: %s", esp_err_to_name(err));
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    return INTERNAL_UPDATE_ERROR;
+  }
+  otaWriteHandle = reinterpret_cast<void*>(handle);
+  LOG_INF("OTA", "esp_ota_begin OK on %s; streaming from %s", updatePartition->label, otaUrl.c_str());
+  return UPDATE_IN_PROGRESS;
 }
 
 /* Writes the otadata entry to boot from the most recently flashed OTA partition,
