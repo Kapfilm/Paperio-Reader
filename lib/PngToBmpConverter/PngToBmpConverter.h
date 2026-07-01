@@ -80,8 +80,14 @@ class PngDecodeSession {
 };
 
 class PngToBmpConverter {
+  // enforceSizeCap: reject sources above MAX_PNG_PIXELS before decoding. This guards the ~10 s
+  // full-resolution decode stall on the per-tick thumbnail path (whose callers recover via the
+  // sliced PngDecodeSession). One-shot, stall-tolerant callers (generateCoverBmp for the sleep /
+  // finished-book / OPDS screens, which have no sliced fallback) pass false so a large but
+  // otherwise-decodable cover still renders. The per-dimension safety bound in PngStreamDecoder
+  // (2048x3072) always applies regardless.
   static bool pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight, bool oneBit,
-                                         bool crop = true);
+                                         bool crop = true, bool enforceSizeCap = true);
 
  public:
   static bool pngFileToBmpStream(FsFile& pngFile, Print& bmpOut, bool crop = true);

@@ -138,7 +138,7 @@ void writeBmpHeader2bit(Print& bmpOut, const int width, const int height) {
 }  // namespace
 
 bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight,
-                                                   bool oneBit, bool crop) {
+                                                   bool oneBit, bool crop, bool enforceSizeCap) {
   LOG_DBG("PNG", "Converting PNG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
   // Decode with the shared uzlib-based core (no PNGdec). Scanlines arrive as
@@ -155,9 +155,10 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
   // Reject images whose source pixel count would cause the row-by-row decode to
   // stall the main loop for tens of seconds.  Unlike JPEG (which has DCT pre-scaling),
   // the PNG decoder processes every source row at full resolution before downscaling.
-  // 800*1200 = 960 kpx decodes in ~10 s on the ESP32-C3; cap there.
+  // 800*1200 = 960 kpx decodes in ~10 s on the ESP32-C3; cap there. Skipped for
+  // stall-tolerant one-shot callers (enforceSizeCap=false) that have no sliced fallback.
   constexpr uint32_t MAX_PNG_PIXELS = 800u * 1200u;
-  if (width * height > MAX_PNG_PIXELS) {
+  if (enforceSizeCap && width * height > MAX_PNG_PIXELS) {
     LOG_ERR("PNG", "Source PNG too large for thumbnail (%ux%u, max %u px) — skipping", width, height, MAX_PNG_PIXELS);
     return false;
   }
@@ -574,7 +575,10 @@ bool PngToBmpConverter::pngFileToBmpStream(FsFile& pngFile, Print& bmpOut, bool 
   // Use runtime display dimensions (swapped for portrait cover sizing)
   const int targetWidth = display.getDisplayHeight();
   const int targetHeight = display.getDisplayWidth();
-  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetWidth, targetHeight, false, crop);
+  // Full-screen cover render for one-shot screens (sleep / finished-book / OPDS): stall-tolerant
+  // and with no sliced fallback, so bypass the thumbnail size cap and decode large covers directly.
+  return pngFileToBmpStreamInternal(pngFile, bmpOut, targetWidth, targetHeight, /*oneBit=*/false, crop,
+                                    /*enforceSizeCap=*/false);
 }
 
 bool PngToBmpConverter::pngFileToBmpStreamWithSize(FsFile& pngFile, Print& bmpOut, int targetMaxWidth,
