@@ -29,7 +29,7 @@ const StrId statusItemsPositionNames[] = {StrId::STR_TOP, StrId::STR_BOTTOM};
 // the clock feature is off, so the visible list compacts without any index remapping.
 struct StatusBarItem {
   StrId label;
-  uint8_t CrossPointSettings::*field;
+  uint8_t CrossPointSettings::* field;
   uint8_t valueCount;
   uint8_t defaultValue;     // value to reset to if the stored one is out of range
   const StrId* valueNames;  // nullptr → boolean Show/Hide toggle
@@ -37,11 +37,11 @@ struct StatusBarItem {
 };
 
 template <size_t N>
-constexpr StatusBarItem enumItem(StrId label, uint8_t CrossPointSettings::*field, const StrId (&names)[N],
+constexpr StatusBarItem enumItem(StrId label, uint8_t CrossPointSettings::* field, const StrId (&names)[N],
                                  uint8_t defaultValue) {
   return {label, field, static_cast<uint8_t>(N), defaultValue, names, false};
 }
-constexpr StatusBarItem toggleItem(StrId label, uint8_t CrossPointSettings::*field, bool requiresClock = false) {
+constexpr StatusBarItem toggleItem(StrId label, uint8_t CrossPointSettings::* field, bool requiresClock = false) {
   return {label, field, 2, 1, nullptr, requiresClock};
 }
 
@@ -81,13 +81,9 @@ const StatusBarItem& visibleItem(int visibleIndex) {
 }
 
 int visibleItemCount() {
-  int count = 0;
-  for (const auto& item : statusBarItems) {
-    if (!item.requiresClock || SETTINGS.useClock) {
-      ++count;
-    }
-  }
-  return count;
+  return static_cast<int>(
+      std::count_if(std::begin(statusBarItems), std::end(statusBarItems),
+                    [](const StatusBarItem& item) { return !item.requiresClock || SETTINGS.useClock; }));
 }
 
 // Retained for the progress-bar preview drawing below, which references specific enum cardinalities.
