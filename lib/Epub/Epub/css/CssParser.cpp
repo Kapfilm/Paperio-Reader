@@ -16,14 +16,20 @@ struct StackBuffer {
   static constexpr size_t CAPACITY = 1024;
   char data[CAPACITY];
   size_t len = 0;
+  bool overflowed = false;  // set once content exceeds CAPACITY so callers can reject the whole token
 
   void push_back(char c) {
     if (len < CAPACITY - 1) {
       data[len++] = c;
+    } else {
+      overflowed = true;  // dropping this char would silently truncate — flag it instead
     }
   }
 
-  void clear() { len = 0; }
+  void clear() {
+    len = 0;
+    overflowed = false;
+  }
   bool empty() const { return len == 0; }
   size_t size() const { return len; }
 
@@ -737,7 +743,10 @@ bool CssParser::loadFromStream(FsFile& source) {
         bodyDepth = 1;
         currentStyle = CssStyle{};
         declBuffer.clear();
-        if (selector.size() > MAX_SELECTOR_LENGTH * 4) {
+        // A selector group that overflowed the StackBuffer was silently truncated; the
+        // truncated tail could otherwise be parsed as a bogus rule (e.g. a cut class name
+        // accidentally matching a real one). Skip the entire rule instead.
+        if (selector.overflowed) {
           skippingRule = true;
         }
         return;
@@ -754,7 +763,8 @@ bool CssParser::loadFromStream(FsFile& source) {
     if (c == '}') {
       --bodyDepth;
       if (bodyDepth == 0) {
-        if (!skippingRule && !declBuffer.empty()) {
+        // A truncated (overflowed) trailing declaration is dropped rather than parsed as garbage.
+        if (!skippingRule && !declBuffer.empty() && !declBuffer.overflowed) {
           parseDeclarationIntoStyle(declBuffer.str(), currentStyle, propNameBuf, propValueBuf);
         }
         if (!skippingRule) {
@@ -772,10 +782,12 @@ bool CssParser::loadFromStream(FsFile& source) {
     }
     if (!skippingRule) {
       if (c == ';') {
-        if (!declBuffer.empty()) {
+        // clear() also resets the overflow flag, so a single oversized declaration
+        // is dropped without poisoning the declarations that follow it in the block.
+        if (!declBuffer.empty() && !declBuffer.overflowed) {
           parseDeclarationIntoStyle(declBuffer.str(), currentStyle, propNameBuf, propValueBuf);
-          declBuffer.clear();
         }
+        declBuffer.clear();
       } else {
         declBuffer.push_back(c);
       }
