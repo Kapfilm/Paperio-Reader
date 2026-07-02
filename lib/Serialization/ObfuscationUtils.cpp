@@ -3,7 +3,7 @@
 #include <Logging.h>
 #include <base64.h>
 #include <esp_mac.h>
-#include <mbedtls/base64.h>
+#include <wolfssl/wolfcrypt/coding.h>
 
 #include <cstring>
 
@@ -51,18 +51,12 @@ std::string deobfuscateFromBase64(const char* encoded, bool* ok) {
     return "";
   }
   if (ok) *ok = true;
-  size_t encodedLen = strlen(encoded);
-  // First call: get required output buffer size
-  size_t decodedLen = 0;
-  int ret = mbedtls_base64_decode(nullptr, 0, &decodedLen, reinterpret_cast<const unsigned char*>(encoded), encodedLen);
-  if (ret != 0 && ret != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL) {
-    LOG_ERR("OBF", "Base64 decode size query failed (ret=%d)", ret);
-    if (ok) *ok = false;
-    return "";
-  }
+  const size_t encodedLen = strlen(encoded);
+  // Base64 decodes to at most 3/4 of the input length; +3 for rounding slack.
+  word32 decodedLen = static_cast<word32>((encodedLen / 4) * 3 + 3);
   std::string result(decodedLen, '\0');
-  ret = mbedtls_base64_decode(reinterpret_cast<unsigned char*>(&result[0]), decodedLen, &decodedLen,
-                              reinterpret_cast<const unsigned char*>(encoded), encodedLen);
+  const int ret = Base64_Decode(reinterpret_cast<const byte*>(encoded), static_cast<word32>(encodedLen),
+                                reinterpret_cast<byte*>(&result[0]), &decodedLen);
   if (ret != 0) {
     LOG_ERR("OBF", "Base64 decode failed (ret=%d)", ret);
     if (ok) *ok = false;

@@ -6,10 +6,11 @@
 #include <string>
 
 /**
- * HTTP client utility for fetching content and downloading files. Built on
- * esp_http_client: https is verified against the CA bundle, plain http is
- * used for local servers (transport is chosen from the URL scheme). Ported
- * from upstream PR #2075.
+ * HTTP client utility for fetching content and downloading files. Built on the
+ * wolfSSL-backed SecureNet stack: https is verified against the curated
+ * CrossPoint root set (TLS 1.3, verified-first with an insecure fallback for
+ * browsing paths); plain http uses a WiFiClient passthrough (transport is
+ * chosen from the URL scheme). Use fetchUrlVerified() for fail-closed transfers.
  */
 class HttpDownloader {
  public:
@@ -76,6 +77,15 @@ class HttpDownloader {
    */
   static bool fetchUrl(const std::string& url, const DataCallback& onData, bool treatAbortAsSuccess,
                        const std::string& username = "", const std::string& password = "");
+
+  /**
+   * Streaming fetch that ALWAYS fails closed on TLS verification failure — it
+   * never falls back to an unverified connection. Use for security-critical
+   * transfers (OTA firmware download) where an on-path attacker must not be able
+   * to force a downgrade by presenting a bad certificate.
+   */
+  static bool fetchUrlVerified(const std::string& url, const DataCallback& onData, bool treatAbortAsSuccess = false,
+                               const std::string& username = "", const std::string& password = "");
 
   /**
    * Download a file to the SD card with optional credentials.

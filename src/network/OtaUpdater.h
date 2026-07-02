@@ -7,10 +7,6 @@
 #define CROSSPOINT_GIT_REPOSITORY "jpirnay/witchhunt-reader"
 #endif
 
-// Avoid pulling in esp_https_ota.h here — it transitively includes lwip/sockets.h
-// which defines INADDR_NONE as a numeric macro, conflicting with Arduino's IPAddress.h.
-typedef void* esp_https_ota_handle_t;
-
 class OtaUpdater {
   bool updateAvailable = false;
   std::string latestVersion;
@@ -19,7 +15,6 @@ class OtaUpdater {
   size_t processedSize = 0;
   size_t totalSize = 0;
   bool render = false;
-  esp_https_ota_handle_t otaHandle = nullptr;
   bool cancelRequested = false;
 
  public:
@@ -46,7 +41,7 @@ class OtaUpdater {
   bool getRender() const { return render; }
   void clearRender() { render = false; }
 
-  bool isUpdateInProgress() const { return otaHandle != nullptr; }
+  bool isUpdateInProgress() const { return otaWriteHandle != nullptr; }
 
   // Called periodically during the streaming install with (processed, total)
   // so the host can redraw progress and poll for cancel. Return false to abort

@@ -17,8 +17,6 @@
 #include <bootloader_common.h>
 #include <esp_flash_partitions.h>
 #include <esp_heap_caps.h>
-#include <esp_http_client.h>
-#include <esp_https_ota.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_wifi.h>
@@ -30,19 +28,6 @@ constexpr char releaseListUrl[] = "https://api.github.com/repos/" CROSSPOINT_GIT
 constexpr int otaHttpMaxAttempts = 3;
 constexpr unsigned long otaInitialRetryDelayMs = 1000;
 constexpr size_t releaseMetadataMaxBytes = 128 * 1024;
-
-/*
- * When esp_crt_bundle.h included, it is pointing wrong header file
- * which is something under WifiClientSecure because of our framework based on arduno platform.
- * To manage this obstacle, don't include anything, just extern and it will point correct one.
- */
-extern "C" {
-extern esp_err_t esp_crt_bundle_attach(void* conf);
-}
-
-esp_err_t http_client_set_header_cb(esp_http_client_handle_t http_client) {
-  return esp_http_client_set_header(http_client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
-}
 
 const char* getReleaseApiUrl() { return SETTINGS.includeBetaUpdates ? releaseListUrl : latestReleaseUrl; }
 
@@ -209,23 +194,22 @@ bool OtaUpdater::isUpdateNewer() const {
 const std::string& OtaUpdater::getLatestVersion() const { return latestVersion; }
 
 void OtaUpdater::cleanupUpdate() {
-  if (otaHandle) {
-    const esp_err_t err = esp_https_ota_finish(otaHandle);
+  if (otaWriteHandle) {
+    const esp_err_t err = esp_ota_abort(reinterpret_cast<esp_ota_handle_t>(otaWriteHandle));
     if (err != ESP_OK) {
-      LOG_ERR("OTA", "esp_https_ota_finish on cleanup: %s", esp_err_to_name(err));
+      LOG_ERR("OTA", "esp_ota_abort on cleanup: %s", esp_err_to_name(err));
     }
-    otaHandle = nullptr;
+    otaWriteHandle = nullptr;
   }
   cancelRequested = false;
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 }
 
 void OtaUpdater::cancelUpdate() {
-  if (otaHandle) {
-    cleanupUpdate();
-  } else {
-    cancelRequested = true;
-  }
+  // If a streaming install is mid-flight, the DataCallback observes
+  // cancelRequested and aborts; the step then cleans up. If not started yet,
+  // just set the flag so the next step returns UPDATE_CANCELLED.
+  cancelRequested = true;
 }
 
 OtaUpdater::OtaUpdaterError OtaUpdater::beginInstallUpdate() {
@@ -264,8 +248,9 @@ OtaUpdater::OtaUpdaterError OtaUpdater::beginInstallUpdate() {
 
 /* Writes the otadata entry to boot from the most recently flashed OTA partition,
  * bypassing esp_ota_set_boot_partition()'s image_validate() call.
- * Used when esp_https_ota_finish() returns ESP_ERR_OTA_VALIDATE_FAILED on
- * unsigned Arduino builds (boot_comm efuse revision check false-positive). */
+ * Used when esp_ota_end()/esp_ota_set_boot_partition() returns
+ * ESP_ERR_OTA_VALIDATE_FAILED on unsigned Arduino builds (boot_comm efuse
+ * revision check false-positive). */
 int OtaUpdater::forceSetOtaBootPartition() {
   const esp_partition_t* newPartition = esp_ota_get_next_update_partition(nullptr);
   if (newPartition == nullptr) {
@@ -348,52 +333,96 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
     cleanupUpdate();
     return UPDATE_CANCELLED;
   }
-
-  if (!otaHandle) {
+  if (!otaWriteHandle) {
     return INTERNAL_UPDATE_ERROR;
   }
-
-  esp_err_t esp_err = esp_https_ota_perform(otaHandle);
-  processedSize = esp_https_ota_get_image_len_read(otaHandle);
-  render = true;
-
-  if (esp_err == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
-    return UPDATE_IN_PROGRESS;
+  // The whole streaming download happens in this single call; the DataCallback
+  // drives progress/cancel via installProgressCb so the UI stays responsive.
+  // Idempotent guard: once done, don't re-enter.
+  if (installDone) {
+    return installResult;
   }
+
+  const esp_ota_handle_t handle = reinterpret_cast<esp_ota_handle_t>(otaWriteHandle);
+  bool writeOk = true;
+  bool userCancelled = false;
+
+  // Verify-only (fail closed): a MITM must not be able to downgrade the firmware
+  // download to an unverified connection by presenting a bad cert.
+  const bool fetchOk = HttpDownloader::fetchUrlVerified(
+      otaUrl,
+      [&](const uint8_t* data, size_t len) -> bool {
+        if (cancelRequested) {
+          userCancelled = true;
+          return false;
+        }
+        if (esp_ota_write(handle, data, len) != ESP_OK) {
+          writeOk = false;
+          return false;  // abort
+        }
+        processedSize += len;
+        render = true;
+        // Let the host redraw progress and poll for Back; abort if it returns false.
+        if (installProgressCb && !installProgressCb(processedSize, totalSize)) {
+          userCancelled = true;
+          return false;
+        }
+        return true;
+      },
+      /*treatAbortAsSuccess=*/false);
 
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+  installDone = true;
 
-  if (esp_err != ESP_OK) {
-    LOG_ERR("OTA", "esp_https_ota_perform Failed: %s", esp_err_to_name(esp_err));
+  if (userCancelled || cancelRequested) {
+    LOG_INF("OTA", "Install cancelled by user");
     cleanupUpdate();
-    return HTTP_ERROR;
+    installResult = UPDATE_CANCELLED;
+    return installResult;
+  }
+  if (!writeOk) {
+    LOG_ERR("OTA", "esp_ota_write failed");
+    cleanupUpdate();
+    installResult = INTERNAL_UPDATE_ERROR;
+    return installResult;
+  }
+  if (!fetchOk) {
+    LOG_ERR("OTA", "firmware download failed");
+    cleanupUpdate();
+    installResult = HTTP_ERROR;
+    return installResult;
   }
 
-  if (!esp_https_ota_is_complete_data_received(otaHandle)) {
-    LOG_ERR("OTA", "esp_https_ota_is_complete_data_received Failed");
-    cleanupUpdate();
-    return INTERNAL_UPDATE_ERROR;
+  esp_err_t finish_err = esp_ota_end(handle);
+  otaWriteHandle = nullptr;
+  if (finish_err != ESP_OK && finish_err != ESP_ERR_OTA_VALIDATE_FAILED) {
+    LOG_ERR("OTA", "esp_ota_end failed: %s", esp_err_to_name(finish_err));
+    installResult = INTERNAL_UPDATE_ERROR;
+    return installResult;
   }
 
-  esp_err_t finish_err = esp_https_ota_finish(otaHandle);
-  otaHandle = nullptr;
-  if (finish_err == ESP_ERR_OTA_VALIDATE_FAILED) {
-    /* Arduino unsigned builds fail boot_comm validation even though the image
-     * is fully written. Force the boot partition to the new OTA slot by writing
-     * the otadata entry directly, bypassing image_validate(). */
+  // Set the new partition as boot. Arduino unsigned builds fail image_validate()
+  // in esp_ota_set_boot_partition (and esp_ota_end returns VALIDATE_FAILED), so
+  // fall back to writing otadata directly — same bypass as before.
+  const esp_partition_t* updatePartition = esp_ota_get_next_update_partition(nullptr);
+  esp_err_t boot_err =
+      (finish_err == ESP_ERR_OTA_VALIDATE_FAILED) ? ESP_ERR_OTA_VALIDATE_FAILED
+                                                  : esp_ota_set_boot_partition(updatePartition);
+  if (boot_err == ESP_ERR_OTA_VALIDATE_FAILED) {
     LOG_INF("OTA", "Validation failed (expected for unsigned Arduino builds) - forcing boot partition");
-    finish_err = forceSetOtaBootPartition();
-    if (finish_err != ESP_OK) {
-      LOG_ERR("OTA", "forceSetOtaBootPartition failed: %s", esp_err_to_name(finish_err));
-      cleanupUpdate();
-      return VALIDATE_FAILED;
+    boot_err = static_cast<esp_err_t>(forceSetOtaBootPartition());
+    if (boot_err != ESP_OK) {
+      LOG_ERR("OTA", "forceSetOtaBootPartition failed: %s", esp_err_to_name(boot_err));
+      installResult = VALIDATE_FAILED;
+      return installResult;
     }
-  } else if (finish_err != ESP_OK) {
-    LOG_ERR("OTA", "esp_https_ota_finish Failed: %s", esp_err_to_name(finish_err));
-    cleanupUpdate();
-    return INTERNAL_UPDATE_ERROR;
+  } else if (boot_err != ESP_OK) {
+    LOG_ERR("OTA", "esp_ota_set_boot_partition failed: %s", esp_err_to_name(boot_err));
+    installResult = INTERNAL_UPDATE_ERROR;
+    return installResult;
   }
 
-  LOG_INF("OTA", "Update completed");
-  return OK;
+  LOG_INF("OTA", "Update completed (%zu bytes)", processedSize);
+  installResult = OK;
+  return installResult;
 }

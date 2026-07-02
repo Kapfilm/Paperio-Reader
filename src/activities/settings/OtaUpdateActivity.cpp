@@ -216,6 +216,22 @@ void OtaUpdateActivity::loop() {
   if (state == WAITING_CONFIRMATION) {
     if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
       LOG_DBG("OTA", "New update available, starting download...");
+      // The install now streams in one blocking call; drive the progress bar and
+      // Back-to-cancel from inside the download via this callback. Throttle state
+      // is a member (the callback outlives this stack frame).
+      lastOtaDrawMs = 0;
+      updater.setInstallProgressCallback([this](size_t, size_t) -> bool {
+        mappedInput.update();
+        if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+          return false;  // abort the install
+        }
+        const uint32_t now = millis();
+        if (now - lastOtaDrawMs >= 1000) {  // throttle e-ink redraws
+          lastOtaDrawMs = now;
+          requestUpdate(true);
+        }
+        return true;
+      });
       const auto beginResult = updater.beginInstallUpdate();
       if (beginResult != OtaUpdater::UPDATE_IN_PROGRESS) {
         LOG_DBG("OTA", "Update begin failed: %d", beginResult);
