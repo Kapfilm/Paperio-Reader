@@ -118,6 +118,18 @@ void HalDisplay::releaseBuffers() { einkDisplay.releaseBuffers(); }
 static uint32_t fbufContig() { return heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT); }
 
 bool HalDisplay::releaseSecondaryBuffer() {
+  // Double-release guard. releaseSecondaryBuffer() returning false means the
+  // secondary buffer was already gone — i.e. a caller released it without
+  // tracking that it had, then released again. The release windows here are
+  // NOT lexically scoped (Background-C releases in buildSection and restores in
+  // recoverSecondaryBufferIfNeeded(), across page turns), so a lost release-flag
+  // is a real, plausible bug rather than a theoretical one. It is not fatal —
+  // the buffer is already freed — but it signals confused ownership that can
+  // strand the reader in degraded (single-buffer) mode, so log it loudly.
+  if (!einkDisplay.hasSecondaryBuffer()) {
+    LOG_INF("FBUF", "releaseSecondary called but secondary already released (double-release; caller lost track)");
+    return false;
+  }
   const bool ok = einkDisplay.releaseSecondaryBuffer();
   LOG_INF("FBUF", "releaseSecondary -> %d (hasSecondary=%d redSynced=%d contig=%lu)", ok ? 1 : 0,
           einkDisplay.hasSecondaryBuffer() ? 1 : 0, einkDisplay.isRedRamSynced() ? 1 : 0,

@@ -211,6 +211,28 @@ esp_restart();             // reboot; begin() re-allocates buffers on next boot
 
 ---
 
+## Refresh-mode downgrade contract (while secondary is released)
+
+Releasing the secondary buffer changes what a `FAST_REFRESH` request means. The
+downgrade is applied automatically inside `triggerDisplay()` — callers do not need to
+sanitise the mode themselves — but the resulting behaviour must be understood:
+
+| State | `FAST_REFRESH` request resolves to |
+|---|---|
+| Secondary present (normal) | FAST — host reseeds RED RAM from `frameBufferActive` |
+| Secondary released, `setSingleBufferFastDiff(false)` (X4) | **Downgraded to HALF** — no host previous-frame copy to diff against |
+| Secondary released, `setSingleBufferFastDiff(true)` (X4) | FAST — diffs against the controller's retained RED RAM (only valid if RED RAM was seeded before release and no HALF/FULL fired since; see Scenario 1) |
+| Secondary released (X3) | FAST — DTM1 baseline lives in the controller, unaffected by the host release |
+
+The invariant driving the downgrade is derived from the owning objects at refresh time
+(`hasSecondaryBuffer()` and `isRedRamSynced()`), **not** from a mirrored HAL-level mode
+flag. Do not introduce a shadow copy of this state: after a failed
+`reallocSecondaryBuffer()` the two sources would diverge, and the RED-RAM reseed
+subtleties (see "Implementation note on RED RAM reseed") make a mirrored flag likely to
+be wrong. Query the display, don't cache its state.
+
+---
+
 ## API reference
 
 All methods are on `EInkDisplay` (low level) and forwarded through `HalDisplay` and
