@@ -484,6 +484,9 @@ bool syncNtp(char* errorBuf, size_t errorBufSize) {
       snprintf(errorBuf, errorBufSize, "NTP timeout (%s)", statusName);
     }
     LOG_ERR("CLK", "NTP sync timeout (%s)", statusName);
+    // Stop SNTP on the failure path so a later applyClientTime() (which
+    // refuses while SNTP is enabled) isn't blocked by a dangling instance.
+    esp_sntp_stop();
     return false;
   }
 
