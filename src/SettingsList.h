@@ -427,6 +427,8 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                        StrId::STR_CUSTOMISE_STATUS_BAR));
   settings.push_back(SettingInfo::Toggle(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount,
                                          "statusBarChapterPageCount", StrId::STR_CUSTOMISE_STATUS_BAR));
+  settings.push_back(SettingInfo::Toggle(StrId::STR_PRINTED_PAGE_NUMBER, &CrossPointSettings::statusBarPrintedPage,
+                                         "statusBarPrintedPage", StrId::STR_CUSTOMISE_STATUS_BAR));
   settings.push_back(SettingInfo::Toggle(StrId::STR_BOOK_PROGRESS_PERCENTAGE,
                                          &CrossPointSettings::statusBarBookProgressPercentage,
                                          "statusBarBookProgressPercentage", StrId::STR_CUSTOMISE_STATUS_BAR));

@@ -3658,7 +3658,7 @@ void EpubReaderActivity::renderStatusBar() const {
   const bool isStarred = section && bookmarkStore.has(static_cast<uint16_t>(currentSpineIndex),
                                                       static_cast<uint16_t>(section->currentPage));
   std::string printedPageLabel;
-  if (section) {
+  if (section && SETTINGS.statusBarPrintedPage) {
     const auto page = static_cast<uint16_t>(section->currentPage);
     if (const auto label = section->getPrintedPageLabelForPage(page)) {
       // Exact-match label (already parenthesised, may be "7/8" when multiple anchors collapse).
