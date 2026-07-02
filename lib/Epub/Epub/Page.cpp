@@ -23,6 +23,10 @@ std::unique_ptr<PageLine> PageLine::deserialize(FsFile& file) {
   serialization::readPod(file, yPos);
 
   auto tb = TextBlock::deserialize(file);
+  if (!tb) {
+    LOG_ERR("PGE", "PageLine: TextBlock deserialize failed");
+    return nullptr;
+  }
   return std::unique_ptr<PageLine>(new PageLine(std::move(tb), xPos, yPos));
 }
 
@@ -50,6 +54,10 @@ std::unique_ptr<PageImage> PageImage::deserialize(FsFile& file) {
   serialization::readPod(file, yPos);
 
   auto ib = ImageBlock::deserialize(file);
+  if (!ib) {
+    LOG_ERR("PGE", "PageImage: ImageBlock deserialize failed");
+    return nullptr;
+  }
   return std::unique_ptr<PageImage>(new PageImage(std::move(ib), xPos, yPos));
 }
 
@@ -95,6 +103,7 @@ void PageTableFragment::render(GfxRenderer& renderer, const int fontId, const in
   }
 
   // Rows: text content + horizontal separators
+  const int lineHeight = renderer.getLineHeight(fontId);  // constant for this render; hoist out of the cell loops
   int rowY = drawY;
   for (size_t r = 0; r < rows.size(); r++) {
     const TableRow& row = rows[r];
@@ -103,7 +112,7 @@ void PageTableFragment::render(GfxRenderer& renderer, const int fontId, const in
       int lineY = rowY + TABLE_CELL_PADDING;
       for (const auto& line : cell.lines) {
         line->render(renderer, fontId, colX[c] + TABLE_CELL_PADDING, lineY);
-        lineY += renderer.getLineHeight(fontId);
+        lineY += lineHeight;
       }
       // In-cell graphic, drawn below the cell text. Always 1-bit (BW) thumbnails:
       // the decode/cache machinery lives in ImageBlock; the BW cache is built during
@@ -376,6 +385,14 @@ std::unique_ptr<Page> Page::deserialize(FsFile& file) {
   uint16_t count;
   serialization::readPod(file, count);
 
+  // Guard a corrupt cache header from reserving an absurd number of elements. A real page is
+  // bounded by screen-height/min-line-height plus images/tables — well under this cap.
+  static constexpr uint16_t MAX_PAGE_ELEMENTS = 1024;
+  if (count > MAX_PAGE_ELEMENTS) {
+    LOG_ERR("PGE", "Deserialization failed: element count %u exceeds maximum", count);
+    return nullptr;
+  }
+
   page->elements.reserve(count);
   for (uint16_t i = 0; i < count; i++) {
     uint8_t tag;
@@ -383,9 +400,11 @@ std::unique_ptr<Page> Page::deserialize(FsFile& file) {
 
     if (tag == TAG_PageLine) {
       auto pl = PageLine::deserialize(file);
+      if (!pl) return nullptr;
       page->elements.push_back(std::move(pl));
     } else if (tag == TAG_PageImage) {
       auto pi = PageImage::deserialize(file);
+      if (!pi) return nullptr;
       page->elements.push_back(std::move(pi));
     } else if (tag == TAG_PageTable) {
       auto pt = PageTableFragment::deserialize(file);
