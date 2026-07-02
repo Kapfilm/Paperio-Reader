@@ -1037,25 +1037,15 @@ static void renderCharAtScale(const GfxRenderer& renderer, GfxRenderer::RenderMo
     return;
   }
 
-  // Upscaling (heading scale, e.g. h1=1.6×): area-weighted coverage resampling that preserves the
-  // font's grayscale AA. Nearest-neighbor bloated each source pixel into a scale×scale solid block,
-  // so light-gray AA edge pixels (raw==1, 33% coverage) rendered as full-black blocks — the jagged,
-  // over-bold look.
-  //
-  // Here each destination pixel integrates the fractional source coverage over the source region it
-  // maps back to (0..1), then re-quantizes that coverage into a 2-bit AA level (0=white .. 3=black).
-  // That reconstructed level feeds the SAME multi-pass machinery body text uses: drawMaskFor2BitMode
-  // decides, per render pass and darkness setting, whether this level draws into the current plane.
-  // In grayscale render modes the enlarged heading therefore emits true gray edge pixels (MSB/LSB
-  // planes) instead of a hard 1-bit threshold; in BW mode every non-white level draws, matching the
-  // body font's weight. Grayscale passes always clear the bit (draw false), exactly like the body
-  // per-pixel path — only the BW pass honors the caller's pixelState.
-  const uint8_t drawMask = drawMaskFor2BitMode(renderMode, renderer.getTextDarkness());
-  if (drawMask == 0) return;  // Maximum darkness suppresses grayscale passes entirely
-  const bool isBW = (drawMask == 0x0E);
-
+  // Upscaling (heading scale, e.g. h1=1.6×): area-weighted coverage instead of nearest-neighbor.
+  // Nearest-neighbor bloated each source pixel into a scale×scale solid block, so light-gray AA
+  // edge pixels (raw==1, 33% coverage) rendered as full-black blocks — the jagged, over-bold look.
+  // Here each destination pixel integrates the fractional source coverage over the source region
+  // it maps back to, then thresholds at 50%. Edge pixels that only partially cover ink fall below
+  // 0.5 and stay white (anti-aliasing); interior pixels stay solid. The result matches the visual
+  // weight of the body font instead of thickening every stroke.
   const float invScale = 1.0f / scale;
-  const float invDstPixelArea = scale * scale;  // 1 / (source area covered by one dst pixel)
+  const float dstPixelArea = invScale * invScale;  // source area covered by one dst pixel
   for (int dstY = 0; dstY < dstH; dstY++) {
     const float srcY0 = dstY * invScale;
     const float srcY1 = srcY0 + invScale;
@@ -1079,12 +1069,8 @@ static void renderCharAtScale(const GfxRenderer& renderer, GfxRenderer::RenderMo
           covered += c * hOverlap * wOverlap;
         }
       }
-      // Fraction of this dst pixel covered by ink, then reconstructed to a 0..3 AA level (round to
-      // nearest third). Mirrors the source font's raw encoding so the drawMask logic is identical.
-      const float frac = covered * invDstPixelArea;
-      const uint8_t raw = static_cast<uint8_t>(std::min(3.0f, frac * 3.0f + 0.5f));
-      if ((drawMask >> raw) & 0x01) {
-        renderer.drawPixel(baseX + dstX, baseY + dstY, isBW ? pixelState : false);
+      if (covered >= 0.5f * dstPixelArea) {
+        renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
       }
     }
   }
