@@ -198,7 +198,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                                  s->pendingSdFontFamilyOverride.clear();
                                }
                              })
-                             .withSubmenu(StrId::STR_READER_OVERRIDES);
+                             .withSubmenu(StrId::STR_READER_OVERRIDES)
+                             .withSelectorActivity();
 
     familySetting.enumLabels = {tr(STR_DEFAULT_VALUE), tr(STR_BOOKERLY), tr(STR_NOTO_SANS)};
     for (const auto& fam : families) {
@@ -223,7 +224,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                             auto* s = static_cast<EpubReaderMenuActivity*>(ctx);
                             s->pendingFontSizeOverride = (v == 0) ? -1 : static_cast<int8_t>(v - 1);
                           })
-                          .withSubmenu(StrId::STR_READER_OVERRIDES));
+                          .withSubmenu(StrId::STR_READER_OVERRIDES)
+                          .withSelectorActivity());
 
   // Text darkness: straightforward 0-3 cycle
   menuItems.push_back(
@@ -234,7 +236,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
             return static_cast<const EpubReaderMenuActivity*>(ctx)->pendingTextDarkness;
           },
           [](void* ctx, uint8_t v) { static_cast<EpubReaderMenuActivity*>(ctx)->pendingTextDarkness = v; })
-          .withSubmenu(StrId::STR_READER_OVERRIDES));
+          .withSubmenu(StrId::STR_READER_OVERRIDES)
+          .withSelectorActivity());
 
   menuItems.push_back(
       SettingInfo::DynamicEnumCtx(
@@ -261,7 +264,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                             auto* s = static_cast<EpubReaderMenuActivity*>(ctx);
                             s->pendingParagraphAlignmentOverride = (v == 0) ? -1 : static_cast<int8_t>(v - 1);
                           })
-                          .withSubmenu(StrId::STR_READER_OVERRIDES));
+                          .withSubmenu(StrId::STR_READER_OVERRIDES)
+                          .withSelectorActivity());
 
   // Text anti-aliasing: default / on / off (mirrors QuickOverrides)
   menuItems.push_back(

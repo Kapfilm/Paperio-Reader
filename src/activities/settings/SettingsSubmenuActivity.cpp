@@ -6,9 +6,7 @@
 #include <I18n.h>
 
 #include "CrossPointSettings.h"
-#include "FontSelectionActivity.h"
 #include "MappedInputManager.h"
-#include "SdCardFontGlobals.h"
 #include "SettingActionDispatch.h"
 #include "activities/SliderPickerActivity.h"
 #include "components/UITheme.h"
@@ -103,14 +101,14 @@ void SettingsSubmenuActivity::toggleCurrentItem() {
   if (setting.isSeparator) return;
 
   if (setting.usesSelectorActivity) {
-    const auto target = (setting.valueGetter == txtFontFamilyDynamicGetter) ? FontSelectionActivity::Target::TXT
-                                                                            : FontSelectionActivity::Target::EPUB;
-    startActivityForResult(std::make_unique<FontSelectionActivity>(renderer, mappedInput, target),
-                           [this](const ActivityResult&) {
-                             SETTINGS.saveToFile();
-                             needsHalfRefresh = true;
-                             requestUpdate();
-                           });
+    auto selector = createSelectorActivity(setting, renderer, mappedInput);
+    if (selector) {
+      startActivityForResult(std::move(selector), [this](const ActivityResult&) {
+        SETTINGS.saveToFile();
+        needsHalfRefresh = true;
+        requestUpdate();
+      });
+    }
     return;
   }
 
