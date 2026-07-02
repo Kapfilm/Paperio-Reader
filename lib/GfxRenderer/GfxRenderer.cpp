@@ -972,10 +972,12 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   }
 }
 
-// Render a glyph at an arbitrary scale factor via nearest-neighbor sampling.
+// Render a glyph at an arbitrary scale factor.
 // Used for heading font-size scaling (e.g. h1=1.6×, h2=1.4×, h3=1.2×).
-// scale > 1.0 enlarges; scale < 1.0 shrinks. For scale == 0.5 the existing
-// renderCharScaled() above is used for SUP/SUB (kept separate for clarity).
+// Upscaling (scale > 1.0) uses area-weighted coverage resampling so enlarged headings stay
+// anti-aliased and keep the body font's visual weight instead of the jagged, over-bold look
+// nearest-neighbor produced. Downscaling (scale < 1.0) keeps crisp nearest-neighbor point-
+// sampling. For scale == 0.5 the existing renderCharScaled() above is used for SUP/SUB.
 static void renderCharAtScale(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
                               const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
                               const bool pixelState, const EpdFontFamily::Style style, const float scale,
@@ -998,40 +1000,91 @@ static void renderCharAtScale(const GfxRenderer& renderer, GfxRenderer::RenderMo
   const int baseX = cursorX + static_cast<int>(glyph->left * scale + 0.5f);
   const int baseY = cursorY - static_cast<int>(glyph->top * scale + 0.5f);
 
-  if (fontData->is2Bit) {
+  // Per-source-pixel coverage, in [0,1]. 2-bit fonts carry 4 AA levels (raw/3); 1-bit fonts
+  // are on/off. Kept as a lambda so the two resampling paths below share one source access.
+  const bool is2Bit = fontData->is2Bit;
+  auto srcCoverage = [&](const int sx, const int sy) -> float {
+    const int pos = sy * srcW + sx;
+    if (is2Bit) {
+      const uint8_t byte = bitmap[pos >> 2];
+      const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
+      return raw * (1.0f / 3.0f);
+    }
+    const uint8_t byte = bitmap[pos >> 3];
+    return ((byte >> (7 - (pos & 7))) & 1) ? 1.0f : 0.0f;
+  };
+
+  // Downscaling (small-caps fold, SUP/SUB) stays on the crisp nearest-neighbor point-sample:
+  // shrinking already suppresses jaggies, and area-averaging would only blur thin strokes below
+  // the 50% threshold and drop them. Downscalers pass minRaw2Bit=2 to keep only the dark shades.
+  if (scale < 1.0f) {
     for (int dstY = 0; dstY < dstH; dstY++) {
       const int srcY = static_cast<int>(dstY / scale);
       if (srcY >= srcH) break;
       for (int dstX = 0; dstX < dstW; dstX++) {
         const int srcX = static_cast<int>(dstX / scale);
         if (srcX >= srcW) break;
-        const int pos = srcY * srcW + srcX;
-        const uint8_t byte = bitmap[pos >> 2];
-        const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
-        // Draw raw in {1,2,3} -- i.e. every non-white source pixel -- to match the BW glyph
-        // path (drawMask 0x0E). Headings are *upscaled*, so dropping the light-gray (raw==1)
-        // pixels here erased glyph edges and thin horizontal strokes, which showed up as
-        // thinned glyphs and "every other line" stripes. (The SUP/SUB *downscaler* keeps the
-        // raw>=2 threshold on purpose, to stay crisp when shrinking.)  Callers that downscale
-        // (e.g. small-caps) pass minRaw2Bit=2 to drop light-gray and stay crisp.
-        if (raw >= minRaw2Bit) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+        if (is2Bit) {
+          const int pos = srcY * srcW + srcX;
+          const uint8_t byte = bitmap[pos >> 2];
+          const uint8_t raw = (byte >> ((3 - (pos & 3)) * 2)) & 0x3;
+          if (raw >= minRaw2Bit) renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+        } else {
+          if (srcCoverage(srcX, srcY) > 0.0f) renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
         }
       }
     }
-  } else {
-    for (int dstY = 0; dstY < dstH; dstY++) {
-      const int srcY = static_cast<int>(dstY / scale);
-      if (srcY >= srcH) break;
-      for (int dstX = 0; dstX < dstW; dstX++) {
-        const int srcX = static_cast<int>(dstX / scale);
-        if (srcX >= srcW) break;
-        const int pos = srcY * srcW + srcX;
-        const uint8_t byte = bitmap[pos >> 3];
-        const uint8_t bit = 7 - (pos & 7);
-        if ((byte >> bit) & 1) {
-          renderer.drawPixel(baseX + dstX, baseY + dstY, pixelState);
+    return;
+  }
+
+  // Upscaling (heading scale, e.g. h1=1.6×): area-weighted coverage resampling that preserves the
+  // font's grayscale AA. Nearest-neighbor bloated each source pixel into a scale×scale solid block,
+  // so light-gray AA edge pixels (raw==1, 33% coverage) rendered as full-black blocks — the jagged,
+  // over-bold look.
+  //
+  // Here each destination pixel integrates the fractional source coverage over the source region it
+  // maps back to (0..1), then re-quantizes that coverage into a 2-bit AA level (0=white .. 3=black).
+  // That reconstructed level feeds the SAME multi-pass machinery body text uses: drawMaskFor2BitMode
+  // decides, per render pass and darkness setting, whether this level draws into the current plane.
+  // In grayscale render modes the enlarged heading therefore emits true gray edge pixels (MSB/LSB
+  // planes) instead of a hard 1-bit threshold; in BW mode every non-white level draws, matching the
+  // body font's weight. Grayscale passes always clear the bit (draw false), exactly like the body
+  // per-pixel path — only the BW pass honors the caller's pixelState.
+  const uint8_t drawMask = drawMaskFor2BitMode(renderMode, renderer.getTextDarkness());
+  if (drawMask == 0) return;  // Maximum darkness suppresses grayscale passes entirely
+  const bool isBW = (drawMask == 0x0E);
+
+  const float invScale = 1.0f / scale;
+  const float invDstPixelArea = scale * scale;  // 1 / (source area covered by one dst pixel)
+  for (int dstY = 0; dstY < dstH; dstY++) {
+    const float srcY0 = dstY * invScale;
+    const float srcY1 = srcY0 + invScale;
+    const int sy0 = static_cast<int>(srcY0);
+    const int sy1 = std::min(static_cast<int>(srcY1 - 1e-6f), srcH - 1);
+    for (int dstX = 0; dstX < dstW; dstX++) {
+      const float srcX0 = dstX * invScale;
+      const float srcX1 = srcX0 + invScale;
+      const int sx0 = static_cast<int>(srcX0);
+      const int sx1 = std::min(static_cast<int>(srcX1 - 1e-6f), srcW - 1);
+
+      float covered = 0.0f;
+      for (int sy = sy0; sy <= sy1; sy++) {
+        const float hOverlap = std::min(srcY1, static_cast<float>(sy + 1)) - std::max(srcY0, static_cast<float>(sy));
+        if (hOverlap <= 0.0f) continue;
+        for (int sx = sx0; sx <= sx1; sx++) {
+          const float c = srcCoverage(sx, sy);
+          if (c <= 0.0f) continue;
+          const float wOverlap = std::min(srcX1, static_cast<float>(sx + 1)) - std::max(srcX0, static_cast<float>(sx));
+          if (wOverlap <= 0.0f) continue;
+          covered += c * hOverlap * wOverlap;
         }
+      }
+      // Fraction of this dst pixel covered by ink, then reconstructed to a 0..3 AA level (round to
+      // nearest third). Mirrors the source font's raw encoding so the drawMask logic is identical.
+      const float frac = covered * invDstPixelArea;
+      const uint8_t raw = static_cast<uint8_t>(std::min(3.0f, frac * 3.0f + 0.5f));
+      if ((drawMask >> raw) & 0x01) {
+        renderer.drawPixel(baseX + dstX, baseY + dstY, isBW ? pixelState : false);
       }
     }
   }
