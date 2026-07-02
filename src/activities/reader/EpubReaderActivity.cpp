@@ -1978,6 +1978,16 @@ void EpubReaderActivity::applyBookReaderOverrides(
                                   bookBionicReadingOverride, bookParagraphAlignmentOverride,
                                   bookTextAntiAliasingOverride, bookHyphenationOverride);
 
+  // A changed override forces a full section relayout (section.reset() below → rebuild with the
+  // "Indexing…" popup). That popup FAST-refreshes against whatever is on the panel; when the change
+  // arrived via the full-screen selector, the extra menu/submenu/selector redraws leave the FAST
+  // baseline out of sync and the popup box ghosts. Arm a one-shot HALF so drawPopup() establishes a
+  // clean baseline — the same deliberate-transition signal the chapter/percent/footnote jumps use
+  // (hasRefreshOverridePending() at the popup then also arms forceHalfRefreshAfterPopup_ for the
+  // first content page). Reached only when something actually changed (early-out above), so routine
+  // no-op reopens of the menu don't pay for it.
+  ReaderUtils::enforceExitFullRefresh(renderer);
+
   RenderLock lock(*this);
   if (section) {
     navTarget = NavigationTarget::makePage(section->currentPage);
