@@ -475,6 +475,13 @@ void EpubReaderActivity::onExit() {
     }
     secondaryBufferDegraded_ = false;
   }
+  // Restore the display-global single-buffer fast-diff flag unconditionally. Background-C
+  // (buildSection) sets it true alongside its release; the two designed restore sites
+  // (recoverSecondaryBufferIfNeeded, compileSectionCache) clear it, but exiting mid-build
+  // reaches neither. The flag lives on the shared EInkDisplay and outlives this activity,
+  // so a stale true would make the next activity's first FAST refresh diff against the
+  // controller's retained RED RAM instead of its host baseline (ghosting). No-op on X3.
+  renderer.setSingleBufferFastDiff(false);
   UITheme::getInstance().getMutableTheme().onBookWillClose(epub ? epub->getPath() : "", epub.get(), nullptr, nullptr);
   epub.reset();
   currentPageFootnotes.clear();
