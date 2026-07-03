@@ -24,8 +24,7 @@ class SleepActivity final : public Activity {
   void renderDefaultSleepScreen() const;
   void renderCustomSleepScreen() const;
   void renderCoverSleepScreen() const;
-  void renderBitmapSleepScreen(const Bitmap& bitmap, const BookOverlayInfo& overlayInfo,
-                               bool topAlignForCoverFit = false) const;
+  void renderBitmapSleepScreen(const Bitmap& bitmap, const BookOverlayInfo& overlayInfo) const;
   void renderBlankSleepScreen() const;
   void renderOverlaySleepScreen() const;
   // Quick Resume: leaves the framebuffer (reader page) intact and overlays a small moon icon.

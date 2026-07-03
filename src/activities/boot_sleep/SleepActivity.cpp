@@ -231,9 +231,16 @@ void SleepActivity::onEnter() {
     return renderLastScreenSleepScreen();
   }
 
-  // For OVERLAY mode the popup is suppressed so the frame buffer (reader page) stays intact
+  // For OVERLAY mode the popup is suppressed so the frame buffer (reader page) stays intact.
+  // OVERLAY manages its own orientation (renderOverlaySleepScreen), so leave it untouched here.
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY) {
+    // The popup is drawn in the reader's current orientation so it matches the page the user
+    // was looking at. The sleep-screen renderers below, however, all expect portrait: the cover
+    // BMP is generated portrait-sized (getDisplayHeight x getDisplayWidth) and the custom/default
+    // screens are laid out portrait. A timeout sleep bypasses the reader's onExit() orientation
+    // reset, so force portrait here or a landscape cover overflows the edges / mis-centers.
     GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
+    renderer.setOrientation(GfxRenderer::Portrait);
   }
   switch (SETTINGS.sleepScreen) {
     case (CrossPointSettings::SLEEP_SCREEN_MODE::BLANK):
@@ -457,8 +464,7 @@ BookOverlayInfo SleepActivity::getBookOverlayInfo(const std::string& bookPath) c
   return info;
 }
 
-void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOverlayInfo& overlayInfo,
-                                            bool topAlignForCoverFit) const {
+void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOverlayInfo& overlayInfo) const {
   int x, y;
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
@@ -479,9 +485,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
         ratio = (1.0f - cropX) * static_cast<float>(bitmap.getWidth()) / static_cast<float>(bitmap.getHeight());
       }
       x = 0;
-      y = topAlignForCoverFit
-              ? 0
-              : std::round((static_cast<float>(pageHeight) - static_cast<float>(pageWidth) / ratio) / 2);
+      y = std::round((static_cast<float>(pageHeight) - static_cast<float>(pageWidth) / ratio) / 2);
       LOG_DBG("SLP", "Centering with ratio %f to y=%d", ratio, y);
     } else {
       // image taller than viewport ratio, scaled down image needs to be centered horizontally
@@ -497,7 +501,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
   } else {
     // center the image
     x = (pageWidth - bitmap.getWidth()) / 2;
-    y = topAlignForCoverFit ? 0 : (pageHeight - bitmap.getHeight()) / 2;
+    y = (pageHeight - bitmap.getHeight()) / 2;
   }
 
   LOG_DBG("SLP", "drawing to %d x %d", x, y);
@@ -664,8 +668,7 @@ void SleepActivity::renderCoverSleepScreen() const {
       const uint8_t overlayMode = SETTINGS.sleepCoverOverlay;
       const BookOverlayInfo coverOverlayInfo =
           overlayMode != 0 ? getBookOverlayInfo(APP_STATE.openEpubPath) : BookOverlayInfo{};
-      renderBitmapSleepScreen(bitmap, coverOverlayInfo,
-                              SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::FIT);
+      renderBitmapSleepScreen(bitmap, coverOverlayInfo);
       file.close();
       return;
     }
