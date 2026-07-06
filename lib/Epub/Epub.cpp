@@ -262,22 +262,11 @@ bool Epub::parseTocNcxFile() const {
 
   LOG_DBG("EBP", "Parsing toc ncx file: %s", tocNcxItem.c_str());
 
-  const auto tmpNcxPath = getCachePath() + "/toc.ncx";
-  FsFile tempNcxFile;
-  if (!Storage.openFileForWrite("EBP", tmpNcxPath, tempNcxFile)) {
+  size_t ncxSize = 0;
+  if (!getItemSize(tocNcxItem, &ncxSize)) {
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-  if (!readItemContentsToStream(tocNcxItem, tempNcxFile, 1024)) {
-    tempNcxFile.close();
-    Storage.remove(tmpNcxPath.c_str());
-    return false;
-  }
-  tempNcxFile.close();
-  if (!Storage.openFileForRead("EBP", tmpNcxPath, tempNcxFile)) {
-    Storage.remove(tmpNcxPath.c_str());
-    return false;
-  }
-  const auto ncxSize = tempNcxFile.size();
 
   // Stream <pageList> entries straight to pagelist.bin (long printed-page lists used to
   // blow the X3 heap when accumulated in a std::vector — see PageListSink).
@@ -286,39 +275,15 @@ bool Epub::parseTocNcxFile() const {
 
   if (!ncxParser.setup()) {
     LOG_ERR("EBP", "Could not setup toc ncx parser");
-    tempNcxFile.close();
-    Storage.remove(tmpNcxPath.c_str());
     Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
-  const auto ncxBuffer = static_cast<uint8_t*>(malloc(1024));
-  if (!ncxBuffer) {
-    LOG_ERR("EBP", "Could not allocate memory for toc ncx parser");
-    tempNcxFile.close();
-    Storage.remove(tmpNcxPath.c_str());
+  if (!readItemContentsToStream(tocNcxItem, ncxParser, 1024)) {
+    LOG_ERR("EBP", "Could not stream toc ncx data");
     Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-
-  while (tempNcxFile.available()) {
-    const auto readSize = tempNcxFile.read(ncxBuffer, 1024);
-    if (readSize == 0) break;
-    const auto processedSize = ncxParser.write(ncxBuffer, readSize);
-
-    if (processedSize != readSize) {
-      LOG_ERR("EBP", "Could not process all toc ncx data");
-      free(ncxBuffer);
-      tempNcxFile.close();
-      Storage.remove(tmpNcxPath.c_str());
-      Storage.remove((getCachePath() + "/pagelist.bin").c_str());
-      return false;
-    }
-  }
-
-  free(ncxBuffer);
-  tempNcxFile.close();
-  Storage.remove(tmpNcxPath.c_str());
 
   // Flush u16 count + close pagelist.bin (or remove it if no <pageList> entries were
   // streamed). The section builder later reads this file to stamp printed-page labels
@@ -338,22 +303,11 @@ bool Epub::parseTocNavFile() const {
 
   LOG_DBG("EBP", "Parsing toc nav file: %s", tocNavItem.c_str());
 
-  const auto tmpNavPath = getCachePath() + "/toc.nav";
-  FsFile tempNavFile;
-  if (!Storage.openFileForWrite("EBP", tmpNavPath, tempNavFile)) {
+  size_t navSize = 0;
+  if (!getItemSize(tocNavItem, &navSize)) {
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-  if (!readItemContentsToStream(tocNavItem, tempNavFile, 1024)) {
-    tempNavFile.close();
-    Storage.remove(tmpNavPath.c_str());
-    return false;
-  }
-  tempNavFile.close();
-  if (!Storage.openFileForRead("EBP", tmpNavPath, tempNavFile)) {
-    Storage.remove(tmpNavPath.c_str());
-    return false;
-  }
-  const auto navSize = tempNavFile.size();
 
   // Note: We can't use `contentBasePath` here as the nav file may be in a different folder to the content.opf
   // and the HTMLX nav file will have hrefs relative to itself
@@ -364,39 +318,15 @@ bool Epub::parseTocNavFile() const {
 
   if (!navParser.setup()) {
     LOG_ERR("EBP", "Could not setup toc nav parser");
-    tempNavFile.close();
-    Storage.remove(tmpNavPath.c_str());
     Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
-  const auto navBuffer = static_cast<uint8_t*>(malloc(1024));
-  if (!navBuffer) {
-    LOG_ERR("EBP", "Could not allocate memory for toc nav parser");
-    tempNavFile.close();
-    Storage.remove(tmpNavPath.c_str());
+  if (!readItemContentsToStream(tocNavItem, navParser, 1024)) {
+    LOG_ERR("EBP", "Could not stream toc nav data");
     Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-
-  while (tempNavFile.available()) {
-    const auto readSize = tempNavFile.read(navBuffer, 1024);
-    if (readSize == 0) break;
-    const auto processedSize = navParser.write(navBuffer, readSize);
-
-    if (processedSize != readSize) {
-      LOG_ERR("EBP", "Could not process all toc nav data");
-      free(navBuffer);
-      tempNavFile.close();
-      Storage.remove(tmpNavPath.c_str());
-      Storage.remove((getCachePath() + "/pagelist.bin").c_str());
-      return false;
-    }
-  }
-
-  free(navBuffer);
-  tempNavFile.close();
-  Storage.remove(tmpNavPath.c_str());
 
   // Flush u16 count + close pagelist.bin (or remove it if no entries were streamed).
   navPageListSink.finalize();
@@ -415,22 +345,11 @@ bool Epub::parsePageMapFile() const {
 
   LOG_DBG("EBP", "Parsing page-map file: %s", pageMapItem.c_str());
 
-  const auto tmpPageMapPath = getCachePath() + "/page-map.xml";
-  FsFile tempPageMapFile;
-  if (!Storage.openFileForWrite("EBP", tmpPageMapPath, tempPageMapFile)) {
+  size_t pageMapSize = 0;
+  if (!getItemSize(pageMapItem, &pageMapSize)) {
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-  if (!readItemContentsToStream(pageMapItem, tempPageMapFile, 1024)) {
-    tempPageMapFile.close();
-    Storage.remove(tmpPageMapPath.c_str());
-    return false;
-  }
-  tempPageMapFile.close();
-  if (!Storage.openFileForRead("EBP", tmpPageMapPath, tempPageMapFile)) {
-    Storage.remove(tmpPageMapPath.c_str());
-    return false;
-  }
-  const auto pageMapSize = tempPageMapFile.size();
 
   // page-map hrefs are relative to the page-map file itself (typically content.opf's dir).
   const std::string pageMapBasePath = pageMapItem.substr(0, pageMapItem.find_last_of('/') + 1);
@@ -440,38 +359,15 @@ bool Epub::parsePageMapFile() const {
 
   if (!pageMapParser.setup()) {
     LOG_ERR("EBP", "Could not setup page-map parser");
-    tempPageMapFile.close();
-    Storage.remove(tmpPageMapPath.c_str());
     Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
-  const auto pageMapBuffer = static_cast<uint8_t*>(malloc(1024));
-  if (!pageMapBuffer) {
-    LOG_ERR("EBP", "Could not allocate memory for page-map parser");
-    tempPageMapFile.close();
-    Storage.remove(tmpPageMapPath.c_str());
+  if (!readItemContentsToStream(pageMapItem, pageMapParser, 1024)) {
+    LOG_ERR("EBP", "Could not stream page-map data");
     Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-
-  while (tempPageMapFile.available()) {
-    const auto readSize = tempPageMapFile.read(pageMapBuffer, 1024);
-    if (readSize == 0) break;
-    const auto processedSize = pageMapParser.write(pageMapBuffer, readSize);
-    if (processedSize != readSize) {
-      LOG_ERR("EBP", "Could not process all page-map data");
-      free(pageMapBuffer);
-      tempPageMapFile.close();
-      Storage.remove(tmpPageMapPath.c_str());
-      Storage.remove((getCachePath() + "/pagelist.bin").c_str());
-      return false;
-    }
-  }
-
-  free(pageMapBuffer);
-  tempPageMapFile.close();
-  Storage.remove(tmpPageMapPath.c_str());
 
   pageMapPageListSink.finalize();
   LOG_DBG("EBP", "Parsed page-map entries");
