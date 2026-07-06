@@ -44,14 +44,8 @@ constexpr int mainMenuIconSize = 32;
 constexpr int listIconSize = 24;
 constexpr int mainMenuColumns = 2;
 constexpr int minAdaptiveMenuRowHeight = 40;
-constexpr int progressBadgeInset = 8;
-int coverWidth = 0;
 
-int clampProgressPercent(const int progressPercent) {
-  if (progressPercent < 0) return 0;
-  if (progressPercent > 100) return 100;
-  return progressPercent;
-}
+int coverWidth = 0;
 
 void drawLyraBatteryIcon(const GfxRenderer& renderer, int x, int y, int battWidth, int rectHeight,
                          uint16_t percentage) {
@@ -128,23 +122,6 @@ const uint8_t* LyraTheme::iconForName(UIIcon icon, int size) {
 // UITheme helper so the progress.bin layout lives in one place.
 // Returns -1 if the file is absent or the percent byte is not yet written.
 int LyraTheme::getRecentBookProgressPercent(const RecentBook& book) { return UITheme::getBookProgressPercent(book); }
-
-void LyraTheme::drawProgressBadge(const GfxRenderer& renderer, Rect anchorRect, int progressPercent) {
-  if (progressPercent < 0) {
-    return;
-  }
-
-  const std::string badgeText = std::to_string(clampProgressPercent(progressPercent)) + "%";
-  const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, badgeText.c_str());
-  const int textHeight = renderer.getLineHeight(SMALL_FONT_ID);
-  const int badgeWidth = textWidth + 12;
-  const int badgeHeight = textHeight + 6;
-  const int badgeX = anchorRect.x + anchorRect.width - badgeWidth - progressBadgeInset;
-  const int badgeY = anchorRect.y + progressBadgeInset;
-
-  renderer.fillRoundedRect(badgeX, badgeY, badgeWidth, badgeHeight, 5, Color::Black);
-  renderer.drawText(SMALL_FONT_ID, badgeX + (badgeWidth - textWidth) / 2, badgeY + 3, badgeText.c_str(), false);
-}
 
 void LyraTheme::drawBatteryLeft(const GfxRenderer& renderer, Rect rect, const bool showPercentage) const {
   // Left aligned: icon on left, percentage on right (reader mode)
@@ -585,11 +562,9 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
                                cornerRadius, false, false, true, true, Color::LightGray);
     }
 
-    drawProgressBadge(
-        static_cast<const GfxRenderer&>(renderer),
-        Rect{tileX + hPaddingInSelection + coverWidth + LyraMetrics::values.verticalSpacing, tileY,
-             tileWidth - 2 * hPaddingInSelection - coverWidth - LyraMetrics::values.verticalSpacing, tileHeight},
-        progressPercent);
+    // Progress + pace-based ETA, e.g. "62% · ~45m". Replaces the old top-right
+    // percent badge on this layout — the percentage now lives in the text line.
+    const std::string statusLine = UITheme::formatBookProgressStatus(book, progressPercent);
 
     auto titleLines = renderer.wrappedText(UI_12_FONT_ID, book.title.c_str(), textWidth, 3, EpdFontFamily::BOLD);
     auto authorLines = renderer.wrappedText(UI_10_FONT_ID, book.author.c_str(), textWidth, 2);
@@ -601,7 +576,10 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     const int titleAuthorSpacing = (!authorLines.empty() || !seriesLines.empty()) ? (smallLineHeight / 2) : 0;
     const int authorHeight = static_cast<int>(authorLines.size()) * smallLineHeight;
     const int seriesHeight = static_cast<int>(seriesLines.size()) * smallLineHeight;
-    const int totalBlockHeight = titleBlockHeight + titleAuthorSpacing + authorHeight + seriesHeight;
+    const int statusSpacing = statusLine.empty() ? 0 : (smallLineHeight / 2);
+    const int statusHeight = statusLine.empty() ? 0 : smallLineHeight;
+    const int totalBlockHeight =
+        titleBlockHeight + titleAuthorSpacing + authorHeight + seriesHeight + statusSpacing + statusHeight;
     int titleY = tileY + tileHeight / 2 - totalBlockHeight / 2;
     const int textX = tileX + hPaddingInSelection + coverWidth + LyraMetrics::values.verticalSpacing;
     for (const auto& line : titleLines) {
@@ -618,6 +596,10 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     for (const auto& line : seriesLines) {
       renderer.drawText(UI_10_FONT_ID, textX, titleY, line.c_str(), true);
       titleY += smallLineHeight;
+    }
+    if (!statusLine.empty()) {
+      titleY += statusSpacing;
+      renderer.drawText(UI_10_FONT_ID, textX, titleY, statusLine.c_str(), true, EpdFontFamily::BOLD);
     }
   } else {
     drawEmptyRecents(renderer, rect);

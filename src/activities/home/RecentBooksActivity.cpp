@@ -515,22 +515,10 @@ void RecentBooksActivity::renderGridCell(int index, bool selected, int cellX, in
     renderer.fillRect(cellX + 1, cellY + 1, tw - 2, th - 2, false);
   }
 
-  // Reading-progress badge in the thumbnail's top-right corner. Drawn as a
-  // white box with a black border and black text so it stays legible over
-  // both the white (unselected) and black (selected) cell backgrounds.
+  // Reading-progress overlay on the cover: bottom-edge bar while in progress,
+  // folded corner when finished, nothing for unread books.
   const int progressPercent = (index >= 0 && index < static_cast<int>(bookProgress.size())) ? bookProgress[index] : -1;
-  if (progressPercent >= 0) {
-    const std::string badgeText = std::to_string(progressPercent) + "%";
-    const int textW = renderer.getTextWidth(SMALL_FONT_ID, badgeText.c_str());
-    const int textH = renderer.getLineHeight(SMALL_FONT_ID);
-    const int badgeW = textW + 8;
-    const int badgeH = textH + 4;
-    const int badgeX = cellX + tw - badgeW - 3;
-    const int badgeY = cellY + 3;
-    renderer.fillRect(badgeX, badgeY, badgeW, badgeH, false);
-    renderer.drawRect(badgeX, badgeY, badgeW, badgeH, true);
-    renderer.drawText(SMALL_FONT_ID, badgeX + 4, badgeY + 2, badgeText.c_str(), true);
-  }
+  UITheme::drawCoverProgressIndicator(renderer, Rect{cellX, cellY, tw, th}, progressPercent);
 
   // Label: title line 1, author line 2; white text on black for selected, black on white otherwise
   const bool black = !selected;
