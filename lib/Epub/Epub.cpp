@@ -267,9 +267,14 @@ bool Epub::parseTocNcxFile() const {
   if (!Storage.openFileForWrite("EBP", tmpNcxPath, tempNcxFile)) {
     return false;
   }
-  readItemContentsToStream(tocNcxItem, tempNcxFile, 1024);
+  if (!readItemContentsToStream(tocNcxItem, tempNcxFile, 1024)) {
+    tempNcxFile.close();
+    Storage.remove(tmpNcxPath.c_str());
+    return false;
+  }
   tempNcxFile.close();
   if (!Storage.openFileForRead("EBP", tmpNcxPath, tempNcxFile)) {
+    Storage.remove(tmpNcxPath.c_str());
     return false;
   }
   const auto ncxSize = tempNcxFile.size();
@@ -282,6 +287,8 @@ bool Epub::parseTocNcxFile() const {
   if (!ncxParser.setup()) {
     LOG_ERR("EBP", "Could not setup toc ncx parser");
     tempNcxFile.close();
+    Storage.remove(tmpNcxPath.c_str());
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
@@ -289,6 +296,8 @@ bool Epub::parseTocNcxFile() const {
   if (!ncxBuffer) {
     LOG_ERR("EBP", "Could not allocate memory for toc ncx parser");
     tempNcxFile.close();
+    Storage.remove(tmpNcxPath.c_str());
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
@@ -301,6 +310,8 @@ bool Epub::parseTocNcxFile() const {
       LOG_ERR("EBP", "Could not process all toc ncx data");
       free(ncxBuffer);
       tempNcxFile.close();
+      Storage.remove(tmpNcxPath.c_str());
+      Storage.remove((getCachePath() + "/pagelist.bin").c_str());
       return false;
     }
   }
@@ -332,9 +343,14 @@ bool Epub::parseTocNavFile() const {
   if (!Storage.openFileForWrite("EBP", tmpNavPath, tempNavFile)) {
     return false;
   }
-  readItemContentsToStream(tocNavItem, tempNavFile, 1024);
+  if (!readItemContentsToStream(tocNavItem, tempNavFile, 1024)) {
+    tempNavFile.close();
+    Storage.remove(tmpNavPath.c_str());
+    return false;
+  }
   tempNavFile.close();
   if (!Storage.openFileForRead("EBP", tmpNavPath, tempNavFile)) {
+    Storage.remove(tmpNavPath.c_str());
     return false;
   }
   const auto navSize = tempNavFile.size();
@@ -348,23 +364,32 @@ bool Epub::parseTocNavFile() const {
 
   if (!navParser.setup()) {
     LOG_ERR("EBP", "Could not setup toc nav parser");
+    tempNavFile.close();
+    Storage.remove(tmpNavPath.c_str());
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
   const auto navBuffer = static_cast<uint8_t*>(malloc(1024));
   if (!navBuffer) {
     LOG_ERR("EBP", "Could not allocate memory for toc nav parser");
+    tempNavFile.close();
+    Storage.remove(tmpNavPath.c_str());
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
   while (tempNavFile.available()) {
     const auto readSize = tempNavFile.read(navBuffer, 1024);
+    if (readSize == 0) break;
     const auto processedSize = navParser.write(navBuffer, readSize);
 
     if (processedSize != readSize) {
       LOG_ERR("EBP", "Could not process all toc nav data");
       free(navBuffer);
       tempNavFile.close();
+      Storage.remove(tmpNavPath.c_str());
+      Storage.remove((getCachePath() + "/pagelist.bin").c_str());
       return false;
     }
   }
@@ -395,9 +420,14 @@ bool Epub::parsePageMapFile() const {
   if (!Storage.openFileForWrite("EBP", tmpPageMapPath, tempPageMapFile)) {
     return false;
   }
-  readItemContentsToStream(pageMapItem, tempPageMapFile, 1024);
+  if (!readItemContentsToStream(pageMapItem, tempPageMapFile, 1024)) {
+    tempPageMapFile.close();
+    Storage.remove(tmpPageMapPath.c_str());
+    return false;
+  }
   tempPageMapFile.close();
   if (!Storage.openFileForRead("EBP", tmpPageMapPath, tempPageMapFile)) {
+    Storage.remove(tmpPageMapPath.c_str());
     return false;
   }
   const auto pageMapSize = tempPageMapFile.size();
@@ -411,6 +441,8 @@ bool Epub::parsePageMapFile() const {
   if (!pageMapParser.setup()) {
     LOG_ERR("EBP", "Could not setup page-map parser");
     tempPageMapFile.close();
+    Storage.remove(tmpPageMapPath.c_str());
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
@@ -418,6 +450,8 @@ bool Epub::parsePageMapFile() const {
   if (!pageMapBuffer) {
     LOG_ERR("EBP", "Could not allocate memory for page-map parser");
     tempPageMapFile.close();
+    Storage.remove(tmpPageMapPath.c_str());
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
@@ -429,6 +463,8 @@ bool Epub::parsePageMapFile() const {
       LOG_ERR("EBP", "Could not process all page-map data");
       free(pageMapBuffer);
       tempPageMapFile.close();
+      Storage.remove(tmpPageMapPath.c_str());
+      Storage.remove((getCachePath() + "/pagelist.bin").c_str());
       return false;
     }
   }
@@ -652,15 +688,21 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   }
 
   bool tocParsed = false;
+  bool navAttempted = false;
 
   // Try EPUB 3 nav document first (preferred)
   if (!tocNavItem.empty()) {
+    navAttempted = true;
     LOG_DBG("EBP", "Attempting to parse EPUB 3 nav document");
     tocParsed = parseTocNavFile();
   }
 
   // Fall back to NCX if nav parsing failed or wasn't available
   if (!tocParsed && !tocNcxItem.empty()) {
+    if (navAttempted && !bookMetadataCache->resetTocPassOutput()) {
+      LOG_ERR("EBP", "Could not reset TOC temp output before NCX fallback");
+      return false;
+    }
     LOG_DBG("EBP", "Falling back to NCX TOC");
     tocParsed = parseTocNcxFile();
   }
