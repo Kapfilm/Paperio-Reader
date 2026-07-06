@@ -114,6 +114,10 @@ class ChapterHtmlSlimParser final : public Print {
     bool hasSmallCaps = false, smallCaps = false;
     bool hasMarginLeft = false;
     int16_t marginLeftPx = 0;  // margin-left in pixels, for span-level poem indents
+    // Inline font-size as a percent of the PARENT element's size (em semantics).
+    // Nested entries compose multiplicatively in updateEffectiveInlineStyle().
+    bool hasFontSize = false;
+    uint8_t fontSizePct = 100;
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   CssStyle currentCssStyle;
@@ -125,6 +129,10 @@ class ChapterHtmlSlimParser final : public Print {
   bool effectiveSub = false;
   bool effectiveSmallCaps = false;
   int16_t effectiveInlineMarginLeft = 0;  // accumulated margin-left from inline span stack
+  // Composed inline font-size percent (relative to the block font size) for the
+  // words currently being flushed. 100 outside sized spans; clamped to the
+  // ParsedText per-word range so it always fits the uint8_t word-size channel.
+  uint8_t effectiveSizePct = 100;
   // Buffered table model — populated while inside <table>, emitted on </table>
   struct BufferedTableCell {
     std::unique_ptr<ParsedText> text;
@@ -230,6 +238,11 @@ class ChapterHtmlSlimParser final : public Print {
   std::unordered_map<std::string, CssStyle> inlineStyleCache_;
 
   void updateEffectiveInlineStyle();
+  // Fold an element's CSS font-size (multiplier relative to its parent) into an inline
+  // style-stack entry. No-op when the entry resolves to sup/sub: the SUP/SUB style bits
+  // already scale glyphs 50% at render time, and the typical `.sup { vertical-align:super;
+  // font-size:0.7em }` rule would otherwise shrink twice.
+  static void applyCssFontSizeToEntry(StyleStackEntry& entry, const CssStyle& cssStyle);
   bool ensureHeapForTextLayout(const char* phase);
   void startNewTextBlock(const BlockStyle& blockStyle);
   bool flushPartWordBuffer();

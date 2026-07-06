@@ -19,10 +19,22 @@ class ParsedText {
     RetryWithoutHyphenation,
   };
 
+ public:
+  // Per-word font-size bounds, percent of the block's font size (microreader-style).
+  // Inline CSS font-size composes multiplicatively through nested elements; anything
+  // outside this range is clamped so a uint8_t always holds the value.
+  static constexpr uint8_t MIN_WORD_SIZE_PCT = 30;
+  static constexpr uint8_t MAX_WORD_SIZE_PCT = 250;
+  static constexpr uint8_t DEFAULT_WORD_SIZE_PCT = 100;
+
  private:
   std::vector<std::string> words;
   std::vector<EpdFontFamily::Style> wordStyles;
   std::vector<bool> wordContinues;  // true = word attaches to previous (no space before it)
+  // Per-word font size, percent of the block font size (100 = block size). Kept in
+  // lockstep with `words` through every insert/erase; the sizes are handed to each
+  // TextBlock line so inline font-size spans survive into the page cache.
+  std::vector<uint8_t> wordSizes;
   BlockStyle blockStyle;
   bool extraParagraphSpacing;
   bool hyphenationEnabled;
@@ -32,6 +44,9 @@ class ParsedText {
 
   void applyParagraphIndent(const GfxRenderer& renderer, int fontId);
   void applyBionicReadingTransform();
+  // Effective measurement scale of words[i]: the block-level multiplier combined
+  // with the word's own inline size percentage.
+  float wordScale(const size_t i) const { return blockStyle.fontSizeMultiplier * (wordSizes[i] / 100.0f); }
   // Returns the available line width at a given 0-based line index, accounting
   // for any active float zones in blockStyle.  lineHeight==0 is a fast path
   // (no float zones active) that returns pageWidth unchanged.
@@ -80,7 +95,8 @@ class ParsedText {
         bionicReadingEnabled(bionicReadingEnabled) {}
   ~ParsedText() = default;
 
-  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false);
+  void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
+               uint8_t sizePct = DEFAULT_WORD_SIZE_PCT);
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }

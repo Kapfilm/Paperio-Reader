@@ -75,11 +75,11 @@ constexpr size_t MAX_SELECTOR_LENGTH = 256;
 constexpr size_t CSS_LENGTH_FIELD_COUNT = 11;
 constexpr size_t CSS_LENGTH_BYTES = sizeof(float) + sizeof(uint8_t);
 // Layout: 4 enum bytes + 11 lengths + display byte + definedBits uint16 + 2 vertAlign bytes + cssFloat byte
-//         + smallCaps byte
+//         + smallCaps byte + fontSizeMultiplier float + fontSize flags byte
 constexpr size_t CSS_FIXED_STYLE_BYTES = 4 * sizeof(uint8_t) + (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) +
                                          sizeof(uint8_t) + sizeof(uint16_t) + 2 * sizeof(uint8_t) + sizeof(uint8_t) +
-                                         sizeof(uint8_t);
-static_assert(CSS_FIXED_STYLE_BYTES == 66,
+                                         sizeof(uint8_t) + sizeof(float) + sizeof(uint8_t);
+static_assert(CSS_FIXED_STYLE_BYTES == 71,
               "style payload layout changed — update read/writeCssStylePayload and bump CSS_CACHE_VERSION");
 
 // Cache file name (version is CssParser::CSS_CACHE_VERSION)
@@ -1124,6 +1124,15 @@ bool CssParser::readCssStylePayload(FsFile& file, CssStyle& style) {
   // bit 0 = value, bit 1 = defined (distinguishes explicit "normal" from unset)
   style.smallCaps = (smallCapsVal & 0x1) != 0;
   style.defined.smallCaps = (smallCapsVal & 0x2) != 0 ? 1 : 0;
+  float fontSizeMul = 1.0f;
+  uint8_t fontSizeFlags = 0;
+  if (file.read(&fontSizeMul, sizeof(fontSizeMul)) != sizeof(fontSizeMul) || file.read(&fontSizeFlags, 1) != 1) {
+    return false;
+  }
+  if ((fontSizeFlags & 0x1) != 0) {
+    style.fontSizeMultiplier = fontSizeMul;
+    style.defined.fontSizeMultiplier = 1;
+  }
   return true;
 }
 
@@ -1175,6 +1184,10 @@ void CssParser::writeCssStylePayload(FsFile& file, const CssStyle& style) {
   // bit 0 = value, bit 1 = defined (distinguishes explicit "normal" from unset)
   uint8_t smallCapsVal = (style.smallCaps ? 0x1 : 0x0) | (style.defined.smallCaps ? 0x2 : 0x0);
   file.write(smallCapsVal);
+  // font-size multiplier: float + flags byte (bit 0 = defined)
+  file.write(reinterpret_cast<const uint8_t*>(&style.fontSizeMultiplier), sizeof(style.fontSizeMultiplier));
+  const uint8_t fontSizeFlags = style.defined.fontSizeMultiplier ? 0x1 : 0x0;
+  file.write(fontSizeFlags);
 }
 
 void CssParser::touchHotRule(const std::string& selector) const {

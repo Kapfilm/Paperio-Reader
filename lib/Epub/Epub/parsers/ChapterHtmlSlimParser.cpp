@@ -225,6 +225,10 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   effectiveSub = false;
   effectiveSmallCaps = currentCssStyle.hasSmallCaps() && currentCssStyle.smallCaps;
   effectiveInlineMarginLeft = 0;
+  // Inline font-size composes multiplicatively through the stack (em is relative to
+  // the parent element); the block's own font-size lives in BlockStyle, so 100 here
+  // means "the block size". Tracked in integer percent to match the per-word channel.
+  int sizePct = 100;
 
   // Apply inline style stack in order
   for (const auto& entry : inlineStyleStack) {
@@ -254,7 +258,21 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
     if (entry.hasMarginLeft) {
       effectiveInlineMarginLeft = entry.marginLeftPx;
     }
+    if (entry.hasFontSize) {
+      sizePct = sizePct * entry.fontSizePct / 100;
+    }
   }
+  effectiveSizePct = static_cast<uint8_t>(
+      std::min<int>(std::max<int>(sizePct, ParsedText::MIN_WORD_SIZE_PCT), ParsedText::MAX_WORD_SIZE_PCT));
+}
+
+void ChapterHtmlSlimParser::applyCssFontSizeToEntry(StyleStackEntry& entry, const CssStyle& cssStyle) {
+  if (!cssStyle.hasFontSizeMultiplier()) return;
+  if ((entry.hasSup && entry.sup) || (entry.hasSub && entry.sub)) return;  // SUP/SUB already scale at render
+  const int pct = static_cast<int>(cssStyle.fontSizeMultiplier * 100.0f + 0.5f);
+  entry.hasFontSize = true;
+  entry.fontSizePct = static_cast<uint8_t>(
+      std::min<int>(std::max<int>(pct, ParsedText::MIN_WORD_SIZE_PCT), ParsedText::MAX_WORD_SIZE_PCT));
 }
 
 bool ChapterHtmlSlimParser::ensureHeapForTextLayout(const char* phase) {
@@ -324,7 +342,7 @@ bool ChapterHtmlSlimParser::flushPartWordBuffer() {
   // flush the buffer — route to table cell text when inside a <td>/<th>
   partWordBuffer[partWordBufferIndex] = '\0';
   if (currentTableCell) {
-    currentTableCell->text->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
+    currentTableCell->text->addWord(partWordBuffer, fontStyle, false, nextWordContinues, effectiveSizePct);
   } else if (currentTextBlock) {
     // If a float image is pending and the block is still empty, attach it now so the
     // first word (and all subsequent words) are laid out beside the image.
@@ -333,7 +351,7 @@ bool ChapterHtmlSlimParser::flushPartWordBuffer() {
     if (pendingInlineImage_.active && currentTextBlock->isEmpty()) {
       attachPendingFloatImage(currentTextBlock->getBlockStyle());
     }
-    currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
+    currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, effectiveSizePct);
 
     if (currentTextBlock->size() > 96) {
       if (!ensureHeapForTextLayout("long-block split")) {
@@ -1475,6 +1493,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       entry.hasItalic = true;
       entry.italic = cssStyle.fontStyle == CssFontStyle::Italic;
     }
+    applyCssFontSizeToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, BOLD_TAGS, NUM_BOLD_TAGS)) {
@@ -1507,6 +1526,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
         entry.strikethrough = true;
       }
     }
+    applyCssFontSizeToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, ITALIC_TAGS, NUM_ITALIC_TAGS)) {
@@ -1539,6 +1559,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
         entry.strikethrough = true;
       }
     }
+    applyCssFontSizeToEntry(entry, cssStyle);
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (strcmp(name, "sup") == 0 || strcmp(name, "sub") == 0) {
@@ -1558,9 +1579,13 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (strcmp(name, "span") == 0 || !isHeaderOrBlock(name)) {
-    // Handle span and other inline elements for CSS styling
+    // Handle span and other inline elements for CSS styling.
+    // <small>/<big> carry UA-default sizes (80%/120%) even without any CSS rule.
+    const bool isSmallTag = strcmp(name, "small") == 0;
+    const bool isBigTag = strcmp(name, "big") == 0;
     if (cssStyle.hasFontWeight() || cssStyle.hasFontStyle() || cssStyle.hasTextDecoration() ||
-        cssStyle.hasVerticalAlign() || cssStyle.hasSmallCaps() || cssStyle.hasMarginLeft()) {
+        cssStyle.hasVerticalAlign() || cssStyle.hasSmallCaps() || cssStyle.hasMarginLeft() ||
+        cssStyle.hasFontSizeMultiplier() || isSmallTag || isBigTag) {
       // Flush buffer before style change so preceding text gets current style
       if (self->partWordBufferIndex > 0) {
         const bool endsAtDashBreak = bufferEndsWithBreakableDash(self->partWordBuffer, self->partWordBufferIndex);
@@ -1629,6 +1654,11 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
           updatedStyle.textIndentDefined = true;
           self->currentTextBlock->setBlockStyle(updatedStyle);
         }
+      }
+      applyCssFontSizeToEntry(entry, cssStyle);
+      if (!entry.hasFontSize && (isSmallTag || isBigTag)) {
+        entry.hasFontSize = true;
+        entry.fontSizePct = isSmallTag ? 80 : 120;
       }
       self->inlineStyleStack.push_back(entry);
       self->updateEffectiveInlineStyle();
@@ -2189,7 +2219,13 @@ int ChapterHtmlSlimParser::effectiveLineHeight(const BlockStyle& bs) const {
 ParsedText::LineProcessResult ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line,
                                                                    const bool lineEndsWithHyphenatedWord,
                                                                    const bool suppressHyphenationRetry) {
-  const int lineHeight = effectiveLineHeight(line->getBlockStyle());
+  // Lines carrying inline-sized words advance by the tallest word on the line
+  // (microreader semantics); uniform lines keep the block line height exactly.
+  int lineHeight = effectiveLineHeight(line->getBlockStyle());
+  const uint8_t maxPct = line->maxSizePct();
+  if (maxPct != 100) {
+    lineHeight = lineHeight * maxPct / 100;
+  }
 
   if (!currentPage) {
     currentPage.reset(new Page());

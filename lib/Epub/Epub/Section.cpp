@@ -18,8 +18,8 @@
 
 namespace {
 constexpr uint8_t SECTION_FILE_VERSION =
-    55;  // bumped: parent/child vertical margins now collapse (std::max) instead of summing,
-         // changing block spacing; discards v54 caches so layout re-parses cleanly
+    56;  // bumped: TextBlock records per-word inline font sizes (flag byte + optional
+         // size array) and honors them in layout; discards v55 caches so pages re-parse
 
 namespace header {
 constexpr uint32_t kVersion = 0;
