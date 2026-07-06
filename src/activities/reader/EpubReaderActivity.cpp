@@ -18,6 +18,7 @@
 #include "EpubReaderActivity.h"
 
 #include <Epub/Page.h>
+#include <Epub/ParsedText.h>
 #include <Epub/blocks/TextBlock.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -2439,6 +2440,8 @@ void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
   // Opportunistic recovery: after an OOM during chapter indexing, or after a Background-C
   // released build, restore the secondary buffer when heap is healthy again.
   if (secondaryBufferDegraded_ && !renderer.hasSecondaryBuffer()) {
+    // Clear word-width cache before attempting framebuffer reallocation
+    ParsedText::clearWordWidthCache();
     if (renderer.reallocSecondaryBuffer()) {
       secondaryBufferDegraded_ = false;
       // Undo the IncrementalReleased opt-in (see chooseSectionBuildMode/buildSection): once the
@@ -2754,6 +2757,8 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
   // refresh.
   const BuildOutcome outcome = createOk ? BuildOutcome::Built : BuildOutcome::Failed;
   if (released) {
+    // Clear word-width cache before framebuffer reallocation to avoid heap fragmentation
+    ParsedText::clearWordWidthCache();
     if (!renderer.reallocSecondaryBuffer()) {
       LOG_ERR("ERS", "Failed to reallocate secondary display buffer — display quality degraded");
       secondaryBufferDegraded_ = true;
