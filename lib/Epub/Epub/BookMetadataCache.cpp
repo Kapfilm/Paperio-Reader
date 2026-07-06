@@ -77,6 +77,26 @@ bool BookMetadataCache::beginTocPass() {
   return true;
 }
 
+bool BookMetadataCache::resetTocPassOutput() {
+  if (!buildMode) {
+    LOG_DBG("BMC", "resetTocPassOutput called but not in build mode");
+    return false;
+  }
+
+  if (tocFile) {
+    tocFile.close();
+  }
+
+  if (!Storage.openFileForWrite("BMC", cachePath + tmpTocBinFile, tocFile)) {
+    LOG_ERR("BMC", "Could not reopen TOC temp file for reset");
+    return false;
+  }
+
+  tocCount = 0;
+  LOG_DBG("BMC", "Reset TOC temp output for fallback parse");
+  return true;
+}
+
 bool BookMetadataCache::endTocPass() {
   tocFile.close();
   spineFile.close();
