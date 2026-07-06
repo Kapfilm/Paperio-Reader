@@ -7,6 +7,7 @@
 
 #include <algorithm>
 
+#include "ImageFormatDetector.h"
 #include "converters/GifToFramebufferConverter.h"
 #include "converters/JpegToFramebufferConverter.h"
 #include "converters/PngToFramebufferConverter.h"
@@ -23,15 +24,19 @@ std::string extractedPathFor(const std::string& cachePath, const std::string& ep
   return cachePath + "/img/" + basename;
 }
 
-// Mirror the formats the parser's render-time probe (ImageDecoderFactory) supports, by sniffing
-// the magic bytes — so any image the parser would lay out can be resolved here.
+// Parse image dimensions by detecting format and delegating to the appropriate converter.
 bool parseImageDimensions(const uint8_t* buf, size_t n, ImageDimensions& dims) {
-  if (n >= 2 && buf[0] == 0xFF && buf[1] == 0xD8)
-    return JpegToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
-  if (n >= 8 && buf[0] == 0x89 && buf[1] == 0x50)
-    return PngToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
-  if (n >= 10 && buf[0] == 'G' && buf[1] == 'I' && buf[2] == 'F')
-    return GifToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
+  const auto fmt = ImageFormatDetector::detect(buf, n);
+  switch (fmt) {
+    case ImageFormatDetector::Format::Jpeg:
+      return JpegToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
+    case ImageFormatDetector::Format::Png:
+      return PngToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
+    case ImageFormatDetector::Format::Gif:
+      return GifToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
+    case ImageFormatDetector::Format::Unknown:
+      return false;
+  }
   return false;
 }
 }  // namespace

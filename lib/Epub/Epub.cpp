@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cstring>
 
+#include "Epub/ImageFormatDetector.h"
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/PageListSink.h"
@@ -23,27 +24,17 @@
 
 namespace {
 
-enum class CoverImageFormat { Unknown, Jpeg, Png };
-
-CoverImageFormat detectCoverImageFormat(FsFile& imageFile) {
+// Wrapper around ImageFormatDetector that reads from file and seeks to origin
+ImageFormatDetector::Format detectCoverImageFormat(FsFile& imageFile) {
   if (!imageFile || !imageFile.seek(0)) {
-    return CoverImageFormat::Unknown;
+    return ImageFormatDetector::Format::Unknown;
   }
 
   uint8_t header[8] = {};
   const int readBytes = imageFile.read(header, sizeof(header));
   imageFile.seek(0);
 
-  if (readBytes >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) {
-    return CoverImageFormat::Jpeg;
-  }
-
-  constexpr uint8_t PNG_SIGNATURE[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
-  if (readBytes >= 8 && memcmp(header, PNG_SIGNATURE, sizeof(PNG_SIGNATURE)) == 0) {
-    return CoverImageFormat::Png;
-  }
-
-  return CoverImageFormat::Unknown;
+  return ImageFormatDetector::detect(header, readBytes);
 }
 
 }  // namespace
@@ -510,7 +501,7 @@ void Epub::parseCssFiles() const {
 // load in the meta data for the epub file
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
-  tocReliabilityState = -1;
+  tocReliability = TocReliability::Unknown;
 
   // Initialize spine/TOC cache
   bookMetadataCache.reset(new BookMetadataCache(cachePath));
@@ -796,9 +787,9 @@ bool Epub::coverImageCachedValidOnly() const {
     return true;  // can't open to validate — assume valid, let the decode fail if needed
   }
   const bool nonEmpty = existing.size() > 0;
-  const CoverImageFormat fmt = detectCoverImageFormat(existing);
+  const auto fmt = detectCoverImageFormat(existing);
   existing.close();
-  return nonEmpty && fmt != CoverImageFormat::Unknown;
+  return nonEmpty && fmt != ImageFormatDetector::Format::Unknown;
 }
 
 bool Epub::coverImageCachedAndValid(bool allowExtract) const {
@@ -814,9 +805,9 @@ bool Epub::ensureCoverImageCached() const {
   if (Storage.exists(coverCachePath.c_str())) {
     FsFile existing;
     if (Storage.openFileForRead("EBP", coverCachePath, existing)) {
-      const CoverImageFormat fmt = detectCoverImageFormat(existing);
+      const auto fmt = detectCoverImageFormat(existing);
       existing.close();
-      if (fmt != CoverImageFormat::Unknown) return true;
+      if (fmt != ImageFormatDetector::Format::Unknown) return true;
     } else {
       existing.close();
       return true;  // can't open to validate — assume valid, let generateThumbBmp fail if needed
@@ -881,9 +872,9 @@ bool Epub::ensureCoverImageCached() const {
 
   if (!Storage.openFileForRead("EBP", coverCachePath, coverFile)) return false;
   const bool empty = coverFile.size() == 0;
-  const CoverImageFormat fmt = empty ? CoverImageFormat::Unknown : detectCoverImageFormat(coverFile);
+  const auto fmt = empty ? ImageFormatDetector::Format::Unknown : detectCoverImageFormat(coverFile);
   coverFile.close();
-  if (empty || fmt == CoverImageFormat::Unknown) {
+  if (empty || fmt == ImageFormatDetector::Format::Unknown) {
     LOG_ERR("EBP", "Cover image %s: %s", empty ? "extracted as empty file" : "has unsupported format",
             coverImageHref.c_str());
     Storage.remove(coverCachePath.c_str());
@@ -926,9 +917,9 @@ bool Epub::generateCoverBmp(bool cropped) const {
   if (!Storage.openFileForRead("EBP", coverCachePath, coverImage)) return false;
 
   const auto detectedFormat = detectCoverImageFormat(coverImage);
-  if (detectedFormat == CoverImageFormat::Jpeg) {
+  if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     LOG_DBG("EBP", "Generating BMP from JPEG cover image (%s mode)", cropped ? "cropped" : "fit");
-  } else if (detectedFormat == CoverImageFormat::Png) {
+  } else if (detectedFormat == ImageFormatDetector::Format::Png) {
     LOG_DBG("EBP", "Generating BMP from PNG cover image (%s mode)", cropped ? "cropped" : "fit");
   } else {
     LOG_ERR("EBP", "Cover image has unsupported format");
@@ -943,7 +934,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
   }
 
   bool success = false;
-  if (detectedFormat == CoverImageFormat::Jpeg) {
+  if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     success = JpegToBmpConverter::jpegFileToBmpStream(coverImage, coverBmp, cropped);
   } else {
     success = PngToBmpConverter::pngFileToBmpStream(coverImage, coverBmp, cropped);
@@ -1010,7 +1001,7 @@ ThumbResult Epub::generateThumbBmp(int height, bool allowExtract) const {
   if (!Storage.openFileForRead("EBP", getCoverImageCachePath(), coverImage)) return ThumbResult::TransientFail;
 
   const auto detectedFormat = detectCoverImageFormat(coverImage);
-  if (detectedFormat == CoverImageFormat::Unknown) {
+  if (detectedFormat == ImageFormatDetector::Format::Unknown) {
     // Cover extracted but its format is unsupported — structural, re-extraction yields the same
     // bytes. Sentinel so we stop trying.
     LOG_ERR("EBP", "Cached cover image is not a supported format — writing structural sentinel");
@@ -1027,7 +1018,7 @@ ThumbResult Epub::generateThumbBmp(int height, bool allowExtract) const {
 
   const int thumbW = static_cast<int>(height * 0.6f);
   bool success = false;
-  if (detectedFormat == CoverImageFormat::Jpeg) {
+  if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     LOG_DBG("EBP", "Generating thumb BMP from JPEG cover image");
     success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, thumbW, height);
   } else {
@@ -1086,7 +1077,7 @@ ThumbResult Epub::generateThumbBmp(int width, int height, bool allowExtract) con
   if (!Storage.openFileForRead("EBP", getCoverImageCachePath(), coverImage)) return ThumbResult::TransientFail;
 
   const auto detectedFormat = detectCoverImageFormat(coverImage);
-  if (detectedFormat == CoverImageFormat::Unknown) {
+  if (detectedFormat == ImageFormatDetector::Format::Unknown) {
     // Cover extracted but its format is unsupported — structural, re-extraction yields the same
     // bytes. Sentinel so we stop trying.
     LOG_ERR("EBP", "Cached cover image is not a supported format — writing structural sentinel");
@@ -1102,7 +1093,7 @@ ThumbResult Epub::generateThumbBmp(int width, int height, bool allowExtract) con
   }
 
   bool success = false;
-  if (detectedFormat == CoverImageFormat::Jpeg) {
+  if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     LOG_DBG("EBP", "Generating %dx%d thumb BMP from JPEG cover image", width, height);
     success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, width, height);
   } else {
@@ -1280,12 +1271,12 @@ int Epub::getSpineIndexForTocIndex(const int tocIndex) const {
 }
 
 bool Epub::hasReliableToc() const {
-  if (tocReliabilityState != -1) {
-    return tocReliabilityState == 1;
+  if (tocReliability != TocReliability::Unknown) {
+    return tocReliability == TocReliability::Reliable;
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
-    tocReliabilityState = 0;
+    tocReliability = TocReliability::Unreliable;
     return false;
   }
 
@@ -1293,7 +1284,7 @@ bool Epub::hasReliableToc() const {
   // This avoids the O(tocCount) seek-heavy scan that previously fired on first page load
   // for every book — a large web-novel TOC (~3000 entries) added several seconds of latency.
   const bool reliable = bookMetadataCache->isTocReliable();
-  tocReliabilityState = reliable ? 1 : 0;
+  tocReliability = reliable ? TocReliability::Reliable : TocReliability::Unreliable;
   return reliable;
 }
 
