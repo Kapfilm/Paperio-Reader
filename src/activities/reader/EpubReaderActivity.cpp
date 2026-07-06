@@ -2721,6 +2721,7 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
   bool createOk = runCreate();
   LOG_INF("ERS", "createSectionFile returned %d in %ums (free=%lu)", createOk ? 1 : 0, millis() - createStart,
           esp_get_free_heap_size());
+  ParsedText::logWordWidthCacheStats("createSectionFile");
   checkHeapIntegrity("after_createSectionFile");
 
   if (!createOk && inPlace) {
@@ -2735,6 +2736,7 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
     createOk = runCreate();
     LOG_INF("ERS", "createSectionFile retry returned %d in %ums (free=%lu)", createOk ? 1 : 0, millis() - retryStart,
             esp_get_free_heap_size());
+    ParsedText::logWordWidthCacheStats("createSectionFile_retry");
     checkHeapIntegrity("after_createSectionFile_retry");
   }
 
