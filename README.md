@@ -135,7 +135,7 @@ Rendering examples from [Alice in Wonderland](https://www.gutenberg.org/ebooks/2
 | --- | --- | --- | --- | --- |
 | Floating images 1 | <img src="docs/images/comparison/01_leftfig.png">  | <img src="docs/images/comparison/01_leftfig_mr.png"> | <img src="docs/images/comparison/01_leftfig_cpr.png">   |    |
 | Floating images 2 | <img src="docs/images/comparison/02_rightfig.png">  | <img src="docs/images/comparison/02_rightfig_mr.png">   | <img src="docs/images/comparison/02_rightfig_cpr.png">   |    |
-| CSS Rendering | <img src="docs/images/comparison/03_render.png">  | <img src="docs/images/comparison/03_render_mr.png">  | <img src="docs/images/comparison/03_render_cpr.png"> |    |
+| CSS Rendering | <img src="docs/images/comparison/03_render.png"> <br> <img width="480" height="800" alt="screen" src="https://github.com/user-attachments/assets/ee11c062-b3cf-4543-8954-7e45f77ba772" /> | <img src="docs/images/comparison/03_render_mr.png">  | <img src="docs/images/comparison/03_render_cpr.png"> |    |
 | Graphics | <img src="docs/images/comparison/04_graphic.png">  | <img src="docs/images/comparison/04_graphic_mr.png">  | <img src="docs/images/comparison/04_graphic_cpr.png">  |    |
 | Images in tables | <img src="docs/images/comparison/05_tablegraphic.png">  | <img src="docs/images/comparison/05_tablegraphic_mr.png">  | <img src="docs/images/comparison/05_tablegraphic_cpr.png">  |    |
 
