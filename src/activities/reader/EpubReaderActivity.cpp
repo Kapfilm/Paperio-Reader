@@ -62,6 +62,10 @@
 #include "fontIds.h"
 #include "util/ScreenshotUtil.h"
 
+// Defined further down (near the other font helpers); declared here because
+// buildRenderParams() above it needs the ladder.
+static FontSizeLadder buildReaderFontSizeLadder(int bodyFontId);
+
 namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
 
@@ -767,7 +771,7 @@ Section::BuildParams EpubReaderActivity::makeSectionBuildParams() const {
   p.embeddedStyle = lastRenderStats.embeddedStyle;
   p.bionicReadingEnabled = getEffectiveBionicReading();
   p.imageRendering = lastRenderStats.imageRendering;
-  p.headingFonts = buildHeadingFonts();
+  p.fontSizeLadder = buildReaderFontSizeLadder(p.fontId);
   return p;
 }
 
@@ -2093,14 +2097,36 @@ int EpubReaderActivity::getEffectiveReaderFontId() const {
   return SETTINGS.getReaderFontId();
 }
 
-Section::HeadingFonts EpubReaderActivity::buildHeadingFonts() const {
-  // Headings render by SCALING the body font (nearest-neighbor upscale in renderCharAtScale),
-  // not by switching to a taller built-in font. The taller-font approach was tried and dropped:
-  // it put a second font on chapter-opener pages, which thrashed the limited glyph-cache slots
-  // (multi-second page stalls), and only delivered quantized 2pt steps capped at 18pt for
-  // built-in fonts. Scaling gives the exact 1.6/1.4/1.2 ratios at any body size with one font
-  // per page (no cache pressure). Defaults already encode that: fontId all 0 = scale fallback.
-  return Section::HeadingFonts{};
+// Sibling-size ladder for a built-in body font: every size of the same family, with its
+// point size expressed as a percent of the body's. Deterministic from the fontId ALONE —
+// the section-cache property hash deliberately excludes the ladder on that basis, so any
+// path that rebuilds a section (foreground, background, sleep) derives an identical ladder
+// from the same fontId. Unknown ids (SD-card fonts, one loaded size) get an empty ladder,
+// which keeps the pure-scale fallback.
+//
+// Glyph-cache note: an earlier taller-heading-font attempt thrashed the FontDecompressor's
+// four page slots. Two things changed since: FontCacheManager now prewarms per fontId, and
+// the parser caps sections at ONE auxiliary font (body R/B/I + aux R = exactly four slots).
+static FontSizeLadder buildReaderFontSizeLadder(const int bodyFontId) {
+  static constexpr uint8_t kSizeEnums[] = {CrossPointSettings::TINY, CrossPointSettings::SMALL,
+                                           CrossPointSettings::MEDIUM, CrossPointSettings::LARGE,
+                                           CrossPointSettings::EXTRA_LARGE};
+  static constexpr uint8_t kPointSizes[] = {10, 12, 14, 16, 18};
+  static constexpr uint8_t kFamilies[] = {CrossPointSettings::BOOKERLY, CrossPointSettings::NOTOSANS};
+
+  FontSizeLadder ladder;
+  for (const uint8_t family : kFamilies) {
+    for (size_t i = 0; i < sizeof(kSizeEnums); ++i) {
+      if (CrossPointSettings::getBuiltinReaderFontId(family, kSizeEnums[i]) != bodyFontId) continue;
+      const uint8_t bodyPt = kPointSizes[i];
+      for (size_t j = 0; j < sizeof(kSizeEnums); ++j) {
+        ladder.addRung(CrossPointSettings::getBuiltinReaderFontId(family, kSizeEnums[j]),
+                       static_cast<uint16_t>(kPointSizes[j] * 100 / bodyPt));
+      }
+      return ladder;
+    }
+  }
+  return ladder;  // SD font or unknown id: empty ladder = scale-only fallback
 }
 
 void EpubReaderActivity::NavigationTarget::resolveInto(Section& sec, int spineIndex) const {
@@ -2685,7 +2711,7 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
                                       buildParams.viewportWidth, buildParams.viewportHeight,
                                       buildParams.hyphenationEnabled, buildParams.embeddedStyle,
                                       buildParams.bionicReadingEnabled, buildParams.imageRendering, nullptr,
-                                      /*skipEviction=*/false, buildParams.headingFonts);
+                                      /*skipEviction=*/false, buildParams.fontSizeLadder);
   };
 
   const uint32_t createStart = millis();
@@ -3920,7 +3946,7 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
                                     SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
                                     SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
                                     static_cast<bool>(SETTINGS.bionicReading), SETTINGS.imageRendering, nullptr,
-                                    /*skipEviction=*/false, Section::HeadingFonts{})) {
+                                    /*skipEviction=*/false, buildReaderFontSizeLadder(effectiveFontId))) {
       LOG_ERR("SLP", "EPUB: failed to rebuild section cache for spine %d", spineIndex);
       return false;
     }

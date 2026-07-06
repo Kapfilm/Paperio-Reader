@@ -35,14 +35,16 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     const int ascender = (scale == blockScale) ? blockAscender : renderer.getFontAscenderSizeScaled(effFontId, scale);
     // Baseline alignment: shift smaller words down so all baselines meet at y + lineAscender.
     int wordY = y + (lineAscender - ascender);
-    // SUP/SUB shift the baseline passed to drawText; the glyph is also scaled 50% inside
-    // drawText, so these offsets are chosen relative to the full-size ascender:
-    //   SUP: raise by 40% of ascender — sits clearly above the cap-height
-    //   SUB: lower by 25% of ascender — descends below baseline without clashing with ascenders below
+    // SUP/SUB shift the baseline only — the glyph shrink comes from the word's own size
+    // percentage (parser default 50%, or the publisher's CSS). Offsets are anchored to the
+    // BLOCK's full-size ascender, not the shrunken word's, so the raised/lowered positions
+    // match the surrounding full-size text:
+    //   SUP: raise by 40% of the block ascender — sits clearly above the cap-height
+    //   SUB: lower by 25% of the block ascender — descends below baseline without clashing
     if ((currentStyle & EpdFontFamily::SUP) != 0) {
-      wordY -= ascender * 2 / 5;
+      wordY -= blockAscender * 2 / 5;
     } else if ((currentStyle & EpdFontFamily::SUB) != 0) {
-      wordY += ascender / 4;
+      wordY += blockAscender / 4;
     }
     if (scale == 1.0f) {
       renderer.drawText(effFontId, wordX, wordY, words[i].c_str(), true, currentStyle);

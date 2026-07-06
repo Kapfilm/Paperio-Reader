@@ -206,6 +206,19 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   wordSizes.push_back(std::min(std::max(sizePct, MIN_WORD_SIZE_PCT), MAX_WORD_SIZE_PCT));
 }
 
+bool ParsedText::foldUniformWordSizes() {
+  if (words.empty() || wordSizes.empty()) return false;
+  const uint8_t first = wordSizes[0];
+  for (const uint8_t sz : wordSizes) {
+    if (sz != first) return false;
+  }
+  if (first == DEFAULT_WORD_SIZE_PCT) return false;  // all-100% — nothing to fold
+
+  blockStyle.fontSizeMultiplier *= first / 100.0f;
+  std::fill(wordSizes.begin(), wordSizes.end(), DEFAULT_WORD_SIZE_PCT);
+  return true;
+}
+
 // Consumes data to minimize memory usage
 int ParsedText::widthForLine(const int lineIndex, const int lineHeight, const int16_t blockStartY,
                              const int pageWidth) const {

@@ -50,6 +50,11 @@ struct BlockStyle {
   // a full line-height gap when the <br> block stays empty (section-break use case).
   // NOT propagated through getCombinedBlockStyle so it can't leak into sibling blocks.
   bool fromBrElement = false;
+  // Parse-time guard: true once resolveBlockFont() has snapped this block to the size
+  // ladder, so a second layout pass (long-block split, continuations) can't re-resolve the
+  // residual multiplier. NOT serialised and NOT propagated through getCombinedBlockStyle
+  // (a fresh combined style defaults to unresolved, which is correct — it precedes layout).
+  bool fontResolved = false;
   // Heading sizing. Two strategies share these two fields:
   //  - headingFontId == 0: scale the *body* font by fontSizeMultiplier (nearest-neighbor
   //    upscale path). Used for SD fonts (only one size loaded), steps past the largest

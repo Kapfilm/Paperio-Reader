@@ -27,7 +27,11 @@ void FontCacheManager::clearCache() {
 }
 
 void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
-  clearCache();
+  // Deliberately does NOT clear existing page slots: a page that mixes fonts (body +
+  // heading) is prewarmed with one call per font, and clearing here would wipe the
+  // previous font's slots — the render would then transiently re-decompress a glyph
+  // group per body glyph (~10 ms each, multi-second page turns). The batch clear
+  // happens once in endScanAndPrewarm() before the per-font loop.
 
   // SD card font prewarm path: prewarm all requested styles in one call
   auto sdIt = sdCardFonts_.find(fontId);
@@ -104,6 +108,10 @@ FontCacheManager::PrewarmScope::PrewarmScope(FontCacheManager& manager) : manage
 void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
   manager_->scanMode_ = ScanMode::None;
   if (manager_->scanByFont_.empty()) return;
+
+  // One batch clear for the whole page; the per-font prewarmCache calls below append
+  // into the freed slots (FontDecompressor dedupes across slots between calls).
+  manager_->clearCache();
 
   // Prewarm every font that appeared during the scan (typically 1, occasionally 2 for a
   // heading + body page). Without this, only one font is warmed and the render thrashes the

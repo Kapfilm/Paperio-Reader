@@ -403,3 +403,76 @@ TEST(CssParserCache, FontSizeMultiplierSurvivesDiskCache) {
   removePath(cacheDir);
   std::filesystem::remove(cssPath);
 }
+
+// Regression (cache v14): list-style-type:none and page-break-before/after from
+// stylesheets must survive the disk-cache round trip. Same defect class as the
+// v13 font-size fix — parsed correctly, then dropped by write/readCssStylePayload.
+TEST(CssParserCache, ListStyleAndPageBreaksSurviveDiskCache) {
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+
+  const std::string css =
+      ".plainlist { list-style-type: none }\n"
+      ".chapter { page-break-before: always }\n"
+      ".part { page-break-after: always }\n"
+      ".plain { text-align: center }\n";
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile cssFile;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), cssFile));
+    ASSERT_TRUE(parser.loadFromStream(cssFile));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+
+  const CssStyle plainlist = parser.resolveStyle("ul", "plainlist");
+  EXPECT_TRUE(plainlist.hasListStyleNone());
+  EXPECT_TRUE(plainlist.listStyleNone);
+
+  const CssStyle chapter = parser.resolveStyle("div", "chapter");
+  EXPECT_TRUE(chapter.hasPageBreakBefore());
+  EXPECT_TRUE(chapter.pageBreakBefore);
+  EXPECT_FALSE(chapter.pageBreakAfter);
+
+  const CssStyle part = parser.resolveStyle("div", "part");
+  EXPECT_TRUE(part.hasPageBreakAfter());
+  EXPECT_TRUE(part.pageBreakAfter);
+  EXPECT_FALSE(part.pageBreakBefore);
+
+  const CssStyle plain = parser.resolveStyle("p", "plain");
+  EXPECT_FALSE(plain.hasListStyleNone());
+  EXPECT_FALSE(plain.hasPageBreakBefore());
+  EXPECT_FALSE(plain.hasPageBreakAfter());
+
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
+// Font-size absolute units and keywords resolve to body-relative multipliers:
+// pt normalises against 12 pt, px against 16 px, keywords use fixed steps.
+TEST(CssParserUnits, FontSizeKeywordsAndAbsoluteUnits) {
+  struct Case {
+    const char* decl;
+    float expected;
+  };
+  const Case cases[] = {
+      {"font-size: 9pt", 0.75f},     {"font-size: 12pt", 1.0f},     {"font-size: 24pt", 2.0f},
+      {"font-size: 8px", 0.5f},      {"font-size: 16px", 1.0f},     {"font-size: 32px", 2.0f},
+      {"font-size: xx-small", 0.6f}, {"font-size: x-small", 0.75f}, {"font-size: small", 0.8f},
+      {"font-size: smaller", 0.8f},  {"font-size: medium", 1.0f},   {"font-size: large", 1.2f},
+      {"font-size: larger", 1.2f},   {"font-size: x-large", 1.4f},  {"font-size: xx-large", 1.6f},
+  };
+  for (const auto& c : cases) {
+    const CssStyle st = CssParser::parseInlineStyle(c.decl);
+    EXPECT_TRUE(st.hasFontSizeMultiplier()) << c.decl;
+    EXPECT_FLOAT_EQ(st.fontSizeMultiplier, c.expected) << c.decl;
+  }
+
+  // Unknown keyword must leave font-size undefined.
+  const CssStyle bogus = CssParser::parseInlineStyle("font-size: enormous");
+  EXPECT_FALSE(bogus.hasFontSizeMultiplier());
+}

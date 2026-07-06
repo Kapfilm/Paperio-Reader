@@ -262,17 +262,29 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
       sizePct = sizePct * entry.fontSizePct / 100;
     }
   }
+  // Mirror FontSizeLadder::kResidualDeadZone at the word level: composed sizes within
+  // 3% of 100 render as plain body text — imperceptible size-wise, and it keeps such
+  // lines on the zero-cost uniform paths (no per-word size array, no scaled draws).
+  if (sizePct >= 97 && sizePct <= 103) {
+    sizePct = 100;
+  }
   effectiveSizePct = static_cast<uint8_t>(
       std::min<int>(std::max<int>(sizePct, ParsedText::MIN_WORD_SIZE_PCT), ParsedText::MAX_WORD_SIZE_PCT));
 }
 
 void ChapterHtmlSlimParser::applyCssFontSizeToEntry(StyleStackEntry& entry, const CssStyle& cssStyle) {
   if (!cssStyle.hasFontSizeMultiplier()) return;
-  if ((entry.hasSup && entry.sup) || (entry.hasSub && entry.sub)) return;  // SUP/SUB already scale at render
   const int pct = static_cast<int>(cssStyle.fontSizeMultiplier * 100.0f + 0.5f);
   entry.hasFontSize = true;
   entry.fontSizePct = static_cast<uint8_t>(
       std::min<int>(std::max<int>(pct, ParsedText::MIN_WORD_SIZE_PCT), ParsedText::MAX_WORD_SIZE_PCT));
+}
+
+void ChapterHtmlSlimParser::applySupSubDefaultSize(StyleStackEntry& entry) {
+  if ((entry.hasSup && entry.sup) || (entry.hasSub && entry.sub)) {
+    entry.hasFontSize = true;
+    entry.fontSizePct = kSupSubDefaultSizePct;
+  }
 }
 
 bool ChapterHtmlSlimParser::ensureHeapForTextLayout(const char* phase) {
@@ -361,6 +373,11 @@ bool ChapterHtmlSlimParser::flushPartWordBuffer() {
       }
       LOG_DBG("EHP", "Text block too long, splitting into multiple pages");
       auto& splitBlockStyle = currentTextBlock->getBlockStyle();
+      // First layout of this block happens here, so resolve its font now; the later
+      // makePages() call for the remainder is a no-op via fontResolved. Per-word sizes
+      // are NOT folded mid-block: more words with the same span size may still stream
+      // in after this flush, and folding now would double-scale them.
+      resolveBlockFont(splitBlockStyle);
 
       // A long paragraph (>96 words) beside a tall float lays out here, bypassing
       // makePages(). Inject the active float so it keeps wrapping in this mid-block
@@ -1324,18 +1341,15 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       headerBlockStyle.alignment = cssStyle.textAlign;
     }
     // Apply default heading sizing when no explicit CSS font-size is set.
-    // Concept inspired by CidVonHighwind/microreader. h1-h3 use the resolved heading fonts
-    // (taller built-in font when available, else a scale multiplier); h4-h6 stay at 1.0.
-    // When the author set an explicit font-size (hasFontSizeMultiplier), honor that CSS
-    // multiplier via the scale path — arbitrary em sizes can't map to a discrete font.
+    // Concept inspired by CidVonHighwind/microreader. h1-h3 get default multipliers;
+    // h4-h6 stay at 1.0. The multiplier (default or CSS) is snapped to the size ladder
+    // by resolveBlockFont() once the block is complete, so headings render with a real
+    // taller font when one exists and only the residual is glyph-scaled.
     if (!cssStyle.hasFontSizeMultiplier()) {
       const int level = name[1] - '0';  // 'h1'->1, 'h2'->2, …
       if (level >= 1 && level <= 3) {
-        const int idx = level - 1;
-        headerBlockStyle.headingFontId = self->headingFontId_[idx];
-        headerBlockStyle.fontSizeMultiplier = self->headingResidual_[idx];
+        headerBlockStyle.fontSizeMultiplier = kHeadingMultiplier[level - 1];
       }
-      // h4-h6 stay at 1.0f
     }
     self->startNewTextBlock(headerBlockStyle);
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
@@ -1576,6 +1590,8 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       entry.hasSub = true;
       entry.sub = true;
     }
+    applySupSubDefaultSize(entry);
+    applyCssFontSizeToEntry(entry, cssStyle);  // explicit CSS font-size overrides the 50% default
     self->inlineStyleStack.push_back(entry);
     self->updateEffectiveInlineStyle();
   } else if (strcmp(name, "span") == 0 || !isHeaderOrBlock(name)) {
@@ -1655,6 +1671,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
           self->currentTextBlock->setBlockStyle(updatedStyle);
         }
       }
+      applySupSubDefaultSize(entry);  // vertical-align: super/sub spans get the 50% default
       applyCssFontSizeToEntry(entry, cssStyle);
       if (!entry.hasFontSize && (isSmallTag || isBigTag)) {
         entry.hasFontSize = true;
@@ -2212,6 +2229,23 @@ bool ChapterHtmlSlimParser::finalize() {
   return success;
 }
 
+void ChapterHtmlSlimParser::resolveBlockFont(BlockStyle& bs) {
+  if (bs.fontResolved) return;
+  bs.fontResolved = true;
+  if (bs.headingFontId != 0 || bs.fontSizeMultiplier == 1.0f) return;
+  const FontSizeLadder::Resolved r = fontSizeLadder_.resolve(bs.fontSizeMultiplier * 100.0f);
+  if (r.fontId == 0) {
+    // Nearest rung is the body font (or the ladder is empty, e.g. SD fonts):
+    // keep the pure-scale path — identical to the legacy behavior.
+    bs.fontSizeMultiplier = r.residual;
+    return;
+  }
+  if (auxFontId_ == 0) auxFontId_ = r.fontId;
+  if (r.fontId != auxFontId_) return;  // aux budget already claimed by another size — scale fallback
+  bs.headingFontId = r.fontId;
+  bs.fontSizeMultiplier = r.residual;
+}
+
 int ChapterHtmlSlimParser::effectiveLineHeight(const BlockStyle& bs) const {
   return static_cast<int>(renderer.getLineHeight(effectiveFontId(bs)) * lineCompression * bs.fontSizeMultiplier + 0.5f);
 }
@@ -2301,6 +2335,15 @@ void ChapterHtmlSlimParser::makePages() {
     currentPage.reset(new Page());
     currentPageNextY = 0;
   }
+
+  // Snap the block to the size ladder before any metric below is computed. Uniform
+  // per-word sizes (a span wrapping the whole paragraph) fold into the block multiplier
+  // first so they benefit too; continuations skip the fold — their first chunk already
+  // laid out with the resolved style, and resolveBlockFont is a no-op on them anyway.
+  if (!currentTextBlock->isContinuation()) {
+    currentTextBlock->foldUniformWordSizes();
+  }
+  resolveBlockFont(currentTextBlock->getBlockStyle());
 
   const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
   const int lineHeight = effectiveLineHeight(blockStyle);

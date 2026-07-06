@@ -16,6 +16,7 @@
 #include <memory>
 #include <vector>
 
+#include "Epub/FontSizeLadder.h"
 #include "Epub/ParsedText.h"
 #include "Epub/blocks/TextBlock.h"
 #include "GfxRenderer.h"
@@ -211,6 +212,116 @@ TEST(WordSizeSerialization, UniformBlockCostsOneFlagByte) {
 }
 
 // ---------------------------------------------------------------------------
+// FontSizeLadder: snapping an effective block size to real sibling fonts
+// ---------------------------------------------------------------------------
+
+namespace {
+// Bookerly body at 14 pt: rungs 10/12/14/16/18 pt as percent of the body.
+FontSizeLadder bookerly14Ladder() {
+  FontSizeLadder ladder;
+  ladder.addRung(101, 71);   // 10 pt
+  ladder.addRung(102, 85);   // 12 pt
+  ladder.addRung(103, 100);  // 14 pt (body)
+  ladder.addRung(104, 114);  // 16 pt
+  ladder.addRung(105, 128);  // 18 pt
+  return ladder;
+}
+}  // namespace
+
+TEST(FontSizeLadderTest, EmptyLadderKeepsScaleFallback) {
+  const FontSizeLadder empty;
+  const auto r = empty.resolve(160.0f);
+  EXPECT_EQ(r.fontId, 0);
+  EXPECT_FLOAT_EQ(r.residual, 1.6f);
+}
+
+TEST(FontSizeLadderTest, SnapsToNearestRungWithResidual) {
+  const auto ladder = bookerly14Ladder();
+  // h1 default 160% → nearest rung is 18 pt (128%), residual 160/128.
+  const auto h1 = ladder.resolve(160.0f);
+  EXPECT_EQ(h1.fontId, 105);
+  EXPECT_FLOAT_EQ(h1.residual, 160.0f / 128.0f);
+  // 80% (footnote) → nearest rung is 12 pt (85%), residual < 1.
+  const auto small = ladder.resolve(80.0f);
+  EXPECT_EQ(small.fontId, 102);
+  EXPECT_FLOAT_EQ(small.residual, 80.0f / 85.0f);
+  // Exact rung hit → residual 1.0.
+  const auto exact = ladder.resolve(114.0f);
+  EXPECT_EQ(exact.fontId, 104);
+  EXPECT_FLOAT_EQ(exact.residual, 1.0f);
+}
+
+TEST(FontSizeLadderTest, NearBodySizesStayOnBodyFont) {
+  const auto ladder = bookerly14Ladder();
+  // 105% is nearest the 100% body rung → fontId 0, pure scale (legacy path).
+  const auto near = ladder.resolve(105.0f);
+  EXPECT_EQ(near.fontId, 0);
+  EXPECT_FLOAT_EQ(near.residual, 1.05f);
+}
+
+TEST(FontSizeLadderTest, ResidualDeadZoneSnapsToNativeGlyphs) {
+  const auto ladder = bookerly14Ladder();
+  // 87% → 12 pt rung (85%), residual 1.024 — inside the 3% zone → native 12 pt.
+  const auto near12 = ladder.resolve(87.0f);
+  EXPECT_EQ(near12.fontId, 102);
+  EXPECT_FLOAT_EQ(near12.residual, 1.0f);
+  // 98% → body rung, residual 0.98 — snaps to plain unscaled body text.
+  const auto nearBody = ladder.resolve(98.0f);
+  EXPECT_EQ(nearBody.fontId, 0);
+  EXPECT_FLOAT_EQ(nearBody.residual, 1.0f);
+  // 80% → 12 pt rung, residual 0.941 — OUTSIDE the zone, stays scaled.
+  const auto scaled = ladder.resolve(80.0f);
+  EXPECT_EQ(scaled.fontId, 102);
+  EXPECT_FLOAT_EQ(scaled.residual, 80.0f / 85.0f);
+  // Empty ladder (SD fonts): the zone applies to the pure-scale residual too.
+  const FontSizeLadder empty;
+  EXPECT_FLOAT_EQ(empty.resolve(102.0f).residual, 1.0f);
+  EXPECT_FLOAT_EQ(empty.resolve(95.0f).residual, 0.95f);
+}
+
+// ---------------------------------------------------------------------------
+// ParsedText::foldUniformWordSizes — whole-paragraph spans join the block channel
+// ---------------------------------------------------------------------------
+
+TEST(WordSizeFolding, UniformNonDefaultFoldsIntoBlockMultiplier) {
+  ParsedText text(false, false, noIndentStyle());
+  for (const char* w : {"all", "words", "small"}) text.addWord(w, EpdFontFamily::REGULAR, false, false, 70);
+
+  ASSERT_TRUE(text.foldUniformWordSizes());
+  EXPECT_FLOAT_EQ(text.getBlockStyle().fontSizeMultiplier, 0.7f);
+
+  // Per-word sizes were reset to 100 — the emitted line normalizes to the empty
+  // (zero-cost) vector, and measurement now runs off the block multiplier.
+  GfxRenderer renderer;
+  const auto result = layout(text, renderer, 400);
+  ASSERT_EQ(result.lines.size(), 1u);
+  EXPECT_FALSE(result.lines[0]->hasWordSizes());
+  EXPECT_FLOAT_EQ(result.lines[0]->getBlockStyle().fontSizeMultiplier, 0.7f);
+}
+
+TEST(WordSizeFolding, MixedOrDefaultSizesDoNotFold) {
+  ParsedText mixed(false, false, noIndentStyle());
+  mixed.addWord("normal", EpdFontFamily::REGULAR);
+  mixed.addWord("small", EpdFontFamily::REGULAR, false, false, 70);
+  EXPECT_FALSE(mixed.foldUniformWordSizes());
+  EXPECT_FLOAT_EQ(mixed.getBlockStyle().fontSizeMultiplier, 1.0f);
+
+  ParsedText uniform100(false, false, noIndentStyle());
+  uniform100.addWord("plain", EpdFontFamily::REGULAR);
+  EXPECT_FALSE(uniform100.foldUniformWordSizes());
+}
+
+TEST(WordSizeFolding, FoldComposesWithExistingBlockMultiplier) {
+  BlockStyle bs = noIndentStyle();
+  bs.fontSizeMultiplier = 1.4f;  // e.g. an h2 whose text sits in a 50% span
+  ParsedText text(false, false, bs);
+  text.addWord("word", EpdFontFamily::REGULAR, false, false, 50);
+
+  ASSERT_TRUE(text.foldUniformWordSizes());
+  EXPECT_FLOAT_EQ(text.getBlockStyle().fontSizeMultiplier, 0.7f);
+}
+
+// ---------------------------------------------------------------------------
 // Render: baseline alignment of mixed-size words
 // ---------------------------------------------------------------------------
 
@@ -244,6 +355,26 @@ TEST(WordSizeRender, UniformLineRendersAtLineTop) {
 // ---------------------------------------------------------------------------
 // Interaction with the block-level multiplier (headings, block font-size)
 // ---------------------------------------------------------------------------
+
+// Sup/sub words carry an explicit size (parser default 50%) and the SUP/SUB bits shift
+// the baseline relative to the BLOCK ascender. With ASCENDER=16: a 50% sup word on a
+// 100% line baseline-aligns (+8) then raises by 16*2/5=6 → net +2 from line top. Its
+// baseline lands at wordY + 16*0.5 = lineTop + 10, i.e. 6 px above the line baseline —
+// exactly where the old hardwired-50% drawText path put it.
+TEST(WordSizeRender, SupSubBaselineMatchesLegacyPositions) {
+  GfxRenderer renderer;
+  const auto sup = static_cast<EpdFontFamily::Style>(EpdFontFamily::REGULAR | EpdFontFamily::SUP);
+  const auto sub = static_cast<EpdFontFamily::Style>(EpdFontFamily::REGULAR | EpdFontFamily::SUB);
+  TextBlock line({"ref", "42", "x"}, {0, 40, 60}, {EpdFontFamily::REGULAR, sup, sub}, BlockStyle(), {100, 50, 50});
+  line.render(renderer, kFontId, 0, 100);
+
+  ASSERT_EQ(renderer.drawCalls.size(), 3u);
+  EXPECT_EQ(renderer.drawCalls[0].y, 100);  // full-size word at line top
+  EXPECT_FLOAT_EQ(renderer.drawCalls[1].scale, 0.5f);
+  EXPECT_EQ(renderer.drawCalls[1].y, 100 + 8 - (16 * 2 / 5));  // baseline-align +8, SUP raise -6
+  EXPECT_FLOAT_EQ(renderer.drawCalls[2].scale, 0.5f);
+  EXPECT_EQ(renderer.drawCalls[2].y, 100 + 8 + (16 / 4));  // baseline-align +8, SUB lower +4
+}
 
 TEST(WordSizeRender, BlockMultiplierComposesWithWordSize) {
   GfxRenderer renderer;

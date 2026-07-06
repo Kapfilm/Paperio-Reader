@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../EpubImageManifest.h"
+#include "../FontSizeLadder.h"
 #include "../FootnoteEntry.h"
 #include "../ParsedText.h"
 #include "../blocks/ImageBlock.h"
@@ -81,12 +82,16 @@ class ChapterHtmlSlimParser final : public Print {
   int16_t activeFloatWidth_ = 0;  // image width + gap
   bool activeFloatIsRight_ = false;
   int fontId;
-  // Resolved heading fonts (index 0=h1,1=h2,2=h3). headingFontId_[i]==0 => scale the body
-  // font by headingResidual_[i]; otherwise render the heading with that taller built-in
-  // fontId and apply headingResidual_[i] (usually 1.0) as a small residual scale. Set via
-  // setHeadingFonts(); defaults preserve the legacy scale-only behavior.
-  int32_t headingFontId_[3] = {0, 0, 0};
-  float headingResidual_[3] = {1.6f, 1.4f, 1.2f};
+  // Default heading multipliers (index 0=h1, 1=h2, 2=h3) applied when a heading has no
+  // explicit CSS font-size; resolveBlockFont() then snaps them to the size ladder.
+  static constexpr float kHeadingMultiplier[3] = {1.6f, 1.4f, 1.2f};
+  // Sibling-size ladder of the body font (see FontSizeLadder). resolveBlockFont() snaps a
+  // block's effective font size to the nearest real font on it; empty = scale-only fallback.
+  FontSizeLadder fontSizeLadder_;
+  // One non-body font per section: body regular/bold/italic plus one auxiliary regular is
+  // exactly the FontDecompressor's four page slots. The first block to resolve off-body
+  // claims the slot; blocks that would need a different font keep the scale fallback.
+  int32_t auxFontId_ = 0;
   float lineCompression;
   bool extraParagraphSpacing;
   uint8_t paragraphAlignment;
@@ -237,12 +242,19 @@ class ChapterHtmlSlimParser final : public Print {
   std::unordered_map<std::string, CssStyle> cssStyleCache_;
   std::unordered_map<std::string, CssStyle> inlineStyleCache_;
 
+  // Default size for superscript/subscript text, percent of the surrounding size.
+  // Sup/sub scaling flows through the ordinary per-word size channel (the SUP/SUB
+  // style bits only shift the baseline at render time); an explicit CSS font-size
+  // on the element overrides this default.
+  static constexpr uint8_t kSupSubDefaultSizePct = 50;
+
   void updateEffectiveInlineStyle();
   // Fold an element's CSS font-size (multiplier relative to its parent) into an inline
-  // style-stack entry. No-op when the entry resolves to sup/sub: the SUP/SUB style bits
-  // already scale glyphs 50% at render time, and the typical `.sup { vertical-align:super;
-  // font-size:0.7em }` rule would otherwise shrink twice.
+  // style-stack entry.
   static void applyCssFontSizeToEntry(StyleStackEntry& entry, const CssStyle& cssStyle);
+  // Apply kSupSubDefaultSizePct when the entry resolves to sup/sub. Call BEFORE
+  // applyCssFontSizeToEntry so publisher CSS (e.g. `.sup { font-size: 0.7em }`) wins.
+  static void applySupSubDefaultSize(StyleStackEntry& entry);
   bool ensureHeapForTextLayout(const char* phase);
   void startNewTextBlock(const BlockStyle& blockStyle);
   bool flushPartWordBuffer();
@@ -329,17 +341,17 @@ class ChapterHtmlSlimParser final : public Print {
   // HTML id -> label; an entry with an empty id applies to the first page of this file.
   void setExternalPageBreakAnchors(std::vector<std::pair<std::string, std::string>> anchors);
 
-  // Supplies resolved heading fonts (h1/h2/h3). fontId[i]==0 keeps the scale-only path with
-  // residual[i] as the scale factor; fontId[i]!=0 renders that level with the taller built-in
-  // font and residual[i] as a small residual scale on top.
-  void setHeadingFonts(const int32_t fontId[3], const float residual[3]) {
-    for (int i = 0; i < 3; ++i) {
-      headingFontId_[i] = fontId[i];
-      headingResidual_[i] = residual[i];
-    }
-  }
+  // Supplies the body font's sibling-size ladder (see FontSizeLadder). Blocks whose
+  // effective font size differs from the body resolve to the nearest real font on it.
+  void setFontSizeLadder(const FontSizeLadder& ladder) { fontSizeLadder_ = ladder; }
 
  private:
+  // Snap a completed block's effective font size (block multiplier, after uniform per-word
+  // folding) to the size ladder: sets headingFontId to the chosen real font and reduces
+  // fontSizeMultiplier to the residual. Applies the one-aux-font-per-section budget and is
+  // idempotent via bs.fontResolved. Must run before the block's first layout so measured
+  // widths, line heights and rendering all use the same (fontId, scale) pair.
+  void resolveBlockFont(BlockStyle& bs);
   // Effective fontId for a block: its heading font when set, else the body fontId.
   int effectiveFontId(const BlockStyle& bs) const { return bs.headingFontId != 0 ? bs.headingFontId : fontId; }
   // Line height for a block, honoring the taller heading font (residual multiplier on top)

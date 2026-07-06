@@ -97,6 +97,13 @@ class ParsedText {
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
                uint8_t sizePct = DEFAULT_WORD_SIZE_PCT);
+  // If every word shares one non-100% size (a span wrapping the whole paragraph, e.g.
+  // Alice's mouse-tale lines), fold that percent into the block-level fontSizeMultiplier
+  // and reset the per-word sizes to 100. This routes whole-paragraph spans through the
+  // block font-resolution path (size ladder) so they render with a real smaller font
+  // instead of per-word glyph scaling. Returns true when a fold happened. Must be called
+  // before the first layout pass of the block; callers skip continuations.
+  bool foldUniformWordSizes();
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }
