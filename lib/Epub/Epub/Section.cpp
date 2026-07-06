@@ -17,9 +17,10 @@
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION =
-    55;  // bumped: parent/child vertical margins now collapse (std::max) instead of summing,
-         // changing block spacing; discards v54 caches so layout re-parses cleanly
+constexpr uint8_t SECTION_FILE_VERSION = 59;  // bumped: FontSizeLadder residual dead zone (±3% renders native) changes
+                                              // near-rung block metrics from v58
+                                              // (v58: block sizes snap to the FontSizeLadder, uniform spans fold;
+                                              //  v57: sup/sub scaling moved into the per-word size channel)
 
 namespace header {
 constexpr uint32_t kVersion = 0;
@@ -566,7 +567,7 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
       p.embeddedStyle, st.contentBase, st.imageBasePath, p.imageRendering, std::move(tocAnchors), st.progressFn,
       st.cssParser, epub->getImageManifest());
   st.visitor->setExternalPageBreakAnchors(std::move(externalPageBreakAnchors));
-  st.visitor->setHeadingFonts(p.headingFonts.fontId, p.headingFonts.residual);
+  st.visitor->setFontSizeLadder(p.fontSizeLadder);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
 
   if (!st.visitor->setup(st.inflatedSize)) {
@@ -947,7 +948,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                                 const bool bionicReadingEnabled, const uint8_t imageRendering,
                                 const std::function<void(int)>& progressFn, const bool skipEviction,
-                                const HeadingFonts& headingFonts) {
+                                const FontSizeLadder& fontSizeLadder) {
   if (!skipEviction) {
     evictOldVariants();
   }
@@ -963,7 +964,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   params.embeddedStyle = embeddedStyle;
   params.bionicReadingEnabled = bionicReadingEnabled;
   params.imageRendering = imageRendering;
-  params.headingFonts = headingFonts;
+  params.fontSizeLadder = fontSizeLadder;
 
   // Run-to-completion path: pump the incremental build with no time budget. budgetMs == 0
   // never yields mid-parse, so the only More this loop sees is the restart after a

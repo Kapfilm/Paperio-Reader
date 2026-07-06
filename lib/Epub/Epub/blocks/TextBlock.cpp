@@ -6,9 +6,10 @@
 
 void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int x, const int y) const {
   // Validate iterator bounds before rendering
-  if (words.size() != wordXpos.size() || words.size() != wordStyles.size()) {
-    LOG_ERR("TXB", "Render skipped: size mismatch (words=%u, xpos=%u, styles=%u)\n", (uint32_t)words.size(),
-            (uint32_t)wordXpos.size(), (uint32_t)wordStyles.size());
+  if (words.size() != wordXpos.size() || words.size() != wordStyles.size() ||
+      (!wordSizes.empty() && words.size() != wordSizes.size())) {
+    LOG_ERR("TXB", "Render skipped: size mismatch (words=%u, xpos=%u, styles=%u, sizes=%u)\n", (uint32_t)words.size(),
+            (uint32_t)wordXpos.size(), (uint32_t)wordStyles.size(), (uint32_t)wordSizes.size());
     return;
   }
 
@@ -17,21 +18,33 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
   // body font. In that case fontSizeMultiplier is a small residual (usually 1.0). Resolve the
   // effective (fontId, scale) pair once and use it for every measure/draw below.
   const int effFontId = blockStyle.headingFontId != 0 ? blockStyle.headingFontId : fontId;
-  const float scale = blockStyle.fontSizeMultiplier;
-  const int ascender =
-      (scale == 1.0f) ? renderer.getFontAscenderSize(effFontId) : renderer.getFontAscenderSizeScaled(effFontId, scale);
+  const float blockScale = blockStyle.fontSizeMultiplier;
+  const int blockAscender = (blockScale == 1.0f) ? renderer.getFontAscenderSize(effFontId)
+                                                 : renderer.getFontAscenderSizeScaled(effFontId, blockScale);
+  // Mixed-size lines are baseline-aligned: every word's baseline sits at y + lineAscender,
+  // where lineAscender is the tallest word's ascender. Uniform lines (wordSizes empty)
+  // keep lineAscender == blockAscender, i.e. the historical single-scale layout.
+  int lineAscender = blockAscender;
+  if (!wordSizes.empty()) {
+    lineAscender = renderer.getFontAscenderSizeScaled(effFontId, blockScale * (maxSizePct() / 100.0f));
+  }
   for (size_t i = 0; i < words.size(); i++) {
     const int wordX = wordXpos[i] + x;
     const EpdFontFamily::Style currentStyle = wordStyles[i];
-    // SUP/SUB shift the baseline passed to drawText; the glyph is also scaled 50% inside
-    // drawText, so these offsets are chosen relative to the full-size ascender:
-    //   SUP: raise by 40% of ascender — sits clearly above the cap-height
-    //   SUB: lower by 25% of ascender — descends below baseline without clashing with ascenders below
-    int wordY = y;
+    const float scale = wordScale(i);
+    const int ascender = (scale == blockScale) ? blockAscender : renderer.getFontAscenderSizeScaled(effFontId, scale);
+    // Baseline alignment: shift smaller words down so all baselines meet at y + lineAscender.
+    int wordY = y + (lineAscender - ascender);
+    // SUP/SUB shift the baseline only — the glyph shrink comes from the word's own size
+    // percentage (parser default 50%, or the publisher's CSS). Offsets are anchored to the
+    // BLOCK's full-size ascender, not the shrunken word's, so the raised/lowered positions
+    // match the surrounding full-size text:
+    //   SUP: raise by 40% of the block ascender — sits clearly above the cap-height
+    //   SUB: lower by 25% of the block ascender — descends below baseline without clashing
     if ((currentStyle & EpdFontFamily::SUP) != 0) {
-      wordY -= ascender * 2 / 5;
+      wordY -= blockAscender * 2 / 5;
     } else if ((currentStyle & EpdFontFamily::SUB) != 0) {
-      wordY += ascender / 4;
+      wordY += blockAscender / 4;
     }
     if (scale == 1.0f) {
       renderer.drawText(effFontId, wordX, wordY, words[i].c_str(), true, currentStyle);
@@ -47,12 +60,12 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
                                             : renderer.getTextWidthScaled(effFontId, w.c_str(), currentStyle, scale);
 
       if ((currentStyle & EpdFontFamily::UNDERLINE) != 0) {
-        const int underlineY = y + ascender + 3;
+        const int underlineY = y + lineAscender + 3;
         renderer.drawLine(wordX, underlineY, wordX + lineWidth, underlineY, 2, true);
       }
 
       if ((currentStyle & EpdFontFamily::STRIKETHROUGH) != 0) {
-        const int strikeY = y + ascender / 2 + 4;
+        const int strikeY = wordY + ascender / 2 + 4;
         renderer.drawLine(wordX, strikeY, wordX + lineWidth, strikeY, 2, true);
       }
     }
@@ -60,9 +73,10 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 }
 
 bool TextBlock::serialize(FsFile& file) const {
-  if (words.size() != wordXpos.size() || words.size() != wordStyles.size()) {
-    LOG_ERR("TXB", "Serialization failed: size mismatch (words=%u, xpos=%u, styles=%u)\n", words.size(),
-            wordXpos.size(), wordStyles.size());
+  if (words.size() != wordXpos.size() || words.size() != wordStyles.size() ||
+      (!wordSizes.empty() && words.size() != wordSizes.size())) {
+    LOG_ERR("TXB", "Serialization failed: size mismatch (words=%u, xpos=%u, styles=%u, sizes=%u)\n", words.size(),
+            wordXpos.size(), wordStyles.size(), wordSizes.size());
     return false;
   }
 
@@ -71,6 +85,13 @@ bool TextBlock::serialize(FsFile& file) const {
   for (const auto& w : words) serialization::writeString(file, w);
   for (auto x : wordXpos) serialization::writePod(file, x);
   for (auto s : wordStyles) serialization::writePod(file, s);
+  // Per-word sizes: one flag byte, then one byte per word only when any word
+  // deviates from 100% — uniform lines (the common case) cost a single byte.
+  const uint8_t hasSizes = wordSizes.empty() ? 0 : 1;
+  serialization::writePod(file, hasSizes);
+  if (hasSizes) {
+    for (auto sz : wordSizes) serialization::writePod(file, sz);
+  }
 
   // Style (alignment + margins/padding/indent)
   serialization::writePod(file, blockStyle.alignment);
@@ -96,6 +117,7 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
   std::vector<std::string> words;
   std::vector<int16_t> wordXpos;
   std::vector<EpdFontFamily::Style> wordStyles;
+  std::vector<uint8_t> wordSizes;
   BlockStyle blockStyle;
 
   // Word count
@@ -114,6 +136,12 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
   for (auto& w : words) serialization::readString(file, w);
   for (auto& x : wordXpos) serialization::readPod(file, x);
   for (auto& s : wordStyles) serialization::readPod(file, s);
+  uint8_t hasSizes = 0;
+  serialization::readPod(file, hasSizes);
+  if (hasSizes) {
+    wordSizes.resize(wc);
+    for (auto& sz : wordSizes) serialization::readPod(file, sz);
+  }
 
   // Style (alignment + margins/padding/indent)
   serialization::readPod(file, blockStyle.alignment);
@@ -132,5 +160,5 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
   serialization::readPod(file, blockStyle.headingFontId);
 
   return std::unique_ptr<TextBlock>(
-      new TextBlock(std::move(words), std::move(wordXpos), std::move(wordStyles), blockStyle));
+      new TextBlock(std::move(words), std::move(wordXpos), std::move(wordStyles), blockStyle, std::move(wordSizes)));
 }
