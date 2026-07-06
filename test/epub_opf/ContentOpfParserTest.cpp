@@ -1,7 +1,8 @@
 #include <gtest/gtest.h>
 
-#include <cstdlib>
+#include <array>
 #include <filesystem>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -11,14 +12,30 @@
 namespace {
 
 std::string makeTempDir() {
-  const std::filesystem::path base =
-      std::filesystem::temp_directory_path() / ("opf-test-" + std::to_string(std::rand()));
   std::error_code ec;
-  std::filesystem::create_directories(base, ec);
+  const std::filesystem::path tempRoot = std::filesystem::temp_directory_path(ec);
   if (ec) {
     return {};
   }
-  return base.string();
+
+  std::random_device rd;
+  std::array<uint32_t, 4> parts = {rd(), rd(), rd(), rd()};
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    const std::filesystem::path base =
+        tempRoot / ("opf-test-" + std::to_string(parts[0]) + "-" + std::to_string(parts[1]) + "-" +
+                    std::to_string(parts[2]) + "-" + std::to_string(parts[3]) + "-" + std::to_string(attempt));
+    ec.clear();
+    if (std::filesystem::create_directory(base, ec)) {
+      return base.string();
+    }
+
+    // Retry only on collisions; other filesystem errors should fail fast.
+    if (ec && ec != std::errc::file_exists) {
+      return {};
+    }
+  }
+
+  return {};
 }
 
 struct TempDirGuard {
