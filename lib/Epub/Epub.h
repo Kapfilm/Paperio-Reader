@@ -10,6 +10,7 @@
 #include "Epub/BookMetadataCache.h"
 #include "Epub/EpubImageManifest.h"
 #include "Epub/ThumbResult.h"
+#include "Epub/TocReliability.h"
 #include "Epub/css/CssParser.h"
 
 class ZipFile;
@@ -37,8 +38,7 @@ class Epub {
   std::unique_ptr<EpubImageManifest> imageManifest;
   // CSS files
   std::vector<std::string> cssFiles;
-  // -1 unknown, 0 unreliable, 1 reliable
-  mutable int tocReliabilityState = -1;
+  mutable TocReliability tocReliability = TocReliability::Unknown;
   // Library-level option: app code can override this per-book instance.
   bool syntheticTocFallbackEnabled = false;
 
