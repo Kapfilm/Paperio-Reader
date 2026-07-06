@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "WordWidthCache.h"
 #include "blocks/BlockStyle.h"
 #include "blocks/TextBlock.h"
 
@@ -115,4 +116,20 @@ class ParsedText {
       bool includeLastLine = true,
       int16_t blockStartY = 0,  // currentPageNextY at call site — needed for float zone geometry
       int lineHeight = 0);      // 0 = no float zones (fast path, existing callers unchanged)
+
+  // Word-width cache management (for pagination performance debugging)
+  // These are static because the cache is thread-local and persistent across paragraph layouts.
+
+  // Get current cache statistics. Caller should log these after pagination completes.
+  static WordWidthCache::Stats getWordWidthCacheStats();
+
+  // Reset cache statistics at start of a new section/chapter layout.
+  static void resetWordWidthCacheStats();
+
+  // Clear cache to free memory before memory-pressure operations (image decode, etc.).
+  // Stats are preserved; caller can log pre-clear activity. Cache will rebuild lazily on next pagination.
+  static void clearWordWidthCache();
+
+  // Log cache statistics to debug output (for tuning, not user-facing).
+  static void logWordWidthCacheStats(const char* context);
 };

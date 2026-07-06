@@ -16,6 +16,10 @@
 
 constexpr int MAX_COST = std::numeric_limits<int>::max();
 
+// Thread-local word-width cache for pagination performance.
+// Persists across paragraph layouts within a section build; can be cleared before heavy operations.
+thread_local WordWidthCache g_wordWidthCache;
+
 namespace {
 
 // Closing punctuation that should not have extra space inserted before it during justification.
@@ -87,7 +91,20 @@ void stripSoftHyphensInPlace(std::string& word) {
 // don't inflate inter-word spacing.
 uint16_t measureWordWidth(const GfxRenderer& renderer, const int fontId, const std::string& word,
                           const EpdFontFamily::Style style, const bool appendHyphen = false, const float scale = 1.0f) {
+  // Try word-width cache first (only for unmodified words at 1.0 scale).
+  // Modified words (soft-hyphen stripped, hyphen appended) or scaled words bypass cache.
+  // Cache key includes fontId and style so same word in different fonts don't collide.
   int raw = 0;
+
+  const bool canCache = (scale == 1.0f) && !appendHyphen && !containsSoftHyphen(word);
+  if (canCache && word.size() > 1) {  // Don't cache single characters or spaces
+    int16_t cached = g_wordWidthCache.lookup(word, fontId, style);
+    if (cached >= 0) {
+      return static_cast<uint16_t>(cached);
+    }
+  }
+
+  // Measure the word (cache miss or uncacheable)
   if (word.size() == 1 && word[0] == ' ' && !appendHyphen) {
     raw = renderer.getSpaceWidth(fontId, style);
   } else {
@@ -101,6 +118,12 @@ uint16_t measureWordWidth(const GfxRenderer& renderer, const int fontId, const s
       raw = renderer.getTextAdvanceX(fontId, sanitized.c_str(), style);
     }
   }
+
+  // Cache the result if eligible
+  if (canCache && word.size() > 1) {
+    g_wordWidthCache.insert(word, fontId, static_cast<uint32_t>(style), static_cast<int16_t>(raw));
+  }
+
   if (scale == 1.0f) return static_cast<uint16_t>(raw);
   return static_cast<uint16_t>(raw * scale + 0.5f);
 }
@@ -1171,4 +1194,18 @@ ParsedText::LineProcessResult ParsedText::extractLine(
   return processLine(std::make_shared<TextBlock>(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles),
                                                  blockStyle, std::move(lineWordSizes)),
                      lineEndsWithHyphenatedWord, suppressHyphenationRetry);
+}
+
+// Static cache management methods
+
+WordWidthCache::Stats ParsedText::getWordWidthCacheStats() { return g_wordWidthCache.getStats(); }
+
+void ParsedText::resetWordWidthCacheStats() { g_wordWidthCache.resetStats(); }
+
+void ParsedText::clearWordWidthCache() { g_wordWidthCache.clear(); }
+
+void ParsedText::logWordWidthCacheStats(const char* context) {
+  const auto stats = g_wordWidthCache.getStats();
+  LOG_DBG("PTX", "%s: Word-width cache: %u lookups, %u hits (%.1f%%), %u misses, %u entries%s", context, stats.lookups,
+          stats.hits, stats.hitRate(), stats.misses, stats.cacheSize, stats.isEmpty() ? " (no activity)" : "");
 }
