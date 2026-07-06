@@ -60,6 +60,11 @@ class ContentOpfParser final : public Print {
   static void characterData(void* userData, const char* s, int len);
   static void endElement(void* userData, const char* name);
 
+  bool resolveItemRefHrefWithIndex(const std::string& idref, std::string& href);
+  bool resolveItemRefHrefLinearScan(const std::string& idref, std::string& href);
+  bool resolveSpineItemRefHref(const std::string& idref, std::string& href);
+  void handleSpineItemRefElement(const char** atts);
+
  public:
   struct Stats {
     uint32_t writeCalls = 0;

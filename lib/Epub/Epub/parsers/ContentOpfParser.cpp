@@ -19,6 +19,20 @@ constexpr char MEDIA_TYPE_IMAGE_PREFIX[] = "image/";
 constexpr char itemCacheFile[] = "/.items.bin";
 constexpr size_t MAX_DESCRIPTION_LENGTH = 1024;
 
+inline bool isTag(const char* name, const char* plainTag, const char* opfTag) {
+  return strcmp(name, plainTag) == 0 || strcmp(name, opfTag) == 0;
+}
+
+inline bool isPackageTag(const char* name) { return isTag(name, "package", "opf:package"); }
+inline bool isMetadataTag(const char* name) { return isTag(name, "metadata", "opf:metadata"); }
+inline bool isManifestTag(const char* name) { return isTag(name, "manifest", "opf:manifest"); }
+inline bool isSpineTag(const char* name) { return isTag(name, "spine", "opf:spine"); }
+inline bool isGuideTag(const char* name) { return isTag(name, "guide", "opf:guide"); }
+inline bool isMetaTag(const char* name) { return isTag(name, "meta", "opf:meta"); }
+inline bool isItemTag(const char* name) { return isTag(name, "item", "opf:item"); }
+inline bool isItemRefTag(const char* name) { return isTag(name, "itemref", "opf:itemref"); }
+inline bool isReferenceTag(const char* name) { return isTag(name, "reference", "opf:reference"); }
+
 bool startsWithImageMediaType(const std::string& mediaType) {
   constexpr size_t prefixLen = sizeof(MEDIA_TYPE_IMAGE_PREFIX) - 1;
   if (mediaType.size() < prefixLen) {
@@ -174,16 +188,92 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
   return size;
 }
 
+bool ContentOpfParser::resolveItemRefHrefWithIndex(const std::string& idref, std::string& href) {
+  const uint32_t targetHash = fnvHash(idref);
+  const uint16_t targetLen = static_cast<uint16_t>(idref.size());
+
+  auto it = std::lower_bound(itemIndex.begin(), itemIndex.end(), ItemIndexEntry{targetHash, targetLen, 0},
+                             [](const ItemIndexEntry& a, const ItemIndexEntry& b) {
+                               return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
+                             });
+
+  // Check for match (may need to check a few due to hash collisions).
+  while (it != itemIndex.end() && it->idHash == targetHash) {
+    tempItemStore.seek(it->fileOffset);
+    std::string itemId;
+    if (!serialization::readString(tempItemStore, itemId)) {
+      ++it;
+      continue;
+    }
+    if (itemId == idref) {
+      if (serialization::readString(tempItemStore, href)) {
+        return true;
+      }
+    }
+    ++it;
+  }
+
+  return false;
+}
+
+bool ContentOpfParser::resolveItemRefHrefLinearScan(const std::string& idref, std::string& href) {
+  tempItemStore.seek(0);
+  const size_t itemStoreSize = tempItemStore.fileSize();
+  std::string itemId;
+
+  while (tempItemStore.position() < itemStoreSize) {
+    const size_t beforeReadPos = tempItemStore.position();
+    if (!serialization::readString(tempItemStore, itemId) || !serialization::readString(tempItemStore, href)) {
+      return false;
+    }
+
+    // Guard against malformed temp data or host shims that don't signal EOF via available().
+    if (tempItemStore.position() <= beforeReadPos) {
+      return false;
+    }
+
+    if (itemId == idref) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool ContentOpfParser::resolveSpineItemRefHref(const std::string& idref, std::string& href) {
+  if (useItemIndex) {
+    return resolveItemRefHrefWithIndex(idref, href);
+  }
+
+  // Slow path: linear scan (for small manifests, keeps original behavior).
+  // TODO: This lookup is slow as need to scan through all items each time.
+  //       It can take up to 200ms per item when getting to 1500 items.
+  return resolveItemRefHrefLinearScan(idref, href);
+}
+
+void ContentOpfParser::handleSpineItemRefElement(const char** atts) {
+  for (int i = 0; atts[i]; i += 2) {
+    if (strcmp(atts[i], "idref") == 0) {
+      const std::string idref = atts[i + 1];
+      std::string href;
+
+      if (resolveSpineItemRefHref(idref, href) && cache) {
+        cache->createSpineEntry(href);
+      }
+    }
+  }
+}
+
 void ContentOpfParser::startElement(void* userData, const char* name, const char** atts) {
   auto* self = static_cast<ContentOpfParser*>(userData);
   (void)atts;
 
-  if (self->state == START && (strcmp(name, "package") == 0 || strcmp(name, "opf:package") == 0)) {
+  if (self->state == START && isPackageTag(name)) {
     self->state = IN_PACKAGE;
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "metadata") == 0 || strcmp(name, "opf:metadata") == 0)) {
+  if (self->state == IN_PACKAGE && isMetadataTag(name)) {
     self->state = IN_METADATA;
     return;
   }
@@ -214,7 +304,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "manifest") == 0 || strcmp(name, "opf:manifest") == 0)) {
+  if (self->state == IN_PACKAGE && isManifestTag(name)) {
     self->state = IN_MANIFEST;
     if (!Storage.openFileForWrite("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for writing. This is probably going to be a fatal error.");
@@ -222,7 +312,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "spine") == 0 || strcmp(name, "opf:spine") == 0)) {
+  if (self->state == IN_PACKAGE && isSpineTag(name)) {
     self->state = IN_SPINE;
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
@@ -239,7 +329,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "guide") == 0 || strcmp(name, "opf:guide") == 0)) {
+  if (self->state == IN_PACKAGE && isGuideTag(name)) {
     self->state = IN_GUIDE;
     // TODO Remove print
     LOG_DBG("COF", "Entering guide state.");
@@ -249,7 +339,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_METADATA && (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
+  if (self->state == IN_METADATA && isMetaTag(name)) {
     const char* metaName = nullptr;
     const char* metaContent = nullptr;
     const char* metaProperty = nullptr;
@@ -302,7 +392,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_MANIFEST && (strcmp(name, "item") == 0 || strcmp(name, "opf:item") == 0)) {
+  if (self->state == IN_MANIFEST && isItemTag(name)) {
     std::string itemId;
     std::string href;
     std::string mediaType;
@@ -389,62 +479,13 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
   // NOTE: This relies on spine appearing after item manifest (which is pretty safe as it's part of the EPUB spec)
   // Only run the spine parsing if there's a cache to add it to
   if (self->cache) {
-    if (self->state == IN_SPINE && (strcmp(name, "itemref") == 0 || strcmp(name, "opf:itemref") == 0)) {
-      for (int i = 0; atts[i]; i += 2) {
-        if (strcmp(atts[i], "idref") == 0) {
-          const std::string idref = atts[i + 1];
-          std::string href;
-          bool found = false;
-
-          if (self->useItemIndex) {
-            // Fast path: binary search
-            uint32_t targetHash = fnvHash(idref);
-            uint16_t targetLen = static_cast<uint16_t>(idref.size());
-
-            auto it = std::lower_bound(self->itemIndex.begin(), self->itemIndex.end(),
-                                       ItemIndexEntry{targetHash, targetLen, 0},
-                                       [](const ItemIndexEntry& a, const ItemIndexEntry& b) {
-                                         return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
-                                       });
-
-            // Check for match (may need to check a few due to hash collisions)
-            while (it != self->itemIndex.end() && it->idHash == targetHash) {
-              self->tempItemStore.seek(it->fileOffset);
-              std::string itemId;
-              serialization::readString(self->tempItemStore, itemId);
-              if (itemId == idref) {
-                serialization::readString(self->tempItemStore, href);
-                found = true;
-                break;
-              }
-              ++it;
-            }
-          } else {
-            // Slow path: linear scan (for small manifests, keeps original behavior)
-            // TODO: This lookup is slow as need to scan through all items each time.
-            //       It can take up to 200ms per item when getting to 1500 items.
-            self->tempItemStore.seek(0);
-            std::string itemId;
-            while (self->tempItemStore.available()) {
-              serialization::readString(self->tempItemStore, itemId);
-              serialization::readString(self->tempItemStore, href);
-              if (itemId == idref) {
-                found = true;
-                break;
-              }
-            }
-          }
-
-          if (found && self->cache) {
-            self->cache->createSpineEntry(href);
-          }
-        }
-      }
+    if (self->state == IN_SPINE && isItemRefTag(name)) {
+      self->handleSpineItemRefElement(atts);
       return;
     }
   }
   // parse the guide
-  if (self->state == IN_GUIDE && (strcmp(name, "reference") == 0 || strcmp(name, "opf:reference") == 0)) {
+  if (self->state == IN_GUIDE && isReferenceTag(name)) {
     std::string type;
     std::string guideHref;
     for (int i = 0; atts[i]; i += 2) {
@@ -517,19 +558,19 @@ void ContentOpfParser::endElement(void* userData, const char* name) {
   auto* self = static_cast<ContentOpfParser*>(userData);
   (void)name;
 
-  if (self->state == IN_SPINE && (strcmp(name, "spine") == 0 || strcmp(name, "opf:spine") == 0)) {
+  if (self->state == IN_SPINE && isSpineTag(name)) {
     self->state = IN_PACKAGE;
     self->tempItemStore.close();
     return;
   }
 
-  if (self->state == IN_GUIDE && (strcmp(name, "guide") == 0 || strcmp(name, "opf:guide") == 0)) {
+  if (self->state == IN_GUIDE && isGuideTag(name)) {
     self->state = IN_PACKAGE;
     self->tempItemStore.close();
     return;
   }
 
-  if (self->state == IN_MANIFEST && (strcmp(name, "manifest") == 0 || strcmp(name, "opf:manifest") == 0)) {
+  if (self->state == IN_MANIFEST && isManifestTag(name)) {
     self->state = IN_PACKAGE;
     self->tempItemStore.close();
     return;
@@ -556,24 +597,24 @@ void ContentOpfParser::endElement(void* userData, const char* name) {
     return;
   }
 
-  if (self->state == IN_BOOK_SERIES && (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
+  if (self->state == IN_BOOK_SERIES && isMetaTag(name)) {
     self->series = trim(self->series);
     self->state = IN_METADATA;
     return;
   }
 
-  if (self->state == IN_BOOK_SERIES_INDEX && (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
+  if (self->state == IN_BOOK_SERIES_INDEX && isMetaTag(name)) {
     self->seriesIndex = trim(self->seriesIndex);
     self->state = IN_METADATA;
     return;
   }
 
-  if (self->state == IN_METADATA && (strcmp(name, "metadata") == 0 || strcmp(name, "opf:metadata") == 0)) {
+  if (self->state == IN_METADATA && isMetadataTag(name)) {
     self->state = IN_PACKAGE;
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "package") == 0 || strcmp(name, "opf:package") == 0)) {
+  if (self->state == IN_PACKAGE && isPackageTag(name)) {
     self->state = START;
     return;
   }
