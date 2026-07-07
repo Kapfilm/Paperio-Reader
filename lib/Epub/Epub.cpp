@@ -13,6 +13,8 @@
 
 #include <cctype>
 #include <cstring>
+#include <limits>
+#include <optional>
 
 #include "Epub/ImageFormatDetector.h"
 #include "Epub/parsers/ContainerParser.h"
@@ -1354,28 +1356,88 @@ float Epub::calculateProgress(const int currentSpineIndex, const float currentSp
   return totalProgress / static_cast<float>(bookSize);
 }
 
-std::vector<Epub::PrintedPageEntry> Epub::loadPrintedPageList() const {
-  std::vector<PrintedPageEntry> entries;
-  const auto pageListPath = getCachePath() + "/pagelist.bin";
-  if (!Storage.exists(pageListPath.c_str())) {
-    return entries;
+void Epub::streamPrintedPageEntries(
+    const std::string& path,
+    const std::function<bool(const std::string&, const std::string&, const std::string&)>& visit) {
+  if (!Storage.exists(path.c_str())) {
+    return;
   }
   FsFile f;
-  if (!Storage.openFileForRead("EBP", pageListPath, f)) {
-    return entries;
+  if (!Storage.openFileForRead("EBP", path, f)) {
+    return;
   }
   uint16_t count = 0;
   serialization::readPod(f, count);
-  entries.reserve(count);
+  // Reused across iterations — labels/hrefs are short, so this never grows into the ~200 KB block
+  // the full list would reserve. count is never used to pre-size anything: a corrupt/oversized
+  // count simply runs the loop until readString hits EOF or a malformed field and we stop.
+  std::string href, anchor, label;
   for (uint16_t i = 0; i < count; i++) {
-    PrintedPageEntry e;
-    serialization::readString(f, e.href);
-    serialization::readString(f, e.anchor);
-    serialization::readString(f, e.label);
-    entries.push_back(std::move(e));
+    if (!serialization::readString(f, href) || !serialization::readString(f, anchor) ||
+        !serialization::readString(f, label)) {
+      break;  // malformed / oversized field: stop rather than risk desync
+    }
+    if (!visit(href, anchor, label)) {
+      break;
+    }
   }
   f.close();
-  return entries;
+}
+
+// Mirror of parsePrintedPageLabel (EpubReaderActivity): non-empty, all digits, <= 999999.
+static std::optional<int> parseNumericPageLabel(const std::string& label) {
+  if (label.empty()) return std::nullopt;
+  int value = 0;
+  for (char c : label) {
+    if (c < '0' || c > '9') return std::nullopt;
+    value = value * 10 + (c - '0');
+    if (value > 999999) return std::nullopt;
+  }
+  return value;
+}
+
+bool Epub::hasNumericPrintedPages() const {
+  bool found = false;
+  streamPrintedPageEntries(getCachePath() + "/pagelist.bin",
+                           [&](const std::string&, const std::string&, const std::string& label) {
+                             if (parseNumericPageLabel(label)) {
+                               found = true;
+                               return false;  // short-circuit
+                             }
+                             return true;
+                           });
+  return found;
+}
+
+bool Epub::getPrintedPageLabelRange(int& minLabel, int& maxLabel) const {
+  int lo = std::numeric_limits<int>::max();
+  int hi = std::numeric_limits<int>::min();
+  streamPrintedPageEntries(getCachePath() + "/pagelist.bin",
+                           [&](const std::string&, const std::string&, const std::string& label) {
+                             if (const auto n = parseNumericPageLabel(label)) {
+                               if (*n < lo) lo = *n;
+                               if (*n > hi) hi = *n;
+                             }
+                             return true;
+                           });
+  if (hi < lo) return false;  // no numeric labels
+  minLabel = lo;
+  maxLabel = hi;
+  return true;
+}
+
+std::optional<Epub::PrintedPageEntry> Epub::findPrintedPageByLabel(int target) const {
+  std::optional<PrintedPageEntry> match;
+  streamPrintedPageEntries(
+      getCachePath() + "/pagelist.bin",
+      [&](const std::string& href, const std::string& anchor, const std::string& label) {
+        if (const auto n = parseNumericPageLabel(label); n && *n == target) {
+          match = PrintedPageEntry{href, anchor, label};
+          return false;  // first match wins (file order)
+        }
+        return true;
+      });
+  return match;
 }
 
 int Epub::resolveHrefToSpineIndex(const std::string& href) const {

@@ -10,7 +10,7 @@
 // entries × 3 std::string each is enough to throw std::bad_alloc).
 //
 // File format matches the legacy writePageListBin() in Epub.cpp so the reader
-// side (Epub::loadPrintedPageList) is unchanged: u16 count, then per entry
+// side (Epub::streamPrintedPageEntries) is unchanged: u16 count, then per entry
 // writeString(href), writeString(anchor), writeString(label).
 //
 // Lifecycle: construct (opens the file and writes a placeholder count of 0),
