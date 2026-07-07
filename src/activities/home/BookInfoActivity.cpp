@@ -135,6 +135,12 @@ void BookInfoActivity::render(RenderLock&&) {
   // stale button labels in the real gutter.
   if (fullRenderDone && loadSucceeded && !description.empty() && partialRenderCount < MAX_PARTIAL_RENDERS &&
       renderer.getOrientation() == GfxRenderer::Portrait) {
+    // The write framebuffer holds the frame from two refreshes ago (displayBuffer() swaps
+    // buffers), so on alternating page turns it still contains the "Loading" screen or an
+    // older page rather than the current cover/meta. Resync it to the displayed frame before
+    // patching just the description/hints bands; without this the stale top section (cover or
+    // "Loading") ships back to the panel and the cover appears to flip in and out.
+    renderer.syncWriteBufferFromDisplayed();
     renderer.fillRect(descBandX, descBandY, descBandWidth, descBandHeight, false);
     renderer.fillRect(0, hintsBandY, renderer.getScreenWidth(), hintsBandHeight, false);
     renderDescriptionAndHints();
