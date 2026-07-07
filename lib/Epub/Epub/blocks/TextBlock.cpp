@@ -16,7 +16,7 @@ TextBlock::ArenaOffsets TextBlock::arenaOffsets(const uint16_t wordCount, const 
   ArenaOffsets o{};
   o.xpos = wc * sizeof(uint16_t);
   o.styles = o.xpos + wc * sizeof(int16_t);
-  o.sizes = o.styles + wc * sizeof(uint8_t);            // only meaningful when hasSizes
+  o.sizes = o.styles + wc * sizeof(uint8_t);  // only meaningful when hasSizes
   o.text = o.sizes + (hasSizes ? wc * sizeof(uint8_t) : 0);
   return o;
 }
