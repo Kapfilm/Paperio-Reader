@@ -174,12 +174,12 @@ std::string buildTextBlockPreview(const std::shared_ptr<TextBlock>& line, const 
   }
 
   std::string preview;
-  const auto& words = line->getWords();
-  for (size_t i = 0; i < words.size(); ++i) {
+  const uint16_t wordCount = line->wordCount();
+  for (uint16_t i = 0; i < wordCount; ++i) {
     if (i > 0) {
       preview.push_back(' ');
     }
-    preview += words[i];
+    preview += line->wordText(i);
     if (preview.size() >= maxLen) {
       preview.resize(maxLen);
       preview += "...";
@@ -2729,8 +2729,9 @@ void ChapterHtmlSlimParser::emitTableAsFragments(BufferedTable& table) {
         fbc.isHeader = cell.isHeader;
         fbc.text = std::unique_ptr<ParsedText>(new ParsedText(false, false));
         for (const auto& line : cell.lines) {
-          for (const auto& word : line->getWords()) {
-            fbc.text->addWord(word, EpdFontFamily::REGULAR, false, false);
+          const uint16_t wordCount = line->wordCount();
+          for (uint16_t i = 0; i < wordCount; ++i) {
+            fbc.text->addWord(line->wordText(i), EpdFontFamily::REGULAR, false, false);
           }
         }
         fbRow.cells.push_back(std::move(fbc));

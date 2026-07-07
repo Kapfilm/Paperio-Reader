@@ -17,7 +17,10 @@
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION = 59;  // bumped: FontSizeLadder residual dead zone (±3% renders native) changes
+constexpr uint8_t SECTION_FILE_VERSION = 60;  // bumped: TextBlock word data now serialized as one flat arena
+                                              // (offset table + NUL-terminated text blob) instead of
+                                              // length-prefixed strings and per-field arrays (v60)
+                                              // v59: FontSizeLadder residual dead zone (±3% renders native) changes
                                               // near-rung block metrics from v58
                                               // (v58: block sizes snap to the FontSizeLadder, uniform spans fold;
                                               //  v57: sup/sub scaling moved into the per-word size channel)

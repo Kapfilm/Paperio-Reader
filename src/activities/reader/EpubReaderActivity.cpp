@@ -1272,10 +1272,11 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             if (el->getTag() == TAG_PageLine) {
               const auto& line = static_cast<const PageLine&>(*el);
               if (line.getBlock()) {
-                const auto& words = line.getBlock()->getWords();
-                for (const auto& w : words) {
+                const auto& block = *line.getBlock();
+                const uint16_t wordCount = block.wordCount();
+                for (uint16_t i = 0; i < wordCount; ++i) {
                   if (!fullText.empty()) fullText += " ";
-                  fullText += w;
+                  fullText += block.wordText(i);
                 }
               }
             }

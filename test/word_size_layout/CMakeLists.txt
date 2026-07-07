@@ -19,6 +19,7 @@ target_include_directories(WordSizeLayoutTest PRIVATE
   ${REPO_ROOT}/lib/EpdFont
   ${REPO_ROOT}/lib/Utf8
   ${REPO_ROOT}/lib/Logging
+  ${REPO_ROOT}/lib/Memory
   ${REPO_ROOT}/lib/Serialization
 )
 
