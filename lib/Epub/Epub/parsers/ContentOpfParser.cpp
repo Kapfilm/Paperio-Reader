@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstring>
 
 #include "../BookMetadataCache.h"
@@ -49,6 +50,67 @@ bool startsWithImageMediaType(const std::string& mediaType) {
   return true;
 }
 
+// Append the UTF-8 encoding of a Unicode code point.
+void appendUtf8(std::string& out, uint32_t cp) {
+  if (cp <= 0x7F) {
+    out += static_cast<char>(cp);
+  } else if (cp <= 0x7FF) {
+    out += static_cast<char>(0xC0u | ((cp >> 6) & 0x1Fu));
+    out += static_cast<char>(0x80u | (cp & 0x3Fu));
+  } else if (cp <= 0xFFFF) {
+    out += static_cast<char>(0xE0u | ((cp >> 12) & 0x0Fu));
+    out += static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu));
+    out += static_cast<char>(0x80u | (cp & 0x3Fu));
+  } else {
+    out += static_cast<char>(0xF0u | ((cp >> 18) & 0x07u));
+    out += static_cast<char>(0x80u | ((cp >> 12) & 0x3Fu));
+    out += static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu));
+    out += static_cast<char>(0x80u | (cp & 0x3Fu));
+  }
+}
+
+// Resolve a numeric character reference (&#N; decimal or &#xN; hex) into UTF-8.
+// `entity` points at the leading '&', `len` includes the trailing ';'. Returns
+// false when the reference is malformed or out of range.
+bool appendNumericEntity(std::string& out, const char* entity, size_t len) {
+  // Shortest valid form is "&#0;" (len 4); entity[1] must be '#'.
+  if (len < 4 || entity[1] != '#') {
+    return false;
+  }
+
+  size_t p = 2;
+  int base = 10;
+  if (entity[p] == 'x' || entity[p] == 'X') {
+    base = 16;
+    ++p;
+  }
+  if (p >= len - 1) {  // no digits before ';'
+    return false;
+  }
+
+  uint32_t cp = 0;
+  for (; p < len - 1; ++p) {
+    const char c = entity[p];
+    int digit;
+    if (c >= '0' && c <= '9') {
+      digit = c - '0';
+    } else if (base == 16 && c >= 'a' && c <= 'f') {
+      digit = c - 'a' + 10;
+    } else if (base == 16 && c >= 'A' && c <= 'F') {
+      digit = c - 'A' + 10;
+    } else {
+      return false;
+    }
+    cp = cp * static_cast<uint32_t>(base) + static_cast<uint32_t>(digit);
+    if (cp > 0x10FFFF) {  // beyond Unicode range — bail rather than emit garbage
+      return false;
+    }
+  }
+
+  appendUtf8(out, cp);
+  return true;
+}
+
 bool appendHtmlEntity(std::string& out, const std::string& html, size_t& i) {
   const size_t semi = html.find(';', i + 1);
   if (semi == std::string::npos) {
@@ -57,6 +119,18 @@ bool appendHtmlEntity(std::string& out, const std::string& html, size_t& i) {
 
   const size_t len = semi - i + 1;
   const char* entity = html.data() + i;
+
+  // Numeric character references (&#8212; / &#x2014;) are not in the named-entity
+  // table; decode them directly. yxml already decodes these when they appear raw,
+  // but Calibre-style descriptions often double-escape them (&amp;#8212;), so the
+  // literal form reaches here after the outer &amp; is resolved.
+  if (len > 3 && entity[1] == '#') {
+    if (appendNumericEntity(out, entity, len)) {
+      i = semi;
+      return true;
+    }
+    return false;
+  }
 
   // Metadata descriptions should collapse these to normal spaces; the chapter
   // renderer keeps NBSP because it has layout semantics there.

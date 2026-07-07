@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -18,6 +20,12 @@ class BookInfoActivity final : public Activity {
   std::string loadError;
   bool loadSucceeded = false;
   size_t fileSizeBytes = 0;
+
+  // Reading stats snapshot, populated in loadData() when this book has history.
+  bool hasReadingStats = false;
+  uint32_t statTotalSeconds = 0;
+  uint8_t statProgress = 0;
+  time_t statLastReadEpoch = 0;
 
   // Description paging (populated lazily on first render)
   std::vector<std::string> descLines;

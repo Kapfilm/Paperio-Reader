@@ -145,6 +145,35 @@ TEST(ContentOpfParser, ExtractsMetadataManifestAndGuideFields) {
   EXPECT_EQ(parser.guideCoverPageHref, "book/OEBPS/text/cover.xhtml");
 }
 
+TEST(ContentOpfParser, DecodesNumericCharacterReferencesInDescription) {
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  TempDirGuard dirGuard(cacheDir);
+
+  const std::string base = "/book/OEBPS/";
+  // Calibre-style descriptions frequently double-escape the inner HTML, so the
+  // parser sees the literal "&#8212;" after the outer &amp; is resolved. It must
+  // decode both decimal (&#8212; → em dash) and hex (&#x2019; → right quote).
+  const std::string xml =
+      "<?xml version='1.0' encoding='utf-8'?>"
+      "<package xmlns:opf='http://www.idpf.org/2007/opf' xmlns:dc='http://purl.org/dc/elements/1.1/'>"
+      "<metadata>"
+      "<dc:title>T</dc:title>"
+      "<dc:description>A &amp;#8212; B&amp;#x2019;s tale</dc:description>"
+      "</metadata>"
+      "<manifest>"
+      "<item id='ncx' href='toc.ncx' media-type='application/x-dtbncx+xml'/>"
+      "</manifest>"
+      "<spine/>"
+      "</package>";
+
+  ContentOpfParser parser(cacheDir, base, xml.size(), nullptr);
+  ASSERT_TRUE(parseOpfXml(parser, xml));
+
+  // U+2014 EM DASH = e2 80 94, U+2019 RIGHT SINGLE QUOTATION MARK = e2 80 99
+  EXPECT_EQ(parser.description, "A \xE2\x80\x94 B\xE2\x80\x99s tale");
+}
+
 TEST(ContentOpfParser, ResolvesSpineIdrefsUsingManifestItems) {
   const std::string cacheDir = makeTempDir();
   ASSERT_FALSE(cacheDir.empty());
