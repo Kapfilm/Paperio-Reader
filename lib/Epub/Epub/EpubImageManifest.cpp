@@ -65,12 +65,12 @@ bool EpubImageManifest::load(const std::string& cachePath) {
   serialization::readPod(f, count);
   // A corrupt/truncated images.bin must not steer reserve() into a multi-MB allocation that aborts
   // the firmware (uncaught bad_alloc, -fno-exceptions). The smallest possible on-disk entry is one
-  // u32 string-length prefix (empty key) + 18 B of fixed PODs = 22 B, so a count that can't fit in
-  // the bytes left in the file is garbage. A bad header means the rest is untrustworthy too: drop
-  // the whole cache and start empty — ensureResolved() refills it and the next persist overwrites
-  // the corrupt file.
+  // u32 string-length prefix (empty key) + width + height (two int16) = 8 B, so a count that can't
+  // fit in the bytes left in the file is garbage. A bad header means the rest is untrustworthy too:
+  // drop the whole cache and start empty — ensureResolved() refills it and the next persist
+  // overwrites the corrupt file.
   const int remaining = f.available();
-  const uint32_t maxPlausible = remaining > 0 ? static_cast<uint32_t>(remaining) / 22u : 0u;
+  const uint32_t maxPlausible = remaining > 0 ? static_cast<uint32_t>(remaining) / 8u : 0u;
   if (count > maxPlausible) {
     LOG_ERR("IMF", "images.bin count %u exceeds file capacity %u; ignoring cache", count, maxPlausible);
     f.close();
@@ -85,10 +85,6 @@ bool EpubImageManifest::load(const std::string& cachePath) {
     if (!serialization::readString(f, e.epubEntryPath)) break;
     serialization::readPod(f, e.width);
     serialization::readPod(f, e.height);
-    serialization::readPod(f, e.method);
-    serialization::readPod(f, e.compressedSize);
-    serialization::readPod(f, e.uncompressedSize);
-    serialization::readPod(f, e.localHeaderOffset);
     entries_.push_back(std::move(e));
   }
 
@@ -146,10 +142,6 @@ const ImageManifestEntry* EpubImageManifest::ensureResolved(const std::string& e
       e.epubEntryPath = epubEntryPath;  // caller passes the normalised key
       e.width = dims.width;
       e.height = dims.height;
-      e.method = stat.method;
-      e.compressedSize = stat.compressedSize;
-      e.uncompressedSize = stat.uncompressedSize;
-      e.localHeaderOffset = stat.localHeaderOffset;
 
       // Insert keeping entries_ sorted so find()'s binary search stays valid.
       auto it = std::lower_bound(entries_.begin(), entries_.end(), epubEntryPath,
@@ -206,10 +198,6 @@ void EpubImageManifest::persistIfDirty() {
     serialization::writeString(f, e.epubEntryPath);
     serialization::writePod(f, e.width);
     serialization::writePod(f, e.height);
-    serialization::writePod(f, e.method);
-    serialization::writePod(f, e.compressedSize);
-    serialization::writePod(f, e.uncompressedSize);
-    serialization::writePod(f, e.localHeaderOffset);
   }
   f.flush();
   f.close();
