@@ -1168,7 +1168,13 @@ ParsedText::LineProcessResult ParsedText::extractLine(
     }
   }
 
-  return processLine(std::make_shared<TextBlock>(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles),
-                                                 blockStyle, std::move(lineWordSizes)),
-                     lineEndsWithHyphenatedWord, suppressHyphenationRetry);
+  // TextBlock flattens the vectors into its arena on construct; on arena OOM the
+  // block is invalid, so drop the line rather than render/serialize garbage.
+  auto block = std::make_shared<TextBlock>(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles),
+                                           blockStyle, std::move(lineWordSizes));
+  if (!block->valid()) {
+    LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
+    return LineProcessResult::Accepted;
+  }
+  return processLine(std::move(block), lineEndsWithHyphenatedWord, suppressHyphenationRetry);
 }

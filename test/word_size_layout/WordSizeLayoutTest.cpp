@@ -191,7 +191,7 @@ TEST(WordSizeSerialization, RoundTripsMixedSizes) {
   ASSERT_EQ(restored->wordCount(), 3u);
   ASSERT_TRUE(restored->hasWordSizes());
   EXPECT_EQ(restored->getWordSizes(), (std::vector<uint8_t>{100, 80, 150}));
-  EXPECT_EQ(restored->getWords()[1], "two");
+  EXPECT_EQ(std::string(restored->wordText(1)), "two");
 }
 
 TEST(WordSizeSerialization, UniformBlockCostsOneFlagByte) {
@@ -209,6 +209,69 @@ TEST(WordSizeSerialization, UniformBlockCostsOneFlagByte) {
   const auto restored = TextBlock::deserialize(uniformFile);
   ASSERT_NE(restored, nullptr);
   EXPECT_FALSE(restored->hasWordSizes());
+}
+
+// The flat arena packs word text, offsets, xpos and styles into one allocation;
+// verify every per-word field survives a serialize/deserialize round-trip and
+// that wordText() stays NUL-terminated with the right length.
+TEST(WordSizeSerialization, ArenaRoundTripPreservesPerWordFields) {
+  const std::vector<std::string> words = {"Hello", "wörld", "!", "a"};
+  const std::vector<int16_t> xpos = {0, 60, 120, 140};
+  const std::vector<EpdFontFamily::Style> styles = {EpdFontFamily::REGULAR, EpdFontFamily::BOLD,
+                                                    EpdFontFamily::UNDERLINE, EpdFontFamily::ITALIC};
+  TextBlock original(words, xpos, styles, BlockStyle());
+  ASSERT_TRUE(original.valid());
+
+  FsFile file = HalFile::forReadWrite();
+  ASSERT_TRUE(original.serialize(file));
+  ASSERT_TRUE(file.seek(0));
+
+  const auto restored = TextBlock::deserialize(file);
+  ASSERT_NE(restored, nullptr);
+  ASSERT_EQ(restored->wordCount(), words.size());
+  EXPECT_FALSE(restored->hasWordSizes());
+  for (uint16_t i = 0; i < words.size(); ++i) {
+    EXPECT_EQ(std::string(restored->wordText(i)), words[i]);
+    EXPECT_EQ(restored->wordTextLen(i), words[i].size());
+    EXPECT_EQ(restored->wordXpos(i), xpos[i]);
+    EXPECT_EQ(restored->wordStyle(i), styles[i]);
+  }
+}
+
+// An empty word ("") is stored as a bare NUL; the offset table must still be
+// strictly increasing and validation must accept it.
+TEST(WordSizeSerialization, EmptyStringWordRoundTrips) {
+  TextBlock original({"", "x", ""}, {0, 10, 20},
+                     {EpdFontFamily::REGULAR, EpdFontFamily::REGULAR, EpdFontFamily::REGULAR}, BlockStyle());
+  ASSERT_TRUE(original.valid());
+
+  FsFile file = HalFile::forReadWrite();
+  ASSERT_TRUE(original.serialize(file));
+  ASSERT_TRUE(file.seek(0));
+
+  const auto restored = TextBlock::deserialize(file);
+  ASSERT_NE(restored, nullptr);
+  ASSERT_EQ(restored->wordCount(), 3u);
+  EXPECT_EQ(std::string(restored->wordText(0)), "");
+  EXPECT_EQ(restored->wordTextLen(0), 0u);
+  EXPECT_EQ(std::string(restored->wordText(1)), "x");
+  EXPECT_EQ(std::string(restored->wordText(2)), "");
+}
+
+// A zero-word block carries no arena; it must round-trip as a valid empty block.
+TEST(WordSizeSerialization, EmptyBlockRoundTrips) {
+  TextBlock original({}, {}, {}, BlockStyle());
+  ASSERT_TRUE(original.valid());
+  EXPECT_TRUE(original.isEmpty());
+
+  FsFile file = HalFile::forReadWrite();
+  ASSERT_TRUE(original.serialize(file));
+  ASSERT_TRUE(file.seek(0));
+
+  const auto restored = TextBlock::deserialize(file);
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->wordCount(), 0u);
+  EXPECT_TRUE(restored->isEmpty());
 }
 
 // ---------------------------------------------------------------------------
