@@ -1,6 +1,7 @@
 #include "FontDownloadActivity.h"
 
 #include <ArduinoJson.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -18,6 +19,26 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
+
+namespace {
+// Release the large, long-lived allocations before the first TLS handshake so
+// mbedTLS can obtain contiguous buffers on this constrained heap. The secondary
+// framebuffer (~52 KB) is the single biggest heap consumer and, left resident,
+// fragments the heap enough that esp_http_client_open fails with
+// ESP_ERR_HTTP_CONNECT (no TLS error) before the manifest fetch. Mirrors the
+// trimMemoryBeforeTls() helper in the other network activities (OTA, OPDS, …).
+// Safe here because onExit() always silentRestart()s, so the secondary buffer
+// never needs to be reallocated. See [project-font-download-heap-stash].
+void trimMemoryBeforeTls(const GfxRenderer& renderer) {
+  if (auto* cache = renderer.getFontCacheManager()) {
+    cache->clearCache();
+  }
+  if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
+    LOG_DBG("FONT", "Released secondary framebuffer before TLS (~52 KB contiguous)");
+    renderer.setSingleBufferFastDiff(true);
+  }
+}
+}  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : Activity("FontDownload", renderer, mappedInput), fontInstaller_(sdFontSystem.registry()) {}
@@ -58,6 +79,11 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
   }
   requestUpdateAndWait();
 
+  // Free the secondary framebuffer + font cache before the first TLS handshake.
+  // Done after the LOADING_MANIFEST frame is on-panel so the release doesn't
+  // affect what's displayed during the fetch.
+  trimMemoryBeforeTls(renderer);
+
   if (!fetchAndParseManifest()) {
     RenderLock lock(*this);
     state_ = ERROR;
@@ -81,7 +107,26 @@ bool FontDownloadActivity::fetchAndParseManifest() {
   // parse so the parser has full heap headroom. The Session is opened later
   // for the per-file download loop, on a heap that's been slimmed by
   // trimManifestForDownload().
-  auto result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
+  //
+  // Retry with backoff, mirroring OtaUpdater::checkForUpdate(). The first
+  // attempt runs SNTP (see ensureClockForTls) whose DNS/socket teardown leaves
+  // the heap transiently fragmented — enough that mbedtls_ssl_setup can fail
+  // with MBEDTLS_ERR_SSL_ALLOC_FAILED (-0x7F00) at t~50ms. ensureClockForTls()
+  // only syncs once, so later attempts skip SNTP and hit TLS on a settled heap.
+  constexpr int kMaxAttempts = 3;
+  constexpr unsigned long kInitialRetryDelayMs = 1000;
+  HttpDownloader::DownloadError result = HttpDownloader::HTTP_ERROR;
+  for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+    result = HttpDownloader::downloadToFile(FONT_MANIFEST_URL, MANIFEST_TMP, nullptr);
+    if (result == HttpDownloader::OK) {
+      break;
+    }
+    if (attempt < kMaxAttempts) {
+      const unsigned long delayMs = kInitialRetryDelayMs << static_cast<unsigned int>(attempt - 1);
+      LOG_ERR("FONT", "Manifest fetch failed on attempt %d/%d, retrying in %lu ms", attempt, kMaxAttempts, delayMs);
+      delay(delayMs);
+    }
+  }
   if (result != HttpDownloader::OK) {
     LOG_ERR("FONT", "Failed to fetch manifest from %s", FONT_MANIFEST_URL);
     errorMessage_ = "Failed to fetch font list";

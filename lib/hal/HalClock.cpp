@@ -490,6 +490,14 @@ bool syncNtp(char* errorBuf, size_t errorBufSize) {
     return false;
   }
 
+  // Sync succeeded. Stop SNTP now to release its UDP socket and LWIP buffers
+  // before we return — callers (ensureClockForTls) hand straight off to a TLS
+  // handshake that needs a large contiguous heap block, and a lingering SNTP
+  // instance fragments the heap enough to fail esp_http_client_open with
+  // ESP_ERR_HTTP_CONNECT (no TLS error) on this ESP32-C3. The failure path
+  // below already stops for the same reason; success must too.
+  esp_sntp_stop();
+
   // NTP sync yields authoritative time; allow DS3231 to be updated.
   clockApproximate = false;
   capture(false);

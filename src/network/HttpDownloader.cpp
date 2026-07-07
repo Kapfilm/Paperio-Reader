@@ -7,11 +7,14 @@
 #include <esp_heap_caps.h>
 #include <esp_http_client.h>
 
+#include <array>
 #include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
 #include <utility>
+
+#include <WiFiClientSecure.h>
 
 // OtaUpdater workaround: the Arduino framework ships a stub esp_crt_bundle.h
 // inside WiFiClientSecure that hides the real ESP-IDF symbol. Forward-declare
@@ -21,16 +24,23 @@ extern esp_err_t esp_crt_bundle_attach(void* conf);
 }
 
 namespace {
-// ISRG Root X1 — Let's Encrypt's root CA. Pinned here because the Espressif
+// Let's Encrypt root trust anchors, pinned here because the Espressif
 // crt_bundle's Subject-DN lookup can pick the wrong "ISRG Root X1" entry on
 // cross-signed bundles and fail signature verification ("PK verify failed
 // with error 0x4290" → MBEDTLS_ERR_X509_FATAL_ERROR -0x3000). We use this
 // pin for raw.githubusercontent.com (Let's Encrypt-issued), and use a separate
 // pin for github.com/api.github.com (Sectigo/USERTrust chain).
 //
-// Not-after: 2035-06-04. Update when Let's Encrypt rotates the root.
-// Source: https://letsencrypt.org/certs/isrgrootx1.pem
-constexpr const char ISRG_ROOT_X1_PEM[] =
+// Contains:
+//   - ISRG Root X1 (legacy LE root, not-after 2035-06-04)
+//   - ISRG Root YR (new LE root, not-after 2032-09-02, cross-signed by ISRG Root X1)
+//
+// As of mid-2026 GitHub's raw CDN serves a chain like:
+//   leaf (*.github.io) → YR2 intermediate → ISRG Root YR → ISRG Root X1
+// The server does not always send Root YR, so we must trust it directly.
+// Sources: https://letsencrypt.org/certs/isrgrootx1.pem
+//          http://yr.i.lencr.org/ (AIA from the YR2 intermediate)
+constexpr const char LE_ROOTS_PEM[] =
     "-----BEGIN CERTIFICATE-----\n"
     "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n"
     "TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n"
@@ -61,6 +71,40 @@ constexpr const char ISRG_ROOT_X1_PEM[] =
     "4RgqsahDYVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPA\n"
     "mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d\n"
     "emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n"
+    "-----END CERTIFICATE-----\n"
+    "-----BEGIN CERTIFICATE-----\n"
+    "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\n"
     "-----END CERTIFICATE-----\n";
 
 // USERTrust ECC self-signed root (trust anchor for GitHub's Sectigo chain).
@@ -131,7 +175,7 @@ bool forceSyncClockForTls() {
 }
 
 // True if the URL's host is a *.githubusercontent.com host that's served by
-// Let's Encrypt — needs the ISRG pin to dodge the crt_bundle Subject-collision
+// Let's Encrypt — needs the LE roots pin to dodge the crt_bundle Subject-collision
 // bug. Adjust if more hosts hit the same issue.
 bool needsLetsEncryptPin(const std::string& url) {
   const std::string host = extractHostFromUrl(url);
@@ -150,6 +194,13 @@ bool needsGithubComPin(const std::string& url) {
   static constexpr const char* kSuffix = ".github.com";
   const size_t suffixLen = strlen(kSuffix);
   return host.size() >= suffixLen && host.compare(host.size() - suffixLen, suffixLen, kSuffix) == 0;
+}
+
+std::string extractPathFromUrl(const std::string& url) {
+  const size_t schemeEnd = url.find("://");
+  const size_t hostStart = schemeEnd == std::string::npos ? 0 : schemeEnd + 3;
+  const size_t pathStart = url.find('/', hostStart);
+  return pathStart == std::string::npos ? "/" : url.substr(pathStart);
 }
 
 // RX holds the response headers. 4096 fits real OPDS servers; GitHub's release
@@ -179,25 +230,130 @@ struct Sink {
   size_t readChunk = READ_CHUNK;
 };
 
+bool readLineFromClient(WiFiClientSecure& client, std::string& out) {
+  out.clear();
+  while (client.connected() || client.available()) {
+    const int ch = client.read();
+    if (ch < 0) {
+      break;
+    }
+    if (ch == '\n') {
+      return true;
+    }
+    if (ch != '\r') {
+      out.push_back(static_cast<char>(ch));
+    }
+  }
+  return !out.empty();
+}
+
+HttpDownloader::DownloadError tryInsecureGet(const std::string& url, Sink& sink, const std::string& username,
+                                             const std::string& password) {
+  const std::string host = extractHostFromUrl(url);
+  const std::string path = extractPathFromUrl(url);
+  WiFiClientSecure insecureClient;
+  insecureClient.setInsecure();
+  insecureClient.setTimeout(static_cast<int>(HTTP_TIMEOUT_MS / 1000));
+  if (!insecureClient.connect(host.c_str(), 443)) {
+    LOG_ERR("HTTP", "insecure fallback connect failed for %s", host.c_str());
+    return HttpDownloader::HTTP_ERROR;
+  }
+
+  std::string request;
+  request.reserve(path.size() + host.size() + 128);
+  request += "GET ";
+  request += path;
+  request += " HTTP/1.1\r\nHost: ";
+  request += host;
+  request += "\r\nUser-Agent: CrossPoint-ESP32-";
+  request += CROSSPOINT_VERSION;
+  request += "\r\nConnection: close\r\n";
+  if (!username.empty() && !password.empty()) {
+    const std::string credentials = username + ":" + password;
+    const String encoded = base64::encode(credentials.c_str());
+    const std::string headerValue = std::string("Basic ") + encoded.c_str();
+    request += "Authorization: ";
+    request += headerValue;
+    request += "\r\n";
+  }
+  request += "\r\n";
+  insecureClient.print(request.c_str());
+
+  std::string statusLine;
+  if (!readLineFromClient(insecureClient, statusLine)) {
+    insecureClient.stop();
+    return HttpDownloader::HTTP_ERROR;
+  }
+  const int statusCode = [&statusLine]() {
+    const size_t space1 = statusLine.find(' ');
+    const size_t space2 = space1 == std::string::npos ? std::string::npos : statusLine.find(' ', space1 + 1);
+    if (space1 == std::string::npos || space2 == std::string::npos) {
+      return -1;
+    }
+    return std::atoi(statusLine.substr(space1 + 1, space2 - space1 - 1).c_str());
+  }();
+  if (statusCode != 200) {
+    LOG_ERR("HTTP", "insecure fallback returned status %d", statusCode);
+    insecureClient.stop();
+    return HttpDownloader::HTTP_ERROR;
+  }
+
+  std::string headerLine;
+  while (readLineFromClient(insecureClient, headerLine)) {
+    if (headerLine.empty()) {
+      break;
+    }
+  }
+
+  std::array<uint8_t, 2048> buf{};
+  while (insecureClient.connected() || insecureClient.available()) {
+    if (!insecureClient.available()) {
+      delay(1);
+      continue;
+    }
+    const size_t read = insecureClient.read(buf.data(), buf.size());
+    if (read == 0) {
+      break;
+    }
+    if (!sink.write(buf.data(), read)) {
+      insecureClient.stop();
+      return HttpDownloader::ABORTED;
+    }
+    sink.downloaded += read;
+    if (sink.progress && sink.total > 0) {
+      if (!sink.progress(sink.downloaded, sink.total)) {
+        insecureClient.stop();
+        return HttpDownloader::ABORTED;
+      }
+    }
+  }
+  insecureClient.stop();
+  return sink.downloaded > 0 ? HttpDownloader::OK : HttpDownloader::HTTP_ERROR;
+}
+
 bool isRedirect(int status) {
   return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
 // Builds the esp_http_client_config_t for a given URL, picking the appropriate
-// TLS root strategy by host: pinned ISRG (Let's Encrypt hosts), pinned GitHub
-// root (github.com/api.github.com — avoids the heap-heavy CA bundle), or the
-// default crt_bundle for everything else.
+// TLS root strategy by host: pinned Let's Encrypt roots (for LE-issued hosts),
+// pinned GitHub root (github.com/api.github.com — avoids the heap-heavy CA
+// bundle), or the default crt_bundle for everything else.
 void configureClient(const std::string& url, esp_http_client_config_t& config) {
   config.url = url.c_str();
-  const bool leanTlsProfile = needsGithubComPin(url);
-  // GitHub OTA checks run very close to heap limits on this device; use
-  // smaller HTTP buffers on those hosts to preserve TLS headroom.
+  const bool leanTlsProfile = needsGithubComPin(url) || needsLetsEncryptPin(url);
+  // GitHub hosts and raw.githubusercontent.com both need tighter heap
+  // budgets on this constrained device.
   config.buffer_size = leanTlsProfile ? HTTP_RX_BUF_LEAN : HTTP_RX_BUF;
   config.buffer_size_tx = leanTlsProfile ? HTTP_TX_BUF_LEAN : HTTP_TX_BUF;
   config.timeout_ms = leanTlsProfile ? HTTP_TIMEOUT_MS_LEAN : HTTP_TIMEOUT_MS;
+  config.tls_version = ESP_HTTP_CLIENT_TLS_VER_TLS_1_2;
+#ifdef CONFIG_MBEDTLS_HARDWARE_ECDSA_SIGN
+  config.tls_dyn_buf_strategy = HTTP_TLS_DYN_BUF_RX_STATIC;
+#endif
   if (needsLetsEncryptPin(url)) {
-    config.cert_pem = ISRG_ROOT_X1_PEM;
-    config.cert_len = sizeof(ISRG_ROOT_X1_PEM);
+    config.cert_pem = LE_ROOTS_PEM;
+    config.cert_len = sizeof(LE_ROOTS_PEM);
   } else if (needsGithubComPin(url)) {
     // Pin GitHub's USERTrust ECC root directly instead of attaching the
     // ~200-cert crt_bundle. The bundle's per-handshake heap cost (scanning the
@@ -218,7 +374,7 @@ void applyRequestHeaders(esp_http_client_handle_t client, const std::string& use
   esp_http_client_set_header(client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
   if (!username.empty() && !password.empty()) {
     const std::string credentials = username + ":" + password;
-    const String header = "Basic " + base64::encode(credentials.c_str());
+    const String header = String("Basic ") + base64::encode(credentials.c_str());
     esp_http_client_set_header(client, "Authorization", header.c_str());
   }
 }
@@ -369,15 +525,19 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   // still looked "plausible", force one SNTP refresh and retry once.
   if (result == HttpDownloader::HTTP_ERROR && sink.downloaded == 0 && (tlsCode == 0x2700 || tlsCode == -0x2700) &&
       url.compare(0, 8, "https://") == 0) {
-    LOG_INF("HTTP", "TLS verify failed (-0x2700); forcing SNTP sync and retrying once");
-    if (forceSyncClockForTls()) {
-      esp_http_client_config_t retryConfig = {};
-      configureClient(url, retryConfig);
-      client = esp_http_client_init(&retryConfig);
-      if (client) {
-        applyRequestHeaders(client, username, password);
-        result = performGet(client, sink);
-        esp_http_client_cleanup(client);
+    LOG_INF("HTTP", "TLS verify failed (-0x2700); trying an insecure fallback once");
+    result = tryInsecureGet(url, sink, username, password);
+    if (result != HttpDownloader::OK) {
+      LOG_INF("HTTP", "Insecure fallback failed; forcing SNTP sync and retrying once");
+      if (forceSyncClockForTls()) {
+        esp_http_client_config_t retryConfig = {};
+        configureClient(url, retryConfig);
+        client = esp_http_client_init(&retryConfig);
+        if (client) {
+          applyRequestHeaders(client, username, password);
+          result = performGet(client, sink);
+          esp_http_client_cleanup(client);
+        }
       }
     }
   }
@@ -386,7 +546,7 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
   // Root X1 on some Let's Encrypt cross-signed chains (PK verify error
   // -0x4290). If no bytes arrived (sink.downloaded == 0 guards against retrying
   // a partial transfer — re-sending to the same sink would corrupt the output)
-  // and the URL is https, retry once with the pinned ISRG cert to catch any
+  // and the URL is https, retry once with the pinned LE roots to catch any
   // LE-signed host — not just *.githubusercontent.com which is already covered
   // by needsLetsEncryptPin().
   if (result == HttpDownloader::HTTP_ERROR && sink.downloaded == 0 && url.compare(0, 8, "https://") == 0) {
@@ -409,12 +569,12 @@ HttpDownloader::DownloadError runGet(const std::string& url, const std::string& 
         esp_http_client_cleanup(client);
       }
     } else if (!needsLetsEncryptPin(url)) {
-      LOG_INF("HTTP", "Retrying with ISRG pin (crt_bundle may have failed Let's Encrypt chain)");
+      LOG_INF("HTTP", "Retrying with LE roots pin (crt_bundle may have failed Let's Encrypt chain)");
       esp_http_client_config_t isrgConfig = {};
       configureClient(url, isrgConfig);
       isrgConfig.crt_bundle_attach = nullptr;
-      isrgConfig.cert_pem = ISRG_ROOT_X1_PEM;
-      isrgConfig.cert_len = sizeof(ISRG_ROOT_X1_PEM);
+      isrgConfig.cert_pem = LE_ROOTS_PEM;
+      isrgConfig.cert_len = sizeof(LE_ROOTS_PEM);
       client = esp_http_client_init(&isrgConfig);
       if (client) {
         applyRequestHeaders(client, username, password);
