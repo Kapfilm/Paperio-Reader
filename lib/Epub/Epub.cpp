@@ -1428,15 +1428,14 @@ bool Epub::getPrintedPageLabelRange(int& minLabel, int& maxLabel) const {
 
 std::optional<Epub::PrintedPageEntry> Epub::findPrintedPageByLabel(int target) const {
   std::optional<PrintedPageEntry> match;
-  streamPrintedPageEntries(
-      getCachePath() + "/pagelist.bin",
-      [&](const std::string& href, const std::string& anchor, const std::string& label) {
-        if (const auto n = parseNumericPageLabel(label); n && *n == target) {
-          match = PrintedPageEntry{href, anchor, label};
-          return false;  // first match wins (file order)
-        }
-        return true;
-      });
+  streamPrintedPageEntries(getCachePath() + "/pagelist.bin",
+                           [&](const std::string& href, const std::string& anchor, const std::string& label) {
+                             if (const auto n = parseNumericPageLabel(label); n && *n == target) {
+                               match = PrintedPageEntry{href, anchor, label};
+                               return false;  // first match wins (file order)
+                             }
+                             return true;
+                           });
   return match;
 }
 
