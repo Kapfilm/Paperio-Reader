@@ -2,7 +2,9 @@
 
 #include <Print.h>
 
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -147,7 +149,27 @@ class Epub {
     std::string anchor;
     std::string label;
   };
-  // Reads <cachePath>/pagelist.bin. Returns empty vector when the book has no printed-page data.
-  // Inexpensive — only invoked from menu paths, not page-turn hot paths.
-  std::vector<PrintedPageEntry> loadPrintedPageList() const;
+  // Printed-page navigation accessors, all reading <cachePath>/pagelist.bin. They STREAM the file
+  // one entry at a time rather than materialising the list: the full list is ~72 B/entry (~200 KB
+  // for a long book), and reserving that as a single contiguous block aborts the firmware (uncaught
+  // bad_alloc, -fno-exceptions) when a menu is opened while the heap is fragmented by an in-flight
+  // section build — the tag 2.05 "Confirm reboots on a huge chapter" crash. Numeric labels match
+  // the reader's parsePrintedPageLabel rule (non-empty, all digits, <= 999999).
+
+  // True when at least one entry has a numeric label. Short-circuits on the first match — used to
+  // decide whether the reader menu offers "Go to printed page".
+  bool hasNumericPrintedPages() const;
+  // Fills [minLabel, maxLabel] with the numeric-label range (inclusive). Returns false and leaves
+  // the outputs untouched when the book has no numeric labels.
+  bool getPrintedPageLabelRange(int& minLabel, int& maxLabel) const;
+  // Returns the first entry whose numeric label equals target (file order), or nullopt.
+  std::optional<PrintedPageEntry> findPrintedPageByLabel(int target) const;
+
+ private:
+  // Streams pagelist.bin at path into visit(href, anchor, label) per entry; visit returns false to
+  // stop early. The single place that knows the on-disk format, so no caller reserves the whole
+  // list. Silently no-ops when the file is absent or unreadable.
+  static void streamPrintedPageEntries(
+      const std::string& path,
+      const std::function<bool(const std::string&, const std::string&, const std::string&)>& visit);
 };

@@ -1204,18 +1204,13 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::GO_TO_PRINTED_PAGE: {
       if (!epub) break;
-      auto entries = epub->loadPrintedPageList();
-      // Compute the integer label range from parseable entries; non-integer labels are
-      // ignored (the dialog is numeric-only).
-      int minLabel = std::numeric_limits<int>::max();
-      int maxLabel = std::numeric_limits<int>::min();
-      for (const auto& entry : entries) {
-        if (const auto n = parsePrintedPageLabel(entry.label)) {
-          if (*n < minLabel) minLabel = *n;
-          if (*n > maxLabel) maxLabel = *n;
-        }
+      // Integer label range for the numeric input's bounds. Streamed (not loadPrintedPageList) so
+      // the whole list is never held in RAM — see Epub::hasNumericPrintedPages for why.
+      int minLabel = 0;
+      int maxLabel = 0;
+      if (!epub->getPrintedPageLabelRange(minLabel, maxLabel)) {
+        break;  // no integer labels — shouldn't happen if the menu item was shown
       }
-      if (maxLabel < minLabel) break;  // no integer labels — shouldn't happen if menu item was shown
 
       // Pre-fill with the printed page the reader is currently on (or the nearest one before
       // it — rendered device pages rarely carry an anchor themselves, but they sit between
@@ -1233,33 +1228,31 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
 
       startActivityForResult(
           std::make_unique<EpubReaderPrintedPageInputActivity>(renderer, mappedInput, initialValue, minLabel, maxLabel),
-          [this, entries = std::move(entries)](const ActivityResult& result) {
+          [this](const ActivityResult& result) {
             if (result.isCancelled) return;
             const auto& pick = std::get<PrintedPageResult>(result.data);
-            // Resolve the typed label back to a (href, anchor) by linear scan. Entries are
-            // small (typically <500 even for long books) and this fires once per user action.
-            for (const auto& entry : entries) {
-              const auto entryLabelValue = parsePrintedPageLabel(entry.label);
-              const auto pickLabelValue = parsePrintedPageLabel(pick.label);
-              if (entry.label == pick.label ||
-                  (entryLabelValue && pickLabelValue && *entryLabelValue == *pickLabelValue)) {
-                const int spineIdx = epub->resolveHrefToSpineIndex(entry.href);
-                if (spineIdx < 0) {
-                  LOG_DBG("ERS", "printed-page jump: could not resolve spine for href=%s", entry.href.c_str());
-                  return;
-                }
-                {
-                  RenderLock lock(*this);
-                  currentSpineIndex = spineIdx;
-                  navTarget =
-                      entry.anchor.empty() ? NavigationTarget::makePage(0) : NavigationTarget::makeAnchor(entry.anchor);
-                  section.reset();
-                }
-                requestUpdate();
-                return;
-              }
+            // pick.label is always a numeric string (std::to_string of the picked value). Resolve it
+            // back to a (href, anchor) by streaming the list again — no full-list vector retained.
+            const auto value = parsePrintedPageLabel(pick.label);
+            if (!value) return;
+            const auto entry = epub->findPrintedPageByLabel(*value);
+            if (!entry) {
+              LOG_DBG("ERS", "printed-page jump: label '%s' not found in pagelist", pick.label.c_str());
+              return;
             }
-            LOG_DBG("ERS", "printed-page jump: label '%s' not found in pagelist", pick.label.c_str());
+            const int spineIdx = epub->resolveHrefToSpineIndex(entry->href);
+            if (spineIdx < 0) {
+              LOG_DBG("ERS", "printed-page jump: could not resolve spine for href=%s", entry->href.c_str());
+              return;
+            }
+            {
+              RenderLock lock(*this);
+              currentSpineIndex = spineIdx;
+              navTarget =
+                  entry->anchor.empty() ? NavigationTarget::makePage(0) : NavigationTarget::makeAnchor(entry->anchor);
+              section.reset();
+            }
+            requestUpdate();
           });
       break;
     }
@@ -3617,11 +3610,11 @@ void EpubReaderActivity::openReaderMenu() {
 
   // Show the "Go to printed page" item only when this book has at least one integer-labelled
   // entry in pagelist.bin. Roman-only or empty page lists are excluded — the numeric input
-  // dialog can't address them anyway.
-  const auto printedPageList = epub->loadPrintedPageList();
-  const bool hasPrintedPages = std::any_of(printedPageList.begin(), printedPageList.end(), [](const auto& entry) {
-    return parsePrintedPageLabel(entry.label).has_value();
-  });
+  // dialog can't address them anyway. Streamed (not loadPrintedPageList) so opening the menu never
+  // reserves the whole list: that ~200 KB contiguous allocation aborts the firmware via uncaught
+  // bad_alloc when the menu is opened mid section-build on a long book (heap fragmented to tens of
+  // KB) — the tag 2.05 "Confirm reboots" crash.
+  const bool hasPrintedPages = epub->hasNumericPrintedPages();
 
   ReaderUtils::enforceExitFullRefresh(renderer);
   startActivityForResult(
