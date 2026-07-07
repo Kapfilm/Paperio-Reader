@@ -355,3 +355,124 @@ TEST(CssParserPerf, CacheSaveLoadAndLowHeapLookup) {
   removePath(cacheDir);
   std::filesystem::remove(cssPath);
 }
+
+// Regression: font-size from stylesheets must survive the disk-cache round trip.
+// Before cache v13, writeCssStylePayload dropped fontSizeMultiplier, so class-based
+// font-size (e.g. Alice's mouse-tale .taleN spans) silently vanished on device —
+// only inline style="" attributes (which bypass the cache) kept their sizes.
+TEST(CssParserCache, FontSizeMultiplierSurvivesDiskCache) {
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+
+  const std::string css =
+      ".tale1 { font-size: 95% }\n"
+      ".tale5 { font-size: 55% }\n"
+      ".em120 { font-size: 1.2em }\n"
+      ".plain { text-align: center }\n";
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile cssFile;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), cssFile));
+    ASSERT_TRUE(parser.loadFromStream(cssFile));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  // Fresh state: resolve purely from the cache file, as the device does.
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+
+  const CssStyle tale1 = parser.resolveStyle("span", "tale1");
+  ASSERT_TRUE(tale1.hasFontSizeMultiplier());
+  EXPECT_FLOAT_EQ(tale1.fontSizeMultiplier, 0.95f);
+
+  const CssStyle tale5 = parser.resolveStyle("span", "tale5");
+  ASSERT_TRUE(tale5.hasFontSizeMultiplier());
+  EXPECT_FLOAT_EQ(tale5.fontSizeMultiplier, 0.55f);
+
+  const CssStyle em120 = parser.resolveStyle("span", "em120");
+  ASSERT_TRUE(em120.hasFontSizeMultiplier());
+  EXPECT_FLOAT_EQ(em120.fontSizeMultiplier, 1.2f);
+
+  // A rule without font-size must not gain one through the new payload bytes.
+  const CssStyle plain = parser.resolveStyle("span", "plain");
+  EXPECT_FALSE(plain.hasFontSizeMultiplier());
+
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
+// Regression (cache v14): list-style-type:none and page-break-before/after from
+// stylesheets must survive the disk-cache round trip. Same defect class as the
+// v13 font-size fix — parsed correctly, then dropped by write/readCssStylePayload.
+TEST(CssParserCache, ListStyleAndPageBreaksSurviveDiskCache) {
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+
+  const std::string css =
+      ".plainlist { list-style-type: none }\n"
+      ".chapter { page-break-before: always }\n"
+      ".part { page-break-after: always }\n"
+      ".plain { text-align: center }\n";
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile cssFile;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), cssFile));
+    ASSERT_TRUE(parser.loadFromStream(cssFile));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+
+  const CssStyle plainlist = parser.resolveStyle("ul", "plainlist");
+  EXPECT_TRUE(plainlist.hasListStyleNone());
+  EXPECT_TRUE(plainlist.listStyleNone);
+
+  const CssStyle chapter = parser.resolveStyle("div", "chapter");
+  EXPECT_TRUE(chapter.hasPageBreakBefore());
+  EXPECT_TRUE(chapter.pageBreakBefore);
+  EXPECT_FALSE(chapter.pageBreakAfter);
+
+  const CssStyle part = parser.resolveStyle("div", "part");
+  EXPECT_TRUE(part.hasPageBreakAfter());
+  EXPECT_TRUE(part.pageBreakAfter);
+  EXPECT_FALSE(part.pageBreakBefore);
+
+  const CssStyle plain = parser.resolveStyle("p", "plain");
+  EXPECT_FALSE(plain.hasListStyleNone());
+  EXPECT_FALSE(plain.hasPageBreakBefore());
+  EXPECT_FALSE(plain.hasPageBreakAfter());
+
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
+// Font-size absolute units and keywords resolve to body-relative multipliers:
+// pt normalises against 12 pt, px against 16 px, keywords use fixed steps.
+TEST(CssParserUnits, FontSizeKeywordsAndAbsoluteUnits) {
+  struct Case {
+    const char* decl;
+    float expected;
+  };
+  const Case cases[] = {
+      {"font-size: 9pt", 0.75f},     {"font-size: 12pt", 1.0f},     {"font-size: 24pt", 2.0f},
+      {"font-size: 8px", 0.5f},      {"font-size: 16px", 1.0f},     {"font-size: 32px", 2.0f},
+      {"font-size: xx-small", 0.6f}, {"font-size: x-small", 0.75f}, {"font-size: small", 0.8f},
+      {"font-size: smaller", 0.8f},  {"font-size: medium", 1.0f},   {"font-size: large", 1.2f},
+      {"font-size: larger", 1.2f},   {"font-size: x-large", 1.4f},  {"font-size: xx-large", 1.6f},
+  };
+  for (const auto& c : cases) {
+    const CssStyle st = CssParser::parseInlineStyle(c.decl);
+    EXPECT_TRUE(st.hasFontSizeMultiplier()) << c.decl;
+    EXPECT_FLOAT_EQ(st.fontSizeMultiplier, c.expected) << c.decl;
+  }
+
+  // Unknown keyword must leave font-size undefined.
+  const CssStyle bogus = CssParser::parseInlineStyle("font-size: enormous");
+  EXPECT_FALSE(bogus.hasFontSizeMultiplier());
+}

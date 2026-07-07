@@ -106,17 +106,19 @@ inline std::vector<SettingInfo> buildSettingsList() {
                         {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER, StrId::STR_NONE_OPT,
                          StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY, StrId::STR_QUICK_RESUME},
                         "sleepScreen", StrId::STR_CAT_DISPLAY)
-          .withSubcategory(StrId::STR_MENU_DISP_SLEEP));
+          .withSubcategory(StrId::STR_MENU_DISP_SLEEP)
+          .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
                                        {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode",
                                        StrId::STR_CAT_DISPLAY));
   settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_COVER_FILTER, &CrossPointSettings::sleepScreenCoverFilter,
                                        {StrId::STR_NONE_OPT, StrId::STR_FILTER_CONTRAST, StrId::STR_INVERTED},
                                        "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(
-      StrId::STR_SLEEP_COVER_OVERLAY, &CrossPointSettings::sleepCoverOverlay,
-      {StrId::STR_OVERLAY_OFF, StrId::STR_OVERLAY_WHITE, StrId::STR_OVERLAY_GRAY, StrId::STR_OVERLAY_BLACK},
-      "sleepCoverOverlay", StrId::STR_CAT_DISPLAY));
+  settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_COVER_OVERLAY, &CrossPointSettings::sleepCoverOverlay,
+                                       {StrId::STR_OVERLAY_OFF, StrId::STR_OVERLAY_WHITE, StrId::STR_OVERLAY_GRAY,
+                                        StrId::STR_OVERLAY_BLACK},
+                                       "sleepCoverOverlay", StrId::STR_CAT_DISPLAY)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_IMAGE_PICK_MODE, &CrossPointSettings::sleepImagePickMode,
                                        {StrId::STR_RANDOM, StrId::STR_SEQUENTIAL}, "sleepImagePickMode",
                                        StrId::STR_CAT_DISPLAY));
@@ -139,17 +141,19 @@ inline std::vector<SettingInfo> buildSettingsList() {
                          .withSubcategory(StrId::STR_MENU_DISP_REFRESH));
   settings.push_back(SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                                          StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(
-      StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
-      {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED, StrId::STR_THEME_LYRA_CAROUSEL},
-      "uiTheme", StrId::STR_CAT_DISPLAY));
+  settings.push_back(SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
+                                       {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
+                                        StrId::STR_THEME_LYRA_CAROUSEL},
+                                       "uiTheme", StrId::STR_CAT_DISPLAY)
+                         .withSelectorActivity());
 
   // --- Reader ---
   // General reader settings
   settings.push_back(
       SettingInfo::Enum(StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
                         {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED, StrId::STR_LANDSCAPE_CCW},
-                        "orientation", StrId::STR_CAT_READER));
+                        "orientation", StrId::STR_CAT_READER)
+          .withSelectorActivity());
   // EPUB font submenu — family first, then size/AA/darkness.
   // DynamicEnum so SD card font families can be appended at the consumer
   // side (SettingsActivity / CrossPointWebServer enrich enumLabels before
@@ -165,7 +169,8 @@ inline std::vector<SettingInfo> buildSettingsList() {
       SettingInfo::Enum(StrId::STR_FONT_SIZE, &CrossPointSettings::fontSize,
                         {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE, StrId::STR_TINY},
                         "fontSize", StrId::STR_CAT_READER)
-          .withSubmenu(StrId::STR_MENU_READER_FONT));
+          .withSubmenu(StrId::STR_MENU_READER_FONT)
+          .withSelectorActivity());
   settings.push_back(SettingInfo::Toggle(StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, "textAntiAliasing",
                                          StrId::STR_CAT_READER)
                          .withSubmenu(StrId::STR_MENU_READER_FONT));
@@ -180,7 +185,8 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Enum(StrId::STR_TEXT_DARKNESS, &CrossPointSettings::textDarkness,
                                        {StrId::STR_NORMAL, StrId::STR_DARK, StrId::STR_EXTRA_DARK, StrId::STR_MAX_DARK},
                                        "textDarkness", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_READER_FONT));
+                         .withSubmenu(StrId::STR_MENU_READER_FONT)
+                         .withSelectorActivity());
   // TXT/MD font submenu — same dynamic structure as EPUB, includes SD card fonts.
   settings.push_back(SettingInfo::DynamicEnum(StrId::STR_TXT_FONT_FAMILY, {StrId::STR_BOOKERLY, StrId::STR_NOTO_SANS},
                                               txtFontFamilyDynamicGetter, txtFontFamilyDynamicSetter, "txtFontFamily",
@@ -191,12 +197,14 @@ inline std::vector<SettingInfo> buildSettingsList() {
       SettingInfo::Enum(StrId::STR_TXT_FONT_SIZE, &CrossPointSettings::txtFontSize,
                         {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE, StrId::STR_TINY},
                         "txtFontSize", StrId::STR_CAT_READER)
-          .withSubmenu(StrId::STR_MENU_TXT_FONT));
+          .withSubmenu(StrId::STR_MENU_TXT_FONT)
+          .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_PARA_ALIGNMENT, &CrossPointSettings::paragraphAlignment,
                                        {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER,
                                         StrId::STR_ALIGN_RIGHT, StrId::STR_BOOK_S_STYLE},
                                        "paragraphAlignment", StrId::STR_CAT_READER)
-                         .withSubcategory(StrId::STR_MENU_READER_LAYOUT));
+                         .withSubcategory(StrId::STR_MENU_READER_LAYOUT)
+                         .withSelectorActivity());
   // Formatting settings
   settings.push_back(SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
                                          StrId::STR_CAT_READER));
@@ -246,11 +254,13 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleBack,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleBack",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_BACK));
+                         .withSubmenu(StrId::STR_BTN_BACK)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongBack,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_GO_HOME), "btnLongBack",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_BACK));
+                         .withSubmenu(StrId::STR_BTN_BACK)
+                         .withSelectorActivity());
   // Confirm button: short=reader menu, double=ignore, long=KOReader sync
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortConfirm,
                                        {StrId::STR_BTN_DEF_READER_MENU}, "btnShortConfirm", StrId::STR_CAT_CONTROLS)
@@ -258,72 +268,88 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleConfirm,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleConfirm",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_CONFIRM));
+                         .withSubmenu(StrId::STR_BTN_CONFIRM)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongConfirm,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_KOREADER_SYNC), "btnLongConfirm",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_CONFIRM));
+                         .withSubmenu(StrId::STR_BTN_CONFIRM)
+                         .withSelectorActivity());
   // Left button: short=previous page, double=ignore, long=chapter back
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortLeft,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_PREV_PAGE), "btnShortLeft",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_LEFT));
+                         .withSubmenu(StrId::STR_BTN_LEFT)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleLeft,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleLeft",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_LEFT));
+                         .withSubmenu(StrId::STR_BTN_LEFT)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongLeft,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_BACK), "btnLongLeft",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_LEFT));
+                         .withSubmenu(StrId::STR_BTN_LEFT)
+                         .withSelectorActivity());
   // Right button: short=next page, double=ignore, long=chapter forward
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortRight,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_NEXT_PAGE), "btnShortRight",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_RIGHT));
+                         .withSubmenu(StrId::STR_BTN_RIGHT)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleRight,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleRight",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_RIGHT));
+                         .withSubmenu(StrId::STR_BTN_RIGHT)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongRight,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_FORWARD), "btnLongRight",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_RIGHT));
+                         .withSubmenu(StrId::STR_BTN_RIGHT)
+                         .withSelectorActivity());
   // Page Back button: short=previous page, double=ignore, long=chapter back
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPageBack,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_PREV_PAGE), "btnShortPageBack",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_UP));
+                         .withSubmenu(StrId::STR_BTN_UP)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePageBack,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoublePageBack",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_UP));
+                         .withSubmenu(StrId::STR_BTN_UP)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPageBack,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_BACK), "btnLongPageBack",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_UP));
+                         .withSubmenu(StrId::STR_BTN_UP)
+                         .withSelectorActivity());
   // Page Forward button: short=next page, double=ignore, long=chapter forward
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPageForward,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_NEXT_PAGE), "btnShortPageForward",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_DOWN));
+                         .withSubmenu(StrId::STR_BTN_DOWN)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePageForward,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoublePageForward",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_DOWN));
+                         .withSubmenu(StrId::STR_BTN_DOWN)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPageForward,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_FORWARD), "btnLongPageForward",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_DOWN));
+                         .withSubmenu(StrId::STR_BTN_DOWN)
+                         .withSelectorActivity());
   // Power button: short=ignore, double=ignore, long=sleep (via hold timer, not event system)
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPower,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnShortPower",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_POWER));
+                         .withSubmenu(StrId::STR_BTN_POWER)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePower,
                                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoublePower",
                                        StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_POWER));
+                         .withSubmenu(StrId::STR_BTN_POWER)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPower,
                                        {StrId::STR_BTN_DEF_SLEEP}, "btnLongPower", StrId::STR_CAT_CONTROLS)
                          .withSubmenu(StrId::STR_BTN_POWER));
@@ -363,7 +389,8 @@ inline std::vector<SettingInfo> buildSettingsList() {
                          StrId::STR_TZ_UTC_PLUS4, StrId::STR_TZ_IST, StrId::STR_TZ_UTC_PLUS7, StrId::STR_TZ_UTC_PLUS8,
                          StrId::STR_TZ_UTC_PLUS9, StrId::STR_TZ_AEST, StrId::STR_TZ_NZST, StrId::STR_TZ_UTC_MINUS3,
                          StrId::STR_TZ_EST, StrId::STR_TZ_CST, StrId::STR_TZ_MST, StrId::STR_TZ_PST},
-                        "timeZone", StrId::STR_CLOCK));
+                        "timeZone", StrId::STR_CLOCK)
+          .withSelectorActivity());
   // Weather
   settings.push_back(
       SettingInfo::Toggle(StrId::STR_USE_WEATHER, &CrossPointSettings::useWeather, "useWeather", StrId::STR_WEATHER));
@@ -427,6 +454,8 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                        StrId::STR_CUSTOMISE_STATUS_BAR));
   settings.push_back(SettingInfo::Toggle(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount,
                                          "statusBarChapterPageCount", StrId::STR_CUSTOMISE_STATUS_BAR));
+  settings.push_back(SettingInfo::Toggle(StrId::STR_PRINTED_PAGE_NUMBER, &CrossPointSettings::statusBarPrintedPage,
+                                         "statusBarPrintedPage", StrId::STR_CUSTOMISE_STATUS_BAR));
   settings.push_back(SettingInfo::Toggle(StrId::STR_BOOK_PROGRESS_PERCENTAGE,
                                          &CrossPointSettings::statusBarBookProgressPercentage,
                                          "statusBarBookProgressPercentage", StrId::STR_CUSTOMISE_STATUS_BAR));

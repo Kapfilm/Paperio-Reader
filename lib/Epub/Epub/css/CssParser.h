@@ -56,7 +56,13 @@ class CssParser {
   //      + index sequentially from file position 0 — no seek over the 37KB rule block.
   // v11: style payload gains a trailing smallCaps byte (font-variant: small-caps).
   // v12: ID selectors (#id, tag#id) are now stored and resolved.
-  static constexpr uint8_t CSS_CACHE_VERSION = 12;
+  // v13: style payload gains fontSizeMultiplier (float + defined byte). Before this,
+  //      font-size from stylesheets was parsed but silently DROPPED on device because
+  //      every rule round-trips through this cache (only inline style="" survived).
+  // v14: style payload gains a block-flags byte persisting listStyleNone and
+  //      pageBreakBefore/After — the same dropped-through-the-cache defect as v13, so
+  //      stylesheet-driven list markers and page breaks now actually reach the parser.
+  static constexpr uint8_t CSS_CACHE_VERSION = 14;
 
   // Retained RAM per rule in disk-backed lookup mode (the sorted SelectorEntry index).
   // Heap gates (Section::heapAllowsEmbeddedStyle) size their contiguous-block floor

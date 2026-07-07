@@ -470,6 +470,12 @@ void LyraCarouselTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect,
                       kCenterCoverMaxH + 2 * kCenterOutlineW, false);
     drawCover(centerIdx, centerX, centerTileY, kCenterCoverMaxW, kCenterCoverMaxH);
 
+    // Progress + pace-based ETA as a badge in the centre cover's top-right corner,
+    // e.g. "62% · ~45m". The large centre cover has room to carry it overlaid.
+    const int centerProgress = UITheme::getBookProgressPercent(recentBooks[centerIdx]);
+    UITheme::drawCoverProgressBadge(renderer, Rect{centerX, centerTileY, kCenterCoverMaxW, kCenterCoverMaxH},
+                                    recentBooks[centerIdx], centerProgress);
+
     // Dots — centred over the cover tile, count = actual book count
     const int dotsY = centerTileY + kCenterCoverMaxH + 8;
     const int totalDotsW = bookCount * kDotSize + (bookCount - 1) * kDotGap;

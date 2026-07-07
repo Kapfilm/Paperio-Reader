@@ -216,6 +216,9 @@ class CrossPointSettings {
   // Status bar settings (statusBar, statusBarProgressBar, statusBarProgressBarThickness retained for migration only)
   uint8_t statusBar = FULL;
   uint8_t statusBarChapterPageCount = 1;
+  // Printed ("physical") page number from the book's page-list. Drawn in parentheses to the left of
+  // the device page counter when both share a location; otherwise on its own. Default on.
+  uint8_t statusBarPrintedPage = 1;
   uint8_t statusBarBookProgressPercentage = 1;
   uint8_t statusBarProgressBar = HIDE_PROGRESS;
   uint8_t statusBarProgressBarThickness = PROGRESS_BAR_NORMAL;

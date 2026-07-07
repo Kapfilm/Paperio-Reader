@@ -192,7 +192,7 @@ static std::vector<TokenSpan> tokenizeBionicWord(const std::string& word) {
 }  // namespace
 
 void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle, const bool underline,
-                         const bool attachToPrevious) {
+                         const bool attachToPrevious, const uint8_t sizePct) {
   if (word.empty()) return;
 
   word = utf8NfcNorm(std::move(word));
@@ -203,6 +203,20 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   }
   wordStyles.push_back(combinedStyle);
   wordContinues.push_back(attachToPrevious);
+  wordSizes.push_back(std::min(std::max(sizePct, MIN_WORD_SIZE_PCT), MAX_WORD_SIZE_PCT));
+}
+
+bool ParsedText::foldUniformWordSizes() {
+  if (words.empty() || wordSizes.empty()) return false;
+  const uint8_t first = wordSizes[0];
+  for (const uint8_t sz : wordSizes) {
+    if (sz != first) return false;
+  }
+  if (first == DEFAULT_WORD_SIZE_PCT) return false;  // all-100% — nothing to fold
+
+  blockStyle.fontSizeMultiplier *= first / 100.0f;
+  std::fill(wordSizes.begin(), wordSizes.end(), DEFAULT_WORD_SIZE_PCT);
+  return true;
 }
 
 // Consumes data to minimize memory usage
@@ -340,6 +354,7 @@ void ParsedText::layoutAndExtractLines(
         words.erase(words.begin() + splitIndex + 1);
         wordStyles.erase(wordStyles.begin() + splitIndex + 1);
         wordContinues.erase(wordContinues.begin() + splitIndex + 1);
+        wordSizes.erase(wordSizes.begin() + splitIndex + 1);
       }
 
       // Recompute widths after restoring unsplit words.
@@ -402,9 +417,11 @@ void ParsedText::layoutAndExtractLines(
     words.erase(words.begin(), words.begin() + consumed);
     wordStyles.erase(wordStyles.begin(), wordStyles.begin() + consumed);
     wordContinues.erase(wordContinues.begin(), wordContinues.begin() + consumed);
+    wordSizes.erase(wordSizes.begin(), wordSizes.begin() + consumed);
     words.shrink_to_fit();
     wordStyles.shrink_to_fit();
     wordContinues.shrink_to_fit();
+    wordSizes.shrink_to_fit();
     // All remaining words were already transformed before the flush; reset the
     // watermark so that words appended by addWord() are processed next time.
     bionicTransformedUpTo_ = words.size();
@@ -415,10 +432,9 @@ void ParsedText::layoutAndExtractLines(
 std::vector<uint16_t> ParsedText::calculateWordWidths(const GfxRenderer& renderer, const int fontId) {
   std::vector<uint16_t> wordWidths;
   wordWidths.reserve(words.size());
-  const float scale = blockStyle.fontSizeMultiplier;
 
   for (size_t i = 0; i < words.size(); ++i) {
-    wordWidths.push_back(measureWordWidth(renderer, fontId, words[i], wordStyles[i], false, scale));
+    wordWidths.push_back(measureWordWidth(renderer, fontId, words[i], wordStyles[i], false, wordScale(i)));
   }
 
   return wordWidths;
@@ -662,14 +678,17 @@ void ParsedText::applyBionicReadingTransform() {
   std::vector<std::string> transformedSuffix;
   std::vector<EpdFontFamily::Style> transformedSuffixStyles;
   std::vector<bool> transformedSuffixContinues;
+  std::vector<uint8_t> transformedSuffixSizes;
   transformedSuffix.reserve((words.size() - suffixStart) * 2);
   transformedSuffixStyles.reserve(transformedSuffix.capacity());
   transformedSuffixContinues.reserve(transformedSuffix.capacity());
+  transformedSuffixSizes.reserve(transformedSuffix.capacity());
 
   for (size_t i = suffixStart; i < words.size(); ++i) {
     std::string source = std::move(words[i]);
     const auto originalStyle = wordStyles[i];
     const bool originalAttachToPrevious = wordContinues[i];
+    const uint8_t originalSize = wordSizes[i];
 
     const auto spans = tokenizeBionicWord(source);
     if (spans.empty()) {
@@ -705,10 +724,12 @@ void ParsedText::applyBionicReadingTransform() {
             transformedSuffix.push_back(std::move(token));
             transformedSuffixStyles.push_back(boldStyle);
             transformedSuffixContinues.push_back(attachToPrevious);
+            transformedSuffixSizes.push_back(originalSize);
 
             transformedSuffix.push_back(std::move(suffix));
             transformedSuffixStyles.push_back(originalStyle);
             transformedSuffixContinues.push_back(true);
+            transformedSuffixSizes.push_back(originalSize);
             attachToPrevious = true;
             continue;
           }
@@ -718,6 +739,7 @@ void ParsedText::applyBionicReadingTransform() {
       transformedSuffix.push_back(std::move(token));
       transformedSuffixStyles.push_back(originalStyle);
       transformedSuffixContinues.push_back(attachToPrevious);
+      transformedSuffixSizes.push_back(originalSize);
       attachToPrevious = true;
     }
   }
@@ -726,10 +748,12 @@ void ParsedText::applyBionicReadingTransform() {
   words.resize(suffixStart);
   wordStyles.resize(suffixStart);
   wordContinues.resize(suffixStart);
+  wordSizes.resize(suffixStart);
   words.insert(words.end(), std::make_move_iterator(transformedSuffix.begin()),
                std::make_move_iterator(transformedSuffix.end()));
   wordStyles.insert(wordStyles.end(), transformedSuffixStyles.begin(), transformedSuffixStyles.end());
   wordContinues.insert(wordContinues.end(), transformedSuffixContinues.begin(), transformedSuffixContinues.end());
+  wordSizes.insert(wordSizes.end(), transformedSuffixSizes.begin(), transformedSuffixSizes.end());
   bionicTransformedUpTo_ = words.size();
 }
 
@@ -939,6 +963,7 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
 
   const std::string& word = words[wordIndex];
   const auto style = wordStyles[wordIndex];
+  const float scale = wordScale(wordIndex);
 
   // Collect candidate breakpoints (byte offsets and hyphen requirements).
   auto breakInfos = Hyphenator::breakOffsets(word, allowFallbackBreaks);
@@ -958,8 +983,7 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
     }
 
     const bool needsHyphen = info.requiresInsertedHyphen;
-    const int prefixWidth =
-        measureWordWidth(renderer, fontId, word.substr(0, offset), style, needsHyphen, blockStyle.fontSizeMultiplier);
+    const int prefixWidth = measureWordWidth(renderer, fontId, word.substr(0, offset), style, needsHyphen, scale);
     if (prefixWidth > availableWidth || prefixWidth <= chosenWidth) {
       continue;  // Skip if too wide or not an improvement
     }
@@ -981,9 +1005,10 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
     words[wordIndex].push_back('-');
   }
 
-  // Insert the remainder word (with matching style and continuation flag) directly after the prefix.
+  // Insert the remainder word (with matching style, size and continuation flag) directly after the prefix.
   words.insert(words.begin() + wordIndex + 1, remainder);
   wordStyles.insert(wordStyles.begin() + wordIndex + 1, style);
+  wordSizes.insert(wordSizes.begin() + wordIndex + 1, wordSizes[wordIndex]);
 
   // Continuation flag handling after splitting a word into prefix + remainder.
   //
@@ -1009,8 +1034,7 @@ bool ParsedText::hyphenateWordAtIndex(const size_t wordIndex, const int availabl
 
   // Update cached widths to reflect the new prefix/remainder pairing.
   wordWidths[wordIndex] = static_cast<uint16_t>(chosenWidth);
-  const uint16_t remainderWidth =
-      measureWordWidth(renderer, fontId, remainder, style, false, blockStyle.fontSizeMultiplier);
+  const uint16_t remainderWidth = measureWordWidth(renderer, fontId, remainder, style, false, scale);
   wordWidths.insert(wordWidths.begin() + wordIndex + 1, remainderWidth);
   if (outInsertedHyphen) {
     *outInsertedHyphen = chosenNeedsHyphen;
@@ -1047,10 +1071,11 @@ ParsedText::LineProcessResult ParsedText::extractLine(
     if (wordIdx > 0 && !continuesVec[lastBreakAt + wordIdx]) {
       const bool beforeClosing = isClosingPunctuation(firstCp);
       if (!beforeClosing) actualGapCount++;
+      // Inter-word gaps scale with the preceding word's effective size, matching wordStyles usage.
       totalNaturalGaps +=
           static_cast<int>(renderer.getSpaceAdvance(fontId, lastCodepoint(words[lastBreakAt + wordIdx - 1]), firstCp,
                                                     wordStyles[lastBreakAt + wordIdx - 1]) *
-                               blockStyle.fontSizeMultiplier +
+                               wordScale(lastBreakAt + wordIdx - 1) +
                            0.5f);
     } else if (wordIdx > 0 && continuesVec[lastBreakAt + wordIdx]) {
       // Non-breaking space tokens (" " with continues=true) are visible, stretchable spaces —
@@ -1061,7 +1086,7 @@ ParsedText::LineProcessResult ParsedText::extractLine(
       // Cross-boundary kerning for continuation words (e.g. nonbreaking spaces, attached punctuation)
       totalNaturalGaps += static_cast<int>(renderer.getKerning(fontId, lastCodepoint(words[lastBreakAt + wordIdx - 1]),
                                                                firstCp, wordStyles[lastBreakAt + wordIdx - 1]) *
-                                               blockStyle.fontSizeMultiplier +
+                                               wordScale(lastBreakAt + wordIdx - 1) +
                                            0.5f);
     }
   }
@@ -1105,7 +1130,7 @@ ParsedText::LineProcessResult ParsedText::extractLine(
       advance += static_cast<int>(renderer.getKerning(fontId, lastCodepoint(words[lastBreakAt + wordIdx]),
                                                       firstCodepoint(words[lastBreakAt + wordIdx + 1]),
                                                       wordStyles[lastBreakAt + wordIdx]) *
-                                      blockStyle.fontSizeMultiplier +
+                                      wordScale(lastBreakAt + wordIdx) +
                                   0.5f);
       // Non-breaking space tokens are stretchable — expand them during justification like normal spaces.
       if (words[lastBreakAt + wordIdx] == " " && continuesVec[lastBreakAt + wordIdx] &&
@@ -1119,7 +1144,7 @@ ParsedText::LineProcessResult ParsedText::extractLine(
         const uint32_t nextFirstCp = firstCodepoint(words[lastBreakAt + wordIdx + 1]);
         gap = static_cast<int>(renderer.getSpaceAdvance(fontId, lastCodepoint(words[lastBreakAt + wordIdx]),
                                                         nextFirstCp, wordStyles[lastBreakAt + wordIdx]) *
-                                   blockStyle.fontSizeMultiplier +
+                                   wordScale(lastBreakAt + wordIdx) +
                                0.5f);
         // Don't stretch the gap before closing punctuation — it looks wrong with
         // extra space before ".", ")", "»" etc.
@@ -1135,6 +1160,7 @@ ParsedText::LineProcessResult ParsedText::extractLine(
   // Copy line words; keep source intact so retry paths can safely inspect/merge tokens.
   std::vector<std::string> lineWords(words.begin() + lastBreakAt, words.begin() + lineBreak);
   std::vector<EpdFontFamily::Style> lineWordStyles(wordStyles.begin() + lastBreakAt, wordStyles.begin() + lineBreak);
+  std::vector<uint8_t> lineWordSizes(wordSizes.begin() + lastBreakAt, wordSizes.begin() + lineBreak);
 
   for (auto& word : lineWords) {
     if (containsSoftHyphen(word)) {
@@ -1142,7 +1168,13 @@ ParsedText::LineProcessResult ParsedText::extractLine(
     }
   }
 
-  return processLine(
-      std::make_shared<TextBlock>(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles), blockStyle),
-      lineEndsWithHyphenatedWord, suppressHyphenationRetry);
+  // TextBlock flattens the vectors into its arena on construct; on arena OOM the
+  // block is invalid, so drop the line rather than render/serialize garbage.
+  auto block = std::make_shared<TextBlock>(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles),
+                                           blockStyle, std::move(lineWordSizes));
+  if (!block->valid()) {
+    LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
+    return LineProcessResult::Accepted;
+  }
+  return processLine(std::move(block), lineEndsWithHyphenatedWord, suppressHyphenationRetry);
 }

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "HashUtils.h"
+
 class BookMetadataCache {
  public:
   struct BookMetadata {
@@ -73,16 +75,6 @@ class BookMetadataCache {
   // spine items) take the O(n·log m) batch path instead of O(n·m) per-item scans.
   static constexpr uint16_t LARGE_SPINE_THRESHOLD = 16;
 
-  // FNV-1a 64-bit hash function
-  static uint64_t fnvHash64(const std::string& s) {
-    uint64_t hash = 14695981039346656037ull;
-    for (char c : s) {
-      hash ^= static_cast<uint8_t>(c);
-      hash *= 1099511628211ull;
-    }
-    return hash;
-  }
-
   uint32_t writeSpineEntry(FsFile& file, const SpineEntry& entry) const;
   uint32_t writeTocEntry(FsFile& file, const TocEntry& entry) const;
   SpineEntry readSpineEntry(FsFile& file) const;
@@ -112,6 +104,7 @@ class BookMetadataCache {
   void createSpineEntry(const std::string& href);
   bool endContentOpfPass();
   bool beginTocPass();
+  bool resetTocPassOutput();
   void createTocEntry(const std::string& title, const std::string& href, const std::string& anchor, uint8_t level);
   bool endTocPass();
   bool endWrite();

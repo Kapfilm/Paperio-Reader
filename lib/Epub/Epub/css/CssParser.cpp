@@ -16,14 +16,20 @@ struct StackBuffer {
   static constexpr size_t CAPACITY = 1024;
   char data[CAPACITY];
   size_t len = 0;
+  bool overflowed = false;  // set once content exceeds CAPACITY so callers can reject the whole token
 
   void push_back(char c) {
     if (len < CAPACITY - 1) {
       data[len++] = c;
+    } else {
+      overflowed = true;  // dropping this char would silently truncate — flag it instead
     }
   }
 
-  void clear() { len = 0; }
+  void clear() {
+    len = 0;
+    overflowed = false;
+  }
   bool empty() const { return len == 0; }
   size_t size() const { return len; }
 
@@ -69,11 +75,12 @@ constexpr size_t MAX_SELECTOR_LENGTH = 256;
 constexpr size_t CSS_LENGTH_FIELD_COUNT = 11;
 constexpr size_t CSS_LENGTH_BYTES = sizeof(float) + sizeof(uint8_t);
 // Layout: 4 enum bytes + 11 lengths + display byte + definedBits uint16 + 2 vertAlign bytes + cssFloat byte
-//         + smallCaps byte
+//         + smallCaps byte + fontSizeMultiplier float + fontSize flags byte + block flags byte
+//         (listStyleNone / pageBreakBefore / pageBreakAfter value+defined pairs)
 constexpr size_t CSS_FIXED_STYLE_BYTES = 4 * sizeof(uint8_t) + (CSS_LENGTH_FIELD_COUNT * CSS_LENGTH_BYTES) +
                                          sizeof(uint8_t) + sizeof(uint16_t) + 2 * sizeof(uint8_t) + sizeof(uint8_t) +
-                                         sizeof(uint8_t);
-static_assert(CSS_FIXED_STYLE_BYTES == 66,
+                                         sizeof(uint8_t) + sizeof(float) + sizeof(uint8_t) + sizeof(uint8_t);
+static_assert(CSS_FIXED_STYLE_BYTES == 72,
               "style payload layout changed — update read/writeCssStylePayload and bump CSS_CACHE_VERSION");
 
 // Cache file name (version is CssParser::CSS_CACHE_VERSION)
@@ -574,6 +581,44 @@ void CssParser::parseDeclarationIntoStyle(const std::string& decl, CssStyle& sty
           parsed = v;
           ok = true;
         }
+      } else if (val.size() > 2 && val.substr(val.size() - 2) == "pt") {
+        // Absolute points, normalised against a 12 pt nominal body size — the
+        // convention print-derived EPUBs assume (CSS medium == 16 px == 12 pt).
+        const char* p = val.data();
+        char* end = nullptr;
+        float v = std::strtof(p, &end);
+        if (end != p) {
+          parsed = v / 12.0f;
+          ok = true;
+        }
+      } else if (val.size() > 2 && val.substr(val.size() - 2) == "px") {
+        // Absolute pixels, normalised against the CSS default body size of 16 px.
+        const char* p = val.data();
+        char* end = nullptr;
+        float v = std::strtof(p, &end);
+        if (end != p) {
+          parsed = v / 16.0f;
+          ok = true;
+        }
+      } else {
+        // CSS absolute-size / relative-size keywords, mapped to the same multiplier
+        // steps microreader uses (smaller/larger fold onto small/large).
+        if (val == "xx-small") {
+          parsed = 0.6f;
+        } else if (val == "x-small") {
+          parsed = 0.75f;
+        } else if (val == "small" || val == "smaller") {
+          parsed = 0.8f;
+        } else if (val == "medium") {
+          parsed = 1.0f;
+        } else if (val == "large" || val == "larger") {
+          parsed = 1.2f;
+        } else if (val == "x-large") {
+          parsed = 1.4f;
+        } else if (val == "xx-large") {
+          parsed = 1.6f;
+        }
+        ok = parsed > 0.0f;
       }
       if (ok && parsed > 0.0f) {
         style.fontSizeMultiplier = parsed;
@@ -737,7 +782,10 @@ bool CssParser::loadFromStream(FsFile& source) {
         bodyDepth = 1;
         currentStyle = CssStyle{};
         declBuffer.clear();
-        if (selector.size() > MAX_SELECTOR_LENGTH * 4) {
+        // A selector group that overflowed the StackBuffer was silently truncated; the
+        // truncated tail could otherwise be parsed as a bogus rule (e.g. a cut class name
+        // accidentally matching a real one). Skip the entire rule instead.
+        if (selector.overflowed) {
           skippingRule = true;
         }
         return;
@@ -754,7 +802,8 @@ bool CssParser::loadFromStream(FsFile& source) {
     if (c == '}') {
       --bodyDepth;
       if (bodyDepth == 0) {
-        if (!skippingRule && !declBuffer.empty()) {
+        // A truncated (overflowed) trailing declaration is dropped rather than parsed as garbage.
+        if (!skippingRule && !declBuffer.empty() && !declBuffer.overflowed) {
           parseDeclarationIntoStyle(declBuffer.str(), currentStyle, propNameBuf, propValueBuf);
         }
         if (!skippingRule) {
@@ -772,10 +821,12 @@ bool CssParser::loadFromStream(FsFile& source) {
     }
     if (!skippingRule) {
       if (c == ';') {
-        if (!declBuffer.empty()) {
+        // clear() also resets the overflow flag, so a single oversized declaration
+        // is dropped without poisoning the declarations that follow it in the block.
+        if (!declBuffer.empty() && !declBuffer.overflowed) {
           parseDeclarationIntoStyle(declBuffer.str(), currentStyle, propNameBuf, propValueBuf);
-          declBuffer.clear();
         }
+        declBuffer.clear();
       } else {
         declBuffer.push_back(c);
       }
@@ -1112,6 +1163,25 @@ bool CssParser::readCssStylePayload(FsFile& file, CssStyle& style) {
   // bit 0 = value, bit 1 = defined (distinguishes explicit "normal" from unset)
   style.smallCaps = (smallCapsVal & 0x1) != 0;
   style.defined.smallCaps = (smallCapsVal & 0x2) != 0 ? 1 : 0;
+  float fontSizeMul = 1.0f;
+  uint8_t fontSizeFlags = 0;
+  if (file.read(&fontSizeMul, sizeof(fontSizeMul)) != sizeof(fontSizeMul) || file.read(&fontSizeFlags, 1) != 1) {
+    return false;
+  }
+  if ((fontSizeFlags & 0x1) != 0) {
+    style.fontSizeMultiplier = fontSizeMul;
+    style.defined.fontSizeMultiplier = 1;
+  }
+  uint8_t blockFlags = 0;
+  if (file.read(&blockFlags, 1) != 1) {
+    return false;
+  }
+  style.listStyleNone = (blockFlags & 0x01) != 0;
+  style.defined.listStyleNone = (blockFlags & 0x02) != 0 ? 1 : 0;
+  style.pageBreakBefore = (blockFlags & 0x04) != 0;
+  style.defined.pageBreakBefore = (blockFlags & 0x08) != 0 ? 1 : 0;
+  style.pageBreakAfter = (blockFlags & 0x10) != 0;
+  style.defined.pageBreakAfter = (blockFlags & 0x20) != 0 ? 1 : 0;
   return true;
 }
 
@@ -1163,6 +1233,15 @@ void CssParser::writeCssStylePayload(FsFile& file, const CssStyle& style) {
   // bit 0 = value, bit 1 = defined (distinguishes explicit "normal" from unset)
   uint8_t smallCapsVal = (style.smallCaps ? 0x1 : 0x0) | (style.defined.smallCaps ? 0x2 : 0x0);
   file.write(smallCapsVal);
+  // font-size multiplier: float + flags byte (bit 0 = defined)
+  file.write(reinterpret_cast<const uint8_t*>(&style.fontSizeMultiplier), sizeof(style.fontSizeMultiplier));
+  const uint8_t fontSizeFlags = style.defined.fontSizeMultiplier ? 0x1 : 0x0;
+  file.write(fontSizeFlags);
+  // Block flags byte: value/defined pairs, same convention as smallCaps above.
+  const uint8_t blockFlags = (style.listStyleNone ? 0x01 : 0x00) | (style.defined.listStyleNone ? 0x02 : 0x00) |
+                             (style.pageBreakBefore ? 0x04 : 0x00) | (style.defined.pageBreakBefore ? 0x08 : 0x00) |
+                             (style.pageBreakAfter ? 0x10 : 0x00) | (style.defined.pageBreakAfter ? 0x20 : 0x00);
+  file.write(blockFlags);
 }
 
 void CssParser::touchHotRule(const std::string& selector) const {

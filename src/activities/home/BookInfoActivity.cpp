@@ -4,13 +4,69 @@
 #include <Epub.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <KOReaderDocumentId.h>
 #include <Logging.h>
 #include <Xtc.h>
 
+#include <cstdio>
+#include <ctime>
+
+#include "ReadingStats.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+
+namespace {
+
+std::string formatReadingDuration(uint32_t totalSeconds) {
+  const uint32_t h = totalSeconds / 3600;
+  const uint32_t m = (totalSeconds % 3600) / 60;
+  char buf[24];
+  if (h > 0) {
+    snprintf(buf, sizeof(buf), "%uh %02um", h, m);
+  } else {
+    snprintf(buf, sizeof(buf), "%um", m);
+  }
+  return buf;
+}
+
+// "N days ago" / "Nh ago" style, or an absolute date past a month. Empty when
+// the epoch is unknown or the clock isn't synced (caller then skips the row).
+std::string formatLastRead(time_t epoch) {
+  if (epoch == 0 || !HalClock::isSynced()) {
+    return {};
+  }
+  const time_t now = HalClock::now();
+  char buf[24];
+  if (now <= epoch) {
+    return "just now";
+  }
+  const uint32_t delta = static_cast<uint32_t>(now - epoch);
+  if (delta < 60) {
+    return "just now";
+  }
+  if (delta < 3600) {
+    snprintf(buf, sizeof(buf), "%um ago", delta / 60);
+    return buf;
+  }
+  if (delta < 86400) {
+    snprintf(buf, sizeof(buf), "%uh ago", delta / 3600);
+    return buf;
+  }
+  const uint32_t days = delta / 86400;
+  if (days < 30) {
+    snprintf(buf, sizeof(buf), "%ud ago", days);
+    return buf;
+  }
+  struct tm t{};
+  localtime_r(&epoch, &t);
+  snprintf(buf, sizeof(buf), "%04d-%02d-%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
+  return buf;
+}
+
+}  // namespace
 
 std::string BookInfoActivity::formatFileSize(const size_t bytes) {
   char buf[16];
@@ -94,6 +150,18 @@ void BookInfoActivity::loadData() {
     loadError = tr(STR_ERROR_GENERAL_FAILURE);
     LOG_ERR("BookInfo", "Unsupported file type for book info: %s", filePath.c_str());
   }
+
+  // Pull any recorded reading history for this book. Keyed by the same
+  // filename-based document id the reader uses when recording sessions.
+  if (loadSucceeded) {
+    const std::string docId = KOReaderDocumentId::calculateFromFilename(filePath);
+    if (const BookReadingStats* stats = READING_STATS.findBook(docId)) {
+      hasReadingStats = stats->totalSeconds > 0 || stats->sessions > 0;
+      statTotalSeconds = stats->totalSeconds;
+      statProgress = stats->progress;
+      statLastReadEpoch = stats->lastReadEpoch;
+    }
+  }
 }
 
 void BookInfoActivity::onEnter() {
@@ -135,6 +203,12 @@ void BookInfoActivity::render(RenderLock&&) {
   // stale button labels in the real gutter.
   if (fullRenderDone && loadSucceeded && !description.empty() && partialRenderCount < MAX_PARTIAL_RENDERS &&
       renderer.getOrientation() == GfxRenderer::Portrait) {
+    // The write framebuffer holds the frame from two refreshes ago (displayBuffer() swaps
+    // buffers), so on alternating page turns it still contains the "Loading" screen or an
+    // older page rather than the current cover/meta. Resync it to the displayed frame before
+    // patching just the description/hints bands; without this the stale top section (cover or
+    // "Loading") ships back to the panel and the cover appears to flip in and out.
+    renderer.syncWriteBufferFromDisplayed();
     renderer.fillRect(descBandX, descBandY, descBandWidth, descBandHeight, false);
     renderer.fillRect(0, hintsBandY, renderer.getScreenWidth(), hintsBandHeight, false);
     renderDescriptionAndHints();
@@ -267,6 +341,24 @@ void BookInfoActivity::render(RenderLock&&) {
       renderer.drawText(UI_10_FONT_ID, metaX, metaY, sizeStr.c_str());
       metaY += lineHeightSmall;
     }
+  }
+
+  // Reading stats: a few compact "label: value" rows below the file size, shown
+  // only for books with recorded history.
+  if (hasReadingStats) {
+    metaY += metrics.verticalSpacing;
+    const auto drawStatRow = [&](const char* label, const std::string& value) {
+      if (value.empty() || metaY + lineHeightSmall > contentBottom) return;
+      const std::string line = std::string(label) + ": " + value;
+      renderer.drawText(UI_10_FONT_ID, metaX, metaY, line.c_str());
+      metaY += lineHeightSmall;
+    };
+
+    char pctBuf[8];
+    snprintf(pctBuf, sizeof(pctBuf), "%u%%", statProgress);
+    drawStatRow(tr(STR_READING_STATS_PROGRESS), pctBuf);
+    drawStatRow(tr(STR_READING_STATS_TOTAL_TIME), formatReadingDuration(statTotalSeconds));
+    drawStatRow(tr(STR_READING_STATS_LAST_READ), formatLastRead(statLastReadEpoch));
   }
 
   topSectionBottom = std::max(topSectionBottom, metaY);

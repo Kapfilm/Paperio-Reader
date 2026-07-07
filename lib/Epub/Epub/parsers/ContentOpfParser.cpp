@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstring>
 
 #include "../BookMetadataCache.h"
@@ -18,6 +19,20 @@ constexpr char MEDIA_TYPE_PAGEMAP[] = "application/oebps-page-map+xml";
 constexpr char MEDIA_TYPE_IMAGE_PREFIX[] = "image/";
 constexpr char itemCacheFile[] = "/.items.bin";
 constexpr size_t MAX_DESCRIPTION_LENGTH = 1024;
+
+inline bool isTag(const char* name, const char* plainTag, const char* opfTag) {
+  return strcmp(name, plainTag) == 0 || strcmp(name, opfTag) == 0;
+}
+
+inline bool isPackageTag(const char* name) { return isTag(name, "package", "opf:package"); }
+inline bool isMetadataTag(const char* name) { return isTag(name, "metadata", "opf:metadata"); }
+inline bool isManifestTag(const char* name) { return isTag(name, "manifest", "opf:manifest"); }
+inline bool isSpineTag(const char* name) { return isTag(name, "spine", "opf:spine"); }
+inline bool isGuideTag(const char* name) { return isTag(name, "guide", "opf:guide"); }
+inline bool isMetaTag(const char* name) { return isTag(name, "meta", "opf:meta"); }
+inline bool isItemTag(const char* name) { return isTag(name, "item", "opf:item"); }
+inline bool isItemRefTag(const char* name) { return isTag(name, "itemref", "opf:itemref"); }
+inline bool isReferenceTag(const char* name) { return isTag(name, "reference", "opf:reference"); }
 
 bool startsWithImageMediaType(const std::string& mediaType) {
   constexpr size_t prefixLen = sizeof(MEDIA_TYPE_IMAGE_PREFIX) - 1;
@@ -35,6 +50,67 @@ bool startsWithImageMediaType(const std::string& mediaType) {
   return true;
 }
 
+// Append the UTF-8 encoding of a Unicode code point.
+void appendUtf8(std::string& out, uint32_t cp) {
+  if (cp <= 0x7F) {
+    out += static_cast<char>(cp);
+  } else if (cp <= 0x7FF) {
+    out += static_cast<char>(0xC0u | ((cp >> 6) & 0x1Fu));
+    out += static_cast<char>(0x80u | (cp & 0x3Fu));
+  } else if (cp <= 0xFFFF) {
+    out += static_cast<char>(0xE0u | ((cp >> 12) & 0x0Fu));
+    out += static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu));
+    out += static_cast<char>(0x80u | (cp & 0x3Fu));
+  } else {
+    out += static_cast<char>(0xF0u | ((cp >> 18) & 0x07u));
+    out += static_cast<char>(0x80u | ((cp >> 12) & 0x3Fu));
+    out += static_cast<char>(0x80u | ((cp >> 6) & 0x3Fu));
+    out += static_cast<char>(0x80u | (cp & 0x3Fu));
+  }
+}
+
+// Resolve a numeric character reference (&#N; decimal or &#xN; hex) into UTF-8.
+// `entity` points at the leading '&', `len` includes the trailing ';'. Returns
+// false when the reference is malformed or out of range.
+bool appendNumericEntity(std::string& out, const char* entity, size_t len) {
+  // Shortest valid form is "&#0;" (len 4); entity[1] must be '#'.
+  if (len < 4 || entity[1] != '#') {
+    return false;
+  }
+
+  size_t p = 2;
+  int base = 10;
+  if (entity[p] == 'x' || entity[p] == 'X') {
+    base = 16;
+    ++p;
+  }
+  if (p >= len - 1) {  // no digits before ';'
+    return false;
+  }
+
+  uint32_t cp = 0;
+  for (; p < len - 1; ++p) {
+    const char c = entity[p];
+    int digit;
+    if (c >= '0' && c <= '9') {
+      digit = c - '0';
+    } else if (base == 16 && c >= 'a' && c <= 'f') {
+      digit = c - 'a' + 10;
+    } else if (base == 16 && c >= 'A' && c <= 'F') {
+      digit = c - 'A' + 10;
+    } else {
+      return false;
+    }
+    cp = cp * static_cast<uint32_t>(base) + static_cast<uint32_t>(digit);
+    if (cp > 0x10FFFF) {  // beyond Unicode range — bail rather than emit garbage
+      return false;
+    }
+  }
+
+  appendUtf8(out, cp);
+  return true;
+}
+
 bool appendHtmlEntity(std::string& out, const std::string& html, size_t& i) {
   const size_t semi = html.find(';', i + 1);
   if (semi == std::string::npos) {
@@ -43,6 +119,18 @@ bool appendHtmlEntity(std::string& out, const std::string& html, size_t& i) {
 
   const size_t len = semi - i + 1;
   const char* entity = html.data() + i;
+
+  // Numeric character references (&#8212; / &#x2014;) are not in the named-entity
+  // table; decode them directly. yxml already decodes these when they appear raw,
+  // but Calibre-style descriptions often double-escape them (&amp;#8212;), so the
+  // literal form reaches here after the outer &amp; is resolved.
+  if (len > 3 && entity[1] == '#') {
+    if (appendNumericEntity(out, entity, len)) {
+      i = semi;
+      return true;
+    }
+    return false;
+  }
 
   // Metadata descriptions should collapse these to normal spaces; the chapter
   // renderer keeps NBSP because it has layout semantics there.
@@ -174,16 +262,92 @@ size_t ContentOpfParser::write(const uint8_t* buffer, const size_t size) {
   return size;
 }
 
+bool ContentOpfParser::resolveItemRefHrefWithIndex(const std::string& idref, std::string& href) {
+  const uint32_t targetHash = fnvHash(idref);
+  const uint16_t targetLen = static_cast<uint16_t>(idref.size());
+
+  auto it = std::lower_bound(itemIndex.begin(), itemIndex.end(), ItemIndexEntry{targetHash, targetLen, 0},
+                             [](const ItemIndexEntry& a, const ItemIndexEntry& b) {
+                               return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
+                             });
+
+  // Check for match (may need to check a few due to hash collisions).
+  while (it != itemIndex.end() && it->idHash == targetHash) {
+    tempItemStore.seek(it->fileOffset);
+    std::string itemId;
+    if (!serialization::readString(tempItemStore, itemId)) {
+      ++it;
+      continue;
+    }
+    if (itemId == idref) {
+      if (serialization::readString(tempItemStore, href)) {
+        return true;
+      }
+    }
+    ++it;
+  }
+
+  return false;
+}
+
+bool ContentOpfParser::resolveItemRefHrefLinearScan(const std::string& idref, std::string& href) {
+  tempItemStore.seek(0);
+  const size_t itemStoreSize = tempItemStore.fileSize();
+  std::string itemId;
+
+  while (tempItemStore.position() < itemStoreSize) {
+    const size_t beforeReadPos = tempItemStore.position();
+    if (!serialization::readString(tempItemStore, itemId) || !serialization::readString(tempItemStore, href)) {
+      return false;
+    }
+
+    // Guard against malformed temp data or host shims that don't signal EOF via available().
+    if (tempItemStore.position() <= beforeReadPos) {
+      return false;
+    }
+
+    if (itemId == idref) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool ContentOpfParser::resolveSpineItemRefHref(const std::string& idref, std::string& href) {
+  if (useItemIndex) {
+    return resolveItemRefHrefWithIndex(idref, href);
+  }
+
+  // Slow path: linear scan (for small manifests, keeps original behavior).
+  // TODO: This lookup is slow as need to scan through all items each time.
+  //       It can take up to 200ms per item when getting to 1500 items.
+  return resolveItemRefHrefLinearScan(idref, href);
+}
+
+void ContentOpfParser::handleSpineItemRefElement(const char** atts) {
+  for (int i = 0; atts[i]; i += 2) {
+    if (strcmp(atts[i], "idref") == 0) {
+      const std::string idref = atts[i + 1];
+      std::string href;
+
+      if (resolveSpineItemRefHref(idref, href) && cache) {
+        cache->createSpineEntry(href);
+      }
+    }
+  }
+}
+
 void ContentOpfParser::startElement(void* userData, const char* name, const char** atts) {
   auto* self = static_cast<ContentOpfParser*>(userData);
   (void)atts;
 
-  if (self->state == START && (strcmp(name, "package") == 0 || strcmp(name, "opf:package") == 0)) {
+  if (self->state == START && isPackageTag(name)) {
     self->state = IN_PACKAGE;
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "metadata") == 0 || strcmp(name, "opf:metadata") == 0)) {
+  if (self->state == IN_PACKAGE && isMetadataTag(name)) {
     self->state = IN_METADATA;
     return;
   }
@@ -214,7 +378,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "manifest") == 0 || strcmp(name, "opf:manifest") == 0)) {
+  if (self->state == IN_PACKAGE && isManifestTag(name)) {
     self->state = IN_MANIFEST;
     if (!Storage.openFileForWrite("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for writing. This is probably going to be a fatal error.");
@@ -222,7 +386,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "spine") == 0 || strcmp(name, "opf:spine") == 0)) {
+  if (self->state == IN_PACKAGE && isSpineTag(name)) {
     self->state = IN_SPINE;
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
@@ -239,7 +403,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "guide") == 0 || strcmp(name, "opf:guide") == 0)) {
+  if (self->state == IN_PACKAGE && isGuideTag(name)) {
     self->state = IN_GUIDE;
     // TODO Remove print
     LOG_DBG("COF", "Entering guide state.");
@@ -249,7 +413,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_METADATA && (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
+  if (self->state == IN_METADATA && isMetaTag(name)) {
     const char* metaName = nullptr;
     const char* metaContent = nullptr;
     const char* metaProperty = nullptr;
@@ -302,7 +466,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     return;
   }
 
-  if (self->state == IN_MANIFEST && (strcmp(name, "item") == 0 || strcmp(name, "opf:item") == 0)) {
+  if (self->state == IN_MANIFEST && isItemTag(name)) {
     std::string itemId;
     std::string href;
     std::string mediaType;
@@ -389,62 +553,13 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
   // NOTE: This relies on spine appearing after item manifest (which is pretty safe as it's part of the EPUB spec)
   // Only run the spine parsing if there's a cache to add it to
   if (self->cache) {
-    if (self->state == IN_SPINE && (strcmp(name, "itemref") == 0 || strcmp(name, "opf:itemref") == 0)) {
-      for (int i = 0; atts[i]; i += 2) {
-        if (strcmp(atts[i], "idref") == 0) {
-          const std::string idref = atts[i + 1];
-          std::string href;
-          bool found = false;
-
-          if (self->useItemIndex) {
-            // Fast path: binary search
-            uint32_t targetHash = fnvHash(idref);
-            uint16_t targetLen = static_cast<uint16_t>(idref.size());
-
-            auto it = std::lower_bound(self->itemIndex.begin(), self->itemIndex.end(),
-                                       ItemIndexEntry{targetHash, targetLen, 0},
-                                       [](const ItemIndexEntry& a, const ItemIndexEntry& b) {
-                                         return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
-                                       });
-
-            // Check for match (may need to check a few due to hash collisions)
-            while (it != self->itemIndex.end() && it->idHash == targetHash) {
-              self->tempItemStore.seek(it->fileOffset);
-              std::string itemId;
-              serialization::readString(self->tempItemStore, itemId);
-              if (itemId == idref) {
-                serialization::readString(self->tempItemStore, href);
-                found = true;
-                break;
-              }
-              ++it;
-            }
-          } else {
-            // Slow path: linear scan (for small manifests, keeps original behavior)
-            // TODO: This lookup is slow as need to scan through all items each time.
-            //       It can take up to 200ms per item when getting to 1500 items.
-            self->tempItemStore.seek(0);
-            std::string itemId;
-            while (self->tempItemStore.available()) {
-              serialization::readString(self->tempItemStore, itemId);
-              serialization::readString(self->tempItemStore, href);
-              if (itemId == idref) {
-                found = true;
-                break;
-              }
-            }
-          }
-
-          if (found && self->cache) {
-            self->cache->createSpineEntry(href);
-          }
-        }
-      }
+    if (self->state == IN_SPINE && isItemRefTag(name)) {
+      self->handleSpineItemRefElement(atts);
       return;
     }
   }
   // parse the guide
-  if (self->state == IN_GUIDE && (strcmp(name, "reference") == 0 || strcmp(name, "opf:reference") == 0)) {
+  if (self->state == IN_GUIDE && isReferenceTag(name)) {
     std::string type;
     std::string guideHref;
     for (int i = 0; atts[i]; i += 2) {
@@ -517,19 +632,19 @@ void ContentOpfParser::endElement(void* userData, const char* name) {
   auto* self = static_cast<ContentOpfParser*>(userData);
   (void)name;
 
-  if (self->state == IN_SPINE && (strcmp(name, "spine") == 0 || strcmp(name, "opf:spine") == 0)) {
+  if (self->state == IN_SPINE && isSpineTag(name)) {
     self->state = IN_PACKAGE;
     self->tempItemStore.close();
     return;
   }
 
-  if (self->state == IN_GUIDE && (strcmp(name, "guide") == 0 || strcmp(name, "opf:guide") == 0)) {
+  if (self->state == IN_GUIDE && isGuideTag(name)) {
     self->state = IN_PACKAGE;
     self->tempItemStore.close();
     return;
   }
 
-  if (self->state == IN_MANIFEST && (strcmp(name, "manifest") == 0 || strcmp(name, "opf:manifest") == 0)) {
+  if (self->state == IN_MANIFEST && isManifestTag(name)) {
     self->state = IN_PACKAGE;
     self->tempItemStore.close();
     return;
@@ -556,24 +671,24 @@ void ContentOpfParser::endElement(void* userData, const char* name) {
     return;
   }
 
-  if (self->state == IN_BOOK_SERIES && (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
+  if (self->state == IN_BOOK_SERIES && isMetaTag(name)) {
     self->series = trim(self->series);
     self->state = IN_METADATA;
     return;
   }
 
-  if (self->state == IN_BOOK_SERIES_INDEX && (strcmp(name, "meta") == 0 || strcmp(name, "opf:meta") == 0)) {
+  if (self->state == IN_BOOK_SERIES_INDEX && isMetaTag(name)) {
     self->seriesIndex = trim(self->seriesIndex);
     self->state = IN_METADATA;
     return;
   }
 
-  if (self->state == IN_METADATA && (strcmp(name, "metadata") == 0 || strcmp(name, "opf:metadata") == 0)) {
+  if (self->state == IN_METADATA && isMetadataTag(name)) {
     self->state = IN_PACKAGE;
     return;
   }
 
-  if (self->state == IN_PACKAGE && (strcmp(name, "package") == 0 || strcmp(name, "opf:package") == 0)) {
+  if (self->state == IN_PACKAGE && isPackageTag(name)) {
     self->state = START;
     return;
   }

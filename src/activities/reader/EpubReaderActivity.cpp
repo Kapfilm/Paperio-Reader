@@ -1,4 +1,4 @@
-#define DEBUG_MEMORY_CONSUMPTION 1
+﻿#define DEBUG_MEMORY_CONSUMPTION 1
 #define DEBUG_BACKGROUND_WORK 1
 #define DEBUG_BACKGROUND_OVERLAY 0
 
@@ -42,7 +42,6 @@
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderPrintedPageInputActivity.h"
-#include "EpubRenderBenchmarkActivity.h"
 #include "FinishedBookActivity.h"
 #include "GlobalBookmarkIndex.h"
 #include "KOReaderCredentialStore.h"
@@ -57,10 +56,15 @@
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
 #include "StarredPagesActivity.h"
+#include "activities/home/BookInfoActivity.h"
 #include "activities/settings/ReadingStatsBookDetailActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ScreenshotUtil.h"
+
+// Defined further down (near the other font helpers); declared here because
+// buildRenderParams() above it needs the ladder.
+static FontSizeLadder buildReaderFontSizeLadder(int bodyFontId);
 
 namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
@@ -235,30 +239,6 @@ uint8_t epubProgressPercentByte(const Epub& epub, const int spineIndex, const in
   return ReaderUtils::fractionProgressPercentByte(epub.calculateProgress(spineIndex, chapterProgress));
 }
 
-// Writes the canonical EPUB progress.bin layout: spine(2) + page(2) + pageCount(2) + percent(1).
-// Used by the per-page saveProgress() and by transient writers (sync restore, bookmark jump) so
-// the on-disk format stays consistent regardless of caller.
-bool writeReaderProgressCache(const std::string& cachePath, const int spineIndex, const int currentPage,
-                              const int pageCount, const uint8_t percent) {
-  FsFile f;
-  if (!Storage.openFileForWrite("ERS", cachePath + "/progress.bin", f)) {
-    LOG_ERR("ERS", "Failed to open progress cache: %s", cachePath.c_str());
-    return false;
-  }
-
-  uint8_t data[7];
-  data[0] = spineIndex & 0xFF;
-  data[1] = (spineIndex >> 8) & 0xFF;
-  data[2] = currentPage & 0xFF;
-  data[3] = (currentPage >> 8) & 0xFF;
-  data[4] = pageCount & 0xFF;
-  data[5] = (pageCount >> 8) & 0xFF;
-  data[6] = percent;
-  f.write(data, 7);
-  f.close();
-  return true;
-}
-
 int clampPercent(int percent) {
   if (percent < 0) {
     return 0;
@@ -267,20 +247,6 @@ int clampPercent(int percent) {
     return 100;
   }
   return percent;
-}
-
-const char* orientationToString(const GfxRenderer::Orientation orientation) {
-  switch (orientation) {
-    case GfxRenderer::Portrait:
-      return "Portrait";
-    case GfxRenderer::LandscapeClockwise:
-      return "Landscape CW";
-    case GfxRenderer::PortraitInverted:
-      return "Portrait Inverted";
-    case GfxRenderer::LandscapeCounterClockwise:
-      return "Landscape CCW";
-  }
-  return "Unknown";
 }
 
 int getImageOnlyPageYOffset(const Page& page, const int viewportHeight) {
@@ -475,6 +441,13 @@ void EpubReaderActivity::onExit() {
     }
     secondaryBufferDegraded_ = false;
   }
+  // Restore the display-global single-buffer fast-diff flag unconditionally. Background-C
+  // (buildSection) sets it true alongside its release; the two designed restore sites
+  // (recoverSecondaryBufferIfNeeded, compileSectionCache) clear it, but exiting mid-build
+  // reaches neither. The flag lives on the shared EInkDisplay and outlives this activity,
+  // so a stale true would make the next activity's first FAST refresh diff against the
+  // controller's retained RED RAM instead of its host baseline (ghosting). No-op on X3.
+  renderer.setSingleBufferFastDiff(false);
   UITheme::getInstance().getMutableTheme().onBookWillClose(epub ? epub->getPath() : "", epub.get(), nullptr, nullptr);
   epub.reset();
   currentPageFootnotes.clear();
@@ -760,7 +733,7 @@ Section::BuildParams EpubReaderActivity::makeSectionBuildParams() const {
   p.embeddedStyle = lastRenderStats.embeddedStyle;
   p.bionicReadingEnabled = getEffectiveBionicReading();
   p.imageRendering = lastRenderStats.imageRendering;
-  p.headingFonts = buildHeadingFonts();
+  p.fontSizeLadder = buildReaderFontSizeLadder(p.fontId);
   return p;
 }
 
@@ -1231,18 +1204,13 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     }
     case EpubReaderMenuActivity::MenuAction::GO_TO_PRINTED_PAGE: {
       if (!epub) break;
-      auto entries = epub->loadPrintedPageList();
-      // Compute the integer label range from parseable entries; non-integer labels are
-      // ignored (the dialog is numeric-only).
-      int minLabel = std::numeric_limits<int>::max();
-      int maxLabel = std::numeric_limits<int>::min();
-      for (const auto& entry : entries) {
-        if (const auto n = parsePrintedPageLabel(entry.label)) {
-          if (*n < minLabel) minLabel = *n;
-          if (*n > maxLabel) maxLabel = *n;
-        }
+      // Integer label range for the numeric input's bounds. Streamed (not loadPrintedPageList) so
+      // the whole list is never held in RAM — see Epub::hasNumericPrintedPages for why.
+      int minLabel = 0;
+      int maxLabel = 0;
+      if (!epub->getPrintedPageLabelRange(minLabel, maxLabel)) {
+        break;  // no integer labels — shouldn't happen if the menu item was shown
       }
-      if (maxLabel < minLabel) break;  // no integer labels — shouldn't happen if menu item was shown
 
       // Pre-fill with the printed page the reader is currently on (or the nearest one before
       // it — rendered device pages rarely carry an anchor themselves, but they sit between
@@ -1260,33 +1228,31 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
 
       startActivityForResult(
           std::make_unique<EpubReaderPrintedPageInputActivity>(renderer, mappedInput, initialValue, minLabel, maxLabel),
-          [this, entries = std::move(entries)](const ActivityResult& result) {
+          [this](const ActivityResult& result) {
             if (result.isCancelled) return;
             const auto& pick = std::get<PrintedPageResult>(result.data);
-            // Resolve the typed label back to a (href, anchor) by linear scan. Entries are
-            // small (typically <500 even for long books) and this fires once per user action.
-            for (const auto& entry : entries) {
-              const auto entryLabelValue = parsePrintedPageLabel(entry.label);
-              const auto pickLabelValue = parsePrintedPageLabel(pick.label);
-              if (entry.label == pick.label ||
-                  (entryLabelValue && pickLabelValue && *entryLabelValue == *pickLabelValue)) {
-                const int spineIdx = epub->resolveHrefToSpineIndex(entry.href);
-                if (spineIdx < 0) {
-                  LOG_DBG("ERS", "printed-page jump: could not resolve spine for href=%s", entry.href.c_str());
-                  return;
-                }
-                {
-                  RenderLock lock(*this);
-                  currentSpineIndex = spineIdx;
-                  navTarget =
-                      entry.anchor.empty() ? NavigationTarget::makePage(0) : NavigationTarget::makeAnchor(entry.anchor);
-                  section.reset();
-                }
-                requestUpdate();
-                return;
-              }
+            // pick.label is always a numeric string (std::to_string of the picked value). Resolve it
+            // back to a (href, anchor) by streaming the list again — no full-list vector retained.
+            const auto value = parsePrintedPageLabel(pick.label);
+            if (!value) return;
+            const auto entry = epub->findPrintedPageByLabel(*value);
+            if (!entry) {
+              LOG_DBG("ERS", "printed-page jump: label '%s' not found in pagelist", pick.label.c_str());
+              return;
             }
-            LOG_DBG("ERS", "printed-page jump: label '%s' not found in pagelist", pick.label.c_str());
+            const int spineIdx = epub->resolveHrefToSpineIndex(entry->href);
+            if (spineIdx < 0) {
+              LOG_DBG("ERS", "printed-page jump: could not resolve spine for href=%s", entry->href.c_str());
+              return;
+            }
+            {
+              RenderLock lock(*this);
+              currentSpineIndex = spineIdx;
+              navTarget =
+                  entry->anchor.empty() ? NavigationTarget::makePage(0) : NavigationTarget::makeAnchor(entry->anchor);
+              section.reset();
+            }
+            requestUpdate();
           });
       break;
     }
@@ -1299,10 +1265,11 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
             if (el->getTag() == TAG_PageLine) {
               const auto& line = static_cast<const PageLine&>(*el);
               if (line.getBlock()) {
-                const auto& words = line.getBlock()->getWords();
-                for (const auto& w : words) {
+                const auto& block = *line.getBlock();
+                const uint16_t wordCount = block.wordCount();
+                for (uint16_t i = 0; i < wordCount; ++i) {
                   if (!fullText.empty()) fullText += " ";
-                  fullText += w;
+                  fullText += block.wordText(i);
                 }
               }
             }
@@ -1358,6 +1325,12 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                              [this](const ActivityResult&) { requestUpdate(); });
       break;
     }
+    case EpubReaderMenuActivity::MenuAction::BOOK_INFO: {
+      if (!epub) break;
+      startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, epub->getPath()),
+                             [this](const ActivityResult&) { requestUpdate(); });
+      break;
+    }
     case EpubReaderMenuActivity::MenuAction::MARK_AS_READ: {
       if (!epub) {
         break;
@@ -1404,7 +1377,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       return;
     }
     case EpubReaderMenuActivity::MenuAction::RENDER_BENCHMARK: {
+#if ENABLE_BENCHMARKS
       runRenderBenchmark();
+#endif  // ENABLE_BENCHMARKS
       break;
     }
     case EpubReaderMenuActivity::MenuAction::SCREENSHOT: {
@@ -1432,387 +1407,6 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
   }
-}
-
-void EpubReaderActivity::runRenderBenchmark() {
-  if (!epub) {
-    return;
-  }
-
-  if (!section) {
-    requestUpdateAndWait();
-    if (!section) {
-      return;
-    }
-  }
-
-  const LastRenderStats startSnapshot = lastRenderStats;
-  BenchmarkAggregate aggregate;
-  auto recordRender = [&aggregate](const LastRenderStats& snapshot) {
-    if (!snapshot.valid) {
-      return;
-    }
-
-    aggregate.renderCount++;
-    aggregate.imagePageCount += snapshot.hadImages ? 1 : 0;
-    aggregate.cacheRebuildCount += snapshot.cacheRebuilt ? 1 : 0;
-    if (snapshot.footnoteCount > aggregate.maxFootnotes) {
-      aggregate.maxFootnotes = snapshot.footnoteCount;
-    }
-
-    aggregate.totalRequestRenderMs += snapshot.requestRenderMs;
-    if (aggregate.renderCount == 1 || snapshot.requestRenderMs < aggregate.minRequestRenderMs) {
-      aggregate.minRequestRenderMs = snapshot.requestRenderMs;
-    }
-    if (snapshot.requestRenderMs > aggregate.maxRequestRenderMs) {
-      aggregate.maxRequestRenderMs = snapshot.requestRenderMs;
-    }
-
-    aggregate.totalRenderMs += snapshot.phases.totalMs;
-    if (aggregate.renderCount == 1 || snapshot.phases.totalMs < aggregate.minRenderMs) {
-      aggregate.minRenderMs = snapshot.phases.totalMs;
-    }
-    if (snapshot.phases.totalMs > aggregate.maxRenderMs) {
-      aggregate.maxRenderMs = snapshot.phases.totalMs;
-    }
-
-    aggregate.totalSectionLoadMs += snapshot.sectionLoadMs;
-    aggregate.totalPageLoadMs += snapshot.pageLoadMs;
-    aggregate.totalPhases.prewarmMs += snapshot.phases.prewarmMs;
-    aggregate.totalPhases.bwRenderMs += snapshot.phases.bwRenderMs;
-    aggregate.totalPhases.displayMs += snapshot.phases.displayMs;
-    aggregate.totalPhases.bwStoreMs += snapshot.phases.bwStoreMs;
-    aggregate.totalPhases.grayLsbMs += snapshot.phases.grayLsbMs;
-    aggregate.totalPhases.grayMsbMs += snapshot.phases.grayMsbMs;
-    aggregate.totalPhases.grayDisplayMs += snapshot.phases.grayDisplayMs;
-    aggregate.totalPhases.bwRestoreMs += snapshot.phases.bwRestoreMs;
-    aggregate.totalPhases.totalMs += snapshot.phases.totalMs;
-
-    aggregate.totalFontCacheHits += snapshot.fontCacheHits;
-    aggregate.totalFontCacheMisses += snapshot.fontCacheMisses;
-    aggregate.totalFontDecompressMs += snapshot.fontDecompressMs;
-    aggregate.totalFontGetBitmapTimeUs += snapshot.fontGetBitmapTimeUs;
-    aggregate.totalFontGetBitmapCalls += snapshot.fontGetBitmapCalls;
-
-    if (aggregate.renderCount == 1 || snapshot.freeHeapAfter < aggregate.minFreeHeapAfter) {
-      aggregate.minFreeHeapAfter = snapshot.freeHeapAfter;
-    }
-    if (snapshot.freeHeapAfter > aggregate.maxFreeHeapAfter) {
-      aggregate.maxFreeHeapAfter = snapshot.freeHeapAfter;
-    }
-  };
-  const unsigned long startTime = millis();
-  int forwardTurns = 0;
-  int backwardTurns = 0;
-
-  for (int i = 0; i < 10; i++) {
-    if (!stepPageState(true)) {
-      break;
-    }
-    requestUpdateAndWait();
-    recordRender(lastRenderStats);
-    forwardTurns++;
-  }
-
-  const unsigned long forwardMs = millis() - startTime;
-  const unsigned long backwardStart = millis();
-
-  for (int i = 0; i < 10; i++) {
-    if (!stepPageState(false)) {
-      break;
-    }
-    requestUpdateAndWait();
-    recordRender(lastRenderStats);
-    backwardTurns++;
-  }
-
-  const unsigned long backwardMs = millis() - backwardStart;
-
-  startActivityForResult(
-      std::make_unique<EpubRenderBenchmarkActivity>(
-          renderer, mappedInput,
-          buildRenderBenchmarkReport(startSnapshot, aggregate, forwardTurns, forwardMs, backwardTurns, backwardMs)),
-      [this](const ActivityResult&) { requestUpdate(); });
-}
-
-std::string EpubReaderActivity::buildRenderBenchmarkReport(const LastRenderStats& startSnapshot,
-                                                           const BenchmarkAggregate& aggregate, const int forwardTurns,
-                                                           const unsigned long forwardMs, const int backwardTurns,
-                                                           const unsigned long backwardMs) const {
-  const LastRenderStats& endSnapshot = lastRenderStats.valid ? lastRenderStats : startSnapshot;
-
-  std::string report;
-  report.reserve(768);
-
-  auto appendLine = [&report](const std::string& line) {
-    if (!report.empty()) {
-      report += '\n';
-    }
-    report += line;
-  };
-
-  appendLine("Forward 10: " + std::to_string(forwardTurns) + " turns in " + std::to_string(forwardMs) + " ms");
-  if (forwardTurns > 0) {
-    appendLine("Forward avg: " + std::to_string(forwardMs / static_cast<unsigned long>(forwardTurns)) + " ms/turn");
-  }
-  appendLine("Backward 10: " + std::to_string(backwardTurns) + " turns in " + std::to_string(backwardMs) + " ms");
-  if (backwardTurns > 0) {
-    appendLine("Backward avg: " + std::to_string(backwardMs / static_cast<unsigned long>(backwardTurns)) + " ms/turn");
-  }
-  appendLine("Measured renders: " + std::to_string(aggregate.renderCount) + ", image pages " +
-             std::to_string(aggregate.imagePageCount) + ", cache rebuilds " +
-             std::to_string(aggregate.cacheRebuildCount));
-
-  appendLine("Start: spine " + std::to_string(startSnapshot.spineIndex) + ", page " +
-             std::to_string(startSnapshot.pageIndex + 1) + "/" + std::to_string(startSnapshot.pageCount));
-  appendLine("End: spine " + std::to_string(endSnapshot.spineIndex) + ", page " +
-             std::to_string(endSnapshot.pageIndex + 1) + "/" + std::to_string(endSnapshot.pageCount));
-  appendLine("Orientation: " +
-             std::string(orientationToString(static_cast<GfxRenderer::Orientation>(endSnapshot.orientation))));
-  appendLine("Viewport: " + std::to_string(endSnapshot.viewportWidth) + "x" +
-             std::to_string(endSnapshot.viewportHeight) + " px, margins T/R/B/L " +
-             std::to_string(endSnapshot.marginTop) + "/" + std::to_string(endSnapshot.marginRight) + "/" +
-             std::to_string(endSnapshot.marginBottom) + "/" + std::to_string(endSnapshot.marginLeft));
-  appendLine("Font: " + std::to_string(endSnapshot.effectiveFontId) + ", embedded CSS " +
-             std::string(endSnapshot.embeddedStyle ? "on" : "off") + ", images " +
-             std::to_string(endSnapshot.imageRendering) + ", AA " +
-             std::string(endSnapshot.textAntiAliasing ? "on" : "off"));
-  appendLine("Last page: images " + std::string(endSnapshot.hadImages ? "yes" : "no") + ", footnotes " +
-             std::to_string(endSnapshot.footnoteCount) + ", cache rebuilt " +
-             std::string(endSnapshot.cacheRebuilt ? "yes" : "no"));
-  if (aggregate.renderCount > 0) {
-    appendLine("Render avg/min/max: request " +
-               std::to_string(aggregate.totalRequestRenderMs / static_cast<unsigned long>(aggregate.renderCount)) +
-               "/" + std::to_string(aggregate.minRequestRenderMs) + "/" + std::to_string(aggregate.maxRequestRenderMs) +
-               " ms, core " +
-               std::to_string(aggregate.totalRenderMs / static_cast<unsigned long>(aggregate.renderCount)) + "/" +
-               std::to_string(aggregate.minRenderMs) + "/" + std::to_string(aggregate.maxRenderMs) + " ms");
-    appendLine("Aggregate loads: section " + std::to_string(aggregate.totalSectionLoadMs) + " ms, page " +
-               std::to_string(aggregate.totalPageLoadMs) + " ms, max footnotes " +
-               std::to_string(aggregate.maxFootnotes));
-    appendLine("Aggregate phases: prewarm " + std::to_string(aggregate.totalPhases.prewarmMs) + ", bw " +
-               std::to_string(aggregate.totalPhases.bwRenderMs) + ", display " +
-               std::to_string(aggregate.totalPhases.displayMs) + ", planes " +
-               std::to_string(aggregate.totalPhases.grayLsbMs) + ", gray display " +
-               std::to_string(aggregate.totalPhases.grayDisplayMs) + ", restore " +
-               std::to_string(aggregate.totalPhases.bwRestoreMs));
-    appendLine("Aggregate font: hits " + std::to_string(aggregate.totalFontCacheHits) + ", misses " +
-               std::to_string(aggregate.totalFontCacheMisses) + ", decompress " +
-               std::to_string(aggregate.totalFontDecompressMs) + " ms");
-    appendLine("Aggregate glyph lookups: " + std::to_string(aggregate.totalFontGetBitmapCalls) + " calls, " +
-               std::to_string(aggregate.totalFontGetBitmapTimeUs) + " us total");
-    appendLine("Heap after render min/max: " + std::to_string(aggregate.minFreeHeapAfter) + "/" +
-               std::to_string(aggregate.maxFreeHeapAfter));
-  }
-  appendLine("Last render: request " + std::to_string(endSnapshot.requestRenderMs) + " ms, section load " +
-             std::to_string(endSnapshot.sectionLoadMs) + " ms, page load " + std::to_string(endSnapshot.pageLoadMs) +
-             " ms, render total " + std::to_string(endSnapshot.phases.totalMs) + " ms");
-  appendLine("Phases: prewarm " + std::to_string(endSnapshot.phases.prewarmMs) + ", bw " +
-             std::to_string(endSnapshot.phases.bwRenderMs) + ", display " +
-             std::to_string(endSnapshot.phases.displayMs) + ", planes " + std::to_string(endSnapshot.phases.grayLsbMs) +
-             ", gray display " + std::to_string(endSnapshot.phases.grayDisplayMs) + ", restore " +
-             std::to_string(endSnapshot.phases.bwRestoreMs));
-  appendLine("Font cache: hits " + std::to_string(endSnapshot.fontCacheHits) + ", misses " +
-             std::to_string(endSnapshot.fontCacheMisses) + ", decompress " +
-             std::to_string(endSnapshot.fontDecompressMs) + " ms, groups " +
-             std::to_string(endSnapshot.fontUniqueGroups));
-  appendLine("Font buffers: page " + std::to_string(endSnapshot.fontPageBufferBytes) + ", glyph table " +
-             std::to_string(endSnapshot.fontPageGlyphsBytes) + ", peak temp " +
-             std::to_string(endSnapshot.fontPeakTempBytes));
-  appendLine("Glyph lookups: " + std::to_string(endSnapshot.fontGetBitmapCalls) + " calls, " +
-             std::to_string(endSnapshot.fontGetBitmapTimeUs) + " us total");
-  appendLine("Heap: before " + std::to_string(endSnapshot.freeHeapBefore) + "/" +
-             std::to_string(endSnapshot.largestFreeBlockBefore) + ", after " +
-             std::to_string(endSnapshot.freeHeapAfter) + "/" + std::to_string(endSnapshot.largestFreeBlockAfter));
-
-  return report;
-}
-
-void EpubReaderActivity::launchKOReaderSync(const SyncLaunchMode mode) {
-  if (!epub) {
-    return;
-  }
-
-  const int currentPage = section ? section->currentPage : 0;
-  const int totalPages = section ? section->pageCount : 0;
-  KOReaderSyncIntentState syncIntent = KOReaderSyncIntentState::COMPARE;
-  if (mode == SyncLaunchMode::PULL_REMOTE) {
-    syncIntent = KOReaderSyncIntentState::PULL_REMOTE;
-  } else if (mode == SyncLaunchMode::PUSH_LOCAL) {
-    syncIntent = KOReaderSyncIntentState::PUSH_LOCAL;
-  } else if (mode == SyncLaunchMode::AUTO_PUSH) {
-    syncIntent = KOReaderSyncIntentState::AUTO_PUSH;
-  }
-
-  auto& sync = APP_STATE.koReaderSyncSession;
-  sync.active = true;
-  sync.epubPath = epub->getPath();
-  sync.spineIndex = currentSpineIndex;
-  sync.page = currentPage;
-  sync.totalPagesInSpine = totalPages;
-  // Populate paragraph index and XHTML seek hint from section LUT if available.
-  if (section) {
-    if (const auto pIdx = section->getParagraphIndexForPage(static_cast<uint16_t>(currentPage))) {
-      sync.paragraphIndex = *pIdx;
-      sync.hasParagraphIndex = true;
-      if (const auto hint = section->getXhtmlByteOffsetForPage(static_cast<uint16_t>(currentPage))) {
-        sync.xhtmlSeekHint = *hint;
-      } else {
-        sync.xhtmlSeekHint = 0;
-      }
-    } else {
-      sync.paragraphIndex = 0;
-      sync.hasParagraphIndex = false;
-      sync.xhtmlSeekHint = 0;
-    }
-  } else {
-    sync.paragraphIndex = 0;
-    sync.hasParagraphIndex = false;
-    sync.xhtmlSeekHint = 0;
-  }
-  sync.intent = syncIntent;
-  sync.outcome = KOReaderSyncOutcomeState::PENDING;
-  sync.resultSpineIndex = 0;
-  sync.resultPage = 0;
-  sync.resultParagraphIndex = 0;
-  sync.resultHasParagraphIndex = false;
-  // Only auto-push-on-close should bypass the reader on resume; explicit syncs from the
-  // reader menu always come back to the reader. Reset here so a stale flag from a prior
-  // run cannot steal the user back to home.
-  sync.exitToHomeAfterSync = (mode == SyncLaunchMode::AUTO_PUSH);
-  APP_STATE.saveToFile();
-
-  LOG_DBG("ERS", "Standalone sync handoff: spine=%d page=%d/%d", currentSpineIndex, currentPage, totalPages);
-  logReaderMemSnapshot("before_replace_with_sync");
-  activityManager.goToKOReaderSync();
-}
-
-bool EpubReaderActivity::tryAutoPushOnClose() {
-  // Three-page minimum filters out brief inspections — opening to check the cover or
-  // skim the TOC shouldn't burn a network round-trip. Counter is per-activity-instance.
-  constexpr int MIN_SESSION_PAGES = 3;
-  if (!SETTINGS.koSyncOnBookClose) {
-    return false;
-  }
-  if (!KOREADER_STORE.hasCredentials()) {
-    return false;
-  }
-  if (sessionPagesAdvanced < MIN_SESSION_PAGES) {
-    return false;
-  }
-  if (!epub) {
-    return false;
-  }
-
-  const int spineCount = epub->getSpineItemsCount();
-  if (spineCount == 0 || currentSpineIndex >= spineCount || !section) {
-    LOG_DBG("ERS", "Skipping AUTO_PUSH on end-of-book sentinel: spine=%d section=%s", currentSpineIndex,
-            section ? "present" : "null");
-    return false;
-  }
-
-  // exitToHomeAfterSync flag is set inside launchKOReaderSync for AUTO_PUSH mode.
-  launchKOReaderSync(SyncLaunchMode::AUTO_PUSH);
-  return true;
-}
-
-void EpubReaderActivity::applyPendingSyncSession() {
-  auto& sync = APP_STATE.koReaderSyncSession;
-  if (!sync.active || !epub || sync.epubPath != epub->getPath()) {
-    return;
-  }
-
-  LOG_DBG("ERS", "Applying pending sync session outcome=%d path=%s", static_cast<int>(sync.outcome),
-          sync.epubPath.c_str());
-
-  // Upload-complete returns to the same local position the reader already persisted
-  // before sync launched, so there is no need to rewrite progress.bin here.
-  if (sync.outcome == KOReaderSyncOutcomeState::UPLOAD_COMPLETE) {
-    LOG_DBG("ERS", "Upload-complete resume keeps existing local progress.bin unchanged");
-    sync.clear();
-    APP_STATE.saveToFile();
-    logReaderMemSnapshot("after_apply_pending_sync_session");
-    return;
-  }
-
-  // AUTO_PULL handed off zeroed local state (the reader was not yet running when sync started),
-  // so on cancel/fail we must NOT restore those zeros to progress.bin — they would clobber the
-  // user's real local progress. Just clear the session and let the normal startup load progress.bin.
-  if (sync.intent == KOReaderSyncIntentState::AUTO_PULL && sync.outcome != KOReaderSyncOutcomeState::APPLIED_REMOTE) {
-    LOG_DBG("ERS", "AUTO_PULL non-success outcome=%d: leaving progress.bin untouched", static_cast<int>(sync.outcome));
-    sync.clear();
-    APP_STATE.saveToFile();
-    logReaderMemSnapshot("after_apply_pending_sync_session");
-    return;
-  }
-
-  int restoreSpineIndex = sync.spineIndex;
-  int restorePage = sync.page;
-
-  if (restoreSpineIndex < 0 || restoreSpineIndex >= epub->getSpineItemsCount()) {
-    LOG_ERR("ERS", "Invalid sync restore spine index %d, resetting to 0", restoreSpineIndex);
-    restoreSpineIndex = 0;
-    restorePage = 0;
-  }
-
-  // Build the navigation target from the sync result. For LUT-anchored targets the
-  // estimated restorePage is plumbed through as fallbackPage so a LUT miss in the
-  // target spine still lands the user on a sensible page rather than page 0.
-  NavigationTarget restoreTarget;
-  if (sync.outcome == KOReaderSyncOutcomeState::APPLIED_REMOTE) {
-    const int spineCount = epub->getSpineItemsCount();
-    if (sync.resultSpineIndex < 0 || sync.resultSpineIndex >= spineCount) {
-      LOG_ERR("ERS", "Sync resultSpineIndex %d out of range [0,%d), clamping to previous %d", sync.resultSpineIndex,
-              spineCount, restoreSpineIndex);
-      // Keep restoreSpineIndex / restorePage from the pre-validation block above.
-    } else {
-      restoreSpineIndex = sync.resultSpineIndex;
-      restorePage = sync.resultPage;
-    }
-    if (sync.resultHasListItemIndex) {
-      restoreTarget = NavigationTarget::makeListItem(sync.resultListItemIndex, restorePage);
-      LOG_DBG("ERS", "Applied synced remote position: spine=%d page=%d li[%u]", restoreSpineIndex, restorePage,
-              sync.resultListItemIndex);
-    } else if (sync.resultHasParagraphIndex) {
-      restoreTarget = NavigationTarget::makeParagraph(sync.resultParagraphIndex, restorePage);
-      LOG_DBG("ERS", "Applied synced remote position: spine=%d page=%d p[%u]", restoreSpineIndex, restorePage,
-              sync.resultParagraphIndex);
-    } else {
-      restoreTarget = NavigationTarget::makePage(restorePage);
-      LOG_DBG("ERS", "Applied synced remote position: spine=%d page=%d (no LUT)", restoreSpineIndex, restorePage);
-    }
-  } else {
-    restoreTarget = NavigationTarget::makePage(restorePage);
-    LOG_DBG("ERS", "Restored local pre-sync position: spine=%d page=%d", restoreSpineIndex, restorePage);
-  }
-
-  // sync.totalPagesInSpine is the page count of the local spine at launch time.
-  // When the restore targets a different spine, that count is meaningless for
-  // rescaling the fallbackPage estimate (which was estimated from cross-spine
-  // density anyway). Store 0 to disable rescaling — the LUT lookup is the precise
-  // path, and the cross-spine fallback can't usefully be rescaled here.
-  const int restorePageCount = (restoreSpineIndex == sync.spineIndex) ? sync.totalPagesInSpine : 0;
-  restoreTarget.cachedPageCount = restorePageCount;
-  restoreTarget.cachedSpineIdx = restoreSpineIndex;
-
-  // Seed live state directly — the previous write-then-reload-from-disk pattern relied
-  // on progress.bin being read after this function ran, which clobbered the LUT target.
-  // Live-state seeding is authoritative; the persistent write below is just for crash
-  // recovery so a power loss before the next saveProgress() doesn't lose the synced
-  // spine/page. The next render's saveProgress() supplies the real percent before
-  // the user can return to the home screen.
-  currentSpineIndex = restoreSpineIndex;
-  navTarget = restoreTarget;
-  if (!writeReaderProgressCache(epub->getCachePath(), restoreSpineIndex, restorePage, restorePageCount, 0)) {
-    LOG_ERR("ERS", "Failed to persist sync restore to progress.bin; live state still seeded");
-  } else {
-    LOG_DBG("ERS", "Prepared progress.bin for sync restore: spine=%d page=%d/%d", restoreSpineIndex, restorePage,
-            sync.totalPagesInSpine);
-  }
-
-  sync.clear();
-  APP_STATE.saveToFile();
-  logReaderMemSnapshot("after_apply_pending_sync_session");
 }
 
 void EpubReaderActivity::applyPendingBookmarkJump() {
@@ -1971,6 +1565,16 @@ void EpubReaderActivity::applyBookReaderOverrides(
                                   bookBionicReadingOverride, bookParagraphAlignmentOverride,
                                   bookTextAntiAliasingOverride, bookHyphenationOverride);
 
+  // A changed override forces a full section relayout (section.reset() below → rebuild with the
+  // "Indexing…" popup). That popup FAST-refreshes against whatever is on the panel; when the change
+  // arrived via the full-screen selector, the extra menu/submenu/selector redraws leave the FAST
+  // baseline out of sync and the popup box ghosts. Arm a one-shot HALF so drawPopup() establishes a
+  // clean baseline — the same deliberate-transition signal the chapter/percent/footnote jumps use
+  // (hasRefreshOverridePending() at the popup then also arms forceHalfRefreshAfterPopup_ for the
+  // first content page). Reached only when something actually changed (early-out above), so routine
+  // no-op reopens of the menu don't pay for it.
+  ReaderUtils::enforceExitFullRefresh(renderer);
+
   RenderLock lock(*this);
   if (section) {
     navTarget = NavigationTarget::makePage(section->currentPage);
@@ -2076,14 +1680,36 @@ int EpubReaderActivity::getEffectiveReaderFontId() const {
   return SETTINGS.getReaderFontId();
 }
 
-Section::HeadingFonts EpubReaderActivity::buildHeadingFonts() const {
-  // Headings render by SCALING the body font (nearest-neighbor upscale in renderCharAtScale),
-  // not by switching to a taller built-in font. The taller-font approach was tried and dropped:
-  // it put a second font on chapter-opener pages, which thrashed the limited glyph-cache slots
-  // (multi-second page stalls), and only delivered quantized 2pt steps capped at 18pt for
-  // built-in fonts. Scaling gives the exact 1.6/1.4/1.2 ratios at any body size with one font
-  // per page (no cache pressure). Defaults already encode that: fontId all 0 = scale fallback.
-  return Section::HeadingFonts{};
+// Sibling-size ladder for a built-in body font: every size of the same family, with its
+// point size expressed as a percent of the body's. Deterministic from the fontId ALONE —
+// the section-cache property hash deliberately excludes the ladder on that basis, so any
+// path that rebuilds a section (foreground, background, sleep) derives an identical ladder
+// from the same fontId. Unknown ids (SD-card fonts, one loaded size) get an empty ladder,
+// which keeps the pure-scale fallback.
+//
+// Glyph-cache note: an earlier taller-heading-font attempt thrashed the FontDecompressor's
+// four page slots. Two things changed since: FontCacheManager now prewarms per fontId, and
+// the parser caps sections at ONE auxiliary font (body R/B/I + aux R = exactly four slots).
+static FontSizeLadder buildReaderFontSizeLadder(const int bodyFontId) {
+  static constexpr uint8_t kSizeEnums[] = {CrossPointSettings::TINY, CrossPointSettings::SMALL,
+                                           CrossPointSettings::MEDIUM, CrossPointSettings::LARGE,
+                                           CrossPointSettings::EXTRA_LARGE};
+  static constexpr uint8_t kPointSizes[] = {10, 12, 14, 16, 18};
+  static constexpr uint8_t kFamilies[] = {CrossPointSettings::BOOKERLY, CrossPointSettings::NOTOSANS};
+
+  FontSizeLadder ladder;
+  for (const uint8_t family : kFamilies) {
+    for (size_t i = 0; i < sizeof(kSizeEnums); ++i) {
+      if (CrossPointSettings::getBuiltinReaderFontId(family, kSizeEnums[i]) != bodyFontId) continue;
+      const uint8_t bodyPt = kPointSizes[i];
+      for (size_t j = 0; j < sizeof(kSizeEnums); ++j) {
+        ladder.addRung(CrossPointSettings::getBuiltinReaderFontId(family, kSizeEnums[j]),
+                       static_cast<uint16_t>(kPointSizes[j] * 100 / bodyPt));
+      }
+      return ladder;
+    }
+  }
+  return ladder;  // SD font or unknown id: empty ladder = scale-only fallback
 }
 
 void EpubReaderActivity::NavigationTarget::resolveInto(Section& sec, int spineIndex) const {
@@ -2668,7 +2294,7 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
                                       buildParams.viewportWidth, buildParams.viewportHeight,
                                       buildParams.hyphenationEnabled, buildParams.embeddedStyle,
                                       buildParams.bionicReadingEnabled, buildParams.imageRendering, nullptr,
-                                      /*skipEviction=*/false, buildParams.headingFonts);
+                                      /*skipEviction=*/false, buildParams.fontSizeLadder);
   };
 
   const uint32_t createStart = millis();
@@ -3252,6 +2878,27 @@ bool EpubReaderActivity::maybeRestartForFragmentedHeap(const uint32_t freeHeap, 
   return false;
 }
 
+bool EpubReaderActivity::writeReaderProgressCache(const std::string& cachePath, const int spineIndex,
+                                                  const int currentPage, const int pageCount, const uint8_t percent) {
+  FsFile f;
+  if (!Storage.openFileForWrite("ERS", cachePath + "/progress.bin", f)) {
+    LOG_ERR("ERS", "Failed to open progress cache: %s", cachePath.c_str());
+    return false;
+  }
+
+  uint8_t data[7];
+  data[0] = spineIndex & 0xFF;
+  data[1] = (spineIndex >> 8) & 0xFF;
+  data[2] = currentPage & 0xFF;
+  data[3] = (currentPage >> 8) & 0xFF;
+  data[4] = pageCount & 0xFF;
+  data[5] = (pageCount >> 8) & 0xFF;
+  data[6] = percent;
+  f.write(data, 7);
+  f.close();
+  return true;
+}
+
 void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
   const uint8_t percent = epubProgressPercentByte(*epub, spineIndex, currentPage, pageCount);
   if (!writeReaderProgressCache(epub->getCachePath(), spineIndex, currentPage, pageCount, percent)) {
@@ -3658,7 +3305,7 @@ void EpubReaderActivity::renderStatusBar() const {
   const bool isStarred = section && bookmarkStore.has(static_cast<uint16_t>(currentSpineIndex),
                                                       static_cast<uint16_t>(section->currentPage));
   std::string printedPageLabel;
-  if (section) {
+  if (section && SETTINGS.statusBarPrintedPage) {
     const auto page = static_cast<uint16_t>(section->currentPage);
     if (const auto label = section->getPrintedPageLabelForPage(page)) {
       // Exact-match label (already parenthesised, may be "7/8" when multiple anchors collapse).
@@ -3903,7 +3550,7 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
                                     SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
                                     SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
                                     static_cast<bool>(SETTINGS.bionicReading), SETTINGS.imageRendering, nullptr,
-                                    /*skipEviction=*/false, Section::HeadingFonts{})) {
+                                    /*skipEviction=*/false, buildReaderFontSizeLadder(effectiveFontId))) {
       LOG_ERR("SLP", "EPUB: failed to rebuild section cache for spine %d", spineIndex);
       return false;
     }
@@ -3963,11 +3610,11 @@ void EpubReaderActivity::openReaderMenu() {
 
   // Show the "Go to printed page" item only when this book has at least one integer-labelled
   // entry in pagelist.bin. Roman-only or empty page lists are excluded — the numeric input
-  // dialog can't address them anyway.
-  const auto printedPageList = epub->loadPrintedPageList();
-  const bool hasPrintedPages = std::any_of(printedPageList.begin(), printedPageList.end(), [](const auto& entry) {
-    return parsePrintedPageLabel(entry.label).has_value();
-  });
+  // dialog can't address them anyway. Streamed (not loadPrintedPageList) so opening the menu never
+  // reserves the whole list: that ~200 KB contiguous allocation aborts the firmware via uncaught
+  // bad_alloc when the menu is opened mid section-build on a long book (heap fragmented to tens of
+  // KB) — the tag 2.05 "Confirm reboots" crash.
+  const bool hasPrintedPages = epub->hasNumericPrintedPages();
 
   ReaderUtils::enforceExitFullRefresh(renderer);
   startActivityForResult(

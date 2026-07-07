@@ -1,4 +1,13 @@
 #pragma once
+
+// On-device render-benchmark harness (reader menu "Render benchmark" entry). Off by default —
+// enable with -DENABLE_BENCHMARKS=1 in a platformio.ini environment for perf investigation
+// builds only; the harness and its report-building code have no value for end users and are
+// worth keeping out of release flash budgets.
+#ifndef ENABLE_BENCHMARKS
+#define ENABLE_BENCHMARKS 0
+#endif
+
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
@@ -254,6 +263,7 @@ class EpubReaderActivity final : public Activity {
     uint32_t fontGetBitmapTimeUs = 0;
     uint32_t fontGetBitmapCalls = 0;
   };
+#if ENABLE_BENCHMARKS
   struct BenchmarkAggregate {
     int renderCount = 0;
     int imagePageCount = 0;
@@ -276,6 +286,7 @@ class EpubReaderActivity final : public Activity {
     uint32_t minFreeHeapAfter = 0;
     uint32_t maxFreeHeapAfter = 0;
   };
+#endif  // ENABLE_BENCHMARKS
   LastRenderStats lastRenderStats;
   // Pre-rendered next page: frame buffer holds page content (no status bar) ready to display.
   // Set by the pre-render pass in render(); consumed and cleared by the fast path in pageTurn().
@@ -559,6 +570,12 @@ class EpubReaderActivity final : public Activity {
   mutable int lastStatusBarClockMinute = -1;
   bool maybeRestartForFragmentedHeap(uint32_t freeHeap, uint32_t contigHeap);
   void saveProgress(int spineIndex, int currentPage, int pageCount);
+  // Writes the canonical EPUB progress.bin layout: spine(2) + page(2) + pageCount(2) + percent(1).
+  // Used by the per-page saveProgress() and by transient writers (sync restore, bookmark jump) so
+  // the on-disk format stays consistent regardless of caller. Static (and shared across the split
+  // EpubReaderActivity/EpubReaderSync translation units) since it needs no instance state.
+  static bool writeReaderProgressCache(const std::string& cachePath, int spineIndex, int currentPage, int pageCount,
+                                       uint8_t percent);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
@@ -600,17 +617,15 @@ class EpubReaderActivity final : public Activity {
   bool getEffectiveTextAntiAliasing() const;
   bool getEffectiveHyphenation() const;
   int getEffectiveReaderFontId() const;
-  // Resolve h1/h2/h3 heading fonts for the current body font: built-in families step up to a
-  // taller loaded size (crisp glyphs); SD fonts / over-cap fall back to scaling. Passed to
-  // createSectionFile so the layout bakes the right per-block font.
-  Section::HeadingFonts buildHeadingFonts() const;
   float getEffectiveReaderLineCompression() const;
   bool stepPageState(bool isForwardTurn);
   void pageTurn(bool isForwardTurn);
+#if ENABLE_BENCHMARKS
   void runRenderBenchmark();
   std::string buildRenderBenchmarkReport(const LastRenderStats& startSnapshot, const BenchmarkAggregate& aggregate,
                                          int forwardTurns, unsigned long forwardMs, int backwardTurns,
                                          unsigned long backwardMs) const;
+#endif  // ENABLE_BENCHMARKS
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);

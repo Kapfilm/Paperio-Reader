@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Epub.h"
+#include "FontSizeLadder.h"
 
 class Page;
 class GfxRenderer;
@@ -96,19 +97,6 @@ class Section {
   uint16_t pageCount = 0;
   int currentPage = 0;
 
-  // Resolved heading fonts for h1/h2/h3, computed by the app layer (which knows the body
-  // font family/size) and passed down as pure data so the Epub lib stays settings-agnostic.
-  // For each level: fontId != 0 means "render this heading with that taller built-in font"
-  // and `residual` is a small extra scale (usually 1.0) applied on top. fontId == 0 means
-  // "scale the body font by `residual`" (the nearest-neighbor fallback for SD fonts / caps).
-  // Index 0 = h1, 1 = h2, 2 = h3. Default-constructed = all-fallback (current behavior).
-  struct HeadingFonts {
-    // 32-bit font-id hashes (see fontIds.h) — must NOT be truncated to a byte, or the
-    // heading font lookup fails and headings render nothing. 0 = scale-fallback for that level.
-    int32_t fontId[3] = {0, 0, 0};
-    float residual[3] = {1.6f, 1.4f, 1.2f};
-  };
-
   // Render parameters that determine a section-cache variant. Bundles the long argument
   // list shared by loadSectionFile / createSectionFile / stepSectionBuild so a resumable
   // build can carry them across slices without re-passing ten arguments each call.
@@ -123,9 +111,10 @@ class Section {
     bool embeddedStyle = false;
     bool bionicReadingEnabled = false;
     uint8_t imageRendering = 0;
-    // Heading fonts derived from the body font (see HeadingFonts). Not part of the property
-    // hash: they are a deterministic function of fontId, which is already hashed.
-    HeadingFonts headingFonts;
+    // Sibling-size ladder derived from the body font (see FontSizeLadder). Not part of the
+    // property hash: it is a deterministic function of fontId, which is already hashed.
+    // Default (empty) = scale-only fallback, the right behavior for SD fonts.
+    FontSizeLadder fontSizeLadder;
   };
 
   // Progress of an incremental (sliceable) section build. Setup/Parse/Finalize are the
@@ -146,7 +135,7 @@ class Section {
   bool createSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                          uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
                          bool bionicReadingEnabled, uint8_t imageRendering, const std::function<void(int)>& progressFn,
-                         bool skipEviction, const HeadingFonts& headingFonts);
+                         bool skipEviction, const FontSizeLadder& fontSizeLadder);
 
   // Incremental section-cache build. Advances the build by at most ~budgetMs of work
   // (budgetMs == 0 means no budget: run to a terminal state in one call) and returns More

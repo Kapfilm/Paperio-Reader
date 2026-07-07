@@ -58,7 +58,7 @@ bool BookMetadataCache::beginTocPass() {
     for (int i = 0; i < spineCount; i++) {
       readSpineEntry(spineFile, scratch);
       SpineHrefIndexEntry idx;
-      idx.hrefHash = fnvHash64(scratch.href);
+      idx.hrefHash = HashUtils::fnvHash64(scratch.href);
       idx.hrefLen = static_cast<uint16_t>(scratch.href.size());
       idx.spineIndex = static_cast<int16_t>(i);
       spineHrefIndex[i] = idx;
@@ -74,6 +74,26 @@ bool BookMetadataCache::beginTocPass() {
     useSpineHrefIndex = false;
   }
 
+  return true;
+}
+
+bool BookMetadataCache::resetTocPassOutput() {
+  if (!buildMode) {
+    LOG_DBG("BMC", "resetTocPassOutput called but not in build mode");
+    return false;
+  }
+
+  if (tocFile) {
+    tocFile.close();
+  }
+
+  if (!Storage.openFileForWrite("BMC", cachePath + tmpTocBinFile, tocFile)) {
+    LOG_ERR("BMC", "Could not reopen TOC temp file for reset");
+    return false;
+  }
+
+  tocCount = 0;
+  LOG_DBG("BMC", "Reset TOC temp output for fallback parse");
   return true;
 }
 
@@ -231,7 +251,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
       FsHelpers::normalisePath(spineScratch.href, pathScratch);
 
       ZipFile::SizeTarget t;
-      t.hash = ZipFile::fnvHash64(pathScratch.c_str(), pathScratch.size());
+      t.hash = HashUtils::fnvHash64(pathScratch.c_str(), pathScratch.size());
       t.len = static_cast<uint16_t>(pathScratch.size());
       t.index = static_cast<uint16_t>(i);
       targets[i] = t;
@@ -368,7 +388,7 @@ void BookMetadataCache::createTocEntry(const std::string& title, const std::stri
   int16_t spineIndex = -1;
 
   if (useSpineHrefIndex) {
-    uint64_t targetHash = fnvHash64(href);
+    uint64_t targetHash = HashUtils::fnvHash64(href);
     uint16_t targetLen = static_cast<uint16_t>(href.size());
 
     auto it =

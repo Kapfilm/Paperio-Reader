@@ -366,6 +366,86 @@ void testIdSelectorGrouped() {
 }
 
 // ============================================================================
+// StackBuffer overflow handling (selector / declaration truncation)
+//
+// The streaming parser buffers each selector group and each declaration in a
+// fixed 1024-byte StackBuffer. Before the overflow flag was added, content past
+// the cap was silently dropped: a truncated selector could be parsed as a bogus
+// rule, and a truncated declaration could be parsed as garbage. These tests pin
+// the recovery behaviour — oversized tokens are skipped, and valid rules before
+// and after them still parse.
+// ============================================================================
+
+void testOverflowedSelectorGroupDropsUsablePrefix() {
+  printf("testOverflowedSelectorGroupDropsUsablePrefix...\n");
+  CssParser parser("");
+  // A comma group whose first member (#keep) is short and usable, followed by a
+  // giant filler selector that overflows the 1024-byte StackBuffer. The whole rule
+  // must be dropped: without the overflow guard the truncated buffer still begins
+  // with "#keep, ..." and #keep would be stored as a bogus rule.
+  std::string css = "#keep, #";
+  css.append(2000, 'x');
+  css += " { font-weight: bold; }";
+  loadCssFromString(parser, css.c_str());
+
+  const CssStyle style = parser.resolveStyle("p", "", "keep");
+  ASSERT_FALSE(style.hasFontWeight());  // giant rule dropped in full — #keep not stored
+  PASS();
+}
+
+void testParserRecoversAfterOverflowedSelector() {
+  printf("testParserRecoversAfterOverflowedSelector...\n");
+  CssParser parser("");
+  // The dropped giant rule must not derail parsing: valid rules before and after
+  // it still resolve.
+  std::string css = "p { text-align: center; } #";
+  css.append(2000, 'x');
+  css += " { font-weight: bold; } #ok { font-style: italic; }";
+  loadCssFromString(parser, css.c_str());
+
+  const CssStyle before = parser.resolveStyle("p", "", "");
+  ASSERT_TRUE(before.hasTextAlign());
+  ASSERT_EQ(before.textAlign, CssTextAlign::Center);
+
+  const CssStyle after = parser.resolveStyle("span", "", "ok");
+  ASSERT_TRUE(after.hasFontStyle());
+  ASSERT_EQ(after.fontStyle, CssFontStyle::Italic);
+  PASS();
+}
+
+void testOverflowedDeclarationNotParsedAsProperty() {
+  printf("testOverflowedDeclarationNotParsedAsProperty...\n");
+  CssParser parser("");
+  // A "text-align:" declaration padded past the buffer. Without the overflow guard
+  // the truncated "text-align:xxxx..." is parsed, interpretAlignment() falls back to
+  // Left, and hasTextAlign() becomes true. With the guard the declaration is dropped.
+  std::string css = "p { text-align:";
+  css.append(2000, 'x');
+  css += "; }";
+  loadCssFromString(parser, css.c_str());
+
+  const CssStyle style = parser.resolveStyle("p", "", "");
+  ASSERT_FALSE(style.hasTextAlign());  // truncated declaration dropped, not parsed as Left
+  PASS();
+}
+
+void testValidDeclarationSurvivesAfterOverflowedOne() {
+  printf("testValidDeclarationSurvivesAfterOverflowedOne...\n");
+  CssParser parser("");
+  // The oversized declaration is dropped when ';' flushes it; the following valid
+  // declaration in the same block must still apply.
+  std::string css = "p { color:";
+  css.append(2000, 'z');  // overflow the declaration StackBuffer
+  css += "; text-align: right; }";
+  loadCssFromString(parser, css.c_str());
+
+  const CssStyle style = parser.resolveStyle("p", "", "");
+  ASSERT_TRUE(style.hasTextAlign());
+  ASSERT_EQ(style.textAlign, CssTextAlign::Right);
+  PASS();
+}
+
+// ============================================================================
 // main
 // ============================================================================
 
@@ -415,6 +495,12 @@ int main() {
   testIdSelectorCaseNormalized();
   testIdSelectorNotAffectUnrelatedElement();
   testIdSelectorGrouped();
+
+  printf("\n--- StackBuffer overflow handling ---\n");
+  testOverflowedSelectorGroupDropsUsablePrefix();
+  testParserRecoversAfterOverflowedSelector();
+  testOverflowedDeclarationNotParsedAsProperty();
+  testValidDeclarationSurvivesAfterOverflowedOne();
 
   printf("\n=== Results: %d passed, %d failed ===\n", testsPassed, testsFailed);
   return testsFailed > 0 ? 1 : 0;

@@ -14,31 +14,80 @@
 #include "fontIds.h"
 
 namespace {
-// Base menu items (without clock). Clock is appended conditionally at index 5.
-constexpr int MENU_ITEMS_NO_CLOCK = 9;
-constexpr int MENU_ITEMS_WITH_CLOCK = 10;
-const StrId menuNames[MENU_ITEMS_WITH_CLOCK] = {StrId::STR_STATUS_ITEMS_POSITION,
-                                                StrId::STR_CHAPTER_PAGE_COUNT,
-                                                StrId::STR_BOOK_PROGRESS_PERCENTAGE,
-                                                StrId::STR_TITLE,
-                                                StrId::STR_BATTERY,
-                                                StrId::STR_CLOCK,
-                                                StrId::STR_UPPER_PROGRESS_BAR,
-                                                StrId::STR_UPPER_PROGRESS_BAR_THICKNESS,
-                                                StrId::STR_LOWER_PROGRESS_BAR,
-                                                StrId::STR_LOWER_PROGRESS_BAR_THICKNESS};
+const StrId progressBarNames[] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
+const StrId progressBarThicknessNames[] = {StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM,
+                                           StrId::STR_PROGRESS_BAR_THICK};
+const StrId titleNames[] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
+const StrId statusItemsPositionNames[] = {StrId::STR_TOP, StrId::STR_BOTTOM};
+
+// One menu row. Editing a status-bar option means: cycle `field` through `valueCount` values and
+// display its current value. Rows with an enum-style set of choices provide `valueNames` (indexed by
+// the field value); rows with no `valueNames` are on/off toggles rendered as Show/Hide.
+//
+// The whole menu is this single table. Adding, removing, or reordering a row is a one-line edit here —
+// there is no parallel index bookkeeping to keep in sync. Rows with `requiresClock` are skipped when
+// the clock feature is off, so the visible list compacts without any index remapping.
+struct StatusBarItem {
+  StrId label;
+  uint8_t CrossPointSettings::* field;
+  uint8_t valueCount;
+  uint8_t defaultValue;     // value to reset to if the stored one is out of range
+  const StrId* valueNames;  // nullptr → boolean Show/Hide toggle
+  bool requiresClock;
+};
+
+template <size_t N>
+constexpr StatusBarItem enumItem(StrId label, uint8_t CrossPointSettings::* field, const StrId (&names)[N],
+                                 uint8_t defaultValue) {
+  return {label, field, static_cast<uint8_t>(N), defaultValue, names, false};
+}
+constexpr StatusBarItem toggleItem(StrId label, uint8_t CrossPointSettings::* field, bool requiresClock = false) {
+  return {label, field, 2, 1, nullptr, requiresClock};
+}
+
+const StatusBarItem statusBarItems[] = {
+    enumItem(StrId::STR_STATUS_ITEMS_POSITION, &CrossPointSettings::statusBarItemsPosition, statusItemsPositionNames,
+             CrossPointSettings::STATUS_BAR_ITEMS_POSITION::STATUS_BAR_ITEMS_BOTTOM),
+    toggleItem(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount),
+    toggleItem(StrId::STR_PRINTED_PAGE_NUMBER, &CrossPointSettings::statusBarPrintedPage),
+    toggleItem(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage),
+    enumItem(StrId::STR_TITLE, &CrossPointSettings::statusBarTitle, titleNames,
+             CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE),
+    toggleItem(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery),
+    toggleItem(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock, /*requiresClock=*/true),
+    enumItem(StrId::STR_UPPER_PROGRESS_BAR, &CrossPointSettings::statusBarUpperProgressBar, progressBarNames,
+             CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS),
+    enumItem(StrId::STR_UPPER_PROGRESS_BAR_THICKNESS, &CrossPointSettings::statusBarUpperProgressBarThickness,
+             progressBarThicknessNames, CrossPointSettings::STATUS_BAR_PROGRESS_BAR_THICKNESS::PROGRESS_BAR_NORMAL),
+    enumItem(StrId::STR_LOWER_PROGRESS_BAR, &CrossPointSettings::statusBarLowerProgressBar, progressBarNames,
+             CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS),
+    enumItem(StrId::STR_LOWER_PROGRESS_BAR_THICKNESS, &CrossPointSettings::statusBarLowerProgressBarThickness,
+             progressBarThicknessNames, CrossPointSettings::STATUS_BAR_PROGRESS_BAR_THICKNESS::PROGRESS_BAR_NORMAL),
+};
+
+// Map a visible row index (clock rows omitted when the clock is off) to its entry in statusBarItems.
+const StatusBarItem& visibleItem(int visibleIndex) {
+  int seen = 0;
+  for (const auto& item : statusBarItems) {
+    if (item.requiresClock && !SETTINGS.useClock) {
+      continue;
+    }
+    if (seen == visibleIndex) {
+      return item;
+    }
+    ++seen;
+  }
+  return statusBarItems[0];  // out-of-range guard; callers clamp the index first
+}
+
+int visibleItemCount() {
+  return static_cast<int>(
+      std::count_if(std::begin(statusBarItems), std::end(statusBarItems),
+                    [](const StatusBarItem& item) { return !item.requiresClock || SETTINGS.useClock; }));
+}
+
+// Retained for the progress-bar preview drawing below, which references specific enum cardinalities.
 constexpr int PROGRESS_BAR_ITEMS = 3;
-const StrId progressBarNames[PROGRESS_BAR_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
-
-constexpr int PROGRESS_BAR_THICKNESS_ITEMS = 3;
-const StrId progressBarThicknessNames[PROGRESS_BAR_THICKNESS_ITEMS] = {
-    StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK};
-
-constexpr int TITLE_ITEMS = 3;
-const StrId titleNames[TITLE_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
-
-constexpr int STATUS_ITEMS_POSITION_ITEMS = 2;
-const StrId statusItemsPositionNames[STATUS_ITEMS_POSITION_ITEMS] = {StrId::STR_TOP, StrId::STR_BOTTOM};
 
 constexpr int previewHorizontalInset = 10;
 constexpr int previewHeight = 78;
@@ -60,8 +109,8 @@ void drawPreviewProgressBar(const GfxRenderer& renderer, const Rect& rect, const
 void drawPreviewStatusItems(const GfxRenderer& renderer, const Rect& rect, const ThemeMetrics& metrics) {
   const bool hasProgressText = SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage;
   const bool hasTitle = SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE;
-  const bool hasStatusItems =
-      hasProgressText || hasTitle || SETTINGS.statusBarBattery || (SETTINGS.useClock && SETTINGS.statusBarClock);
+  const bool hasStatusItems = hasProgressText || hasTitle || SETTINGS.statusBarBattery ||
+                              SETTINGS.statusBarPrintedPage || (SETTINGS.useClock && SETTINGS.statusBarClock);
   if (!hasStatusItems) {
     return;
   }
@@ -94,7 +143,14 @@ void drawPreviewStatusItems(const GfxRenderer& renderer, const Rect& rect, const
     renderer.drawText(SMALL_FONT_ID, clockX, textY, "00:00");
   }
 
+  // Right-aligned zone: the printed ("physical") page label sits to the LEFT of the device page
+  // counter as a parenthesised hint, matching BaseTheme::drawStatusBar. Example label "(vii)".
+  const char* printedLabel = SETTINGS.statusBarPrintedPage ? "(vii)" : "";
+  const int printedLabelWidth = *printedLabel ? renderer.getTextWidth(SMALL_FONT_ID, printedLabel) : 0;
+  const int printedLabelGap = printedLabelWidth > 0 && hasProgressText ? 8 : 0;
+
   int progressTextWidth = 0;
+  const int rightEdge = rect.x + rect.width - previewInnerMargin - 2;
   if (hasProgressText) {
     char progressStr[32] = "";
     if (SETTINGS.statusBarChapterPageCount && SETTINGS.statusBarBookProgressPercentage) {
@@ -105,9 +161,16 @@ void drawPreviewStatusItems(const GfxRenderer& renderer, const Rect& rect, const
       snprintf(progressStr, sizeof(progressStr), "%d/%d", 8, 32);
     }
 
-    progressTextWidth = renderer.getTextWidth(SMALL_FONT_ID, progressStr);
-    renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - previewInnerMargin - 2 - progressTextWidth, textY,
-                      progressStr);
+    const int progressStrWidth = renderer.getTextWidth(SMALL_FONT_ID, progressStr);
+    progressTextWidth = progressStrWidth + printedLabelGap + printedLabelWidth;
+    renderer.drawText(SMALL_FONT_ID, rightEdge - progressStrWidth, textY, progressStr);
+    if (printedLabelWidth > 0) {
+      renderer.drawText(SMALL_FONT_ID, rightEdge - progressStrWidth - printedLabelGap - printedLabelWidth, textY,
+                        printedLabel);
+    }
+  } else if (printedLabelWidth > 0) {
+    progressTextWidth = printedLabelWidth;
+    renderer.drawText(SMALL_FONT_ID, rightEdge - printedLabelWidth, textY, printedLabel);
   }
 
   if (!hasTitle) {
@@ -147,36 +210,16 @@ void drawPreviewStatusItems(const GfxRenderer& renderer, const Rect& rect, const
 void StatusBarSettingsActivity::onEnter() {
   Activity::onEnter();
 
-  const int menuCount = SETTINGS.useClock ? MENU_ITEMS_WITH_CLOCK : MENU_ITEMS_NO_CLOCK;
-  if (selectedIndex >= menuCount) {
+  if (selectedIndex >= visibleItemCount()) {
     selectedIndex = 0;
   }
 
-  // Clamp status bar settings in case of corrupt/migrated data.
-  if (SETTINGS.statusBarUpperProgressBar >= PROGRESS_BAR_ITEMS) {
-    SETTINGS.statusBarUpperProgressBar = CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
-  }
-
-  if (SETTINGS.statusBarLowerProgressBar >= PROGRESS_BAR_ITEMS) {
-    SETTINGS.statusBarLowerProgressBar = CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
-  }
-
-  if (SETTINGS.statusBarUpperProgressBarThickness >= PROGRESS_BAR_THICKNESS_ITEMS) {
-    SETTINGS.statusBarUpperProgressBarThickness =
-        CrossPointSettings::STATUS_BAR_PROGRESS_BAR_THICKNESS::PROGRESS_BAR_NORMAL;
-  }
-
-  if (SETTINGS.statusBarLowerProgressBarThickness >= PROGRESS_BAR_THICKNESS_ITEMS) {
-    SETTINGS.statusBarLowerProgressBarThickness =
-        CrossPointSettings::STATUS_BAR_PROGRESS_BAR_THICKNESS::PROGRESS_BAR_NORMAL;
-  }
-
-  if (SETTINGS.statusBarItemsPosition >= STATUS_ITEMS_POSITION_ITEMS) {
-    SETTINGS.statusBarItemsPosition = CrossPointSettings::STATUS_BAR_ITEMS_POSITION::STATUS_BAR_ITEMS_BOTTOM;
-  }
-
-  if (SETTINGS.statusBarTitle >= TITLE_ITEMS) {
-    SETTINGS.statusBarTitle = CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE;
+  // Clamp status bar settings in case of corrupt/migrated data: every field must hold a valid value
+  // index (0..valueCount-1). A stray value would index past its valueNames array when rendered.
+  for (const auto& item : statusBarItems) {
+    if (SETTINGS.*item.field >= item.valueCount) {
+      SETTINGS.*item.field = item.defaultValue;
+    }
   }
 
   requestUpdate();
@@ -197,49 +240,14 @@ void StatusBarSettingsActivity::loop() {
   }
 
   // Handle navigation
-  const int menuCount = SETTINGS.useClock ? MENU_ITEMS_WITH_CLOCK : MENU_ITEMS_NO_CLOCK;
+  const int menuCount = visibleItemCount();
   buttonNavigator.onNextList(selectedIndex, menuCount, [this] { requestUpdate(); });
   buttonNavigator.onPreviousList(selectedIndex, menuCount, [this] { requestUpdate(); });
 }
 
 void StatusBarSettingsActivity::handleSelection() {
-  // When clock is hidden, indices 6+ shift down by 1 (clock slot at index 5 is absent).
-  // We remap the logical index to match the menuNames array which always includes clock at slot 5.
-  const int logicalIndex = (!SETTINGS.useClock && selectedIndex >= 5) ? selectedIndex + 1 : selectedIndex;
-
-  if (logicalIndex == 0) {
-    // Status Items Position
-    SETTINGS.statusBarItemsPosition = (SETTINGS.statusBarItemsPosition + 1) % STATUS_ITEMS_POSITION_ITEMS;
-  } else if (logicalIndex == 1) {
-    // Chapter Page Count
-    SETTINGS.statusBarChapterPageCount = (SETTINGS.statusBarChapterPageCount + 1) % 2;
-  } else if (logicalIndex == 2) {
-    // Book Progress %
-    SETTINGS.statusBarBookProgressPercentage = (SETTINGS.statusBarBookProgressPercentage + 1) % 2;
-  } else if (logicalIndex == 3) {
-    // Title
-    SETTINGS.statusBarTitle = (SETTINGS.statusBarTitle + 1) % TITLE_ITEMS;
-  } else if (logicalIndex == 4) {
-    // Battery
-    SETTINGS.statusBarBattery = (SETTINGS.statusBarBattery + 1) % 2;
-  } else if (logicalIndex == 5 && SETTINGS.useClock) {
-    // Clock
-    SETTINGS.statusBarClock = (SETTINGS.statusBarClock + 1) % 2;
-  } else if (logicalIndex == 6) {
-    // Upper Progress Bar
-    SETTINGS.statusBarUpperProgressBar = (SETTINGS.statusBarUpperProgressBar + 1) % PROGRESS_BAR_ITEMS;
-  } else if (logicalIndex == 7) {
-    // Upper Progress Bar Thickness
-    SETTINGS.statusBarUpperProgressBarThickness =
-        (SETTINGS.statusBarUpperProgressBarThickness + 1) % PROGRESS_BAR_THICKNESS_ITEMS;
-  } else if (logicalIndex == 8) {
-    // Lower Progress Bar
-    SETTINGS.statusBarLowerProgressBar = (SETTINGS.statusBarLowerProgressBar + 1) % PROGRESS_BAR_ITEMS;
-  } else if (logicalIndex == 9) {
-    // Lower Progress Bar Thickness
-    SETTINGS.statusBarLowerProgressBarThickness =
-        (SETTINGS.statusBarLowerProgressBarThickness + 1) % PROGRESS_BAR_THICKNESS_ITEMS;
-  }
+  const StatusBarItem& item = visibleItem(selectedIndex);
+  SETTINGS.*item.field = (SETTINGS.*item.field + 1) % item.valueCount;
   SETTINGS.saveToFile();
 }
 
@@ -259,43 +267,17 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
   const int previewAreaHeight = previewLabelHeight + previewHeight + metrics.verticalSpacing * 2;
   const int contentHeight =
       pageHeight - contentTop - metrics.buttonHintsHeight - previewAreaHeight - metrics.verticalSpacing * 2;
-  const int menuCount = SETTINGS.useClock ? MENU_ITEMS_WITH_CLOCK : MENU_ITEMS_NO_CLOCK;
   GUI.drawList(
-      renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(menuCount),
-      static_cast<int>(selectedIndex),
+      renderer, Rect{0, contentTop, pageWidth, contentHeight}, visibleItemCount(), static_cast<int>(selectedIndex),
+      [](int index) { return std::string(I18N.get(visibleItem(index).label)); }, nullptr, nullptr,
       [](int index) {
-        const int logicalIndex = (!SETTINGS.useClock && index >= 5) ? index + 1 : index;
-        return std::string(I18N.get(menuNames[logicalIndex]));
-      },
-      nullptr, nullptr,
-      [this](int index) {
-        // When clock is hidden, indices 6+ shift down by 1 in the display list but we still
-        // index into menuNames which has clock at slot 5. Remap for value display.
-        const int logicalIndex = (!SETTINGS.useClock && index >= 5) ? index + 1 : index;
-
-        if (logicalIndex == 0) {
-          return I18N.get(statusItemsPositionNames[SETTINGS.statusBarItemsPosition]);
-        } else if (logicalIndex == 1) {
-          return SETTINGS.statusBarChapterPageCount ? tr(STR_SHOW) : tr(STR_HIDE);
-        } else if (logicalIndex == 2) {
-          return SETTINGS.statusBarBookProgressPercentage ? tr(STR_SHOW) : tr(STR_HIDE);
-        } else if (logicalIndex == 3) {
-          return I18N.get(titleNames[SETTINGS.statusBarTitle]);
-        } else if (logicalIndex == 4) {
-          return SETTINGS.statusBarBattery ? tr(STR_SHOW) : tr(STR_HIDE);
-        } else if (logicalIndex == 5) {
-          return SETTINGS.statusBarClock ? tr(STR_SHOW) : tr(STR_HIDE);
-        } else if (logicalIndex == 6) {
-          return I18N.get(progressBarNames[SETTINGS.statusBarUpperProgressBar]);
-        } else if (logicalIndex == 7) {
-          return I18N.get(progressBarThicknessNames[SETTINGS.statusBarUpperProgressBarThickness]);
-        } else if (logicalIndex == 8) {
-          return I18N.get(progressBarNames[SETTINGS.statusBarLowerProgressBar]);
-        } else if (logicalIndex == 9) {
-          return I18N.get(progressBarThicknessNames[SETTINGS.statusBarLowerProgressBarThickness]);
-        } else {
-          return tr(STR_HIDE);
+        const StatusBarItem& item = visibleItem(index);
+        const uint8_t value = SETTINGS.*item.field;
+        // Enum rows show their named value; toggle rows (no valueNames) show Show/Hide.
+        if (item.valueNames) {
+          return I18N.get(item.valueNames[value]);
         }
+        return value ? tr(STR_SHOW) : tr(STR_HIDE);
       },
       true);
 

@@ -16,6 +16,9 @@ class FontCacheManager {
   void setFontDecompressor(FontDecompressor* d);
 
   void clearCache();
+  // Prewarm one font's glyphs for the given text. Appends into existing page slots
+  // WITHOUT clearing them (multi-font pages call this once per font); clear once via
+  // clearCache() before a batch — endScanAndPrewarm() does exactly that.
   void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
   void logStats(const char* label = "render");
   void resetStats();

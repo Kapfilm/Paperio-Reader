@@ -7,6 +7,7 @@
 
 #include <algorithm>
 
+#include "ImageFormatDetector.h"
 #include "converters/GifToFramebufferConverter.h"
 #include "converters/JpegToFramebufferConverter.h"
 #include "converters/PngToFramebufferConverter.h"
@@ -16,22 +17,19 @@ constexpr const char* kImagesBinFile = "/images.bin";
 // Enough to find any JPEG SOF marker, PNG IHDR chunk, or GIF logical-screen header.
 constexpr size_t kHeaderBufSize = 4 * 1024;
 
-std::string extractedPathFor(const std::string& cachePath, const std::string& epubEntryPath) {
-  // Use only the basename so the path stays short and is spine-agnostic.
-  const size_t slash = epubEntryPath.rfind('/');
-  const std::string basename = (slash != std::string::npos) ? epubEntryPath.substr(slash + 1) : epubEntryPath;
-  return cachePath + "/img/" + basename;
-}
-
-// Mirror the formats the parser's render-time probe (ImageDecoderFactory) supports, by sniffing
-// the magic bytes — so any image the parser would lay out can be resolved here.
+// Parse image dimensions by detecting format and delegating to the appropriate converter.
 bool parseImageDimensions(const uint8_t* buf, size_t n, ImageDimensions& dims) {
-  if (n >= 2 && buf[0] == 0xFF && buf[1] == 0xD8)
-    return JpegToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
-  if (n >= 8 && buf[0] == 0x89 && buf[1] == 0x50)
-    return PngToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
-  if (n >= 10 && buf[0] == 'G' && buf[1] == 'I' && buf[2] == 'F')
-    return GifToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
+  const auto fmt = ImageFormatDetector::detect(buf, n);
+  switch (fmt) {
+    case ImageFormatDetector::Format::Jpeg:
+      return JpegToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
+    case ImageFormatDetector::Format::Png:
+      return PngToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
+    case ImageFormatDetector::Format::Gif:
+      return GifToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
+    case ImageFormatDetector::Format::Unknown:
+      return false;
+  }
   return false;
 }
 }  // namespace
@@ -65,6 +63,21 @@ bool EpubImageManifest::load(const std::string& cachePath) {
 
   uint16_t count = 0;
   serialization::readPod(f, count);
+  // A corrupt/truncated images.bin must not steer reserve() into a multi-MB allocation that aborts
+  // the firmware (uncaught bad_alloc, -fno-exceptions). The smallest possible on-disk entry is one
+  // u32 string-length prefix (empty key) + width + height (two int16) = 8 B, so a count that can't
+  // fit in the bytes left in the file is garbage. A bad header means the rest is untrustworthy too:
+  // drop the whole cache and start empty — ensureResolved() refills it and the next persist
+  // overwrites the corrupt file.
+  const int remaining = f.available();
+  const uint32_t maxPlausible = remaining > 0 ? static_cast<uint32_t>(remaining) / 8u : 0u;
+  if (count > maxPlausible) {
+    LOG_ERR("IMF", "images.bin count %u exceeds file capacity %u; ignoring cache", count, maxPlausible);
+    f.close();
+    entries_.clear();
+    loaded_ = true;
+    return true;
+  }
   entries_.reserve(count);
 
   for (uint16_t i = 0; i < count; ++i) {
@@ -72,11 +85,6 @@ bool EpubImageManifest::load(const std::string& cachePath) {
     if (!serialization::readString(f, e.epubEntryPath)) break;
     serialization::readPod(f, e.width);
     serialization::readPod(f, e.height);
-    serialization::readPod(f, e.method);
-    serialization::readPod(f, e.compressedSize);
-    serialization::readPod(f, e.uncompressedSize);
-    serialization::readPod(f, e.localHeaderOffset);
-    if (!serialization::readString(f, e.extractedPath)) break;
     entries_.push_back(std::move(e));
   }
 
@@ -134,11 +142,6 @@ const ImageManifestEntry* EpubImageManifest::ensureResolved(const std::string& e
       e.epubEntryPath = epubEntryPath;  // caller passes the normalised key
       e.width = dims.width;
       e.height = dims.height;
-      e.method = stat.method;
-      e.compressedSize = stat.compressedSize;
-      e.uncompressedSize = stat.uncompressedSize;
-      e.localHeaderOffset = stat.localHeaderOffset;
-      e.extractedPath = extractedPathFor(cachePath_, epubEntryPath);
 
       // Insert keeping entries_ sorted so find()'s binary search stays valid.
       auto it = std::lower_bound(entries_.begin(), entries_.end(), epubEntryPath,
@@ -195,11 +198,6 @@ void EpubImageManifest::persistIfDirty() {
     serialization::writeString(f, e.epubEntryPath);
     serialization::writePod(f, e.width);
     serialization::writePod(f, e.height);
-    serialization::writePod(f, e.method);
-    serialization::writePod(f, e.compressedSize);
-    serialization::writePod(f, e.uncompressedSize);
-    serialization::writePod(f, e.localHeaderOffset);
-    serialization::writeString(f, e.extractedPath);
   }
   f.flush();
   f.close();

@@ -13,7 +13,10 @@
 
 #include <cctype>
 #include <cstring>
+#include <limits>
+#include <optional>
 
+#include "Epub/ImageFormatDetector.h"
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/PageListSink.h"
@@ -23,27 +26,17 @@
 
 namespace {
 
-enum class CoverImageFormat { Unknown, Jpeg, Png };
-
-CoverImageFormat detectCoverImageFormat(FsFile& imageFile) {
+// Wrapper around ImageFormatDetector that reads from file and seeks to origin
+ImageFormatDetector::Format detectCoverImageFormat(FsFile& imageFile) {
   if (!imageFile || !imageFile.seek(0)) {
-    return CoverImageFormat::Unknown;
+    return ImageFormatDetector::Format::Unknown;
   }
 
   uint8_t header[8] = {};
   const int readBytes = imageFile.read(header, sizeof(header));
   imageFile.seek(0);
 
-  if (readBytes >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) {
-    return CoverImageFormat::Jpeg;
-  }
-
-  constexpr uint8_t PNG_SIGNATURE[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
-  if (readBytes >= 8 && memcmp(header, PNG_SIGNATURE, sizeof(PNG_SIGNATURE)) == 0) {
-    return CoverImageFormat::Png;
-  }
-
-  return CoverImageFormat::Unknown;
+  return ImageFormatDetector::detect(header, readBytes);
 }
 
 }  // namespace
@@ -262,17 +255,11 @@ bool Epub::parseTocNcxFile() const {
 
   LOG_DBG("EBP", "Parsing toc ncx file: %s", tocNcxItem.c_str());
 
-  const auto tmpNcxPath = getCachePath() + "/toc.ncx";
-  FsFile tempNcxFile;
-  if (!Storage.openFileForWrite("EBP", tmpNcxPath, tempNcxFile)) {
+  size_t ncxSize = 0;
+  if (!getItemSize(tocNcxItem, &ncxSize)) {
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-  readItemContentsToStream(tocNcxItem, tempNcxFile, 1024);
-  tempNcxFile.close();
-  if (!Storage.openFileForRead("EBP", tmpNcxPath, tempNcxFile)) {
-    return false;
-  }
-  const auto ncxSize = tempNcxFile.size();
 
   // Stream <pageList> entries straight to pagelist.bin (long printed-page lists used to
   // blow the X3 heap when accumulated in a std::vector — see PageListSink).
@@ -281,33 +268,15 @@ bool Epub::parseTocNcxFile() const {
 
   if (!ncxParser.setup()) {
     LOG_ERR("EBP", "Could not setup toc ncx parser");
-    tempNcxFile.close();
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
-  const auto ncxBuffer = static_cast<uint8_t*>(malloc(1024));
-  if (!ncxBuffer) {
-    LOG_ERR("EBP", "Could not allocate memory for toc ncx parser");
-    tempNcxFile.close();
+  if (!readItemContentsToStream(tocNcxItem, ncxParser, 1024)) {
+    LOG_ERR("EBP", "Could not stream toc ncx data");
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-
-  while (tempNcxFile.available()) {
-    const auto readSize = tempNcxFile.read(ncxBuffer, 1024);
-    if (readSize == 0) break;
-    const auto processedSize = ncxParser.write(ncxBuffer, readSize);
-
-    if (processedSize != readSize) {
-      LOG_ERR("EBP", "Could not process all toc ncx data");
-      free(ncxBuffer);
-      tempNcxFile.close();
-      return false;
-    }
-  }
-
-  free(ncxBuffer);
-  tempNcxFile.close();
-  Storage.remove(tmpNcxPath.c_str());
 
   // Flush u16 count + close pagelist.bin (or remove it if no <pageList> entries were
   // streamed). The section builder later reads this file to stamp printed-page labels
@@ -327,17 +296,11 @@ bool Epub::parseTocNavFile() const {
 
   LOG_DBG("EBP", "Parsing toc nav file: %s", tocNavItem.c_str());
 
-  const auto tmpNavPath = getCachePath() + "/toc.nav";
-  FsFile tempNavFile;
-  if (!Storage.openFileForWrite("EBP", tmpNavPath, tempNavFile)) {
+  size_t navSize = 0;
+  if (!getItemSize(tocNavItem, &navSize)) {
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-  readItemContentsToStream(tocNavItem, tempNavFile, 1024);
-  tempNavFile.close();
-  if (!Storage.openFileForRead("EBP", tmpNavPath, tempNavFile)) {
-    return false;
-  }
-  const auto navSize = tempNavFile.size();
 
   // Note: We can't use `contentBasePath` here as the nav file may be in a different folder to the content.opf
   // and the HTMLX nav file will have hrefs relative to itself
@@ -348,30 +311,15 @@ bool Epub::parseTocNavFile() const {
 
   if (!navParser.setup()) {
     LOG_ERR("EBP", "Could not setup toc nav parser");
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
-  const auto navBuffer = static_cast<uint8_t*>(malloc(1024));
-  if (!navBuffer) {
-    LOG_ERR("EBP", "Could not allocate memory for toc nav parser");
+  if (!readItemContentsToStream(tocNavItem, navParser, 1024)) {
+    LOG_ERR("EBP", "Could not stream toc nav data");
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-
-  while (tempNavFile.available()) {
-    const auto readSize = tempNavFile.read(navBuffer, 1024);
-    const auto processedSize = navParser.write(navBuffer, readSize);
-
-    if (processedSize != readSize) {
-      LOG_ERR("EBP", "Could not process all toc nav data");
-      free(navBuffer);
-      tempNavFile.close();
-      return false;
-    }
-  }
-
-  free(navBuffer);
-  tempNavFile.close();
-  Storage.remove(tmpNavPath.c_str());
 
   // Flush u16 count + close pagelist.bin (or remove it if no entries were streamed).
   navPageListSink.finalize();
@@ -390,17 +338,11 @@ bool Epub::parsePageMapFile() const {
 
   LOG_DBG("EBP", "Parsing page-map file: %s", pageMapItem.c_str());
 
-  const auto tmpPageMapPath = getCachePath() + "/page-map.xml";
-  FsFile tempPageMapFile;
-  if (!Storage.openFileForWrite("EBP", tmpPageMapPath, tempPageMapFile)) {
+  size_t pageMapSize = 0;
+  if (!getItemSize(pageMapItem, &pageMapSize)) {
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-  readItemContentsToStream(pageMapItem, tempPageMapFile, 1024);
-  tempPageMapFile.close();
-  if (!Storage.openFileForRead("EBP", tmpPageMapPath, tempPageMapFile)) {
-    return false;
-  }
-  const auto pageMapSize = tempPageMapFile.size();
 
   // page-map hrefs are relative to the page-map file itself (typically content.opf's dir).
   const std::string pageMapBasePath = pageMapItem.substr(0, pageMapItem.find_last_of('/') + 1);
@@ -410,32 +352,15 @@ bool Epub::parsePageMapFile() const {
 
   if (!pageMapParser.setup()) {
     LOG_ERR("EBP", "Could not setup page-map parser");
-    tempPageMapFile.close();
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
 
-  const auto pageMapBuffer = static_cast<uint8_t*>(malloc(1024));
-  if (!pageMapBuffer) {
-    LOG_ERR("EBP", "Could not allocate memory for page-map parser");
-    tempPageMapFile.close();
+  if (!readItemContentsToStream(pageMapItem, pageMapParser, 1024)) {
+    LOG_ERR("EBP", "Could not stream page-map data");
+    Storage.remove((getCachePath() + "/pagelist.bin").c_str());
     return false;
   }
-
-  while (tempPageMapFile.available()) {
-    const auto readSize = tempPageMapFile.read(pageMapBuffer, 1024);
-    if (readSize == 0) break;
-    const auto processedSize = pageMapParser.write(pageMapBuffer, readSize);
-    if (processedSize != readSize) {
-      LOG_ERR("EBP", "Could not process all page-map data");
-      free(pageMapBuffer);
-      tempPageMapFile.close();
-      return false;
-    }
-  }
-
-  free(pageMapBuffer);
-  tempPageMapFile.close();
-  Storage.remove(tmpPageMapPath.c_str());
 
   pageMapPageListSink.finalize();
   LOG_DBG("EBP", "Parsed page-map entries");
@@ -578,7 +503,7 @@ void Epub::parseCssFiles() const {
 // load in the meta data for the epub file
 bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   LOG_DBG("EBP", "Loading ePub: %s", filepath.c_str());
-  tocReliabilityState = -1;
+  tocReliability = TocReliability::Unknown;
 
   // Initialize spine/TOC cache
   bookMetadataCache.reset(new BookMetadataCache(cachePath));
@@ -652,15 +577,21 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   }
 
   bool tocParsed = false;
+  bool navAttempted = false;
 
   // Try EPUB 3 nav document first (preferred)
   if (!tocNavItem.empty()) {
+    navAttempted = true;
     LOG_DBG("EBP", "Attempting to parse EPUB 3 nav document");
     tocParsed = parseTocNavFile();
   }
 
   // Fall back to NCX if nav parsing failed or wasn't available
   if (!tocParsed && !tocNcxItem.empty()) {
+    if (navAttempted && !bookMetadataCache->resetTocPassOutput()) {
+      LOG_ERR("EBP", "Could not reset TOC temp output before NCX fallback");
+      return false;
+    }
     LOG_DBG("EBP", "Falling back to NCX TOC");
     tocParsed = parseTocNcxFile();
   }
@@ -858,9 +789,9 @@ bool Epub::coverImageCachedValidOnly() const {
     return true;  // can't open to validate — assume valid, let the decode fail if needed
   }
   const bool nonEmpty = existing.size() > 0;
-  const CoverImageFormat fmt = detectCoverImageFormat(existing);
+  const auto fmt = detectCoverImageFormat(existing);
   existing.close();
-  return nonEmpty && fmt != CoverImageFormat::Unknown;
+  return nonEmpty && fmt != ImageFormatDetector::Format::Unknown;
 }
 
 bool Epub::coverImageCachedAndValid(bool allowExtract) const {
@@ -876,9 +807,9 @@ bool Epub::ensureCoverImageCached() const {
   if (Storage.exists(coverCachePath.c_str())) {
     FsFile existing;
     if (Storage.openFileForRead("EBP", coverCachePath, existing)) {
-      const CoverImageFormat fmt = detectCoverImageFormat(existing);
+      const auto fmt = detectCoverImageFormat(existing);
       existing.close();
-      if (fmt != CoverImageFormat::Unknown) return true;
+      if (fmt != ImageFormatDetector::Format::Unknown) return true;
     } else {
       existing.close();
       return true;  // can't open to validate — assume valid, let generateThumbBmp fail if needed
@@ -943,9 +874,9 @@ bool Epub::ensureCoverImageCached() const {
 
   if (!Storage.openFileForRead("EBP", coverCachePath, coverFile)) return false;
   const bool empty = coverFile.size() == 0;
-  const CoverImageFormat fmt = empty ? CoverImageFormat::Unknown : detectCoverImageFormat(coverFile);
+  const auto fmt = empty ? ImageFormatDetector::Format::Unknown : detectCoverImageFormat(coverFile);
   coverFile.close();
-  if (empty || fmt == CoverImageFormat::Unknown) {
+  if (empty || fmt == ImageFormatDetector::Format::Unknown) {
     LOG_ERR("EBP", "Cover image %s: %s", empty ? "extracted as empty file" : "has unsupported format",
             coverImageHref.c_str());
     Storage.remove(coverCachePath.c_str());
@@ -988,9 +919,9 @@ bool Epub::generateCoverBmp(bool cropped) const {
   if (!Storage.openFileForRead("EBP", coverCachePath, coverImage)) return false;
 
   const auto detectedFormat = detectCoverImageFormat(coverImage);
-  if (detectedFormat == CoverImageFormat::Jpeg) {
+  if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     LOG_DBG("EBP", "Generating BMP from JPEG cover image (%s mode)", cropped ? "cropped" : "fit");
-  } else if (detectedFormat == CoverImageFormat::Png) {
+  } else if (detectedFormat == ImageFormatDetector::Format::Png) {
     LOG_DBG("EBP", "Generating BMP from PNG cover image (%s mode)", cropped ? "cropped" : "fit");
   } else {
     LOG_ERR("EBP", "Cover image has unsupported format");
@@ -1005,7 +936,7 @@ bool Epub::generateCoverBmp(bool cropped) const {
   }
 
   bool success = false;
-  if (detectedFormat == CoverImageFormat::Jpeg) {
+  if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     success = JpegToBmpConverter::jpegFileToBmpStream(coverImage, coverBmp, cropped);
   } else {
     success = PngToBmpConverter::pngFileToBmpStream(coverImage, coverBmp, cropped);
@@ -1072,7 +1003,7 @@ ThumbResult Epub::generateThumbBmp(int height, bool allowExtract) const {
   if (!Storage.openFileForRead("EBP", getCoverImageCachePath(), coverImage)) return ThumbResult::TransientFail;
 
   const auto detectedFormat = detectCoverImageFormat(coverImage);
-  if (detectedFormat == CoverImageFormat::Unknown) {
+  if (detectedFormat == ImageFormatDetector::Format::Unknown) {
     // Cover extracted but its format is unsupported — structural, re-extraction yields the same
     // bytes. Sentinel so we stop trying.
     LOG_ERR("EBP", "Cached cover image is not a supported format — writing structural sentinel");
@@ -1089,7 +1020,7 @@ ThumbResult Epub::generateThumbBmp(int height, bool allowExtract) const {
 
   const int thumbW = static_cast<int>(height * 0.6f);
   bool success = false;
-  if (detectedFormat == CoverImageFormat::Jpeg) {
+  if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     LOG_DBG("EBP", "Generating thumb BMP from JPEG cover image");
     success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, thumbW, height);
   } else {
@@ -1148,7 +1079,7 @@ ThumbResult Epub::generateThumbBmp(int width, int height, bool allowExtract) con
   if (!Storage.openFileForRead("EBP", getCoverImageCachePath(), coverImage)) return ThumbResult::TransientFail;
 
   const auto detectedFormat = detectCoverImageFormat(coverImage);
-  if (detectedFormat == CoverImageFormat::Unknown) {
+  if (detectedFormat == ImageFormatDetector::Format::Unknown) {
     // Cover extracted but its format is unsupported — structural, re-extraction yields the same
     // bytes. Sentinel so we stop trying.
     LOG_ERR("EBP", "Cached cover image is not a supported format — writing structural sentinel");
@@ -1164,7 +1095,7 @@ ThumbResult Epub::generateThumbBmp(int width, int height, bool allowExtract) con
   }
 
   bool success = false;
-  if (detectedFormat == CoverImageFormat::Jpeg) {
+  if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     LOG_DBG("EBP", "Generating %dx%d thumb BMP from JPEG cover image", width, height);
     success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, width, height);
   } else {
@@ -1342,12 +1273,12 @@ int Epub::getSpineIndexForTocIndex(const int tocIndex) const {
 }
 
 bool Epub::hasReliableToc() const {
-  if (tocReliabilityState != -1) {
-    return tocReliabilityState == 1;
+  if (tocReliability != TocReliability::Unknown) {
+    return tocReliability == TocReliability::Reliable;
   }
 
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
-    tocReliabilityState = 0;
+    tocReliability = TocReliability::Unreliable;
     return false;
   }
 
@@ -1355,7 +1286,7 @@ bool Epub::hasReliableToc() const {
   // This avoids the O(tocCount) seek-heavy scan that previously fired on first page load
   // for every book — a large web-novel TOC (~3000 entries) added several seconds of latency.
   const bool reliable = bookMetadataCache->isTocReliable();
-  tocReliabilityState = reliable ? 1 : 0;
+  tocReliability = reliable ? TocReliability::Reliable : TocReliability::Unreliable;
   return reliable;
 }
 
@@ -1425,28 +1356,87 @@ float Epub::calculateProgress(const int currentSpineIndex, const float currentSp
   return totalProgress / static_cast<float>(bookSize);
 }
 
-std::vector<Epub::PrintedPageEntry> Epub::loadPrintedPageList() const {
-  std::vector<PrintedPageEntry> entries;
-  const auto pageListPath = getCachePath() + "/pagelist.bin";
-  if (!Storage.exists(pageListPath.c_str())) {
-    return entries;
+void Epub::streamPrintedPageEntries(
+    const std::string& path,
+    const std::function<bool(const std::string&, const std::string&, const std::string&)>& visit) {
+  if (!Storage.exists(path.c_str())) {
+    return;
   }
   FsFile f;
-  if (!Storage.openFileForRead("EBP", pageListPath, f)) {
-    return entries;
+  if (!Storage.openFileForRead("EBP", path, f)) {
+    return;
   }
   uint16_t count = 0;
   serialization::readPod(f, count);
-  entries.reserve(count);
+  // Reused across iterations — labels/hrefs are short, so this never grows into the ~200 KB block
+  // the full list would reserve. count is never used to pre-size anything: a corrupt/oversized
+  // count simply runs the loop until readString hits EOF or a malformed field and we stop.
+  std::string href, anchor, label;
   for (uint16_t i = 0; i < count; i++) {
-    PrintedPageEntry e;
-    serialization::readString(f, e.href);
-    serialization::readString(f, e.anchor);
-    serialization::readString(f, e.label);
-    entries.push_back(std::move(e));
+    if (!serialization::readString(f, href) || !serialization::readString(f, anchor) ||
+        !serialization::readString(f, label)) {
+      break;  // malformed / oversized field: stop rather than risk desync
+    }
+    if (!visit(href, anchor, label)) {
+      break;
+    }
   }
   f.close();
-  return entries;
+}
+
+// Mirror of parsePrintedPageLabel (EpubReaderActivity): non-empty, all digits, <= 999999.
+static std::optional<int> parseNumericPageLabel(const std::string& label) {
+  if (label.empty()) return std::nullopt;
+  int value = 0;
+  for (char c : label) {
+    if (c < '0' || c > '9') return std::nullopt;
+    value = value * 10 + (c - '0');
+    if (value > 999999) return std::nullopt;
+  }
+  return value;
+}
+
+bool Epub::hasNumericPrintedPages() const {
+  bool found = false;
+  streamPrintedPageEntries(getCachePath() + "/pagelist.bin",
+                           [&](const std::string&, const std::string&, const std::string& label) {
+                             if (parseNumericPageLabel(label)) {
+                               found = true;
+                               return false;  // short-circuit
+                             }
+                             return true;
+                           });
+  return found;
+}
+
+bool Epub::getPrintedPageLabelRange(int& minLabel, int& maxLabel) const {
+  int lo = std::numeric_limits<int>::max();
+  int hi = std::numeric_limits<int>::min();
+  streamPrintedPageEntries(getCachePath() + "/pagelist.bin",
+                           [&](const std::string&, const std::string&, const std::string& label) {
+                             if (const auto n = parseNumericPageLabel(label)) {
+                               if (*n < lo) lo = *n;
+                               if (*n > hi) hi = *n;
+                             }
+                             return true;
+                           });
+  if (hi < lo) return false;  // no numeric labels
+  minLabel = lo;
+  maxLabel = hi;
+  return true;
+}
+
+std::optional<Epub::PrintedPageEntry> Epub::findPrintedPageByLabel(int target) const {
+  std::optional<PrintedPageEntry> match;
+  streamPrintedPageEntries(getCachePath() + "/pagelist.bin",
+                           [&](const std::string& href, const std::string& anchor, const std::string& label) {
+                             if (const auto n = parseNumericPageLabel(label); n && *n == target) {
+                               match = PrintedPageEntry{href, anchor, label};
+                               return false;  // first match wins (file order)
+                             }
+                             return true;
+                           });
+  return match;
 }
 
 int Epub::resolveHrefToSpineIndex(const std::string& href) const {

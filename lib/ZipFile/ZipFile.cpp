@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "../Epub/Epub/HashUtils.h"
+
 struct ZipInflateCtx {
   InflateReader reader;  // Must be first — callback casts uzlib_uncomp* to ZipInflateCtx*
   FsFile* file = nullptr;
@@ -304,7 +306,7 @@ int ZipFile::fillUncompressedSizes(const std::vector<SizeTarget>& targets, std::
       file.read(itemName, nameLen);
       itemName[nameLen] = '\0';
 
-      uint64_t hash = fnvHash64(itemName, nameLen);
+      uint64_t hash = HashUtils::fnvHash64(itemName, nameLen);
       SizeTarget key = {hash, nameLen, 0};
 
       auto it = std::lower_bound(targets.begin(), targets.end(), key, [](const SizeTarget& a, const SizeTarget& b) {

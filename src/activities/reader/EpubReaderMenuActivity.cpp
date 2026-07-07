@@ -10,6 +10,11 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+// Keep in sync with the default in EpubReaderActivity.h — see the comment there for rationale.
+#ifndef ENABLE_BENCHMARKS
+#define ENABLE_BENCHMARKS 0
+#endif
+
 namespace {
 // Three-state cycle helper for overrides represented as int8_t with -1 = default.
 // Mirrors the helpers in QuickOverridesActivity.cpp; kept duplicated rather
@@ -198,7 +203,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                                  s->pendingSdFontFamilyOverride.clear();
                                }
                              })
-                             .withSubmenu(StrId::STR_READER_OVERRIDES);
+                             .withSubmenu(StrId::STR_READER_OVERRIDES)
+                             .withSelectorActivity();
 
     familySetting.enumLabels = {tr(STR_DEFAULT_VALUE), tr(STR_BOOKERLY), tr(STR_NOTO_SANS)};
     for (const auto& fam : families) {
@@ -223,7 +229,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                             auto* s = static_cast<EpubReaderMenuActivity*>(ctx);
                             s->pendingFontSizeOverride = (v == 0) ? -1 : static_cast<int8_t>(v - 1);
                           })
-                          .withSubmenu(StrId::STR_READER_OVERRIDES));
+                          .withSubmenu(StrId::STR_READER_OVERRIDES)
+                          .withSelectorActivity());
 
   // Text darkness: straightforward 0-3 cycle
   menuItems.push_back(
@@ -234,7 +241,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
             return static_cast<const EpubReaderMenuActivity*>(ctx)->pendingTextDarkness;
           },
           [](void* ctx, uint8_t v) { static_cast<EpubReaderMenuActivity*>(ctx)->pendingTextDarkness = v; })
-          .withSubmenu(StrId::STR_READER_OVERRIDES));
+          .withSubmenu(StrId::STR_READER_OVERRIDES)
+          .withSelectorActivity());
 
   menuItems.push_back(
       SettingInfo::DynamicEnumCtx(
@@ -261,7 +269,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                             auto* s = static_cast<EpubReaderMenuActivity*>(ctx);
                             s->pendingParagraphAlignmentOverride = (v == 0) ? -1 : static_cast<int8_t>(v - 1);
                           })
-                          .withSubmenu(StrId::STR_READER_OVERRIDES));
+                          .withSubmenu(StrId::STR_READER_OVERRIDES)
+                          .withSelectorActivity());
 
   // Text anti-aliasing: default / on / off (mirrors QuickOverrides)
   menuItems.push_back(
@@ -303,6 +312,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
 
   // --- Tools ---
   menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_TOOLS));
+  menuItems.push_back(
+      SettingInfo::Action(StrId::STR_BOOK_INFO, SettingAction::None).withSubmenu(StrId::STR_READER_TOOLS));
   menuItems.push_back(SettingInfo::Action(StrId::STR_READING_STATS_FOR_THIS_BOOK, SettingAction::None)
                           .withSubmenu(StrId::STR_READER_TOOLS));
   menuItems.push_back(
@@ -315,11 +326,11 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   menuItems.push_back(
       SettingInfo::Action(StrId::STR_DISPLAY_QR, SettingAction::None).withSubmenu(StrId::STR_READER_TOOLS));
   menuItems.push_back(SettingInfo::Action(StrId::STR_GO_HOME_BUTTON, SettingAction::None));
-#ifdef ENABLE_BENCHMARKS
+#if ENABLE_BENCHMARKS
   menuItems.push_back(SettingInfo::Separator(StrId::STR_NONE_OPT).withSubmenu(StrId::STR_READER_TOOLS));
   menuItems.push_back(
       SettingInfo::Action(StrId::STR_RENDER_BENCHMARK, SettingAction::None).withSubmenu(StrId::STR_READER_TOOLS));
-#endif
+#endif  // ENABLE_BENCHMARKS
 }
 
 EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForNameId(StrId nameId) {
@@ -364,6 +375,8 @@ EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForNameId(StrId
       return MenuAction::GO_HOME;
     case StrId::STR_READING_STATS_FOR_THIS_BOOK:
       return MenuAction::READING_STATS;
+    case StrId::STR_BOOK_INFO:
+      return MenuAction::BOOK_INFO;
     default:
       return MenuAction::NONE;
   }

@@ -2,6 +2,7 @@
 // Minimal stub for host/test builds — only the types needed to compile
 // CssParser.h and CssStyle.h without ESP32/SdFat dependencies.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -29,6 +30,16 @@ class HalFile : public Print {
     HalFile f;
     f.backing_ = std::move(content);
     f.hasData_ = true;
+    return f;
+  }
+
+  // Returns an empty read/write HalFile backed by an in-memory buffer — used by
+  // serialization round-trip tests (write, seek(0), read back). Default-constructed
+  // instances keep their historical no-op write semantics.
+  static HalFile forReadWrite() {
+    HalFile f;
+    f.hasData_ = true;
+    f.writable_ = true;
     return f;
   }
 
@@ -60,8 +71,20 @@ class HalFile : public Print {
   bool seek64(uint64_t) { return false; }
   bool seekSet64(uint64_t) { return false; }
   uint64_t position64() const { return pos_; }
-  size_t write(const void*, size_t) { return 0; }
-  size_t write(uint8_t) override { return 0; }
+  size_t write(const void* buf, size_t n) {
+    if (!writable_) return 0;
+    const auto* bytes = static_cast<const char*>(buf);
+    if (pos_ < backing_.size()) {
+      const size_t overlap = std::min(n, backing_.size() - pos_);
+      std::memcpy(&backing_[pos_], bytes, overlap);
+      backing_.append(bytes + overlap, n - overlap);
+    } else {
+      backing_.append(bytes, n);
+    }
+    pos_ += n;
+    return n;
+  }
+  size_t write(uint8_t b) override { return write(&b, 1); }
   bool rename(const char*) { return false; }
   bool getModifyDateTime(uint16_t*, uint16_t*) { return false; }
   bool isDirectory() const { return false; }
@@ -75,6 +98,7 @@ class HalFile : public Print {
   std::string backing_;
   size_t pos_ = 0;
   bool hasData_ = false;
+  bool writable_ = false;
 };
 
 using FsFile = HalFile;

@@ -290,6 +290,43 @@ struct SettingInfo {
   // Marked const because it mutates the external SETTINGS global (via valuePtr),
   // not the SettingInfo itself.
   void toggleValue() const;
+
+  // --- ENUM option accessors, used by the full-screen EnumSelectionActivity ---
+  // These mirror the read/write logic in getDisplayValue()/toggleValue() but expose
+  // the option set directly so a list selector can render every choice and jump to
+  // one, instead of cycling. enumLabels takes precedence over enumValues (see the
+  // enumLabels contract above). All are no-ops / empty for non-ENUM types.
+
+  // Number of selectable options (0 for non-ENUM).
+  [[nodiscard]] uint8_t getEnumOptionCount() const {
+    if (type != SettingType::ENUM) return 0;
+    return static_cast<uint8_t>(enumLabels.empty() ? enumValues.size() : enumLabels.size());
+  }
+
+  // Localised label for option `index` (empty if out of range or non-ENUM).
+  [[nodiscard]] std::string getEnumOptionLabel(uint8_t index) const {
+    if (type != SettingType::ENUM) return {};
+    if (!enumLabels.empty()) return index < enumLabels.size() ? enumLabels[index] : std::string{};
+    return index < enumValues.size() ? std::string(I18N.get(enumValues[index])) : std::string{};
+  }
+
+  // Currently selected option index (0 if unreadable).
+  [[nodiscard]] uint8_t getEnumSelectedIndex() const {
+    if (type != SettingType::ENUM) return 0;
+    if (valuePtr) return SETTINGS.*(valuePtr);
+    if (valueGetter) return callValueGetter();
+    return 0;
+  }
+
+  // Writes the selected option index through the same path getDisplayValue() reads.
+  void setEnumSelectedIndex(uint8_t index) const {
+    if (type != SettingType::ENUM) return;
+    if (index >= getEnumOptionCount()) return;
+    if (valuePtr)
+      SETTINGS.*(valuePtr) = index;
+    else if (valueSetter)
+      callValueSetter(index);
+  }
 };
 
 inline void SettingInfo::prepareSubmenus(std::vector<SettingInfo>& items,
