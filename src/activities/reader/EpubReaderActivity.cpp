@@ -56,6 +56,7 @@
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
 #include "StarredPagesActivity.h"
+#include "activities/home/BookInfoActivity.h"
 #include "activities/settings/ReadingStatsBookDetailActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -1327,6 +1328,12 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       if (!epub) break;
       startActivityForResult(std::make_unique<ReadingStatsBookDetailActivity>(
                                  renderer, mappedInput, KOReaderDocumentId::calculateFromFilename(epub->getPath())),
+                             [this](const ActivityResult&) { requestUpdate(); });
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::BOOK_INFO: {
+      if (!epub) break;
+      startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, epub->getPath()),
                              [this](const ActivityResult&) { requestUpdate(); });
       break;
     }
