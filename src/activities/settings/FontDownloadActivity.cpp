@@ -1,6 +1,7 @@
 #include "FontDownloadActivity.h"
 
 #include <ArduinoJson.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -18,6 +19,20 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
+
+namespace {
+// Release large allocations before TLS so mbedTLS can get contiguous buffers
+// on constrained heaps. See OtaUpdateActivity for the reference pattern.
+void trimMemoryBeforeTls(const GfxRenderer& renderer) {
+  if (auto* cache = renderer.getFontCacheManager()) {
+    cache->clearCache();
+  }
+  if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
+    LOG_DBG("FONT", "Released secondary framebuffer before TLS (~52 KB contiguous)");
+    renderer.setSingleBufferFastDiff(true);
+  }
+}
+}  // namespace
 
 FontDownloadActivity::FontDownloadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
     : Activity("FontDownload", renderer, mappedInput), fontInstaller_(sdFontSystem.registry()) {}
@@ -57,6 +72,8 @@ void FontDownloadActivity::onWifiSelectionComplete(const bool success) {
     state_ = LOADING_MANIFEST;
   }
   requestUpdateAndWait();
+
+  trimMemoryBeforeTls(renderer);
 
   if (!fetchAndParseManifest()) {
     RenderLock lock(*this);
