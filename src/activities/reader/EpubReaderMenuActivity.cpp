@@ -10,6 +10,11 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+// Keep in sync with the default in EpubReaderActivity.h — see the comment there for rationale.
+#ifndef ENABLE_BENCHMARKS
+#define ENABLE_BENCHMARKS 0
+#endif
+
 namespace {
 // Three-state cycle helper for overrides represented as int8_t with -1 = default.
 // Mirrors the helpers in QuickOverridesActivity.cpp; kept duplicated rather
@@ -319,11 +324,11 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   menuItems.push_back(
       SettingInfo::Action(StrId::STR_DISPLAY_QR, SettingAction::None).withSubmenu(StrId::STR_READER_TOOLS));
   menuItems.push_back(SettingInfo::Action(StrId::STR_GO_HOME_BUTTON, SettingAction::None));
-#ifdef ENABLE_BENCHMARKS
+#if ENABLE_BENCHMARKS
   menuItems.push_back(SettingInfo::Separator(StrId::STR_NONE_OPT).withSubmenu(StrId::STR_READER_TOOLS));
   menuItems.push_back(
       SettingInfo::Action(StrId::STR_RENDER_BENCHMARK, SettingAction::None).withSubmenu(StrId::STR_READER_TOOLS));
-#endif
+#endif  // ENABLE_BENCHMARKS
 }
 
 EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForNameId(StrId nameId) {
