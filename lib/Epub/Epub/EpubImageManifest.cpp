@@ -70,6 +70,21 @@ bool EpubImageManifest::load(const std::string& cachePath) {
 
   uint16_t count = 0;
   serialization::readPod(f, count);
+  // A corrupt/truncated images.bin must not steer reserve() into a multi-MB allocation that aborts
+  // the firmware (uncaught bad_alloc, -fno-exceptions). The smallest possible on-disk entry is two
+  // u32 string-length prefixes (empty strings) + 18 B of fixed PODs = 26 B, so a count that can't
+  // fit in the bytes left in the file is garbage. A bad header means the rest is untrustworthy too:
+  // drop the whole cache and start empty — ensureResolved() refills it and the next persist
+  // overwrites the corrupt file.
+  const int remaining = f.available();
+  const uint32_t maxPlausible = remaining > 0 ? static_cast<uint32_t>(remaining) / 26u : 0u;
+  if (count > maxPlausible) {
+    LOG_ERR("IMF", "images.bin count %u exceeds file capacity %u; ignoring cache", count, maxPlausible);
+    f.close();
+    entries_.clear();
+    loaded_ = true;
+    return true;
+  }
   entries_.reserve(count);
 
   for (uint16_t i = 0; i < count; ++i) {
