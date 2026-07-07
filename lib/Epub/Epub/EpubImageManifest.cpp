@@ -17,13 +17,6 @@ constexpr const char* kImagesBinFile = "/images.bin";
 // Enough to find any JPEG SOF marker, PNG IHDR chunk, or GIF logical-screen header.
 constexpr size_t kHeaderBufSize = 4 * 1024;
 
-std::string extractedPathFor(const std::string& cachePath, const std::string& epubEntryPath) {
-  // Use only the basename so the path stays short and is spine-agnostic.
-  const size_t slash = epubEntryPath.rfind('/');
-  const std::string basename = (slash != std::string::npos) ? epubEntryPath.substr(slash + 1) : epubEntryPath;
-  return cachePath + "/img/" + basename;
-}
-
 // Parse image dimensions by detecting format and delegating to the appropriate converter.
 bool parseImageDimensions(const uint8_t* buf, size_t n, ImageDimensions& dims) {
   const auto fmt = ImageFormatDetector::detect(buf, n);
@@ -71,13 +64,13 @@ bool EpubImageManifest::load(const std::string& cachePath) {
   uint16_t count = 0;
   serialization::readPod(f, count);
   // A corrupt/truncated images.bin must not steer reserve() into a multi-MB allocation that aborts
-  // the firmware (uncaught bad_alloc, -fno-exceptions). The smallest possible on-disk entry is two
-  // u32 string-length prefixes (empty strings) + 18 B of fixed PODs = 26 B, so a count that can't
-  // fit in the bytes left in the file is garbage. A bad header means the rest is untrustworthy too:
-  // drop the whole cache and start empty — ensureResolved() refills it and the next persist
-  // overwrites the corrupt file.
+  // the firmware (uncaught bad_alloc, -fno-exceptions). The smallest possible on-disk entry is one
+  // u32 string-length prefix (empty key) + 18 B of fixed PODs = 22 B, so a count that can't fit in
+  // the bytes left in the file is garbage. A bad header means the rest is untrustworthy too: drop
+  // the whole cache and start empty — ensureResolved() refills it and the next persist overwrites
+  // the corrupt file.
   const int remaining = f.available();
-  const uint32_t maxPlausible = remaining > 0 ? static_cast<uint32_t>(remaining) / 26u : 0u;
+  const uint32_t maxPlausible = remaining > 0 ? static_cast<uint32_t>(remaining) / 22u : 0u;
   if (count > maxPlausible) {
     LOG_ERR("IMF", "images.bin count %u exceeds file capacity %u; ignoring cache", count, maxPlausible);
     f.close();
@@ -96,7 +89,6 @@ bool EpubImageManifest::load(const std::string& cachePath) {
     serialization::readPod(f, e.compressedSize);
     serialization::readPod(f, e.uncompressedSize);
     serialization::readPod(f, e.localHeaderOffset);
-    if (!serialization::readString(f, e.extractedPath)) break;
     entries_.push_back(std::move(e));
   }
 
@@ -158,7 +150,6 @@ const ImageManifestEntry* EpubImageManifest::ensureResolved(const std::string& e
       e.compressedSize = stat.compressedSize;
       e.uncompressedSize = stat.uncompressedSize;
       e.localHeaderOffset = stat.localHeaderOffset;
-      e.extractedPath = extractedPathFor(cachePath_, epubEntryPath);
 
       // Insert keeping entries_ sorted so find()'s binary search stays valid.
       auto it = std::lower_bound(entries_.begin(), entries_.end(), epubEntryPath,
@@ -219,7 +210,6 @@ void EpubImageManifest::persistIfDirty() {
     serialization::writePod(f, e.compressedSize);
     serialization::writePod(f, e.uncompressedSize);
     serialization::writePod(f, e.localHeaderOffset);
-    serialization::writeString(f, e.extractedPath);
   }
   f.flush();
   f.close();

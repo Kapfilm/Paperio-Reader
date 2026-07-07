@@ -17,9 +17,6 @@ struct ImageManifestEntry {
   uint32_t compressedSize = 0;
   uint32_t uncompressedSize = 0;
   uint32_t localHeaderOffset = 0;
-  // Stable extracted path shared across all spines and render configs:
-  // {cachePath}/img/{basename}  e.g. "/.crosspoint/epub_HASH/img/foo.jpg"
-  std::string extractedPath;
 };
 
 // Incremental, persisted image-dimension cache. The book is NOT scanned up front: the
@@ -30,8 +27,10 @@ struct ImageManifestEntry {
 // the heap on image-heavy books — see git history.)
 class EpubImageManifest {
  public:
-  // v2: normalised keys. Bump invalidates v1 caches (raw keys), which then refill incrementally.
-  static constexpr uint8_t VERSION = 2;
+  // v3: dropped the unused per-entry extractedPath (the render path computes its own image-cache
+  // filename, so it was written and persisted but never read). Bumping invalidates older caches,
+  // which then refill incrementally. (v2 added normalised keys.)
+  static constexpr uint8_t VERSION = 3;
 
   // Load images.bin from cachePath into memory. A missing (or stale-version) file is NOT an
   // error: it yields an empty but loaded manifest that ensureResolved() fills incrementally.
