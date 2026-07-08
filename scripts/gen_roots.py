@@ -34,6 +34,7 @@ def build_header(pem_text):
     out.append("// Regenerate after editing the .pem: python scripts/gen_roots.py")
     out.append("#pragma once")
     out.append("")
+    out.append("// clang-format off")
     out.append("// Concatenated PEM roots, loaded once via wolfSSL_CTX_load_verify_buffer().")
     out.append("inline constexpr char CROSSPOINT_ROOTS_PEM[] =")
     for line in lines:
@@ -43,6 +44,7 @@ def build_header(pem_text):
             continue
         out.append('    "{}\\n"'.format(line))
     out.append("    ;")
+    out.append("// clang-format on")
     out.append("")
     return "\n".join(out)
 

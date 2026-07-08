@@ -3,6 +3,7 @@
 // Regenerate after editing the .pem: python scripts/gen_roots.py
 #pragma once
 
+// clang-format off
 // Concatenated PEM roots, loaded once via wolfSSL_CTX_load_verify_buffer().
 inline constexpr char CROSSPOINT_ROOTS_PEM[] =
     // CrossPoint curated TLS root set — see CrossPointRoots.h / plan
@@ -92,4 +93,6 @@ inline constexpr char CROSSPOINT_ROOTS_PEM[] =
     "BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D\n"
     "9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8\n"
     "p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD\n"
-    "-----END CERTIFICATE-----\n";
+    "-----END CERTIFICATE-----\n"
+    ;
+// clang-format on
