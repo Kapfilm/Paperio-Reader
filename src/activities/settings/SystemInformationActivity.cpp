@@ -139,6 +139,7 @@ void SystemInformationActivity::render(RenderLock&&) {
 
   drawSection(tr(STR_SEC_VERSION));
   drawRow(tr(STR_FW_VERSION), status.version);
+  drawRow(tr(STR_DISPLAY_SDK), status.displaySdk);
   drawRow(tr(STR_DEVICE), std::string(status.deviceType) + " (" + std::to_string(status.displayWidth) + " x " +
                               std::to_string(status.displayHeight) + " px)");
 
