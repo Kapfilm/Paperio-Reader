@@ -226,7 +226,7 @@ HttpDownloader::DownloadError runGetSecureOnSession(HttpDownloader::Session& ses
 
   const int rc = impl->http->get(url, bodySink, progress);
   if (rc == crosspoint::SecureHttpClient::ERR_ABORTED) return HttpDownloader::ABORTED;
-  if (rc < 0 || rc != 200) {
+  if (rc != 200) {
     LOG_ERR("HTTP", "SecureNet session GET failed: rc=%d url=%s", rc, url.c_str());
     return HttpDownloader::HTTP_ERROR;
   }
