@@ -2,10 +2,6 @@
 .idea
 .DS_Store
 .vscode
-# Local dev junction to the FreeInk SDK working tree used on this test branch.
-# Not a submodule yet — points at a local freeink-sdk clone. Ignore so it is
-# never committed as tracked files (see platformio.ini lib_deps).
-/freeink-sdk/
 lib/EpdFont/fontsrc
 lib/I18n/I18nKeys.h
 lib/I18n/I18nStrings.h
