@@ -158,6 +158,10 @@ class GfxRenderer {
   bool hasRefreshOverridePending() const {
     return refreshOverride.load(std::memory_order_acquire) != REFRESH_OVERRIDE_NONE;
   }
+  // Discard a pending setNextDisplayRefreshMode() override without applying it, so the next display
+  // uses its own requested mode. Use when the armed override should move to a later refresh — e.g.
+  // the reader keeps the indexing popup FAST but forces the following content page to HALF itself.
+  void clearRefreshOverride() const { consumeRefreshOverride(HalDisplay::FAST_REFRESH); }
   // Make the write framebuffer match the currently displayed frame. Call before
   // a partial repaint that patches a few regions and re-displays without
   // re-rendering the full frame: displayBuffer() ends with swapBuffers(), so

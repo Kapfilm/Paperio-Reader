@@ -2431,6 +2431,30 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
     bool runBlocking = !incremental;
 
     if (incremental) {
+      // Draw the popup BEFORE any secondary-buffer release. drawPopup() overlays the box on the
+      // on-screen frame via syncWriteBufferFromDisplayed(), which copies from frameBufferActive —
+      // once the secondary buffer is released that copy is gone (the call no-ops) and the box would
+      // be composited onto the stale two-refreshes-ago write buffer, ghosting the previous page
+      // under the popup. Capture the "dramatic transition" signal first, because the popup's own
+      // refresh would otherwise consume the pending exit-full-refresh override:
+      //   - cold open of this book (coldOpenHalfRefreshArmed_), or
+      //   - a pending exit-full-refresh override left by a deliberate jump (chapter/percent/footnote)
+      //     to a possibly-uncached section. Capture it now (a peek, not a consume) so the content
+      //     page below can be forced to HALF; without capturing it the content page would fall back
+      //     to a FAST diff against the popup frame and ghost its outline.
+      const bool dramaticTransition = coldOpenHalfRefreshArmed_ || renderer.hasRefreshOverridePending();
+      coldOpenHalfRefreshArmed_ = false;
+      // X4: the dramatic-transition HALF belongs on the first CONTENT page (forceHalfRefreshAfterPopup_
+      // below), not the popup. The popup is a transient box over the already-correct current page, so a
+      // FAST overlay is clean and instant — drop the pending HALF override here so drawPopup() doesn't
+      // spend a second ~1.7s HALF on the popup itself. On X3 the popup's own refresh IS the baseline
+      // step (its displayBuffer updates DTM1, which the following FAST content page diffs against), so
+      // leave the override for drawPopup() to consume there.
+      if (!renderer.isX3() && dramaticTransition) {
+        renderer.clearRefreshOverride();  // discard the armed HALF -> popup paints FAST
+      }
+      GUI.drawPopup(renderer, tr(STR_INDEXING));  // immediate feedback before the first page lands
+
       if (mode == SectionBuildMode::IncrementalReleased) {
         // Tight heap: free the secondary buffer (~48–52 KB) for the build. AA is off until the
         // build ends and recoverSecondaryBufferIfNeeded() reallocates it (marked via
@@ -2441,11 +2465,11 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
         // and displayBuildPage() requests FAST refreshes via the normal cadence the whole time —
         // without the opt-in below, EInkDisplay::triggerDisplay() silently downgrades every one
         // of those to HALF (no host-side previous-frame copy to diff against), so every mid-build
-        // page turn pays the slow waveform. Seed RED RAM from the page still on screen (the
-        // pre-release frame) BEFORE releasing, then opt in to single-buffer fast differential so
-        // FAST refreshes keep diffing against the controller's retained RED RAM copy. Symmetric
-        // setSingleBufferFastDiff(false) lives in recoverSecondaryBufferIfNeeded(), the one place
-        // this released state gets cleanly restored.
+        // page turn pays the slow waveform. Seed RED RAM from the popup frame now on screen (drawn
+        // just above, while the buffer was still resident) BEFORE releasing, then opt in to
+        // single-buffer fast differential so FAST refreshes keep diffing against the controller's
+        // retained RED RAM copy. Symmetric setSingleBufferFastDiff(false) lives in
+        // recoverSecondaryBufferIfNeeded(), the one place this released state gets cleanly restored.
         const uint32_t freeBefore = esp_get_free_heap_size();
         if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
         renderer.releaseSecondaryBuffer();
@@ -2458,17 +2482,6 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
                 currentSpineIndex, esp_get_free_heap_size(),
                 heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT));
       }
-      // Decide BEFORE drawPopup whether this build's popup -> content transition is "dramatic" and
-      // deserves a clean HALF baseline (see coldOpenHalfRefreshArmed_). Two signals, captured here
-      // because the popup's own refresh would consume the second one:
-      //   - cold open of this book (coldOpenHalfRefreshArmed_), or
-      //   - a pending exit-full-refresh override left by a deliberate jump (chapter/percent/footnote)
-      //     to a possibly-uncached section. drawPopup() consumes that override (so the popup itself
-      //     paints HALF); without capturing it now, the content page would fall back to a FAST diff
-      //     against the popup frame and ghost its outline.
-      const bool dramaticTransition = coldOpenHalfRefreshArmed_ || renderer.hasRefreshOverridePending();
-      coldOpenHalfRefreshArmed_ = false;
-      GUI.drawPopup(renderer, tr(STR_INDEXING));  // immediate feedback before the first page lands
       // Force the first REAL page that replaces the popup — whether shown by displayBuildPage()
       // (multi-slice build) or directly by renderContents() (build finishes in one slice, e.g. a
       // one-page cover) — to HALF, so a dramatic content change (text popup -> photo) doesn't leave
@@ -3718,6 +3731,13 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
     case BA::BTN_NEXT_SECTION:
     case BA::BTN_PREV_SECTION: {
       const bool forward = (action == BA::BTN_NEXT_SECTION);
+      // Deliberate chapter jump: arm a HALF refresh for the next displayed screen, exactly like the
+      // other deliberate jumps (percent / TOC / footnote / reader exit). The indexing popup consumes
+      // this override so hasRefreshOverridePending() reads true there, which arms
+      // forceHalfRefreshAfterPopup_; the first page of the target chapter then paints HALF instead of
+      // a FAST differential. Without it, the dramatic previous-chapter -> new-chapter transition
+      // under-drives on X4 and the previous chapter's text ghosts through the new page.
+      ReaderUtils::enforceExitFullRefresh(renderer);
       {
         RenderLock lock(*this);
         if (section && section->pageCount > 0) {
