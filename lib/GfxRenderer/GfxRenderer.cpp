@@ -2492,10 +2492,13 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
   // writes into the wrong buffer — cleared by display.clearScreen() but then written
   // to the old slot by glyph rendering, producing a blank page.
   frameBuffer = display.getFrameBuffer();
-  // Also seed RED RAM from the just-displayed frame so the next fast differential
-  // refresh compares against the correct previous frame, preventing ghosting on
-  // dithered full-screen content (restores single-buffer-mode post-refresh behaviour).
-  display.syncRedRamFromFrameBuffer();
+  // Do NOT seed RED RAM here per page. The display driver already keeps the RED
+  // (previous-frame) plane current on every refresh — it writes RED from `prev` on
+  // each dual-buffer fast refresh, and reseeds RED from the framebuffer after each
+  // single-buffer refresh. A per-page syncRedRamFromFrameBuffer() would be a second,
+  // redundant full-plane RED write. The one place the baseline genuinely needs an
+  // explicit seed is the dual->single transition (before releaseSecondaryBuffer for
+  // fast-diff): the release sites call syncRedRamFromFrameBuffer() there directly.
 }
 
 std::string GfxRenderer::truncatedText(const int fontId, const char* text, const int maxWidth,
