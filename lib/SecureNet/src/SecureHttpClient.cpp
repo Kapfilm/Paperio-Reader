@@ -303,8 +303,8 @@ int SecureHttpClient::request(const char* method, const std::string& url, const 
     if (!parseUrl(current, u)) return ERR_BAD_URL;
     if (!ensureConnected(u)) return ERR_CONNECT;
     const bool hasBody = !activeBody.empty();
-    if (!sendRequest(activeMethod.c_str(), u,
-                     hasBody ? reinterpret_cast<const uint8_t*>(activeBody.data()) : nullptr, activeBody.size())) {
+    if (!sendRequest(activeMethod.c_str(), u, hasBody ? reinterpret_cast<const uint8_t*>(activeBody.data()) : nullptr,
+                     activeBody.size())) {
       close();
       return ERR_SEND;
     }

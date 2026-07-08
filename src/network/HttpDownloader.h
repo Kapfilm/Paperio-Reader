@@ -28,16 +28,17 @@ class HttpDownloader {
 
   /**
    * Reusable HTTP+TLS session. Holding one of these across multiple
-   * downloadToFile() calls keeps a single esp_http_client_handle_t alive,
-   * so the TLS handshake (≈36 KB of contiguous mbedtls buffers, RSA chain
-   * verify, etc.) runs once instead of per-file. This is the structural fix
-   * for back-to-back HTTPS calls failing on a fragmented heap.
+   * downloadToFile() calls keeps a single SecureHttpClient (and its wolfSSL
+   * connection) alive, so the TLS handshake — the heap/CPU spike from the ECC
+   * key exchange and RSA/ECDSA chain verify — runs once instead of per-file.
+   * This is the structural fix for back-to-back HTTPS calls failing on a
+   * fragmented heap.
    *
    * Usage: construct one, pass to downloadToFile(session, …) for every file
    * served by the same host. Destroying it closes the connection.
    *
-   * Cross-host reuse is technically supported (esp_http_client_set_url tears
-   * down and reopens) but defeats the heap win — group calls by host.
+   * Cross-host reuse is transparent (SecureHttpClient reopens when host/port
+   * change) but defeats the heap win — group calls by host.
    */
   class Session {
    public:

@@ -30,8 +30,8 @@ std::string extractHostFromUrl(const std::string& url) {
   return url.substr(hostStart, hostEnd - hostStart);
 }
 
-// mbedtls rejects certs whose notBefore lies in the future of the device
-// clock, returning MBEDTLS_ERR_X509_CERT_VERIFY_FAILED (-0x2700). The
+// wolfSSL rejects certs whose notBefore lies in the future of the device
+// clock (ASN_BEFORE_DATE_E), and expired ones (ASN_AFTER_DATE_E). The
 // ESP32-C3 has no battery-backed RTC, so cold-boot clocks default to 1970
 // (or, if HalClock restored from NVS, a stale "last known" time that may
 // still predate the cert's notBefore). Fix it once per process before the
@@ -77,18 +77,11 @@ bool ensureClockForTls() {
   return true;
 }
 
-
-// RX holds the response headers. 4096 fits real OPDS servers; GitHub's release
-// CDN sends more and logs HTTP_HEADER "Buffer length is small", but that's
-// non-fatal: the headers we read (Location, Content-Length) come first and
-// survive. Smaller keeps contiguous heap free while WiFi and TLS are up. TX
-// only carries our GET; the body streams in READ_CHUNK pieces. Matches
-// upstream PR #2075 (port of OtaUpdater's PR #2074 sizing).
-// Per-socket-op timeout. 60s gives slow servers room to send their first
-// headers. Shared by both TLS backends. READ_CHUNK is the Sink's default read
-// size (also shared, though the SecureNet path uses SecureHttpClient's own).
+// Per-request timeout handed to SecureHttpClient::setTimeout(). 60s gives slow
+// servers room to send their first headers; SecureHttpClient reuses it as the
+// idle deadline for each body read. The response body streams in
+// SecureHttpClient's own READ_CHUNK-sized pieces.
 constexpr int HTTP_TIMEOUT_MS = 60000;
-constexpr size_t READ_CHUNK = 2048;
 
 struct Sink {
   // Returns false to abort the transfer (e.g. SD write failure or user cancel).
@@ -96,13 +89,11 @@ struct Sink {
   HttpDownloader::ProgressCallback progress;
   size_t total = 0;
   size_t downloaded = 0;
-  size_t readChunk = READ_CHUNK;
 };
 
 bool isRedirect(int status) {
   return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
-
 
 // Runs once per http call (or once per session for reused sessions): logs
 // heap stats and ensures the wall clock is set so TLS cert-date validation
@@ -114,7 +105,6 @@ void logPreCallContext(const std::string& url) {
     ensureClockForTls();
   }
 }
-
 
 // One-shot streaming GET over SecureNet (wolfSSL). Fills the Sink and emits
 // "Phase start"/"Phase open_ok"/"Phase done" heap telemetry. TLS verification

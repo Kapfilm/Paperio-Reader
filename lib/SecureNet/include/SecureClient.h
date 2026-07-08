@@ -83,11 +83,11 @@ class SecureClient : public Client {
   bool _insecure = false;
   bool _allowInsecureFallback = true;
   bool _lastWasInsecure = false;
-  int _lastConnectErr = 0;  // wolfSSL_get_error() from the last failed handshake
+  int _lastConnectErr = 0;                 // wolfSSL_get_error() from the last failed handshake
   size_t _handshakeMinFree = SIZE_MAX;     // heap trough during the last handshake
   size_t _handshakeMinLargest = SIZE_MAX;  // largest-block trough during the last handshake
-  void* _ssl = nullptr;  // WOLFSSL*      (opaque; keeps wolfSSL headers out of here)
-  void* _ctx = nullptr;  // WOLFSSL_CTX*
+  void* _ssl = nullptr;                    // WOLFSSL*      (opaque; keeps wolfSSL headers out of here)
+  void* _ctx = nullptr;                    // WOLFSSL_CTX*
   bool _connected = false;
 };
 

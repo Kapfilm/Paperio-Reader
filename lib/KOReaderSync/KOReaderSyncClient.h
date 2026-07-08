@@ -112,7 +112,8 @@ class KOReaderSyncClient {
 
   /** HTTP status code from the last request (for diagnostics). */
   static int lastHttpCode;
-  /** Last esp_err_t from esp_http_client_perform (ESP_OK if request reached the server). */
+  /** Last transport result, esp_err_t-shaped (ESP_OK if the request reached the
+   *  server; KO_ERR_CONNECT / KO_ERR_EAGAIN / ESP_ERR_NO_MEM otherwise). */
   static int lastEspError;
   /** Free heap (bytes) captured at the start of the last failing request. */
   static unsigned lastHeapAtFailure;

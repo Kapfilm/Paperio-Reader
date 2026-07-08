@@ -21,8 +21,9 @@
 #include "network/HttpDownloader.h"
 
 namespace {
-// Release large allocations before TLS so mbedTLS can get contiguous buffers
-// on constrained heaps. See OtaUpdateActivity for the reference pattern.
+// Release large allocations before TLS so the wolfSSL handshake can get
+// contiguous buffers on constrained heaps. See OtaUpdateActivity for the
+// reference pattern.
 void trimMemoryBeforeTls(const GfxRenderer& renderer) {
   if (auto* cache = renderer.getFontCacheManager()) {
     cache->clearCache();
@@ -215,10 +216,10 @@ bool FontDownloadActivity::fetchAndParseManifest() {
 // --- Stash/Restore ---
 //
 // Persist families_ to a small binary file on SD so we can free the
-// ~10 KB of scattered std::string allocations it holds. mbedtls's TLS
-// handshake needs many small allocations from a defragmented heap; with
-// families_ resident, the heap stays fragmented at ~36 KB largest contiguous
-// and the handshake fails with -0x2700 / flags=0 (internal alloc failure).
+// ~10 KB of scattered std::string allocations it holds. The wolfSSL TLS
+// handshake needs contiguous heap for its key-exchange/verify buffers; with
+// families_ resident, the heap stays fragmented and the handshake can fail
+// with an internal alloc failure.
 //
 // Format (little-endian):
 //   u32 magic    = 'CPFM' (0x4D465043)

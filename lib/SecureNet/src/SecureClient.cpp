@@ -73,8 +73,7 @@ bool isVerificationError(int err) {
 }  // namespace
 
 // One handshake attempt at a fixed verification level and TLS method.
-int SecureClient::connectWithMethod(const char* host, uint16_t port, void* method, const char* label,
-                                    bool verifyPeer) {
+int SecureClient::connectWithMethod(const char* host, uint16_t port, void* method, const char* label, bool verifyPeer) {
   stop();
   if (!_transport.connect(host, port)) return 0;
 
@@ -178,16 +177,14 @@ int SecureClient::connect(const char* host, uint16_t port) {
 
   // Only fall back to insecure on a verification-class failure, when allowed.
   if (_allowInsecureFallback && isVerificationError(_lastConnectErr)) {
-    LOG_INF("TLS", "WARNING: cert verify failed for %s (err=%d); retrying WITHOUT verification", host,
-            _lastConnectErr);
+    LOG_INF("TLS", "WARNING: cert verify failed for %s (err=%d); retrying WITHOUT verification", host, _lastConnectErr);
     const int ok = connectAtVerify(host, port, /*verifyPeer=*/false);
     _lastWasInsecure = ok == 1;
     return ok;
   }
 
   if (!_allowInsecureFallback && isVerificationError(_lastConnectErr)) {
-    LOG_ERR("TLS", "cert verify failed for %s (err=%d); insecure fallback disabled -> aborting", host,
-            _lastConnectErr);
+    LOG_ERR("TLS", "cert verify failed for %s (err=%d); insecure fallback disabled -> aborting", host, _lastConnectErr);
   }
   return 0;
 }
@@ -212,7 +209,7 @@ int SecureClient::read(uint8_t* buf, size_t size) {
 
   const int err = wolfSSL_get_error(ssl, n);
   if (err == WOLFSSL_ERROR_WANT_READ || err == WOLFSSL_ERROR_WANT_WRITE) return 0;  // no data yet
-  if (err == WOLFSSL_ERROR_ZERO_RETURN) {  // peer closed cleanly
+  if (err == WOLFSSL_ERROR_ZERO_RETURN) {                                           // peer closed cleanly
     _connected = false;
     return 0;
   }

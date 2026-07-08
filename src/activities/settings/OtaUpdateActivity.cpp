@@ -14,7 +14,8 @@
 
 namespace {
 // Ported from crosspoint-reader/crosspoint-reader: release large allocations
-// before TLS so mbedTLS can get contiguous buffers on constrained heaps.
+// before TLS so the wolfSSL handshake can get contiguous buffers on
+// constrained heaps.
 void trimMemoryBeforeTls(const GfxRenderer& renderer) {
   if (auto* cache = renderer.getFontCacheManager()) {
     cache->clearCache();

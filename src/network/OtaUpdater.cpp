@@ -9,9 +9,9 @@
 
 // clang-format off
 // HttpDownloader.h pulls Arduino/SdFat, whose macros collide with lwip's
-// ip4_addr.h unless seen before esp_http_client (which includes lwip). Pin this
-// order; clang-format would otherwise sort the local headers last and break the
-// build.
+// ip4_addr.h unless seen before the ESP-IDF headers below (esp_wifi.h and
+// friends transitively include lwip). Pin this order; clang-format would
+// otherwise sort the local headers last and break the build.
 #include "CrossPointSettings.h"
 #include "HttpDownloader.h"
 #include <bootloader_common.h>
@@ -302,7 +302,7 @@ int OtaUpdater::forceSetOtaBootPartition() {
     newSeq = currentSeq;
     // ESP-IDF's bootloader maps ota_seq to an OTA app slot with
     // (ota_seq - 1) % ota_app_count. Match that mapping here so the forced
-    // otadata entry selects the partition that esp_https_ota just wrote.
+    // otadata entry selects the partition the streaming install just wrote.
     while ((newSeq - 1) % otaAppCount != static_cast<uint32_t>(subTypeId)) {
       newSeq++;
     }
@@ -405,9 +405,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
   // in esp_ota_set_boot_partition (and esp_ota_end returns VALIDATE_FAILED), so
   // fall back to writing otadata directly — same bypass as before.
   const esp_partition_t* updatePartition = esp_ota_get_next_update_partition(nullptr);
-  esp_err_t boot_err =
-      (finish_err == ESP_ERR_OTA_VALIDATE_FAILED) ? ESP_ERR_OTA_VALIDATE_FAILED
-                                                  : esp_ota_set_boot_partition(updatePartition);
+  esp_err_t boot_err = (finish_err == ESP_ERR_OTA_VALIDATE_FAILED) ? ESP_ERR_OTA_VALIDATE_FAILED
+                                                                   : esp_ota_set_boot_partition(updatePartition);
   if (boot_err == ESP_ERR_OTA_VALIDATE_FAILED) {
     LOG_INF("OTA", "Validation failed (expected for unsigned Arduino builds) - forcing boot partition");
     boot_err = static_cast<esp_err_t>(forceSetOtaBootPartition());

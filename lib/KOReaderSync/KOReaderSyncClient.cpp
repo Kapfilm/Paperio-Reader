@@ -106,7 +106,7 @@ constexpr char DEVICE_NAME[] = "CrossPoint";
 constexpr char DEVICE_ID[] = "crosspoint-reader";
 
 // Keep strict thresholding here. A small tolerance caused repeated handshake
-// attempts in borderline-fragmented states that still failed in mbedTLS.
+// attempts in borderline-fragmented states that still failed in the TLS layer.
 constexpr unsigned TLS_CONTIG_HEAP_TOLERANCE = 0;
 
 // Captures radio/link state around failed connects.
@@ -137,12 +137,16 @@ std::string base64Encode(const std::string& input) {
   return out;
 }
 
-// Verify there is enough contiguous heap to attempt a TLS handshake. mbedTLS needs a
-// large contiguous block during the handshake (~24-32 KB depending on cert chain depth).
-// Total free heap can mislead because fragmentation leaves no single block big enough,
-// which is precisely the scenario after recent PNG/JPG decode activity. Returns true if
-// we should proceed; false means caller must abort with NETWORK_ERROR — in which case
-// lastFailureDetail() will report the heap shortage instead of attempting a doomed handshake.
+// Verify there is enough contiguous heap to attempt a TLS handshake. The wolfSSL
+// handshake peaks on a contiguous block during the ECC key exchange and chain
+// verify. Total free heap can mislead because fragmentation leaves no single block
+// big enough, which is precisely the scenario after recent PNG/JPG decode activity.
+// Returns true if we should proceed; false means caller must abort with NETWORK_ERROR
+// — in which case lastFailureDetail() reports the heap shortage instead of attempting
+// a doomed handshake.
+// NOTE: MIN_CONTIG_HEAP_FOR_TLS is a legacy mbedTLS figure; the wolfSSL trough is
+// measured via SecureClient::handshakeMinLargest() (logged below) so it can be
+// re-tuned once field data confirms the real requirement.
 bool checkHeapForTls() {
   const bool hasReusableSession = g_keepSessionOpen && g_sessionHttp != nullptr;
   const bool isUpload =
@@ -207,8 +211,8 @@ void applyAuthHeaders(crosspoint::SecureHttpClient& http) {
 //   KO_ERR_EAGAIN : timeout/truncated mid-transfer (retryable)
 //   ESP_ERR_NO_MEM      : client alloc failure
 // method: "GET" | "POST" | "PUT". contentType/body empty for GET.
-esp_err_t performKoRequest(const char* method, const std::string& url, const char* contentType,
-                           const std::string& body, std::string& outBody) {
+esp_err_t performKoRequest(const char* method, const std::string& url, const char* contentType, const std::string& body,
+                           std::string& outBody) {
   outBody.clear();
   KOReaderSyncClient::lastHttpCode = 0;
 
@@ -236,7 +240,32 @@ esp_err_t performKoRequest(const char* method, const std::string& url, const cha
     http->addHeader("Content-Type", contentType);
   }
 
+  // --- TLS handshake heap telemetry (diagnostic) ---
+  // The MIN_CONTIG_HEAP_FOR_TLS gate in checkHeapForTls() (36 KB) was sized for
+  // mbedTLS. wolfSSL likely needs far less, so measure the ACTUAL handshake
+  // contiguous-heap trough here to decide how far the gate can be lowered.
+  // handshakeMinLargest() moves only when a NEW handshake ran this request (it is
+  // untouched on keep-alive reuse), so a change in its value flags a fresh
+  // handshake and lets us pair the pre-request largest block with that trough.
+  // Sampled with the same cap (MALLOC_CAP_DEFAULT) the handshake sampler uses so
+  // the "consumed" delta is apples-to-apples. Logged at INFO for field bug
+  // reports; remove once the gate is re-tuned. See KOReaderSyncClient.h.
+  const size_t troughBefore = http->lastHandshakeMinLargest();
+  const size_t preflightLargest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+
   const int rc = http->request(method, url, body);
+
+  const size_t troughLargest = http->lastHandshakeMinLargest();
+  const bool didHandshake = (troughLargest != troughBefore) && (troughLargest != SIZE_MAX);
+  if (didHandshake) {
+    const long consumedContig = static_cast<long>(preflightLargest) - static_cast<long>(troughLargest);
+    LOG_INF("KOSync",
+            "TLS handshake heap: preLargest=%u troughLargest=%u consumedContig=%ld troughFree=%u | gate=%u insecure=%d",
+            static_cast<unsigned>(preflightLargest), static_cast<unsigned>(troughLargest), consumedContig,
+            static_cast<unsigned>(http->lastHandshakeMinFree()), KOReaderSyncClient::MIN_CONTIG_HEAP_FOR_TLS,
+            static_cast<int>(http->lastConnectionWasInsecure()));
+  }
+
   if (rc >= 100) {  // got an HTTP status line
     KOReaderSyncClient::lastHttpCode = rc;
     outBody = http->getBody();
@@ -298,8 +327,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::registerUser() {
   const int httpCode = lastHttpCode;
   lastEspError = err;
 
-  LOG_DBG("KOSync", "Register response: %d (err: %s) | body: %s", httpCode, esp_err_to_name(err),
-          responseBody.c_str());
+  LOG_DBG("KOSync", "Register response: %d (err: %s) | body: %s", httpCode, esp_err_to_name(err), responseBody.c_str());
 
   if (err != ESP_OK) {
     return NETWORK_ERROR;
@@ -555,14 +583,14 @@ const char* KOReaderSyncClient::lastFailureDetail() {
              lastContigHeapAtFailure, requiredContig);
     return g_failureDetailBuf;
   }
-  // Network/TLS case: esp_http_client_perform() failed before getting a status code.
+  // Network/TLS case: the request failed before getting a status code.
   if (lastHttpCode == 0 && lastEspError != 0) {
-    // HTTPS connect failures can be TLS version issues (ESP32 only supports up
-    // to TLS 1.2), but also DNS, cert, or plain network problems. Include the
-    // error name and heap stats so the user/bug-report has enough to triage.
+    // HTTPS connect failures are usually DNS, cert, or plain network problems
+    // (wolfSSL negotiates TLS 1.3/1.2, so version mismatch is not the cause).
+    // Include the error name and heap stats so the user/bug-report can triage.
     if (lastEspError == KO_ERR_CONNECT && KOREADER_STORE.getBaseUrl().rfind("https", 0) == 0) {
       snprintf(g_failureDetailBuf, sizeof(g_failureDetailBuf),
-               "%s: connect failed — check network, DNS, certs, or TLS 1.2 compat (heap %u/%u contig)", lastOperation,
+               "%s: connect failed — check network, DNS, or certificate (heap %u/%u contig)", lastOperation,
                lastHeapAtFailure, lastContigHeapAtFailure);
     } else {
       snprintf(g_failureDetailBuf, sizeof(g_failureDetailBuf), "%s: %s (heap %u/%u contig)", lastOperation,

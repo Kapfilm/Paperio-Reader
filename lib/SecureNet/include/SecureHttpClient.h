@@ -9,8 +9,8 @@
 // wrap Arduino HTTPClient (which binds a NetworkClient, incompatible with our
 // SecureClient's owned-WiFiClient design).
 //
-// This is the single HTTP engine behind HttpDownloader and KOReaderSync once the
-// mbedtls/esp_http_client stack is removed.
+// This is the single HTTP engine behind HttpDownloader and KOReaderSync now that
+// the mbedtls/esp_http_client stack has been removed.
 //
 // OPT-IN: https requires -DFREEINK_NET_WOLFSSL=1. With the flag off, https
 // connect() fails; plain-http still works over the WiFiClient transport.
@@ -51,9 +51,7 @@ class SecureHttpClient {
     _pass = pass;
   }
   // Per-request custom headers (cleared after each request unless keep()).
-  void addHeader(const std::string& name, const std::string& value) {
-    _headers.push_back(name + ": " + value);
-  }
+  void addHeader(const std::string& name, const std::string& value) { _headers.push_back(name + ": " + value); }
   void clearHeaders() { _headers.clear(); }
   // Max redirect hops to follow (default 5; 0 disables following).
   void setMaxRedirects(int n) { _maxRedirects = n; }
