@@ -144,9 +144,9 @@ std::string base64Encode(const std::string& input) {
 // Returns true if we should proceed; false means caller must abort with NETWORK_ERROR
 // — in which case lastFailureDetail() reports the heap shortage instead of attempting
 // a doomed handshake.
-// NOTE: MIN_CONTIG_HEAP_FOR_TLS is a legacy mbedTLS figure; the wolfSSL trough is
-// measured via SecureClient::handshakeMinLargest() (logged below) so it can be
-// re-tuned once field data confirms the real requirement.
+// NOTE: MIN_CONTIG_HEAP_FOR_TLS (26 KB) is sized from field telemetry — the
+// wolfSSL handshake's measured peak contiguous demand is 12-16 KB (logged by the
+// "TLS handshake heap" line below). See KOReaderSyncClient.h for the derivation.
 bool checkHeapForTls() {
   const bool hasReusableSession = g_keepSessionOpen && g_sessionHttp != nullptr;
   const bool isUpload =
@@ -240,16 +240,16 @@ esp_err_t performKoRequest(const char* method, const std::string& url, const cha
     http->addHeader("Content-Type", contentType);
   }
 
-  // --- TLS handshake heap telemetry (diagnostic) ---
-  // The MIN_CONTIG_HEAP_FOR_TLS gate in checkHeapForTls() (36 KB) was sized for
-  // mbedTLS. wolfSSL likely needs far less, so measure the ACTUAL handshake
-  // contiguous-heap trough here to decide how far the gate can be lowered.
+  // --- TLS handshake heap telemetry (gate health) ---
+  // Reports the wolfSSL handshake's ACTUAL contiguous-heap trough vs the
+  // MIN_CONTIG_HEAP_FOR_TLS gate, so the gate stays honest as the TLS stack /
+  // cert chains evolve (it's what sized the current 26 KB — see the header).
   // handshakeMinLargest() moves only when a NEW handshake ran this request (it is
   // untouched on keep-alive reuse), so a change in its value flags a fresh
   // handshake and lets us pair the pre-request largest block with that trough.
   // Sampled with the same cap (MALLOC_CAP_DEFAULT) the handshake sampler uses so
-  // the "consumed" delta is apples-to-apples. Logged at INFO for field bug
-  // reports; remove once the gate is re-tuned. See KOReaderSyncClient.h.
+  // the "consumed" delta is apples-to-apples. Kept at INFO so it appears in field
+  // bug reports (handshakes are infrequent — one per sync).
   const size_t troughBefore = http->lastHandshakeMinLargest();
   const size_t preflightLargest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
 
