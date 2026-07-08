@@ -295,8 +295,8 @@ void KOReaderSyncActivity::performFetchAndCompare() {
   // page data. The mapped result is cached and reused if Apply is chosen.
   // closeSessionBeforeMapping=true tears down the warmed TLS session before
   // reverse XPath mapping so the 32 KB inflate ring buffer can allocate. The
-  // held-open esp_http_client + response buffer otherwise pin ~36 KB contig
-  // and the inflate malloc fails, falling back to lossy percentage mapping.
+  // held-open wolfSSL connection otherwise pins contiguous heap and the inflate
+  // malloc fails, falling back to lossy percentage mapping.
   // Trade-off: if the user picks Upload afterwards we eat one extra TLS
   // handshake (~1.7s) — Apply is the common choice and silent inflate
   // failures here previously caused syncs to land on the wrong page.
@@ -729,10 +729,10 @@ bool KOReaderSyncActivity::ensureRemotePositionMapped(const bool closeSessionBef
   }
 
   // Mapping remote->local triggers EPUB inflate work, which needs a 32 KB
-  // contiguous block for the deflate ring buffer. The held-open TLS session
-  // and esp_http_client response buffer otherwise pin ~36 KB contig, causing
-  // the inflate alloc to fail and the reverse XPath mapper to silently
-  // degrade to lossy percentage-only mapping. Tearing the session down here
+  // contiguous block for the deflate ring buffer. The held-open wolfSSL TLS
+  // session otherwise pins contiguous heap, causing the inflate alloc to fail
+  // and the reverse XPath mapper to silently degrade to lossy percentage-only
+  // mapping. Tearing the session down here
   // costs a fresh handshake if Upload runs afterwards, but Apply (the common
   // outcome) wins both heap headroom and round-trip accuracy.
   if (closeSessionBeforeMapping) {

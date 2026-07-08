@@ -847,11 +847,24 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book, const OpdsAcqu
         }
         std::string sidecarPath = baseFilename + ext;
 
+        // Reset progress so the bar tracks the cover, not the just-finished book
+        // (otherwise it shows the book's total frozen at 100%).
+        downloadProgress = 0;
+        downloadTotal = 0;
+        requestUpdate(true);
+
+        uint32_t lastCoverProgressMs = 0;
         const auto coverDlResult = HttpDownloader::downloadToFile(
             coverUrl, sidecarPath,
-            [this](const unsigned int, const unsigned int) {
+            [this, &lastCoverProgressMs](const unsigned int downloaded, const unsigned int total) {
               mappedInput.update();
-              requestUpdate(true);
+              downloadProgress = downloaded;
+              downloadTotal = total;
+              const uint32_t now = millis();
+              if (now - lastCoverProgressMs >= 3000) {  // throttle redraws like the book download
+                lastCoverProgressMs = now;
+                requestUpdate(true);
+              }
               return !mappedInput.wasPressed(MappedInputManager::Button::Back);
             },
             server.username, server.password);

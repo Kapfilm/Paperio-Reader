@@ -1,0 +1,283 @@
+#include "SecureClient.h"
+
+#include <Logging.h>
+#include <esp_heap_caps.h>
+
+// wolfSSL is only pulled in when explicitly enabled, keeping flag-off builds
+// (and host tests) free of the dependency. See SecureClient.h.
+#if defined(FREEINK_NET_WOLFSSL)
+#include <wolfssl/error-ssl.h>  // VERIFY_CERT_ERROR, DOMAIN_NAME_MISMATCH (SSL-layer codes)
+#include <wolfssl/ssl.h>
+
+// The Arduino-wolfSSL library's logging.c references this hook, normally defined
+// in the library's wolfssl.h sketch glue (not compiled in a PlatformIO lib build),
+// so we provide it. Signature must match wolfcrypt/logging.h exactly (int return).
+// Routes wolfSSL's internal debug logging to our logger.
+extern "C" int wolfSSL_Arduino_Serial_Print(const char* const s) {
+  if (s) LOG_DBG("WOLF", "%s", s);
+  return 0;
+}
+#endif
+
+namespace crosspoint {
+
+bool SecureClient::tls13Available() {
+#if defined(FREEINK_NET_WOLFSSL)
+  return true;
+#else
+  return false;
+#endif
+}
+
+SecureClient::~SecureClient() { stop(); }
+
+#if defined(FREEINK_NET_WOLFSSL)
+
+namespace {
+// Bridge wolfSSL's I/O to the underlying WiFiClient transport. Non-blocking:
+// return WANT_READ/WANT_WRITE when the socket has nothing yet so wolfSSL retries.
+int wcSend(WOLFSSL* /*ssl*/, char* buf, int sz, void* ctx) {
+  auto* t = static_cast<WiFiClient*>(ctx);
+  const int n = t->write(reinterpret_cast<const uint8_t*>(buf), sz);
+  if (n <= 0) return WOLFSSL_CBIO_ERR_WANT_WRITE;
+  return n;
+}
+int wcRecv(WOLFSSL* /*ssl*/, char* buf, int sz, void* ctx) {
+  auto* t = static_cast<WiFiClient*>(ctx);
+  if (!t->connected() && t->available() == 0) return WOLFSSL_CBIO_ERR_CONN_CLOSE;
+  if (t->available() == 0) return WOLFSSL_CBIO_ERR_WANT_READ;
+  const int n = t->read(reinterpret_cast<uint8_t*>(buf), sz);
+  if (n <= 0) return WOLFSSL_CBIO_ERR_WANT_READ;
+  return n;
+}
+
+// True if the wolfSSL error code is a peer-certificate-verification failure
+// (as opposed to a transport/protocol failure). Only these justify the
+// verified->insecure fallback: retrying insecurely on a DNS/TCP/version error
+// gains nothing and would hide the real problem.
+bool isVerificationError(int err) {
+  switch (err) {
+    case ASN_NO_SIGNER_E:    // no trusted root for the chain
+    case ASN_SIG_CONFIRM_E:  // signature check failed
+    case ASN_BEFORE_DATE_E:  // notBefore in the future (clock)
+    case ASN_AFTER_DATE_E:   // expired
+    case ASN_SELF_SIGNED_E:
+    case CRL_CERT_DATE_ERR:
+    case VERIFY_CERT_ERROR:  // generic cert verification failure
+    case DOMAIN_NAME_MISMATCH:
+      return true;
+    default:
+      return false;
+  }
+}
+}  // namespace
+
+// One handshake attempt at a fixed verification level and TLS method.
+int SecureClient::connectWithMethod(const char* host, uint16_t port, void* method, const char* label, bool verifyPeer) {
+  stop();
+  if (!_transport.connect(host, port)) return 0;
+
+  auto* ctx = wolfSSL_CTX_new(static_cast<WOLFSSL_METHOD*>(method));
+  if (!ctx) {
+    _transport.stop();
+    return 0;
+  }
+  _ctx = ctx;
+
+  if (verifyPeer && !_insecure && _rootCA) {
+    if (wolfSSL_CTX_load_verify_buffer(ctx, reinterpret_cast<const unsigned char*>(_rootCA), strlen(_rootCA),
+                                       WOLFSSL_FILETYPE_PEM) != WOLFSSL_SUCCESS) {
+      LOG_ERR("TLS", "load_verify_buffer failed for curated roots");
+      stop();
+      return 0;
+    }
+    wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_PEER, nullptr);
+  } else {
+    wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_NONE, nullptr);
+  }
+  wolfSSL_SetIORecv(ctx, wcRecv);
+  wolfSSL_SetIOSend(ctx, wcSend);
+
+  auto* ssl = wolfSSL_new(ctx);
+  if (!ssl) {
+    stop();
+    return 0;
+  }
+  _ssl = ssl;
+  wolfSSL_SetIOReadCtx(ssl, &_transport);
+  wolfSSL_SetIOWriteCtx(ssl, &_transport);
+  wolfSSL_UseSNI(ssl, WOLFSSL_SNI_HOST_NAME, host, strlen(host));
+  if (verifyPeer && !_insecure) {
+    // Also check the hostname against the cert SAN/CN, not just the chain.
+    wolfSSL_check_domain_name(ssl, host);
+  }
+
+  // Non-blocking recv => retry wolfSSL_connect across handshake round-trips.
+  // Sample the heap low-water across the handshake (this is where ECC/RSA bignum
+  // allocations peak) so callers can report the handshake's real heap trough,
+  // distinct from the all-time ESP.getMinFreeHeap() figure.
+  auto sampleHeapTrough = [this]() {
+    const size_t freeNow = esp_get_free_heap_size();
+    const size_t largestNow = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    if (freeNow < _handshakeMinFree) _handshakeMinFree = freeNow;
+    if (largestNow < _handshakeMinLargest) _handshakeMinLargest = largestNow;
+  };
+  sampleHeapTrough();
+  const uint32_t deadline = millis() + 15000;
+  int ret;
+  while ((ret = wolfSSL_connect(ssl)) != WOLFSSL_SUCCESS) {
+    sampleHeapTrough();
+    const int err = wolfSSL_get_error(ssl, ret);
+    if (err != WOLFSSL_ERROR_WANT_READ && err != WOLFSSL_ERROR_WANT_WRITE) {
+      // Record whether this was a cert-verify failure so the caller can decide
+      // on the insecure fallback; keep the log at DBG (connect() logs the WARN).
+      _lastConnectErr = err;
+      LOG_DBG("TLS", "wolfSSL_connect(%s) failed: err=%d", label, err);
+      stop();
+      return 0;
+    }
+    if (static_cast<int32_t>(millis() - deadline) >= 0) {
+      _lastConnectErr = WOLFSSL_ERROR_WANT_READ;  // treat timeout as transport, not verify
+      LOG_INF("TLS", "handshake timeout to %s", host);
+      stop();
+      return 0;
+    }
+    delay(5);
+  }
+  sampleHeapTrough();
+  _connected = true;
+  return 1;
+}
+
+// A connect attempt at one verification level, with the v23->TLS1.2 method retry.
+int SecureClient::connectAtVerify(const char* host, uint16_t port, bool verifyPeer) {
+  // v23 negotiates the highest mutually supported version (TLS 1.3 when offered,
+  // 1.2 otherwise). WOLFSSL_TLS13 is enabled in user_settings.h.
+  if (connectWithMethod(host, port, wolfSSLv23_client_method(), "auto", verifyPeer)) return 1;
+  // Some TLS-1.2-only servers choke on a 1.3-capable ClientHello; retry 1.2-only,
+  // but only if the failure wasn't a cert-verify problem (that won't change).
+  if (isVerificationError(_lastConnectErr)) return 0;
+  return connectWithMethod(host, port, wolfTLSv1_2_client_method(), "tls1.2", verifyPeer);
+}
+
+int SecureClient::connect(const char* host, uint16_t port) {
+  _lastWasInsecure = false;
+  _handshakeMinFree = SIZE_MAX;
+  _handshakeMinLargest = SIZE_MAX;
+
+  // If explicitly insecure (debug), skip verification outright.
+  if (_insecure) {
+    const int ok = connectAtVerify(host, port, /*verifyPeer=*/false);
+    _lastWasInsecure = ok == 1;
+    return ok;
+  }
+
+  // Verified-first.
+  if (connectAtVerify(host, port, /*verifyPeer=*/true)) return 1;
+
+  // Only fall back to insecure on a verification-class failure, when allowed.
+  if (_allowInsecureFallback && isVerificationError(_lastConnectErr)) {
+    LOG_INF("TLS", "WARNING: cert verify failed for %s (err=%d); retrying WITHOUT verification", host, _lastConnectErr);
+    const int ok = connectAtVerify(host, port, /*verifyPeer=*/false);
+    _lastWasInsecure = ok == 1;
+    return ok;
+  }
+
+  if (!_allowInsecureFallback && isVerificationError(_lastConnectErr)) {
+    LOG_ERR("TLS", "cert verify failed for %s (err=%d); insecure fallback disabled -> aborting", host, _lastConnectErr);
+  }
+  return 0;
+}
+
+int SecureClient::connect(IPAddress ip, uint16_t port) {
+  char host[16];
+  snprintf(host, sizeof(host), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+  return connect(host, port);
+}
+
+size_t SecureClient::write(const uint8_t* buf, size_t size) {
+  if (!_connected) return 0;
+  const int n = wolfSSL_write(static_cast<WOLFSSL*>(_ssl), buf, size);
+  return n > 0 ? static_cast<size_t>(n) : 0;
+}
+
+int SecureClient::read(uint8_t* buf, size_t size) {
+  if (!_connected) return -1;
+  auto* ssl = static_cast<WOLFSSL*>(_ssl);
+  const int n = wolfSSL_read(ssl, buf, size);
+  if (n > 0) return n;
+
+  const int err = wolfSSL_get_error(ssl, n);
+  if (err == WOLFSSL_ERROR_WANT_READ || err == WOLFSSL_ERROR_WANT_WRITE) return 0;  // no data yet
+  if (err == WOLFSSL_ERROR_ZERO_RETURN) {                                           // peer closed cleanly
+    _connected = false;
+    return 0;
+  }
+  _connected = false;
+  return -1;
+}
+
+int SecureClient::available() {
+  if (!_connected) return 0;
+  return wolfSSL_pending(static_cast<WOLFSSL*>(_ssl)) + _transport.available();
+}
+
+void SecureClient::stop() {
+  if (_ssl) {
+    wolfSSL_free(static_cast<WOLFSSL*>(_ssl));
+    _ssl = nullptr;
+  }
+  if (_ctx) {
+    wolfSSL_CTX_free(static_cast<WOLFSSL_CTX*>(_ctx));
+    _ctx = nullptr;
+  }
+  _transport.stop();
+  _connected = false;
+}
+
+uint8_t SecureClient::connected() { return _connected && _transport.connected(); }
+
+#else  // !FREEINK_NET_WOLFSSL — inert stub so the firmware builds without wolfSSL.
+
+int SecureClient::connectWithMethod(const char*, uint16_t, void*, const char*, bool) { return 0; }
+int SecureClient::connectAtVerify(const char*, uint16_t, bool) { return 0; }
+int SecureClient::connect(const char* host, uint16_t port) {
+  (void)host;
+  (void)port;
+  LOG_ERR("TLS", "TLS unavailable: build with -DFREEINK_NET_WOLFSSL=1");
+  return 0;
+}
+int SecureClient::connect(IPAddress ip, uint16_t port) {
+  (void)ip;
+  (void)port;
+  return 0;
+}
+size_t SecureClient::write(const uint8_t* buf, size_t size) {
+  (void)buf;
+  (void)size;
+  return 0;
+}
+int SecureClient::read(uint8_t* buf, size_t size) {
+  (void)buf;
+  (void)size;
+  return -1;
+}
+int SecureClient::available() { return 0; }
+void SecureClient::stop() {
+  _transport.stop();
+  _connected = false;
+}
+uint8_t SecureClient::connected() { return 0; }
+
+#endif
+
+// --- transport-agnostic single-byte helpers (shared) ---
+size_t SecureClient::write(uint8_t b) { return write(&b, 1); }
+int SecureClient::read() {
+  uint8_t b;
+  return read(&b, 1) == 1 ? b : -1;
+}
+int SecureClient::peek() { return -1; }
+void SecureClient::flush() {}
+
+}  // namespace crosspoint

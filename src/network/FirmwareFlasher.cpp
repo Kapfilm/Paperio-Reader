@@ -5,8 +5,8 @@
 #include <Logging.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
-#include <mbedtls/sha256.h>
 #include <spi_flash_mmap.h>
+#include <wolfssl/wolfcrypt/sha256.h>
 
 #include <algorithm>
 #include <cstring>
@@ -65,6 +65,19 @@ const char* resultName(Result r) {
 }
 
 namespace {
+// Thin SHA-256 shim over wolfCrypt so this file's existing mbedtls-style call
+// sites stay unchanged after the mbedtls removal. wolfCrypt's wc_Sha256 needs no
+// explicit free for a stack context (no devId), so _free is a no-op. Signatures
+// mirror the mbedtls ones used here (init/starts/update/finish/free).
+using mbedtls_sha256_context = wc_Sha256;
+inline void mbedtls_sha256_init(wc_Sha256* c) { wc_InitSha256(c); }
+inline void mbedtls_sha256_starts(wc_Sha256* /*c*/, int /*is224*/) { /* wc_InitSha256 already started it */ }
+inline void mbedtls_sha256_update(wc_Sha256* c, const uint8_t* d, size_t n) {
+  wc_Sha256Update(c, d, static_cast<word32>(n));
+}
+inline void mbedtls_sha256_finish(wc_Sha256* c, uint8_t* out) { wc_Sha256Final(c, out); }
+inline void mbedtls_sha256_free(wc_Sha256* /*c*/) { /* no heap to release */ }
+
 // Stream `length` bytes from `file`, feeding them through XOR-checksum and SHA256 accumulators.
 Result feedHashAndChecksum(HalFile& file, size_t length, uint8_t* xorAccum, mbedtls_sha256_context* sha, uint8_t* buf) {
   size_t remaining = length;
