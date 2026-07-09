@@ -90,9 +90,16 @@ constexpr uint32_t FNV_OFFSET_BASIS = 0x811C9DC5;  // 2166136261
 constexpr uint32_t EMBEDDED_STYLE_MIN_FREE_HEAP_BYTES = SCT_EMBEDDED_STYLE_MIN_FREE_HEAP_BYTES;
 constexpr uint32_t EMBEDDED_STYLE_MIN_CONTIG_HEAP_BYTES = SCT_EMBEDDED_STYLE_MIN_CONTIG_HEAP_BYTES;
 
-// Inflate-feed chunk for the sliced parse: same size readFileToStream used, and the
-// granularity at which runBuildParse checks its time budget between visitor writes.
+// Visitor-feed chunk for phase (b): the granularity at which runBuildParse checks its time budget
+// between visitor writes. Kept small so a build slice yields promptly and input stays responsive.
 constexpr size_t PARSE_CHUNK_BYTES = 1024;
+
+// Output chunk for phase (a) extraction (inflate -> temp SD file). Extraction is SD-write bound with
+// no layout between writes, so a larger buffer means far fewer, larger (multi-sector) SD writes for a
+// big single-file spine. Applied ONLY after the inflate ring is allocated (see runBuildParse), so it
+// never competes with the ~32 KB ring for a contiguous block, and it is shrunk back to
+// PARSE_CHUNK_BYTES before phase (b). The grow is best-effort: on failure the 1 KB buffer is kept.
+constexpr size_t EXTRACT_CHUNK_BYTES = 8192;
 
 uint32_t fnv1a(const uint8_t* data, size_t length) {
   uint32_t hash = FNV_OFFSET_BASIS;
@@ -225,7 +232,9 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
     LOG_ERR("SCT", "Failed to serialize page %d", pageCount);
     return 0;
   }
-  LOG_DBG("SCT", "Page %d processed", pageCount);
+  if (pageCount % 10 == 0) {
+    LOG_DBG("SCT", "Page %d processed", pageCount);
+  }
 
   pageCount++;
   return position;
@@ -428,6 +437,10 @@ struct Section::BuildState {
   std::unique_ptr<ZipFile> zip;
   std::unique_ptr<ZipFile::EntryReader> reader;
   std::unique_ptr<uint8_t[]> chunkBuf;
+  // Capacity of chunkBuf during phase (a). Grown to EXTRACT_CHUNK_BYTES once the inflate ring is
+  // allocated (see runBuildParse); stays PARSE_CHUNK_BYTES if that grow fails or on the reused-HTML
+  // path. Phase (b) always feeds PARSE_CHUNK_BYTES and chunkBuf is shrunk back before it runs.
+  size_t extractCap = PARSE_CHUNK_BYTES;
   bool parseStarted = false;
   // Two-phase sliced parse, latched at the first parse call (so a build started in the
   // background stays on this path when the foreground resumes it with budget 0):
@@ -649,6 +662,19 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
         const std::string entryPath = FsHelpers::normalisePath(st.localPath);
         if (!st.reader->open(entryPath.c_str())) {
           streamFailed = true;  // EntryReader::open already logged the cause
+        } else if (esp_get_free_heap_size() >= EXTRACT_CHUNK_BYTES + 48 * 1024) {
+          // The inflate ring is now allocated (open() took its ~32 KB contiguous block first). Only
+          // now grow the extraction feed buffer, so a bigger buffer draws from the remainder and can
+          // never starve the ring (the OOM->blocking regression this replaced). Heap-gated: only
+          // grow when free stays well clear of the resident build's ~30 KB low-heap abort floor —
+          // a resident build running near the floor keeps the 1 KB buffer (stock behaviour) rather
+          // than letting the grow itself trip the abort. Best-effort: on allocation failure keep
+          // the 1 KB buffer and extract slower. Shrunk back after phase (a).
+          auto grown = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[EXTRACT_CHUNK_BYTES]);
+          if (grown) {
+            st.chunkBuf = std::move(grown);
+            st.extractCap = EXTRACT_CHUNK_BYTES;
+          }
         }
       }
       if (!streamFailed) {
@@ -666,7 +692,7 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
     bool done = false;
     while (!done) {
       size_t produced = 0;
-      if (!st.reader->step(st.chunkBuf.get(), PARSE_CHUNK_BYTES, &produced, &done)) {
+      if (!st.reader->step(st.chunkBuf.get(), st.extractCap, &produced, &done)) {
         streamFailed = true;
         break;
       }
@@ -689,6 +715,17 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
     st.tempFile.flush();
     st.tempFile.close();
     st.extractDone = true;
+    // Shrink the feed buffer back before phase (b) so layout runs at the original working set. Only
+    // when it was actually grown; a 1 KB realloc can't realistically fail but is guarded like the rest.
+    if (!streamFailed && st.extractCap != PARSE_CHUNK_BYTES) {
+      st.chunkBuf.reset(new (std::nothrow) uint8_t[PARSE_CHUNK_BYTES]);
+      st.extractCap = PARSE_CHUNK_BYTES;
+      if (!st.chunkBuf) {
+        LOG_ERR("SCT", "Failed to shrink parse buffer to %u bytes (free=%lu)", static_cast<uint32_t>(PARSE_CHUNK_BYTES),
+                esp_get_free_heap_size());
+        streamFailed = true;
+      }
+    }
     if (!streamFailed) {
       if (!Storage.openFileForRead("SCT", st.tempPath, st.tempFile)) {
         streamFailed = true;
