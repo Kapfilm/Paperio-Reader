@@ -27,8 +27,7 @@ void HalDisplay::begin(bool seamless) {
   // restore it before the post-waveform SPI work. Policy (WiFi / lock / idle
   // low-power guards) lives in HalPowerManager; the driver just brackets the
   // sleep.
-  einkDisplay.setWaveformWaitHooks([] { powerManager.enterWaveformWait(); },
-                                   [] { powerManager.exitWaveformWait(); });
+  einkDisplay.setWaveformWaitHooks([] { powerManager.enterWaveformWait(); }, [] { powerManager.exitWaveformWait(); });
 
   einkDisplay.begin();
 
