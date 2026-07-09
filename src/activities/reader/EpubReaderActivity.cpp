@@ -985,19 +985,29 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     return;
   }
 
-  // Discard the in-flight build and re-render: buildSection then takes the blocking path (latched
-  // by forceBlockingBuildSpine_), which builds with the secondary buffer released (~52 KB more
-  // headroom). Shared by the low-heap guard and the failure/degrade handling below.
-  const auto fallbackToReleasedRebuild = [&](const char* reason) {
-    LOG_ERR("ERS", "Background-C spine=%d %s; falling back to released rebuild", currentSpineIndex, reason);
+  // Discard the in-flight build and re-render with more headroom. Two retry flavours, chosen by
+  // the caller via `retryIncremental`:
+  //  - true  (low-heap abort of a RESIDENT build): retry as IncrementalReleased — the release
+  //    frees the ~52 KB the build was starved of, and the build stays sliced so the first page
+  //    still appears mid-build. Latched via forceReleasedBuildSpine_.
+  //  - false (parse failure / truncated / css-degraded): retry on the old blocking released path
+  //    (latched via forceBlockingBuildSpine_; compileSectionCache honours the latch by forcing
+  //    the buffer release).
+  const auto fallbackToReleasedRebuild = [&](const char* reason, const bool retryIncremental) {
+    LOG_ERR("ERS", "Background-C spine=%d %s; falling back to released %s rebuild", currentSpineIndex, reason,
+            retryIncremental ? "incremental" : "blocking");
     section->clearCache();
     section.reset();
-    forceBlockingBuildSpine_ = currentSpineIndex;
+    if (retryIncremental) {
+      forceReleasedBuildSpine_ = currentSpineIndex;
+    } else {
+      forceBlockingBuildSpine_ = currentSpineIndex;
+    }
     readerPhase_ = ReaderPhase::READING;
     buildingPopupShown_ = false;
     buildDisplayedPage_ = -1;
     backgroundBuildPercent_ = -1;
-    requestUpdate();  // -> BuildSection -> blocking (released) build
+    requestUpdate();  // -> BuildSection -> released (incremental or blocking) build
   };
 
   // Layout needs glyph metrics only; reset accumulation so the next prewarm re-wires the
@@ -1017,7 +1027,7 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     if (!secondaryBufferDegraded_ && (esp_get_free_heap_size() < RESIDENT_BUILD_ABORT_FREE_HEAP_BYTES ||
                                       heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT) <
                                           RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES)) {
-      fallbackToReleasedRebuild("low heap mid-build");
+      fallbackToReleasedRebuild("low heap mid-build", /*retryIncremental=*/true);
       return;
     }
     backgroundBuildPercent_ = static_cast<int8_t>(section->activeBuildPercent());
@@ -1035,7 +1045,8 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
   // Failed, or finished but truncated / CSS-degraded: discard and retry on the released path. The
   // latch (set inside the helper) stops buildSection from re-entering Background-C for this spine.
   if (step == Section::BuildStep::Failed || section->isTruncatedCache() || section->isCssLowHeapDegraded()) {
-    fallbackToReleasedRebuild(step == Section::BuildStep::Failed ? "failed" : "incomplete");
+    fallbackToReleasedRebuild(step == Section::BuildStep::Failed ? "failed" : "incomplete",
+                              /*retryIncremental=*/false);
     return;
   }
 
@@ -2191,7 +2202,7 @@ void EpubReaderActivity::renderPreRenderPass(const RenderLayout& layout) {
   checkHeapIntegrity("after_prerender");
 }
 
-bool EpubReaderActivity::heapAllowsInPlaceBuild(const bool embeddedStyle) const {
+bool EpubReaderActivity::heapAllowsInPlaceBuild(const bool embeddedStyle, const size_t inflatedSize) const {
   // Mirror the gate Background-B uses to build with the secondary buffer resident: if a CSS
   // book's selector index won't fit alongside the buffer, don't even attempt the in-place
   // build. Then require a free/contig floor pinned above B's idle gate — the foreground build
@@ -2202,20 +2213,44 @@ bool EpubReaderActivity::heapAllowsInPlaceBuild(const bool embeddedStyle) const 
       return false;
     }
   }
+  // The extraction phase holds an inflate ring sized to the entry (≤32 KB) — a per-spine cost the
+  // static floors were never tuned for (they fit the common few-KB chapter, where the ring is
+  // noise). Add it to the floors the same way Background-B's WaitHeap gate does (ring on top of
+  // the base, contig raised to ring + scratch), so a whole-book-in-one-spine entry is sent
+  // straight to the released path instead of starting a resident build that is doomed to the
+  // low-heap abort (~1.4 s of popup/setup/abort/re-setup waste, observed heap dip to <8 KB free).
+  const uint32_t ringBytes = static_cast<uint32_t>(std::min<size_t>(32768, inflatedSize));
   const uint32_t freeFloor =
-      embeddedStyle ? IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES : IN_PLACE_BUILD_MIN_FREE_HEAP_BYTES;
-  const uint32_t contigFloor =
-      embeddedStyle ? IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES : IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES;
+      (embeddedStyle ? IN_PLACE_BUILD_CSS_MIN_FREE_HEAP_BYTES : IN_PLACE_BUILD_MIN_FREE_HEAP_BYTES) + ringBytes;
+  const uint32_t contigFloor = std::max<uint32_t>(
+      embeddedStyle ? IN_PLACE_BUILD_CSS_MIN_CONTIG_HEAP_BYTES : IN_PLACE_BUILD_MIN_CONTIG_HEAP_BYTES,
+      ringBytes + 8 * 1024);
   const uint32_t freeHeap = esp_get_free_heap_size();
   const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
-  return freeHeap >= freeFloor && contigHeap >= contigFloor;
+  const bool ok = freeHeap >= freeFloor && contigHeap >= contigFloor;
+  // One line per gate evaluation: the resident/released choice and the exact heap-vs-floor
+  // arithmetic behind it. This is the first thing to check when a section build takes the wrong
+  // path (a resident build starving on the inflate ring cascades into the released rebuild).
+  LOG_INF("ERS", "heapAllowsInPlaceBuild=%d css=%d ring=%lu free=%lu(floor=%lu) contig=%lu(floor=%lu)", ok ? 1 : 0,
+          embeddedStyle ? 1 : 0, static_cast<unsigned long>(ringBytes), static_cast<unsigned long>(freeHeap),
+          static_cast<unsigned long>(freeFloor), static_cast<unsigned long>(contigHeap),
+          static_cast<unsigned long>(contigFloor));
+  return ok;
 }
 
-EpubReaderActivity::SectionBuildMode EpubReaderActivity::chooseSectionBuildMode(const bool embeddedStyle) const {
+EpubReaderActivity::SectionBuildMode EpubReaderActivity::chooseSectionBuildMode(const bool embeddedStyle,
+                                                                                const size_t inflatedSize) const {
   // A failed Background-C attempt latches the old blocking path for this spine.
   if (forceBlockingBuildSpine_ == currentSpineIndex) return SectionBuildMode::Blocking;
   // No secondary buffer to keep or release (already degraded): blocking path reallocs it at the end.
   if (!renderer.hasSecondaryBuffer()) return SectionBuildMode::Blocking;
+  // A resident build that aborted on the low-heap guard retries released but still INCREMENTAL:
+  // the heapAllowsInPlaceBuild floors below already proved optimistic for this spine (they gate on
+  // heap at entry, not on what a big spine's ring + parser actually consume), so don't consult
+  // them again — and don't collapse to Blocking, which would index the whole section before the
+  // first page appears. Checked after the buffer guard: with the buffer already gone the released
+  // headroom exists anyway and the blocking path handles the realloc at the end.
+  if (forceReleasedBuildSpine_ == currentSpineIndex) return SectionBuildMode::IncrementalReleased;
 
   // X3 → always build released. Its differential baseline lives in the controller's DTM1, so
   // keeping the ~52 KB RAM buffer resident buys no display benefit (fast refresh works without it)
@@ -2232,8 +2267,8 @@ EpubReaderActivity::SectionBuildMode EpubReaderActivity::chooseSectionBuildMode(
   // isCssLowHeapDegraded() and rebuilt with the buffer released — so this gates "try in place"
   // rather than guaranteeing it. (Historically CSS books always released, from before the build
   // was two-phase, when the ring + parser + resolver were all live at once.)
-  return heapAllowsInPlaceBuild(embeddedStyle) ? SectionBuildMode::IncrementalResident
-                                               : SectionBuildMode::IncrementalReleased;
+  return heapAllowsInPlaceBuild(embeddedStyle, inflatedSize) ? SectionBuildMode::IncrementalResident
+                                                             : SectionBuildMode::IncrementalReleased;
 }
 
 EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const RenderLayout& layout,
@@ -2273,7 +2308,16 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
   // decode under pressure). On X3 we always release: its baseline lives in the controller, so
   // keeping the RAM buffer buys no display benefit, only less headroom.
   bool released = false;
-  const bool inPlace = !renderer.isX3() && renderer.hasSecondaryBuffer() && heapAllowsInPlaceBuild(embeddedStyle);
+  // Honour the Background-C failure latch: its whole point is retrying with the buffer RELEASED
+  // (~52 KB more headroom). Re-consulting heapAllowsInPlaceBuild here would happily go resident
+  // again — heap recovers between the abort and this retry — and repeat exactly the starvation
+  // that failed (observed on-device: low-heap abort -> "blocking" retry rebuilt in place and
+  // ground through the whole spine at <8 KB min free).
+  size_t inflatedSize = 0;
+  epub->getSpineItemInflatedSize(currentSpineIndex, &inflatedSize);
+  const bool inPlace = !renderer.isX3() && renderer.hasSecondaryBuffer() &&
+                       forceBlockingBuildSpine_ != currentSpineIndex &&
+                       heapAllowsInPlaceBuild(embeddedStyle, inflatedSize);
   if (inPlace) {
     LOG_INF("ERS", "Building section in place (secondary buffer kept): free=%lu contig=%lu", esp_get_free_heap_size(),
             heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT));
@@ -2424,11 +2468,24 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
     // responsive and pages appear as they are written. Used for the clean cases — a cache miss
     // or a resumed partial B build. The CSS-fallback rebuild keeps the blocking path: the section
     // already shows usable fallback content.
+    // The spine's uncompressed size sizes the extraction inflate ring, so the resident/released
+    // choice needs it (one central-dir scan; ~zero next to the ~1.4 s a doomed resident attempt
+    // wastes). A lookup failure leaves 0 = unknown -> static floors only, the old behaviour.
+    size_t inflatedSize = 0;
+    epub->getSpineItemInflatedSize(currentSpineIndex, &inflatedSize);
     const SectionBuildMode mode = (resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
-                                      ? chooseSectionBuildMode(embeddedStyle)
+                                      ? chooseSectionBuildMode(embeddedStyle, inflatedSize)
                                       : SectionBuildMode::Blocking;
     const bool incremental = mode != SectionBuildMode::Blocking;
     bool runBlocking = !incremental;
+
+    // Single grep-able marker for the build mode actually taken for this spine — pairs with the
+    // heapAllowsInPlaceBuild line above to explain every section-entry build decision from the log.
+    LOG_INF("ERS", "Section build mode spine=%d: %s (cacheHit=%d cssFallback=%d resumeB=%d)", currentSpineIndex,
+            mode == SectionBuildMode::Blocking              ? "BLOCKING"
+            : mode == SectionBuildMode::IncrementalResident ? "INCR_RESIDENT"
+                                                            : "INCR_RELEASED",
+            cacheHit ? 1 : 0, cssFallbackRebuild ? 1 : 0, resumeBackgroundBuild ? 1 : 0);
 
     if (incremental) {
       if (mode == SectionBuildMode::IncrementalReleased) {
@@ -2559,8 +2616,9 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   }
 
   // Section is ready (cache hit, blocking build, or a tiny C build that finished in one slice):
-  // the Background-C fallback latch for this spine has served its purpose.
+  // the Background-C fallback latches for this spine have served their purpose.
   forceBlockingBuildSpine_ = -1;
+  forceReleasedBuildSpine_ = -1;
 
   LOG_DBG("ERS", "resolveInto: navTarget.kind=%d pageCount=%d", (int)navTarget.kind, (int)section->pageCount);
   navTarget.resolveInto(*section, currentSpineIndex);
