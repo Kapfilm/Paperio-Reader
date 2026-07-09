@@ -345,7 +345,6 @@ bool ContentOpfParser::resolveSpineItemRefHref(const std::string& idref, std::st
   return resolveItemRefHrefLinearScan(idref, href);
 }
 
-
 void ContentOpfParser::handleSpineItemRefElement(const char** atts) {
   for (int i = 0; atts[i]; i += 2) {
     if (strcmp(atts[i], "idref") == 0) {

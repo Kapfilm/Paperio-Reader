@@ -104,8 +104,8 @@ class BufferedFileReader {
   FsFile& file_;
   std::unique_ptr<uint8_t[]> buf_;
   size_t cap_ = 0;
-  size_t fill_ = 0;          // valid bytes in buf_
-  size_t pos_ = 0;           // consumed bytes in buf_
+  size_t fill_ = 0;           // valid bytes in buf_
+  size_t pos_ = 0;            // consumed bytes in buf_
   uint32_t windowStart_ = 0;  // file offset of buf_[0]
 };
 
