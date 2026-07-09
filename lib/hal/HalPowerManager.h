@@ -28,6 +28,16 @@ class HalPowerManager {
   enum LockMode { None, NormalSpeed };
   std::atomic<LockMode> currentLockMode{None};
   SemaphoreHandle_t modeMutex = nullptr;  // Protect Lock acquire/release ordering
+  // Task that holds the current NormalSpeed lock (nullptr when none). Guarded by
+  // modeMutex. Needed by enterWaveformWait(): the render task holds a Lock for
+  // the whole render() pass, and the waveform wait happens inside it — the
+  // downclock is safe when the lock holder IS the waiting task (its code only
+  // resumes after exitWaveformWait() restores the clock), but not when another
+  // task holds the lock and keeps running.
+  TaskHandle_t lockOwnerTask_ = nullptr;
+  // True while the CPU clock is dropped for an e-ink waveform wait (see
+  // enterWaveformWait / exitWaveformWait). Guarded by modeMutex.
+  bool waveformLowPower_ = false;
 
  public:
   static constexpr int LOW_POWER_FREQ = 10;                    // MHz
@@ -38,6 +48,19 @@ class HalPowerManager {
 
   // Control CPU frequency for power saving
   void setPowerSaving(bool enabled);
+
+  // Waveform-wait power hooks, installed on the display driver by HalDisplay:
+  // drop the CPU clock while the render task sleeps on the e-ink BUSY-ISR
+  // semaphore (nothing can run during the waveform — background work gates on
+  // isRefreshPending()/the render lock), restore it before the post-waveform
+  // SPI work. enterWaveformWait() is a no-op when WiFi is active, a
+  // NormalSpeed lock is held by ANOTHER task, or the CPU is already in idle
+  // low-power mode. The render task's own per-render Lock does not block it:
+  // that holder is the waiting task itself and only resumes after the clock
+  // is restored. Runs on the render task; tolerant of the loop task's
+  // concurrent setPowerSaving() calls (same relaxed model as setPowerSaving).
+  void enterWaveformWait();
+  void exitWaveformWait();
 
   // Setup wake up GPIO and enter deep sleep.
   // When keepClockAlive is true, GPIO13 stays HIGH so the LP timer keeps
