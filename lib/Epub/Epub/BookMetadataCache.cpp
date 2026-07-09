@@ -233,13 +233,17 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   // This is O(n*log(m)) instead of O(n*m) while avoiding memory exhaustion.
   // See: https://github.com/crosspoint-reader/crosspoint-reader/issues/134
 
-  std::vector<uint32_t> spineSizes;
+  // Deques, not vectors: at 1732 spines `targets` alone is ~28 KB, and a vector demands that as
+  // one contiguous block — observed aborting here at 51 KB free / 30 KB contig before the
+  // first-open framebuffer release widened the headroom. Chunked storage removes the failure
+  // class outright instead of relying on the released buffer's headroom.
+  std::deque<uint32_t> spineSizes;
   bool useBatchSizes = false;
 
   if (spineCount >= LARGE_SPINE_THRESHOLD) {
     LOG_DBG("BMC", "Using batch size lookup for %d spine items", spineCount);
 
-    std::vector<ZipFile::SizeTarget> targets;
+    std::deque<ZipFile::SizeTarget> targets;
     targets.resize(spineCount);
 
     std::string pathScratch;

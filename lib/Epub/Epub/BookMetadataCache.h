@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 
 #include <algorithm>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -61,13 +62,17 @@ class BookMetadataCache {
   FsFile spineFile;
   FsFile tocFile;
 
-  // Index for fast href→spineIndex lookup (used only for large EPUBs)
+  // Index for fast href→spineIndex lookup (used only for large EPUBs).
+  // Deque, not vector: ~21 KB at 1732 spines, and a vector would demand that as one contiguous
+  // block on a possibly-fragmented heap (bare operator new aborts under -fno-exceptions).
+  // Deque's ~512-byte chunks remove the contiguity demand; its random-access iterators keep
+  // std::sort / lower_bound working.
   struct SpineHrefIndexEntry {
     uint64_t hrefHash;  // FNV-1a 64-bit hash
     uint16_t hrefLen;   // length for collision reduction
     int16_t spineIndex;
   };
-  std::vector<SpineHrefIndexEntry> spineHrefIndex;
+  std::deque<SpineHrefIndexEntry> spineHrefIndex;
   bool useSpineHrefIndex = false;
 
   // Batch ZIP size lookup and fast spine-href index are always better when N is
