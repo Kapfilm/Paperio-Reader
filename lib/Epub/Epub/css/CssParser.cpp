@@ -911,6 +911,16 @@ bool CssParser::appendCompiledFromStream(FsFile& source) {
   return !compileModeFailed_;
 }
 
+void CssParser::abortCacheCompile() {
+  if (!compileModeActive_) {
+    return;
+  }
+  // Reuse the failed-compile teardown: closes and removes the temp staging file and leaves no
+  // rules cache behind (hasCache() stays false, so the next open re-parses the stylesheets).
+  compileModeFailed_ = true;
+  endCacheCompile();
+}
+
 bool CssParser::endCacheCompile() {
   if (!compileModeActive_) {
     return false;
