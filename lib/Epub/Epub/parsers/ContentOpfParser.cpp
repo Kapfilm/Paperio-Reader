@@ -34,20 +34,44 @@ inline bool isItemTag(const char* name) { return isTag(name, "item", "opf:item")
 inline bool isItemRefTag(const char* name) { return isTag(name, "itemref", "opf:itemref"); }
 inline bool isReferenceTag(const char* name) { return isTag(name, "reference", "opf:reference"); }
 
-bool startsWithImageMediaType(const std::string& mediaType) {
+bool startsWithImageMediaType(const char* mediaType) {
   constexpr size_t prefixLen = sizeof(MEDIA_TYPE_IMAGE_PREFIX) - 1;
-  if (mediaType.size() < prefixLen) {
-    return false;
-  }
-
   for (size_t i = 0; i < prefixLen; ++i) {
+    // A shorter string mismatches on its NUL before this reads past the end.
     const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(mediaType[i])));
     if (c != MEDIA_TYPE_IMAGE_PREFIX[i]) {
       return false;
     }
   }
-
   return true;
+}
+
+// Everything the manifest handler needs to know about a media-type, computed once per
+// DISTINCT value: items are only ever routed by these classes, never by the raw string.
+enum class MediaClass : uint8_t { Other = 0, Image, Ncx, Css, PageMap };
+
+MediaClass classifyMediaType(const char* mediaType) {
+  if (mediaType == nullptr || *mediaType == '\0') return MediaClass::Other;
+  if (startsWithImageMediaType(mediaType)) return MediaClass::Image;
+  if (strcmp(mediaType, MEDIA_TYPE_NCX) == 0) return MediaClass::Ncx;
+  if (strcmp(mediaType, MEDIA_TYPE_CSS) == 0) return MediaClass::Css;
+  if (strcmp(mediaType, MEDIA_TYPE_PAGEMAP) == 0) return MediaClass::PageMap;
+  return MediaClass::Other;
+}
+
+// True when `word` appears as a whole space-separated token in `props` (the OPF
+// `properties` attribute format). Pointer scan — no std::string construction.
+bool hasPropertyWord(const char* props, const char* word) {
+  if (props == nullptr || *props == '\0') return false;
+  const size_t wordLen = strlen(word);
+  const char* p = props;
+  while ((p = strstr(p, word)) != nullptr) {
+    const bool startsToken = (p == props) || (p[-1] == ' ');
+    const char after = p[wordLen];
+    if (startsToken && (after == '\0' || after == ' ')) return true;
+    p += wordLen;
+  }
+  return false;
 }
 
 // Append the UTF-8 encoding of a Unicode code point.
@@ -469,8 +493,12 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
   if (self->state == IN_MANIFEST && isItemTag(name)) {
     std::string itemId;
     std::string href;
-    std::string mediaType;
-    std::string properties;
+    // media-type/properties are only INSPECTED, never stored: keep them as pointers into the
+    // parser's attribute array (valid for this callback) instead of copying to std::string.
+    // The dominant media type, application/xhtml+xml, is 21 chars — past SSO — so the old copy
+    // heap-allocated once per item (~1500 alloc/free pairs on a large Calibre manifest).
+    const char* mediaType = nullptr;
+    const char* properties = nullptr;
 
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "id") == 0) {
@@ -481,6 +509,24 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
         mediaType = atts[i + 1];
       } else if (strcmp(atts[i], "properties") == 0) {
         properties = atts[i + 1];
+      }
+    }
+
+    // Manifests group items of one media type together (all chapters, then all images, ...),
+    // so the previous item's classification almost always applies: one strcmp against the memo
+    // replaces the per-item prefix/equality chain. A distinct value is classified once and
+    // cached in the fixed member buffer (no heap; values longer than the buffer classify
+    // per-item, which no real media type triggers).
+    MediaClass mediaClass = MediaClass::Other;
+    if (mediaType != nullptr) {
+      if (strcmp(mediaType, self->lastMediaType_) == 0) {
+        mediaClass = static_cast<MediaClass>(self->lastMediaClass_);
+      } else {
+        mediaClass = classifyMediaType(mediaType);
+        if (strlen(mediaType) < sizeof(self->lastMediaType_)) {
+          strcpy(self->lastMediaType_, mediaType);
+          self->lastMediaClass_ = static_cast<uint8_t>(mediaClass);
+        }
       }
     }
 
@@ -500,52 +546,48 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     if (itemId == self->coverItemId) {
       // Some EPUBs set meta name="cover" to an XHTML wrapper item.
       // Only treat it as a cover image when the manifest media-type is image/*.
-      if (startsWithImageMediaType(mediaType)) {
+      if (mediaClass == MediaClass::Image) {
         self->coverItemHref = href;
       } else {
         LOG_DBG("COF", "Ignoring meta cover item '%s' with non-image media type: %s", itemId.c_str(),
-                mediaType.c_str());
+                mediaType != nullptr ? mediaType : "(none)");
       }
     }
 
-    if (mediaType == MEDIA_TYPE_NCX) {
-      if (self->tocNcxPath.empty()) {
-        self->tocNcxPath = href;
-      } else {
-        LOG_DBG("COF", "Warning: Multiple NCX files found in manifest. Ignoring duplicate: %s", href.c_str());
-      }
+    switch (mediaClass) {
+      case MediaClass::Ncx:
+        if (self->tocNcxPath.empty()) {
+          self->tocNcxPath = href;
+        } else {
+          LOG_DBG("COF", "Warning: Multiple NCX files found in manifest. Ignoring duplicate: %s", href.c_str());
+        }
+        break;
+      // EPUB 2.01 page-map.xml — separate top-level file mapping printed page numbers to spine
+      // locations (e.g. <page name="1" href="OEBPS/c9_split_000.xhtml"/>). Spine references it
+      // via <spine page-map="..."> but only the manifest item carries the canonical href.
+      case MediaClass::PageMap:
+        if (self->pageMapPath.empty()) {
+          self->pageMapPath = href;
+          LOG_DBG("COF", "Found EPUB 2.01 page-map: %s", href.c_str());
+        }
+        break;
+      case MediaClass::Css:
+        self->cssFiles.push_back(href);
+        break;
+      case MediaClass::Image:
+      case MediaClass::Other:
+        break;
     }
 
-    // EPUB 2.01 page-map.xml — separate top-level file mapping printed page numbers to spine
-    // locations (e.g. <page name="1" href="OEBPS/c9_split_000.xhtml"/>). Spine references it
-    // via <spine page-map="..."> but only the manifest item carries the canonical href.
-    if (mediaType == MEDIA_TYPE_PAGEMAP) {
-      if (self->pageMapPath.empty()) {
-        self->pageMapPath = href;
-        LOG_DBG("COF", "Found EPUB 2.01 page-map: %s", href.c_str());
-      }
+    // EPUB 3: Check for nav document (properties contains "nav" as a whole token)
+    if (self->tocNavPath.empty() && hasPropertyWord(properties, "nav")) {
+      self->tocNavPath = href;
+      LOG_DBG("COF", "Found EPUB 3 nav document: %s", href.c_str());
     }
 
-    // Collect CSS files
-    if (mediaType == MEDIA_TYPE_CSS) {
-      self->cssFiles.push_back(href);
-    }
-
-    // EPUB 3: Check for nav document (properties contains "nav")
-    if (!properties.empty() && self->tocNavPath.empty()) {
-      // Properties is space-separated, check if "nav" is present as a word
-      if (properties == "nav" || properties.find("nav ") == 0 || properties.find(" nav") != std::string::npos) {
-        self->tocNavPath = href;
-        LOG_DBG("COF", "Found EPUB 3 nav document: %s", href.c_str());
-      }
-    }
-
-    // EPUB 3: Check for cover image (properties contains "cover-image")
-    if (!properties.empty() && self->coverItemHref.empty()) {
-      if (properties == "cover-image" || properties.find("cover-image ") == 0 ||
-          properties.find(" cover-image") != std::string::npos) {
-        self->coverItemHref = href;
-      }
+    // EPUB 3: Check for cover image (properties contains "cover-image" as a whole token)
+    if (self->coverItemHref.empty() && hasPropertyWord(properties, "cover-image")) {
+      self->coverItemHref = href;
     }
     return;
   }

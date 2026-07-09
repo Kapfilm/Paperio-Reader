@@ -44,6 +44,14 @@ class ContentOpfParser final : public Print {
   std::deque<ItemIndexEntry> itemIndex;
   bool useItemIndex = false;
 
+  // Memo of the last manifest item's media-type and its classification (MediaClass enum in the
+  // .cpp, stored as its uint8_t value here). Manifest items overwhelmingly repeat one media type
+  // (all chapters share application/xhtml+xml, images share image/jpeg), so the common case is a
+  // single strcmp hit instead of re-classifying — and the raw attribute is never copied into a
+  // per-item std::string. Fixed buffer, zero heap; 48 covers every registered EPUB media type.
+  char lastMediaType_[48] = {};
+  uint8_t lastMediaClass_ = 0;
+
   static constexpr uint16_t LARGE_SPINE_THRESHOLD = 400;
 
   // FNV-1a hash function
