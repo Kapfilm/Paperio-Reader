@@ -59,7 +59,8 @@ class BufferedFileReader {
       const size_t avail = fill_ - pos_;
       if (avail > 0) {
         const size_t take = n < avail ? n : avail;
-        memcpy(out, buf_.get() + pos_, take);
+        uint8_t* const base = buf_.get();
+        memcpy(out, base + pos_, take);
         pos_ += take;
         out += take;
         n -= take;
@@ -138,7 +139,8 @@ class BufferedFileWriter {
       return wrote == n;
     }
     if (fill_ + n > cap_ && !flush()) return false;
-    memcpy(buf_.get() + fill_, in, n);
+    uint8_t* const base = buf_.get();
+    memcpy(base + fill_, in, n);
     fill_ += n;
     return true;
   }
