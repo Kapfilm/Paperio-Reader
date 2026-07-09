@@ -318,3 +318,41 @@ TEST(ContentOpfParser, ResolvesSpineIdrefsUsingIndexedLookupForLargeManifest) {
   EXPECT_EQ(capturedSpineHrefs[1], "book/OEBPS/text/ch10.xhtml");
   EXPECT_EQ(capturedSpineHrefs[2], "book/OEBPS/text/ch0.xhtml");
 }
+
+TEST(ContentOpfParser, DisablesHashTrustedIndexOnDuplicateIdsAndStillResolves) {
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  TempDirGuard dirGuard(cacheDir);
+
+  std::vector<std::string> capturedSpineHrefs;
+  ScopedSpineHrefSink sinkGuard(&capturedSpineHrefs);
+
+  // The indexed lookup trusts (idHash, idLen) without reading the id back, so two manifest
+  // items sharing an id (equal hash AND length — the same key shape a genuine 32-bit collision
+  // would produce) must disable the index for the whole book. The exact linear scan then
+  // resolves the ambiguous idref to its FIRST manifest occurrence, and unrelated idrefs keep
+  // resolving normally.
+  constexpr int kItemCount = 420;  // > LARGE_SPINE_THRESHOLD so the index path would engage
+  const std::string base = "/book/OEBPS/";
+  const std::string xml =
+      "<?xml version='1.0' encoding='utf-8'?>"
+      "<package xmlns:opf='http://www.idpf.org/2007/opf' xmlns:dc='http://purl.org/dc/elements/1.1/'>"
+      "<metadata><dc:title>T</dc:title></metadata>"
+      "<manifest>" +
+      buildManifestItems(kItemCount) +
+      "<item id='ch5' href='text/duplicate.xhtml' media-type='application/xhtml+xml'/>"
+      "</manifest>"
+      "<spine>"
+      "<itemref idref='ch5'/>"
+      "<itemref idref='ch419'/>"
+      "</spine>"
+      "</package>";
+
+  BookMetadataCache cache(cacheDir);
+  ContentOpfParser parser(cacheDir, base, xml.size(), &cache);
+  ASSERT_TRUE(parseOpfXml(parser, xml));
+
+  ASSERT_EQ(capturedSpineHrefs.size(), 2u);
+  EXPECT_EQ(capturedSpineHrefs[0], "book/OEBPS/text/ch5.xhtml");  // first occurrence wins
+  EXPECT_EQ(capturedSpineHrefs[1], "book/OEBPS/text/ch419.xhtml");
+}

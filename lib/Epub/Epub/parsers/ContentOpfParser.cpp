@@ -295,38 +295,33 @@ bool ContentOpfParser::resolveItemRefHrefWithIndex(const std::string& idref, std
                                return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
                              });
 
-  // Check for match (may need to check a few due to hash collisions).
-  while (it != itemIndex.end() && it->idHash == targetHash) {
-    tempItemStore.seek(it->fileOffset);
-    std::string itemId;
-    if (!serialization::readString(tempItemStore, itemId)) {
-      ++it;
-      continue;
-    }
-    if (itemId == idref) {
-      if (serialization::readString(tempItemStore, href)) {
-        return true;
-      }
-    }
-    ++it;
+  // Trust (hash, len): the duplicate scan at spine start guarantees the key is unique in this
+  // index, so the first match IS the item — seek straight to its href, skipping the id
+  // read-back-and-compare that used to cost a second string read per itemref (5.8 s of a
+  // 1732-itemref spine pass was this loop's SD traffic). The buffered reader makes the seek
+  // free when the href sits in the current window, which spine-follows-manifest order makes
+  // the common case.
+  if (it != itemIndex.end() && it->idHash == targetHash && it->idLen == targetLen) {
+    itemReader_->seek(it->hrefOffset);
+    return itemReader_->readString(href);
   }
 
   return false;
 }
 
 bool ContentOpfParser::resolveItemRefHrefLinearScan(const std::string& idref, std::string& href) {
-  tempItemStore.seek(0);
+  itemReader_->seek(0);
   const size_t itemStoreSize = tempItemStore.fileSize();
   std::string itemId;
 
-  while (tempItemStore.position() < itemStoreSize) {
-    const size_t beforeReadPos = tempItemStore.position();
-    if (!serialization::readString(tempItemStore, itemId) || !serialization::readString(tempItemStore, href)) {
+  while (itemReader_->position() < itemStoreSize) {
+    const size_t beforeReadPos = itemReader_->position();
+    if (!itemReader_->readString(itemId) || !itemReader_->readString(href)) {
       return false;
     }
 
     // Guard against malformed temp data or host shims that don't signal EOF via available().
-    if (tempItemStore.position() <= beforeReadPos) {
+    if (itemReader_->position() <= beforeReadPos) {
       return false;
     }
 
@@ -339,15 +334,17 @@ bool ContentOpfParser::resolveItemRefHrefLinearScan(const std::string& idref, st
 }
 
 bool ContentOpfParser::resolveSpineItemRefHref(const std::string& idref, std::string& href) {
+  if (!itemReader_.has_value()) {
+    return false;  // spine element never opened the item store — nothing to resolve against
+  }
   if (useItemIndex) {
     return resolveItemRefHrefWithIndex(idref, href);
   }
 
   // Slow path: linear scan (for small manifests, keeps original behavior).
-  // TODO: This lookup is slow as need to scan through all items each time.
-  //       It can take up to 200ms per item when getting to 1500 items.
   return resolveItemRefHrefLinearScan(idref, href);
 }
+
 
 void ContentOpfParser::handleSpineItemRefElement(const char** atts) {
   for (int i = 0; atts[i]; i += 2) {
@@ -407,6 +404,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     if (!Storage.openFileForWrite("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for writing. This is probably going to be a fatal error.");
     }
+    self->itemWriter_.emplace(self->tempItemStore);
     return;
   }
 
@@ -415,14 +413,31 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }
+    self->itemReader_.emplace(self->tempItemStore);
 
     // Sort item index for binary search if we have enough items
     if (self->itemIndex.size() >= LARGE_SPINE_THRESHOLD) {
       std::sort(self->itemIndex.begin(), self->itemIndex.end(), [](const ItemIndexEntry& a, const ItemIndexEntry& b) {
         return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
       });
-      self->useItemIndex = true;
-      LOG_DBG("COF", "Using fast index for %zu manifest items", self->itemIndex.size());
+      // Lookups trust (hash, len) without reading the id back, so a (hash, len) duplicate —
+      // a genuine 32-bit collision (~1e-4 odds per book) or a spec-invalid duplicated id —
+      // could resolve to the wrong href. Adjacent scan after the sort: any duplicate disables
+      // the index for this book and every idref falls back to the exact linear scan.
+      bool duplicateKeys = false;
+      for (size_t i = 1; i < self->itemIndex.size(); ++i) {
+        if (self->itemIndex[i].idHash == self->itemIndex[i - 1].idHash &&
+            self->itemIndex[i].idLen == self->itemIndex[i - 1].idLen) {
+          duplicateKeys = true;
+          break;
+        }
+      }
+      if (duplicateKeys) {
+        LOG_DBG("COF", "Manifest id hash collision; using exact linear idref lookup");
+      } else {
+        self->useItemIndex = true;
+        LOG_DBG("COF", "Using fast index for %zu manifest items", self->itemIndex.size());
+      }
     }
     return;
   }
@@ -530,18 +545,18 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
       }
     }
 
-    // Record index entry for fast lookup later
+    // Write items down to SD card (buffered — thousands of tiny field writes otherwise cost a
+    // full FsFile call each). The index entry records the position AFTER the id string:
+    // hash-trusted lookups seek straight to the href and never re-read the id.
+    self->itemWriter_->writeString(itemId);
     if (self->tempItemStore) {
       ItemIndexEntry entry;
       entry.idHash = fnvHash(itemId);
       entry.idLen = static_cast<uint16_t>(itemId.size());
-      entry.fileOffset = static_cast<uint32_t>(self->tempItemStore.position());
+      entry.hrefOffset = self->itemWriter_->position();
       self->itemIndex.push_back(entry);
     }
-
-    // Write items down to SD card
-    serialization::writeString(self->tempItemStore, itemId);
-    serialization::writeString(self->tempItemStore, href);
+    self->itemWriter_->writeString(href);
 
     if (itemId == self->coverItemId) {
       // Some EPUBs set meta name="cover" to an XHTML wrapper item.
@@ -676,6 +691,7 @@ void ContentOpfParser::endElement(void* userData, const char* name) {
 
   if (self->state == IN_SPINE && isSpineTag(name)) {
     self->state = IN_PACKAGE;
+    self->itemReader_.reset();
     self->tempItemStore.close();
     return;
   }
@@ -688,6 +704,11 @@ void ContentOpfParser::endElement(void* userData, const char* name) {
 
   if (self->state == IN_MANIFEST && isManifestTag(name)) {
     self->state = IN_PACKAGE;
+    // Flush buffered item records before the file closes; the spine pass reads them back.
+    if (self->itemWriter_.has_value()) {
+      self->itemWriter_->flush();
+      self->itemWriter_.reset();
+    }
     self->tempItemStore.close();
     return;
   }
