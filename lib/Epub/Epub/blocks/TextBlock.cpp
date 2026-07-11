@@ -139,12 +139,25 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
   if (sizesPresent) {
     lineAscender = renderer.getFontAscenderSizeScaled(effFontId, blockScale * (maxSizePct() / 100.0f));
   }
+  // Cache per-word ascender calculations (typically 2-3 unique scales per block).
+  // Avoids the per-word function call overhead on ESP32-C3 for typical books where
+  // per-word font sizing is rare or uniform.
+  std::vector<std::pair<float, int>> ascenderCache;
+  auto getOrCacheAscender = [&](float s) -> int {
+    if (s == blockScale) return blockAscender;
+    for (const auto& [cachedScale, cachedAscender] : ascenderCache) {
+      if (cachedScale == s) return cachedAscender;
+    }
+    const int ascender = renderer.getFontAscenderSizeScaled(effFontId, s);
+    ascenderCache.emplace_back(s, ascender);
+    return ascender;
+  };
   for (uint16_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
     const int wordX = xposArr[i] + x;
     const EpdFontFamily::Style currentStyle = wordStyle(i);
     const float scale = wordScale(i);
-    const int ascender = (scale == blockScale) ? blockAscender : renderer.getFontAscenderSizeScaled(effFontId, scale);
+    const int ascender = getOrCacheAscender(scale);
     // Baseline alignment: shift smaller words down so all baselines meet at y + lineAscender.
     int wordY = y + (lineAscender - ascender);
     // SUP/SUB shift the baseline only — the glyph shrink comes from the word's own size
