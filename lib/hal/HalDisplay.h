@@ -45,6 +45,13 @@ class HalDisplay {
   // then does post-waveform SPI work. Both must be called from the render task.
   void triggerDisplay(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
   void completeDisplay();
+  // X4 async refresh split: triggerDisplayAsync() returns while the waveform
+  // runs (BUSY ISR armed); finishDisplayAsync() sleeps until it completes and
+  // clears the refresh bookkeeping. Between the calls the caller may do
+  // CPU/RAM-only work — no display or SPI-bus access, same task as trigger.
+  // On X3 the trigger falls back to triggerDisplay() and finish is a no-op.
+  void triggerDisplayAsync(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
+  void finishDisplayAsync();
   bool isRefreshPending() const;
   bool isRedRamSynced() const;
   // Diagnostics: effective refresh mode of the last refresh (after any downgrade).

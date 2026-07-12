@@ -153,24 +153,30 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
   }
 }
 
+// Resolve the refresh-cycle mode for the next page and advance the counter.
+// Split out of triggerWithRefreshCycle() so callers that fire the refresh
+// through a different mechanism (e.g. triggerDisplayAsync for the inline AA
+// path) share the exact same cycle policy and logging.
+inline HalDisplay::RefreshMode nextRefreshCycleMode(int& pagesUntilFullRefresh) {
+  const int freq = SETTINGS.getRefreshFrequency();
+  if (freq == 0) {
+    return HalDisplay::FAST_REFRESH;
+  }
+  if (pagesUntilFullRefresh <= 1) {
+    LOG_DBG("RCY", "triggerWithRefreshCycle: HALF (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
+    pagesUntilFullRefresh = freq;
+    return HalDisplay::HALF_REFRESH;
+  }
+  LOG_DBG("RCY", "triggerWithRefreshCycle: fast (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
+  pagesUntilFullRefresh--;
+  return HalDisplay::FAST_REFRESH;
+}
+
 // Non-blocking variant: trigger the display refresh and return immediately.
 // completeDisplay() must be called later (on the same task) to wait for the
 // waveform and do post-refresh SPI work.
 inline void triggerWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
-  const int freq = SETTINGS.getRefreshFrequency();
-  if (freq == 0) {
-    renderer.triggerDisplay();
-    return;
-  }
-  if (pagesUntilFullRefresh <= 1) {
-    LOG_DBG("RCY", "triggerWithRefreshCycle: HALF (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
-    renderer.triggerDisplay(HalDisplay::HALF_REFRESH);
-    pagesUntilFullRefresh = freq;
-  } else {
-    LOG_DBG("RCY", "triggerWithRefreshCycle: fast (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
-    renderer.triggerDisplay();
-    pagesUntilFullRefresh--;
-  }
+  renderer.triggerDisplay(nextRefreshCycleMode(pagesUntilFullRefresh));
 }
 
 inline void enforceExitFullRefresh(const GfxRenderer& renderer) {

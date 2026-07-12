@@ -2475,6 +2475,15 @@ void GfxRenderer::triggerDisplay(const HalDisplay::RefreshMode mode, const bool 
   frameBuffer = display.getFrameBuffer();
 }
 
+void GfxRenderer::triggerDisplayAsync(const HalDisplay::RefreshMode mode, const bool turnOffScreen) const {
+  const HalDisplay::RefreshMode effectiveMode = consumeRefreshOverride(mode);
+  const bool effectiveTurnOff = turnOffScreen || fadingFix.load(std::memory_order_relaxed);
+  display.triggerDisplayAsync(effectiveMode, effectiveTurnOff);
+  // The buffer swap happened before the waveform started; resync the cached
+  // pointer now so plane renders during the waveform hit the write buffer.
+  frameBuffer = display.getFrameBuffer();
+}
+
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
   const auto effectiveMode = consumeRefreshOverride(refreshMode);
 

@@ -187,6 +187,13 @@ class GfxRenderer {
   // Honors a pending setNextDisplayRefreshMode() override (see consumeRefreshOverride);
   // defined out-of-line in the .cpp so it can share that logic with displayBuffer().
   void triggerDisplay(HalDisplay::RefreshMode mode = HalDisplay::FAST_REFRESH, bool turnOffScreen = false) const;
+  // X4 async refresh split: triggerDisplayAsync() returns while the waveform
+  // runs; finishDisplayAsync() sleeps until it completes. CPU/RAM-only work is
+  // allowed between the two calls (no display/SPI), same task as the trigger.
+  // Honors the same refresh override + fading-fix policy as triggerDisplay().
+  // On X3 the trigger falls back to the synchronous path and finish is a no-op.
+  void triggerDisplayAsync(HalDisplay::RefreshMode mode = HalDisplay::FAST_REFRESH, bool turnOffScreen = false) const;
+  void finishDisplayAsync() const { display.finishDisplayAsync(); }
   void completeDisplay() const {
     display.completeDisplay();
     // Match displayBuffer(): reseed RED RAM from the current BW frame after the
@@ -335,6 +342,54 @@ class GfxRenderer {
     // holds the full BW page exactly as displayBuffer() left it. Using this
     // instead of re-rendering gives the correct baseline (images + text) and
     // costs only one SPI write.
+    cleanupGrayscaleWithPreviousBuffer();
+
+    t.restoreMs = millis() - t2;
+    return t;
+  }
+
+  // Same plane dance as renderGrayscalePlanesSequential(), but entered while an
+  // async BW refresh is still in flight (triggerDisplayAsync()): the LSB plane
+  // renders into the write framebuffer DURING the waveform — CPU/RAM work only,
+  // the controller scans its own RAM — then finishDisplayAsync() consumes the
+  // remaining wait before the first SPI plane write. This lands the gray flush
+  // ~one plane-render earlier than deferring the whole pass to after the
+  // waveform, which is what makes the AA touch-up read as part of the page
+  // refresh instead of a separate later update.
+  //
+  // Caller contract: an async refresh MUST be in flight, and the glyphs the
+  // renderFn draws must already be prewarmed (a cache miss would issue SD reads
+  // — allowed — but a display/SPI call in renderFn is not).
+  template <typename RenderFn>
+  GrayscaleTimings renderGrayscalePlanesInterleaved(RenderFn renderFn) {
+    GrayscaleTimings t;
+    const unsigned long t0 = millis();
+
+    clearScreen(0x00);
+    setRenderMode(GRAYSCALE_LSB);
+    renderFn(GRAYSCALE_LSB);
+    const unsigned long tLsbDone = millis();
+
+    // Waveform still running: sleep out the remainder (power hooks active).
+    display.finishDisplayAsync();
+    const unsigned long tWaveDone = millis();
+
+    copyGrayscaleLsbBuffers();
+    clearScreen(0x00);
+    setRenderMode(GRAYSCALE_MSB);
+    renderFn(GRAYSCALE_MSB);
+    copyGrayscaleMsbBuffers();
+
+    const unsigned long t1 = millis();
+    // Report only actual plane work; the residual waveform sleep is not ours.
+    t.planesMs = (tLsbDone - t0) + (t1 - tWaveDone);
+
+    setRenderMode(BW);
+    display.displayGrayBuffer(/*turnOffScreen=*/false);
+
+    const unsigned long t2 = millis();
+    t.displayMs = t2 - t1;
+
     cleanupGrayscaleWithPreviousBuffer();
 
     t.restoreMs = millis() - t2;

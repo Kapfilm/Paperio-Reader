@@ -167,6 +167,12 @@ void HalDisplay::triggerDisplay(RefreshMode mode, bool turnOffScreen) {
 
 void HalDisplay::completeDisplay() { einkDisplay.completeDisplay(); }
 
+void HalDisplay::triggerDisplayAsync(RefreshMode mode, bool turnOffScreen) {
+  einkDisplay.triggerDisplayAsync(convertRefreshMode(mode), turnOffScreen);
+}
+
+void HalDisplay::finishDisplayAsync() { einkDisplay.finishDisplayAsync(); }
+
 bool HalDisplay::isRefreshPending() const { return einkDisplay.isRefreshPending(); }
 bool HalDisplay::isRedRamSynced() const { return einkDisplay.isRedRamSynced(); }
 

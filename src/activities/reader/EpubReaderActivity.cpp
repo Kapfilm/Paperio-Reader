@@ -3100,20 +3100,23 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   fcm->logStats("bw_render");
   const auto tBwRender = millis();
   logReaderMemSnapshot("after_bw_render");
-  // Trigger the display refresh — sends pixel data, issues CMD_DISPLAY_REFRESH,
-  // swaps buffers, and returns immediately without waiting for the waveform.
+  // Resolve this page's refresh mode (consuming any force flags), then fire it.
+  // With AA enabled on X4 the refresh goes out async so the grayscale planes
+  // can render during the waveform (inline AA below); everywhere else the
+  // trigger blocks through the waveform exactly as before.
+  HalDisplay::RefreshMode pageRefreshMode;
   if (secondaryBufferDegraded_) {
     // FULL_REFRESH already gives a clean baseline, same goal as forceHalfRefreshAfterPopup_;
     // consume it here too so it doesn't carry over and force an unrelated later page to HALF.
     forceHalfRefreshAfterPopup_ = false;
-    renderer.triggerDisplay(HalDisplay::FULL_REFRESH);
+    pageRefreshMode = HalDisplay::FULL_REFRESH;
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else if (forceRefreshModeNextRender_ >= 0) {
     // Manual force-refresh button: apply the requested mode for this one render. A manual refresh
     // gives its own clean baseline, so consume any armed post-popup HALF too rather than letting it
     // carry over and force an unrelated later page to HALF.
     forceHalfRefreshAfterPopup_ = false;
-    renderer.triggerDisplay(static_cast<HalDisplay::RefreshMode>(forceRefreshModeNextRender_));
+    pageRefreshMode = static_cast<HalDisplay::RefreshMode>(forceRefreshModeNextRender_);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
     forceRefreshModeNextRender_ = -1;
   } else if (forceHalfRefreshAfterPopup_) {
@@ -3121,13 +3124,22 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     // in a single slice (e.g. a one-page cover) and never went through displayBuildPage(). See
     // forceHalfRefreshAfterPopup_.
     forceHalfRefreshAfterPopup_ = false;
-    renderer.triggerDisplay(HalDisplay::HALF_REFRESH);
+    pageRefreshMode = HalDisplay::HALF_REFRESH;
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else if (forceHalfRefreshThisPage) {
-    renderer.triggerDisplay(HalDisplay::HALF_REFRESH);
+    pageRefreshMode = HalDisplay::HALF_REFRESH;
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else {
-    ReaderUtils::triggerWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    pageRefreshMode = ReaderUtils::nextRefreshCycleMode(pagesUntilFullRefresh);
+  }
+  // Inline AA is X4-only: X4 waits out the waveform inside the trigger, so the
+  // async split hands that window to the plane renders. X3 returns pre-waveform
+  // from its trigger already and keeps the deferred loop-task pass.
+  const bool inlineAaThisRender = aaEnabledForThisRender && !renderer.isX3();
+  if (inlineAaThisRender) {
+    renderer.triggerDisplayAsync(pageRefreshMode);
+  } else {
+    renderer.triggerDisplay(pageRefreshMode);
   }
   // Real content is now on screen; any indexing popup it replaced is gone. Clear the flag for the
   // abandon-to-adjacent-section path, which reaches this Normal pass without going through
@@ -3147,9 +3159,28 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     pendingHalfRefreshAfterImagePage = true;
   }
 
-  // Deferred grayscale: store context before releasing the lock, so loop() can
-  // run the AA pass. The page is kept alive via shared_ptr.
-  if (aaEnabledForThisRender) {
+  if (inlineAaThisRender) {
+    // Inline AA (X4): the BW waveform is still running from triggerDisplayAsync().
+    // Render the grayscale planes now — the LSB plane lands inside the waveform
+    // window, so after the wait only the LSB SPI write, the MSB plane and the
+    // short gray flush remain. The AA touch-up then reads as the tail of the
+    // page refresh instead of a separate later update (issue #71).
+    renderer.setFastGrayscaleLut(SETTINGS.fastAntiAliasing);
+    const int aaFontId = getEffectiveReaderFontId();
+    const Page* pagePtr = page.get();
+    const auto gt = renderer.renderGrayscalePlanesInterleaved([&](GfxRenderer::RenderMode) {
+      pagePtr->renderTextOnly(renderer, aaFontId, orientedMarginLeft, contentTop);
+      pagePtr->renderImagesFromGrayscaleCache(renderer, orientedMarginLeft, contentTop);
+    });
+    LOG_DBG("ERS", "Inline AA: planes=%lums gray=%lums restore=%lums", gt.planesMs, gt.displayMs, gt.restoreMs);
+    checkHeapIntegrity("after_inline_aa");
+    lastRenderStats.usedGrayscale = true;
+    lastRenderStats.phases = {tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, 0, gt.planesMs, 0,
+                              gt.displayMs,  gt.restoreMs,         millis() - t0};
+  } else if (aaEnabledForThisRender) {
+    // Deferred grayscale (X3): store context before releasing the lock, so
+    // loop() can run the AA pass once the waveform ends. The page is kept
+    // alive via shared_ptr.
     pendingGrayscale_.active = true;
     pendingGrayscale_.page = std::move(page);
     pendingGrayscale_.fontId = getEffectiveReaderFontId();
