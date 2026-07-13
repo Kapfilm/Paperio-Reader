@@ -95,6 +95,11 @@ String wsLastCompleteName;
 size_t wsLastCompleteSize = 0;
 unsigned long wsLastCompleteAt = 0;
 
+// Last successful HTTP /delete request (reported alongside the WS upload status)
+String lastDeleteName;
+size_t lastDeleteCount = 0;
+unsigned long lastDeleteAt = 0;
+
 void clearBookCacheIfNeeded(const String& filePath) {
   if (FsHelpers::hasEpubExtension(filePath)) {
     Epub(filePath.c_str(), "/.crosspoint").clearCache();
@@ -438,6 +443,9 @@ CrossPointWebServer::WsUploadStatus CrossPointWebServer::getWsUploadStatus() con
   status.lastCompleteName = wsLastCompleteName.c_str();
   status.lastCompleteSize = wsLastCompleteSize;
   status.lastCompleteAt = wsLastCompleteAt;
+  status.lastDeleteName = lastDeleteName.c_str();
+  status.lastDeleteCount = lastDeleteCount;
+  status.lastDeleteAt = lastDeleteAt;
   return status;
 }
 
@@ -1344,6 +1352,8 @@ void CrossPointWebServer::handleDelete() const {
   // Iterate over paths and delete each item
   bool allSuccess = true;
   String failedItems;
+  size_t deletedCount = 0;
+  String lastDeletedItem;
 
   for (const auto& p : paths) {
     auto itemPath = p.as<String>();
@@ -1416,7 +1426,16 @@ void CrossPointWebServer::handleDelete() const {
     if (!success) {
       failedItems += itemPath + " (deletion failed); ";
       allSuccess = false;
+    } else {
+      deletedCount++;
+      lastDeletedItem = itemName;
     }
+  }
+
+  if (deletedCount > 0) {
+    lastDeleteName = lastDeletedItem;
+    lastDeleteCount = deletedCount;
+    lastDeleteAt = millis();
   }
 
   if (allSuccess) {
