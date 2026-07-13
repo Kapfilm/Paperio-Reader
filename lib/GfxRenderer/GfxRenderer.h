@@ -200,10 +200,12 @@ class GfxRenderer {
   void finishDisplayAsync() const { display.finishDisplayAsync(); }
   void completeDisplay() const {
     display.completeDisplay();
-    // Match displayBuffer(): reseed RED RAM from the current BW frame after the
-    // refresh pipeline settles. On X3 this is a no-op; on X4 it restores the
-    // expected differential baseline for the next fast update.
-    display.syncRedRamFromFrameBuffer();
+    // No per-page RED reseed here — same rationale as displayBuffer(): the
+    // display driver keeps the RED (previous-frame) plane current on every
+    // refresh (writes RED from prev on dual-buffer fast, resyncs it after
+    // single-buffer refreshes), so a syncRedRamFromFrameBuffer() here is a
+    // redundant ~48 KB SPI write per page turn. The explicit seed lives at the
+    // dual->single transition (release sites) only.
   }
   bool isRefreshPending() const { return display.isRefreshPending(); }
   bool isRedRamSynced() const { return display.isRedRamSynced(); }
