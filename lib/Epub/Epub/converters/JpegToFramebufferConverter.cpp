@@ -5,6 +5,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <ZipFile.h>
 #include <esp_task_wdt.h>
 #include <tjpgd.h>
@@ -75,6 +76,23 @@ struct JpegContext {
   // emitting only 0/3 so the BW DirectPixelWriter (`pixelValue < 3` rule) maps cleanly.
   int oneBitDitherRow{-1};
   std::unique_ptr<Atkinson1BitDitherer> atkinson1BitDitherer;
+
+  // TJpgDec delivers pixels one MCU block at a time, left-to-right across a row of
+  // MCUs before advancing (see tjpgd.c jd_decomp: outer loop over MCU rows, inner
+  // loop over MCU columns). The error-diffusion ditherers below need true
+  // left-to-right, top-to-bottom pixel order across a FULL row before advancing —
+  // otherwise their carried diffusion error resets every MCU-column boundary,
+  // producing a visible grid of seams (observed on-device, X4 cover images).
+  // When a stateful ditherer is active, incoming blocks are buffered here (in
+  // destination pixel coordinates) for one MCU row at a time; ditherGray() only
+  // runs once the whole row band is complete, via flushDitherBand(). Non-null
+  // implies banding is active; sized dstWidth * ditherBandCapacityRows.
+  std::unique_ptr<uint8_t[]> ditherBand;
+  int ditherBandCapacityRows{0};
+  int ditherBandTop{-1};      // dst Y of band row 0; -1 = no band currently open
+  int ditherBandUsedRows{0};  // rows actually spanned by the open band (<= capacity)
+  int ditherBandXStart{0};    // union of visible dst-X ranges written into the band
+  int ditherBandXEnd{0};
 
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
   int currentDitherRow{-1};
@@ -155,6 +173,57 @@ uint8_t ditherGray(JpegContext& ctx, uint8_t gray, int localX, int outX, int out
   return applyBayerDither4Level(gray, outX, outY);
 }
 #endif
+
+// Dither, write and (if enabled) cache one complete MCU row band: ctx.ditherBand rows
+// [0, ditherBandUsedRows) x dst columns [ditherBandXStart, ditherBandXEnd). Called once
+// per MCU row, after the last block in that row has been buffered — see the banding
+// rationale on JpegContext::ditherBand. Runs the row-based ditherers in true
+// left-to-right, top-to-bottom order, which is what they require.
+void flushDitherBand(JpegContext& ctx) {
+  const int bandTop = ctx.ditherBandTop;
+  ctx.ditherBandTop = -1;  // band is consumed either way
+  if (bandTop < 0) return;
+
+  const int bandRows = ctx.ditherBandUsedRows;
+  const int xStart = ctx.ditherBandXStart;
+  const int xEnd = ctx.ditherBandXEnd;
+  if (bandRows <= 0 || xStart >= xEnd) return;
+
+  const int cfgX = ctx.config->x;
+  const int cfgY = ctx.config->y;
+
+  DirectPixelWriter pw;
+  pw.init(*ctx.renderer);
+
+  bool caching = ctx.caching;
+  DirectCacheWriter cw;
+  if (caching) {
+    if (!ctx.cache.advanceTo(bandTop)) {
+      caching = false;
+      ctx.caching = false;
+    } else {
+      cw.init(ctx.cache.buffer, ctx.cache.bytesPerRow, ctx.cache.originX, ctx.config->y + ctx.cache.bandStart,
+              ctx.cache.width, ctx.cache.bandRows);
+    }
+  }
+
+  for (int dstY = bandTop; dstY < bandTop + bandRows; dstY++) {
+    const int outY = cfgY + dstY;
+    prepareOneBitDitherRow(ctx, dstY);
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+    prepareDitherRow(ctx, dstY);
+#endif
+    pw.beginRow(outY);
+    if (caching) cw.beginRow(outY);
+    const uint8_t* rowBuf = &ctx.ditherBand[static_cast<size_t>(dstY - bandTop) * static_cast<size_t>(ctx.dstWidth)];
+    for (int dstX = xStart; dstX < xEnd; dstX++) {
+      const int outX = cfgX + dstX;
+      uint8_t dithered = ditherGray(ctx, rowBuf[dstX], dstX, outX, outY);
+      pw.writePixel(outX, dithered);
+      if (caching) cw.writePixel(outX, dithered);
+    }
+  }
+}
 
 // TJpgDec session passed through jd->device to the I/O and output callbacks, giving
 // access to the open source file and the shared decode context (no global state).
@@ -375,7 +444,6 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
 
   if (stride <= 0 || blockH <= 0 || validW <= 0) return 1;
 
-  bool caching = ctx->caching;
   const int32_t fineScaleFPX = ctx->fineScaleFPX;
   const int32_t invScaleFPX = ctx->invScaleFPX;
   const int32_t fineScaleFPY = ctx->fineScaleFPY;
@@ -404,9 +472,40 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
   if (dstXStart < -cfgX) dstXStart = -cfgX;
   if (dstXEnd > clampXMax) dstXEnd = clampXMax;
 
-  if (dstYStart >= dstYEnd || dstXStart >= dstXEnd) return 1;
+  if (dstYStart >= dstYEnd) return 1;
 
-  // Pre-compute orientation and render-mode state once per callback invocation
+  // Row-band bookkeeping for the stateful ditherers (see JpegContext::ditherBand).
+  // blockX == 0 marks the first MCU of this row (open a fresh band); srcXEnd
+  // reaching the scaled source width marks the last MCU (the band is complete and
+  // must be dithered+emitted before returning). Both can fire on the same call for
+  // narrow images. This must run even when this particular block is entirely
+  // clipped in X below, since it may still be the block that opens or closes the row.
+  const bool useBand = (ctx->ditherBand != nullptr);
+  const bool rowStart = (blockX == 0);
+  const bool rowEnd = (srcXEnd >= ctx->scaledSrcWidth);
+
+  if (useBand && rowStart) {
+    ctx->ditherBandTop = dstYStart;
+    ctx->ditherBandUsedRows = dstYEnd - dstYStart;
+    if (ctx->ditherBandUsedRows > ctx->ditherBandCapacityRows) ctx->ditherBandUsedRows = ctx->ditherBandCapacityRows;
+    ctx->ditherBandXStart = ctx->dstWidth;
+    ctx->ditherBandXEnd = 0;
+  }
+
+  if (dstXStart >= dstXEnd) {
+    if (useBand && rowEnd) flushDitherBand(*ctx);
+    return 1;
+  }
+
+  if (useBand) {
+    if (dstXStart < ctx->ditherBandXStart) ctx->ditherBandXStart = dstXStart;
+    if (dstXEnd > ctx->ditherBandXEnd) ctx->ditherBandXEnd = dstXEnd;
+  }
+
+  // Pre-compute orientation and render-mode state once per callback invocation.
+  // Unused (but harmless to init) when useBand: this block's pixels are buffered
+  // into ctx->ditherBand instead, and flushDitherBand() does the actual writing
+  // once the whole MCU row band is complete.
   DirectPixelWriter pw;
   pw.init(renderer);
 
@@ -418,6 +517,9 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
   // the partial file) rather than writing past the band buffer.
   //
   // Ported from upstream commit d9bcef7a (crosspoint-reader#2230).
+  // Skipped entirely when useBand: flushDitherBand() drives the cache once per
+  // complete row band instead of once per (partial-width) MCU block.
+  bool caching = !useBand && ctx->caching;
   DirectCacheWriter cw;
   if (caching) {
     if (!ctx->cache.advanceTo(dstYStart)) {
@@ -429,25 +531,46 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
     }
   }
 
+  // Sink one already-resampled grayscale pixel: buffer it for later banded
+  // dithering, or dither+write it immediately (the pre-existing behavior, still
+  // used for the stateless Bayer path where pixel order doesn't matter).
+  auto sinkPixel = [&](int dstX, int dstY, int outX, int outY, uint8_t gray) {
+    if (useBand) {
+      // ditherBandCapacityRows is sized for the documented "MCU is at most 16
+      // scaled-source rows tall" bound (matching PixelCache's identical assumption);
+      // this guard is a defensive backstop against that ever being violated by an
+      // unusual sampling factor, trading a dropped row for a heap overflow.
+      const int bandRow = dstY - ctx->ditherBandTop;
+      if (bandRow < 0 || bandRow >= ctx->ditherBandCapacityRows) return;
+      ctx->ditherBand[static_cast<size_t>(bandRow) * static_cast<size_t>(ctx->dstWidth) + static_cast<size_t>(dstX)] =
+          gray;
+      return;
+    }
+    uint8_t dithered = ditherGray(*ctx, gray, dstX, outX, outY);
+    pw.writePixel(outX, dithered);
+    if (caching) cw.writePixel(outX, dithered);
+  };
+
   // === 1:1 fast path: no scaling math ===
   if (fineScaleFPX == FP_ONE && fineScaleFPY == FP_ONE) {
     for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
       const int outY = cfgY + dstY;
-      prepareOneBitDitherRow(*ctx, dstY);
+      if (!useBand) {
+        prepareOneBitDitherRow(*ctx, dstY);
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
-      prepareDitherRow(*ctx, dstY);
+        prepareDitherRow(*ctx, dstY);
 #endif
-      pw.beginRow(outY);
-      if (caching) cw.beginRow(outY);
+        pw.beginRow(outY);
+        if (caching) cw.beginRow(outY);
+      }
       const uint8_t* row = &pixels[(dstY - blockY) * stride];
       for (int dstX = dstXStart; dstX < dstXEnd; dstX++) {
         const int outX = cfgX + dstX;
         uint8_t gray = row[dstX - blockX];
-        uint8_t dithered = ditherGray(*ctx, gray, dstX, outX, outY);
-        pw.writePixel(outX, dithered);
-        if (caching) cw.writePixel(outX, dithered);
+        sinkPixel(dstX, dstY, outX, outY, gray);
       }
     }
+    if (useBand && rowEnd) flushDitherBand(*ctx);
     return 1;
   }
 
@@ -465,12 +588,14 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
 
     for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
       const int outY = cfgY + dstY;
-      prepareOneBitDitherRow(*ctx, dstY);
+      if (!useBand) {
+        prepareOneBitDitherRow(*ctx, dstY);
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
-      prepareDitherRow(*ctx, dstY);
+        prepareDitherRow(*ctx, dstY);
 #endif
-      pw.beginRow(outY);
-      if (caching) cw.beginRow(outY);
+        pw.beginRow(outY);
+        if (caching) cw.beginRow(outY);
+      }
       const int32_t srcFyFP = dstY * invScaleFPY;
       const int32_t fy = srcFyFP & FP_MASK;
       const int32_t fyInv = FP_ONE - fy;
@@ -500,9 +625,7 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
         int bot = ((int)row1[lx0] * fxInv + (int)row1[lx1] * fx) >> FP_SHIFT;
         uint8_t gray = (uint8_t)((top * fyInv + bot * fy) >> FP_SHIFT);
 
-        uint8_t dithered = ditherGray(*ctx, gray, dstX, outX, outY);
-        pw.writePixel(outX, dithered);
-        if (caching) cw.writePixel(outX, dithered);
+        sinkPixel(dstX, dstY, outX, outY, gray);
       }
 
       // Interior (no X boundary checks — lx0 and lx0+1 guaranteed in bounds)
@@ -517,9 +640,7 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
         int bot = ((int)row1[lx0] * fxInv + (int)row1[lx0 + 1] * fx) >> FP_SHIFT;
         uint8_t gray = (uint8_t)((top * fyInv + bot * fy) >> FP_SHIFT);
 
-        uint8_t dithered = ditherGray(*ctx, gray, dstX, outX, outY);
-        pw.writePixel(outX, dithered);
-        if (caching) cw.writePixel(outX, dithered);
+        sinkPixel(dstX, dstY, outX, outY, gray);
       }
 
       // Right edge (with X boundary clamping)
@@ -537,23 +658,24 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
         int bot = ((int)row1[lx0] * fxInv + (int)row1[lx1] * fx) >> FP_SHIFT;
         uint8_t gray = (uint8_t)((top * fyInv + bot * fy) >> FP_SHIFT);
 
-        uint8_t dithered = ditherGray(*ctx, gray, dstX, outX, outY);
-        pw.writePixel(outX, dithered);
-        if (caching) cw.writePixel(outX, dithered);
+        sinkPixel(dstX, dstY, outX, outY, gray);
       }
     }
+    if (useBand && rowEnd) flushDitherBand(*ctx);
     return 1;
   }
 
   // === Nearest-neighbor (downscale: fineScale < 1.0) ===
   for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
     const int outY = cfgY + dstY;
-    prepareOneBitDitherRow(*ctx, dstY);
+    if (!useBand) {
+      prepareOneBitDitherRow(*ctx, dstY);
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
-    prepareDitherRow(*ctx, dstY);
+      prepareDitherRow(*ctx, dstY);
 #endif
-    pw.beginRow(outY);
-    if (caching) cw.beginRow(outY);
+      pw.beginRow(outY);
+      if (caching) cw.beginRow(outY);
+    }
     const int32_t srcFyFP = dstY * invScaleFPY;
     int ly = (srcFyFP >> FP_SHIFT) - blockY;
     if (ly < 0) ly = 0;
@@ -568,12 +690,11 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
       if (lx >= validW) lx = validW - 1;
       uint8_t gray = row[lx];
 
-      uint8_t dithered = ditherGray(*ctx, gray, dstX, outX, outY);
-      pw.writePixel(outX, dithered);
-      if (caching) cw.writePixel(outX, dithered);
+      sinkPixel(dstX, dstY, outX, outY, gray);
     }
   }
 
+  if (useBand && rowEnd) flushDitherBand(*ctx);
   return 1;
 }
 
@@ -868,9 +989,12 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   LOG_DBG("JPG", "JPEG %dx%d -> %dx%d (scale %.2f, jpegScale 1/%d, fineScale %.2f)", srcWidth, srcHeight, destWidth,
           destHeight, targetScale, jpegScaleDenom, (float)destWidth / ctx.scaledSrcWidth);
 
-  // Start streaming the pixel cache to disk. The band only needs to hold the
-  // tallest single decode block: a TJpgDec MCU is at most 16 scaled-source rows
-  // tall, which our fine scale maps to this many output rows.
+  // A TJpgDec MCU is at most 16 scaled-source rows tall, which our fine scale maps
+  // to this many output rows — the tallest span either the disk cache band or the
+  // dither row band (below) ever needs to hold in one piece.
+  const int maxBlockDstRows = (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
+
+  // Start streaming the pixel cache to disk.
   // (See PixelCache for why streaming replaced a full-image buffer; ported from
   // upstream commit d9bcef7a, crosspoint-reader#2230.)
   ctx.caching = shouldEnableJpegCache(config, destWidth, destHeight);
@@ -881,7 +1005,6 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   ctx.caching = false;
 #endif
   if (ctx.caching) {
-    const int maxBlockDstRows = (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
     if (!ctx.cache.begin(config.cachePath, destWidth, destHeight, config.x, config.y, maxBlockDstRows)) {
       LOG_ERR("JPG", "Failed to start cache stream, continuing without caching");
       ctx.caching = false;
@@ -893,26 +1016,65 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
     ctx.effectiveDitherMode = ImageDitherMode::Bayer;
   }
 
+  // The row-based ditherers (Atkinson1Bit, Atkinson, DiffusedBayer) carry
+  // left-to-right error-diffusion state and need pixels delivered in true raster
+  // order. TJpgDec instead delivers one MCU block at a time — see
+  // JpegContext::ditherBand. Buffer a full MCU row band before constructing any
+  // of these so emitGrayBlock always has somewhere to stash pixels; if the band
+  // can't be allocated, skip straight to the stateless (order-independent) Bayer
+  // path below rather than dithering with corrupted state.
+  bool wantsStatefulDither = config.monochromeOutput;
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+  if (!wantsStatefulDither && config.useDithering &&
+      (ctx.effectiveDitherMode == ImageDitherMode::Atkinson ||
+       ctx.effectiveDitherMode == ImageDitherMode::DiffusedBayer)) {
+    wantsStatefulDither = true;
+  }
+#endif
+
+  bool ditherBandReady = false;
+  if (wantsStatefulDither && destWidth > 0) {
+    // Budget: keep well under the headroom left after the 12KB TJpgDec work pool
+    // and up to 24KB PixelCache band on a page that may have only ~55KB free.
+    constexpr size_t DITHER_BAND_MAX_BYTES = 8 * 1024;
+    int bandRows = maxBlockDstRows < 1 ? 1 : maxBlockDstRows;
+    size_t maxRowsByMem = DITHER_BAND_MAX_BYTES / (size_t)destWidth;
+    if (maxRowsByMem < 1) maxRowsByMem = 1;
+    if ((size_t)bandRows <= maxRowsByMem) {
+      ctx.ditherBand = makeUniqueNoThrow<uint8_t[]>((size_t)destWidth * (size_t)bandRows);
+      if (ctx.ditherBand) {
+        ctx.ditherBandCapacityRows = bandRows;
+        ditherBandReady = true;
+      } else {
+        LOG_ERR("JPG", "OOM allocating %d-row dither band (%u bytes); falling back to Bayer dithering", bandRows,
+                (unsigned)((size_t)destWidth * (size_t)bandRows));
+      }
+    } else {
+      LOG_DBG("JPG", "Dither band needs %d rows > %u budget rows; falling back to Bayer dithering", bandRows,
+              (unsigned)maxRowsByMem);
+    }
+  }
+
   // See PngToFramebufferConverter for rationale: BW-only display needs a 1-bit
   // dither so mid-grays don't collapse to black under DirectPixelWriter's `< 3` rule.
-  if (config.monochromeOutput) {
-    ctx.atkinson1BitDitherer.reset(new (std::nothrow) Atkinson1BitDitherer(destWidth));
+  if (config.monochromeOutput && ditherBandReady) {
+    ctx.atkinson1BitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(destWidth);
     if (!ctx.atkinson1BitDitherer) {
       LOG_ERR("JPG", "Failed to allocate 1-bit Atkinson ditherer, falling back to 4-level dither");
     }
   }
 
-  if (config.useDithering && !ctx.atkinson1BitDitherer) {
+  if (config.useDithering && !ctx.atkinson1BitDitherer && ditherBandReady) {
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
     switch (ctx.effectiveDitherMode) {
       case ImageDitherMode::Atkinson:
-        ctx.atkinsonDitherer.reset(new (std::nothrow) AtkinsonDitherer(destWidth));
+        ctx.atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(destWidth);
         if (!ctx.atkinsonDitherer) {
           LOG_ERR("JPG", "Failed to allocate Atkinson ditherer, falling back to Bayer");
         }
         break;
       case ImageDitherMode::DiffusedBayer:
-        ctx.diffusedBayerDitherer.reset(new (std::nothrow) DiffusedBayerDitherer(destWidth));
+        ctx.diffusedBayerDitherer = makeUniqueNoThrow<DiffusedBayerDitherer>(destWidth);
         if (!ctx.diffusedBayerDitherer) {
           LOG_ERR("JPG", "Failed to allocate diffused Bayer ditherer, falling back to Bayer");
         }
@@ -923,6 +1085,17 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
         break;
     }
 #endif
+  }
+
+  // If neither stateful ditherer ended up constructed (band unavailable, or alloc
+  // failed above), drop the band too so emitGrayBlock takes the direct-write path.
+  if (!ctx.atkinson1BitDitherer
+#ifdef ENABLE_IMAGE_DITHERING_EXTENSION
+      && !ctx.atkinsonDitherer && !ctx.diffusedBayerDitherer
+#endif
+  ) {
+    ctx.ditherBand.reset();
+    ctx.ditherBandCapacityRows = 0;
   }
 
   jpgCheckHeap("jpg_before_decode");
