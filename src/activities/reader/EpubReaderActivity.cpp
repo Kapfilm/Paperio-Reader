@@ -2844,19 +2844,17 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   const RenderPass pass = classifyRenderPass();
   pendingPreRender = false;
   usePreRenderedBuffer = false;
-  // Discard the pre-render only when it is actually STALE — i.e. it no longer describes the
-  // next page of the page currently displayed. A completed pre-render must survive an
-  // intervening Normal render (periodic status-bar/clock update, deferred-AA-triggered
-  // requestUpdate, etc.); the former "clear on any non-pre-render/non-buffer pass" rule threw
-  // away a valid pre-render whenever such a render landed between the pre-render and the page
-  // turn, turning a hit into a slow miss. Validity is keyed on (spineIndex, pageIndex) ==
-  // (current spine, currentPage+1); the BufferDisplay/PreRender passes manage ready themselves.
+  // Any other pass redraws the write framebuffer and flushes/swaps, destroying pre-rendered
+  // pixels — so a completed pre-render must be discarded here even when its (spineIndex,
+  // pageIndex) still matches the current page. Keeping ready=true across an intervening
+  // Normal render (periodic status-bar/battery/clock update) let the next page turn take the
+  // BufferDisplay path and flush the STALE current page with only a fresh status bar drawn
+  // over it (observed as "page counter advances but content doesn't, every 30-40 pages" —
+  // the battery-percent tick cadence). This does not cost the hit: renderContents() re-arms
+  // pendingPreRender when ready is false, and the re-render runs during the same render's
+  // waveform wait. The BufferDisplay/PreRender passes manage ready themselves.
   if (pass != RenderPass::PreRender && pass != RenderPass::BufferDisplay && preRenderedPage.ready) {
-    const bool stillValid = section && preRenderedPage.spineIndex == currentSpineIndex &&
-                            preRenderedPage.pageIndex == section->currentPage + 1;
-    if (!stillValid) {
-      preRenderedPage.ready = false;
-    }
+    preRenderedPage.ready = false;
   }
 
   switch (pass) {
