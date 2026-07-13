@@ -7,6 +7,7 @@
 #include <esp_task_wdt.h>
 
 #include "MappedInputManager.h"
+#include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/SignalStrengthWidget.h"
@@ -31,6 +32,10 @@ void CalibreConnectActivity::onEnter() {
   lastCompleteName.clear();
   lastCompleteAt = 0;
   lastProcessedCompleteAt = 0;
+  lastDeleteName.clear();
+  lastDeleteCount = 0;
+  lastDeleteAt = 0;
+  lastProcessedDeleteAt = 0;
   currentRssi = 0;
   lastRssiUpdateTime = 0;
   exitRequested = false;
@@ -82,6 +87,21 @@ void CalibreConnectActivity::startWebServer() {
     // mDNS is optional for the Calibre plugin but still helpful for users.
     LOG_DBG("CAL", "mDNS started: http://%s.local/", HOSTNAME);
   }
+
+  // Unlike CrossPointWebServerActivity we keep rendering live progress UI, so
+  // the primary framebuffer must stay. The ~52 KB secondary buffer and the SD
+  // reader font are unused here though, and the web server needs the headroom
+  // (each request wants an 8 KB contiguous block). Safe to drop both without
+  // restoring: onExit() always silentRestart()s once WiFi is up.
+  LOG_DBG("CAL", "Free heap before trim: %d bytes", ESP.getFreeHeap());
+  sdFontSystem.unload(renderer);
+  if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
+    // Keep X4 fast differential refresh alive by diffing against the
+    // controller's retained baseline instead of the freed secondary buffer.
+    renderer.setSingleBufferFastDiff(true);
+    LOG_DBG("CAL", "Released secondary framebuffer for web server (~52 KB)");
+  }
+  LOG_DBG("CAL", "Free heap after trim: %d bytes", ESP.getFreeHeap());
 
   webServer.reset(new CrossPointWebServer());
   webServer->begin();
@@ -166,6 +186,19 @@ void CalibreConnectActivity::loop() {
       // Note: we DON'T reset lastProcessedCompleteAt here, so we won't re-process the old server value
       changed = true;
     }
+    // Same pattern for deletions (HTTP /delete requests from the Calibre plugin)
+    if (status.lastDeleteAt != 0 && status.lastDeleteAt != lastProcessedDeleteAt) {
+      lastDeleteAt = status.lastDeleteAt;
+      lastDeleteName = status.lastDeleteName;
+      lastDeleteCount = status.lastDeleteCount;
+      lastProcessedDeleteAt = status.lastDeleteAt;
+      changed = true;
+    }
+    if (lastDeleteAt > 0 && (millis() - lastDeleteAt) >= 6000) {
+      lastDeleteAt = 0;
+      lastDeleteName.clear();
+      changed = true;
+    }
     if (changed) {
       requestUpdate();
     }
@@ -237,6 +270,16 @@ void CalibreConnectActivity::render(RenderLock&&) {
 
     if (lastCompleteAt > 0 && (millis() - lastCompleteAt) < 6000) {
       std::string msg = std::string(tr(STR_CALIBRE_RECEIVED)) + lastCompleteName;
+      msg = renderer.truncatedText(SMALL_FONT_ID, msg.c_str(), textWidth, EpdFontFamily::REGULAR);
+      renderer.drawText(SMALL_FONT_ID, textX, y, msg.c_str());
+      y += height;
+    }
+
+    if (lastDeleteAt > 0 && (millis() - lastDeleteAt) < 6000) {
+      std::string msg = std::string(tr(STR_CALIBRE_DELETED)) + lastDeleteName;
+      if (lastDeleteCount > 1) {
+        msg += " (+" + std::to_string(lastDeleteCount - 1) + ")";
+      }
       msg = renderer.truncatedText(SMALL_FONT_ID, msg.c_str(), textWidth, EpdFontFamily::REGULAR);
       renderer.drawText(SMALL_FONT_ID, textX, y, msg.c_str());
     }

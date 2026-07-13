@@ -27,6 +27,11 @@ class CrossPointWebServer {
     std::string lastCompleteName;
     size_t lastCompleteSize = 0;
     unsigned long lastCompleteAt = 0;
+    // Last successful /delete request (HTTP, not WebSocket): name of the last
+    // item removed, how many items that request removed, and when.
+    std::string lastDeleteName;
+    size_t lastDeleteCount = 0;
+    unsigned long lastDeleteAt = 0;
   };
 
   // Used by POST upload handler
