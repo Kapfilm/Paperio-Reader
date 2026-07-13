@@ -59,33 +59,48 @@ curl http://crosspoint.local/files
 
 ### GET `/api/status` - Device Status
 
-Returns JSON with device status information.
+Returns JSON with device status information. The plain endpoint never touches
+the SD card and responds immediately; pass `phase=full` to additionally
+collect SD usage stats (`sdTotal`/`sdUsed`/`sdFree`), which scans the FAT and
+can take tens of seconds on large cards.
 
 **Request:**
 ```bash
 curl http://crosspoint.local/api/status
+# Include SD usage stats (slow):
+curl "http://crosspoint.local/api/status?phase=full"
 ```
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description                                        |
+| --------- | -------- | ------- | -------------------------------------------------- |
+| `phase`   | No       | (fast)  | `full` = also collect SD usage stats (slow)        |
 
 **Response (200 OK):**
 ```json
 {
   "version": "1.0.0",
+  "device": "X4",
   "ip": "192.168.1.100",
   "mode": "STA",
   "rssi": -45,
   "freeHeap": 123456,
-  "uptime": 3600
+  "uptime": 3600,
+  "sdReady": false
 }
 ```
 
-| Field      | Type   | Description                                               |
-| ---------- | ------ | --------------------------------------------------------- |
-| `version`  | string | CrossPoint firmware version                               |
-| `ip`       | string | Device IP address                                         |
-| `mode`     | string | `"STA"` (connected to WiFi) or `"AP"` (access point mode) |
-| `rssi`     | number | WiFi signal strength in dBm (0 in AP mode)                |
-| `freeHeap` | number | Free heap memory in bytes                                 |
-| `uptime`   | number | Seconds since device boot                                 |
+| Field      | Type   | Description                                                     |
+| ---------- | ------ | --------------------------------------------------------------- |
+| `version`  | string | CrossPoint firmware version                                     |
+| `device`   | string | Device model, `"X3"` or `"X4"` (also exposed as `deviceType`)   |
+| `ip`       | string | Device IP address                                               |
+| `mode`     | string | `"STA"` (connected to WiFi) or `"AP"` (access point mode)       |
+| `rssi`     | number | WiFi signal strength in dBm (0 in AP mode)                      |
+| `freeHeap` | number | Free heap memory in bytes                                       |
+| `uptime`   | number | Seconds since device boot                                       |
+| `sdReady`  | bool   | `true` only with `phase=full`; SD stats are valid only then     |
 
 ---
 

@@ -597,16 +597,22 @@ void CrossPointWebServer::handleNotFound() const {
 }
 
 void CrossPointWebServer::handleStatus() const {
-  const bool fastOnly = server->hasArg("phase") && server->arg("phase").equalsIgnoreCase("fast");
+  // SD stats require a freeClusterCount() scan of the whole FAT, which can
+  // block the (single-threaded) server for tens of seconds on a large card.
+  // Only collect them when explicitly asked (?phase=full): third-party
+  // clients like the Calibre plugin poll plain /api/status with short
+  // timeouts right before listing files, and a stalled server makes those
+  // listings time out (books on device never show up in Calibre).
+  const bool fullSd = server->hasArg("phase") && server->arg("phase").equalsIgnoreCase("full");
   if (rejectIfLowMemory(server.get())) return;
   LOG_WEB_MEM("status_enter");
-  LOG_DBG("SYSINFO", "handleStatus request received (fastOnly=%d)", fastOnly);
+  LOG_DBG("SYSINFO", "handleStatus request received (fullSd=%d)", fullSd);
   int32_t t0 = millis();
   SystemStatus status = SystemStatus::collectFast();
   int32_t t1 = millis();
   LOG_WEB_MEM("status_after_collectFast");
-  LOG_DBG("SYSINFO", "Collected fast status in %d ms (fastOnly=%d)", t1 - t0, fastOnly);
-  if (!fastOnly) {
+  LOG_DBG("SYSINFO", "Collected fast status in %d ms (fullSd=%d)", t1 - t0, fullSd);
+  if (fullSd) {
     LOG_DBG("SYSINFO", "handleStatus will collect SD stats");
     SystemStatus::fillSdStatus(status);
     LOG_WEB_MEM("status_after_fillSd");
@@ -615,6 +621,8 @@ void CrossPointWebServer::handleStatus() const {
   JsonDocument doc;
   doc["version"] = status.version;
   doc["deviceType"] = status.deviceType;
+  // Upstream-compatible alias used by the Calibre plugin's model detection.
+  doc["device"] = status.deviceType;
   doc["displayWidth"] = status.displayWidth;
   doc["displayHeight"] = status.displayHeight;
   doc["chipVersion"] = status.chipVersion;
@@ -631,7 +639,7 @@ void CrossPointWebServer::handleStatus() const {
   doc["batteryPercent"] = status.batteryPercent;
   doc["charging"] = status.charging;
   doc["uptime"] = status.uptimeSeconds;
-  doc["sdReady"] = !fastOnly;
+  doc["sdReady"] = fullSd;
   doc["sdTotal"] = status.sdTotalBytes;
   doc["sdUsed"] = status.sdUsedBytes;
   doc["sdFree"] = status.sdFreeBytes;
@@ -651,6 +659,8 @@ void CrossPointWebServer::handleStatusFast() const {
   JsonDocument doc;
   doc["version"] = status.version;
   doc["deviceType"] = status.deviceType;
+  // Upstream-compatible alias used by the Calibre plugin's model detection.
+  doc["device"] = status.deviceType;
   doc["displayWidth"] = status.displayWidth;
   doc["displayHeight"] = status.displayHeight;
   doc["chipVersion"] = status.chipVersion;

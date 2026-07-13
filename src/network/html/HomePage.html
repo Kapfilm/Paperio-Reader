@@ -393,7 +393,7 @@
       const start = performance.now();
 
       try {
-        const response = await fetch('/api/status');
+        const response = await fetch('/api/status?phase=full');
         if (!response.ok) {
           throw new Error('Failed to fetch SD status: ' + response.status + ' ' + response.statusText);
         }
