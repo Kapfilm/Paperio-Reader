@@ -679,14 +679,46 @@ void ReaderActivity::onEnter() {
     // isn't a dead screen; skip it on a warm cache so cached re-opens don't add
     // an extra e-ink flash. The throwaway Epub only computes paths + does a few
     // file-existence checks (no parsing), so this is cheap.
-    if (Epub(initialBookPath, "/.crosspoint").needsFirstOpenIndexing()) {
+    const bool firstOpenIndexing = Epub(initialBookPath, "/.crosspoint").needsFirstOpenIndexing();
+    if (firstOpenIndexing) {
       RenderLock lock;
       // drawPopup() overlays the indexing box on the displayed frame (it resyncs the write buffer
       // from the screen first), so the box lands on the launcher screen — e.g. the recent-books grid
       // — without the stale-buffer diff toggling the old/new selection cells before the popup appears.
       GUI.drawPopup(renderer, tr(STR_INDEXING));
     }
+    // First-open indexing allocates per-spine transient state — the batch-size-lookup vectors
+    // (~28 KB contiguous for a 1700-spine book) and the TOC's 32 KB NCX inflate ring — while the
+    // ~48 KB secondary framebuffer sits unused. Observed on-device: buildBookBin aborted (bare
+    // operator new under -fno-exceptions) at 51 KB free / 30 KB contig, after the TOC pass had
+    // already lost its inflate ring and produced 0 TOC entries. Lend the buffer out for the build
+    // (the popup above is drawn BEFORE the release — drawPopup needs the active buffer — and
+    // load() performs no rendering) and restore it before the reader activity starts. Same
+    // pattern as HomeActivity cover loading. If the realloc fails, EpubReaderActivity::onEnter
+    // sees the missing buffer (secondaryBufferDegraded_) and recovers once heap allows.
+    bool releasedForIndexing = false;
+    if (firstOpenIndexing && renderer.hasSecondaryBuffer()) {
+      RenderLock lock;
+      if (renderer.releaseSecondaryBuffer()) {
+        releasedForIndexing = true;
+        // Keep X4 fast-differential refresh alive off the controller's RED RAM (seeded by the
+        // popup's displayBuffer just above); no-op on X3.
+        renderer.setSingleBufferFastDiff(true);
+        LOG_INF("READER", "Released secondary framebuffer for first-open indexing (free=%lu)",
+                static_cast<unsigned long>(esp_get_free_heap_size()));
+      }
+    }
     auto epub = loadEpub(initialBookPath);
+    if (releasedForIndexing) {
+      RenderLock lock;
+      if (renderer.reallocSecondaryBuffer()) {
+        renderer.setSingleBufferFastDiff(false);
+        LOG_INF("READER", "Restored secondary framebuffer after first-open indexing");
+      } else {
+        LOG_ERR("READER", "Secondary framebuffer realloc failed after indexing (free=%lu); reader will recover",
+                static_cast<unsigned long>(esp_get_free_heap_size()));
+      }
+    }
     if (!epub) {
       onGoBack();
       return;

@@ -34,20 +34,44 @@ inline bool isItemTag(const char* name) { return isTag(name, "item", "opf:item")
 inline bool isItemRefTag(const char* name) { return isTag(name, "itemref", "opf:itemref"); }
 inline bool isReferenceTag(const char* name) { return isTag(name, "reference", "opf:reference"); }
 
-bool startsWithImageMediaType(const std::string& mediaType) {
+bool startsWithImageMediaType(const char* mediaType) {
   constexpr size_t prefixLen = sizeof(MEDIA_TYPE_IMAGE_PREFIX) - 1;
-  if (mediaType.size() < prefixLen) {
-    return false;
-  }
-
   for (size_t i = 0; i < prefixLen; ++i) {
+    // A shorter string mismatches on its NUL before this reads past the end.
     const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(mediaType[i])));
     if (c != MEDIA_TYPE_IMAGE_PREFIX[i]) {
       return false;
     }
   }
-
   return true;
+}
+
+// Everything the manifest handler needs to know about a media-type, computed once per
+// DISTINCT value: items are only ever routed by these classes, never by the raw string.
+enum class MediaClass : uint8_t { Other = 0, Image, Ncx, Css, PageMap };
+
+MediaClass classifyMediaType(const char* mediaType) {
+  if (mediaType == nullptr || *mediaType == '\0') return MediaClass::Other;
+  if (startsWithImageMediaType(mediaType)) return MediaClass::Image;
+  if (strcmp(mediaType, MEDIA_TYPE_NCX) == 0) return MediaClass::Ncx;
+  if (strcmp(mediaType, MEDIA_TYPE_CSS) == 0) return MediaClass::Css;
+  if (strcmp(mediaType, MEDIA_TYPE_PAGEMAP) == 0) return MediaClass::PageMap;
+  return MediaClass::Other;
+}
+
+// True when `word` appears as a whole space-separated token in `props` (the OPF
+// `properties` attribute format). Pointer scan — no std::string construction.
+bool hasPropertyWord(const char* props, const char* word) {
+  if (props == nullptr || *props == '\0') return false;
+  const size_t wordLen = strlen(word);
+  const char* p = props;
+  while ((p = strstr(p, word)) != nullptr) {
+    const bool startsToken = (p == props) || (p[-1] == ' ');
+    const char after = p[wordLen];
+    if (startsToken && (after == '\0' || after == ' ')) return true;
+    p += wordLen;
+  }
+  return false;
 }
 
 // Append the UTF-8 encoding of a Unicode code point.
@@ -271,38 +295,33 @@ bool ContentOpfParser::resolveItemRefHrefWithIndex(const std::string& idref, std
                                return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
                              });
 
-  // Check for match (may need to check a few due to hash collisions).
-  while (it != itemIndex.end() && it->idHash == targetHash) {
-    tempItemStore.seek(it->fileOffset);
-    std::string itemId;
-    if (!serialization::readString(tempItemStore, itemId)) {
-      ++it;
-      continue;
-    }
-    if (itemId == idref) {
-      if (serialization::readString(tempItemStore, href)) {
-        return true;
-      }
-    }
-    ++it;
+  // Trust (hash, len): the duplicate scan at spine start guarantees the key is unique in this
+  // index, so the first match IS the item — seek straight to its href, skipping the id
+  // read-back-and-compare that used to cost a second string read per itemref (5.8 s of a
+  // 1732-itemref spine pass was this loop's SD traffic). The buffered reader makes the seek
+  // free when the href sits in the current window, which spine-follows-manifest order makes
+  // the common case.
+  if (it != itemIndex.end() && it->idHash == targetHash && it->idLen == targetLen) {
+    itemReader_->seek(it->hrefOffset);
+    return itemReader_->readString(href);
   }
 
   return false;
 }
 
 bool ContentOpfParser::resolveItemRefHrefLinearScan(const std::string& idref, std::string& href) {
-  tempItemStore.seek(0);
+  itemReader_->seek(0);
   const size_t itemStoreSize = tempItemStore.fileSize();
   std::string itemId;
 
-  while (tempItemStore.position() < itemStoreSize) {
-    const size_t beforeReadPos = tempItemStore.position();
-    if (!serialization::readString(tempItemStore, itemId) || !serialization::readString(tempItemStore, href)) {
+  while (itemReader_->position() < itemStoreSize) {
+    const size_t beforeReadPos = itemReader_->position();
+    if (!itemReader_->readString(itemId) || !itemReader_->readString(href)) {
       return false;
     }
 
     // Guard against malformed temp data or host shims that don't signal EOF via available().
-    if (tempItemStore.position() <= beforeReadPos) {
+    if (itemReader_->position() <= beforeReadPos) {
       return false;
     }
 
@@ -315,13 +334,14 @@ bool ContentOpfParser::resolveItemRefHrefLinearScan(const std::string& idref, st
 }
 
 bool ContentOpfParser::resolveSpineItemRefHref(const std::string& idref, std::string& href) {
+  if (!itemReader_.has_value()) {
+    return false;  // spine element never opened the item store — nothing to resolve against
+  }
   if (useItemIndex) {
     return resolveItemRefHrefWithIndex(idref, href);
   }
 
   // Slow path: linear scan (for small manifests, keeps original behavior).
-  // TODO: This lookup is slow as need to scan through all items each time.
-  //       It can take up to 200ms per item when getting to 1500 items.
   return resolveItemRefHrefLinearScan(idref, href);
 }
 
@@ -383,6 +403,7 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     if (!Storage.openFileForWrite("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for writing. This is probably going to be a fatal error.");
     }
+    self->itemWriter_.emplace(self->tempItemStore);
     return;
   }
 
@@ -391,14 +412,31 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
     if (!Storage.openFileForRead("COF", self->cachePath + itemCacheFile, self->tempItemStore)) {
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }
+    self->itemReader_.emplace(self->tempItemStore);
 
     // Sort item index for binary search if we have enough items
     if (self->itemIndex.size() >= LARGE_SPINE_THRESHOLD) {
       std::sort(self->itemIndex.begin(), self->itemIndex.end(), [](const ItemIndexEntry& a, const ItemIndexEntry& b) {
         return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
       });
-      self->useItemIndex = true;
-      LOG_DBG("COF", "Using fast index for %zu manifest items", self->itemIndex.size());
+      // Lookups trust (hash, len) without reading the id back, so a (hash, len) duplicate —
+      // a genuine 32-bit collision (~1e-4 odds per book) or a spec-invalid duplicated id —
+      // could resolve to the wrong href. Adjacent scan after the sort: any duplicate disables
+      // the index for this book and every idref falls back to the exact linear scan.
+      bool duplicateKeys = false;
+      for (size_t i = 1; i < self->itemIndex.size(); ++i) {
+        if (self->itemIndex[i].idHash == self->itemIndex[i - 1].idHash &&
+            self->itemIndex[i].idLen == self->itemIndex[i - 1].idLen) {
+          duplicateKeys = true;
+          break;
+        }
+      }
+      if (duplicateKeys) {
+        LOG_DBG("COF", "Manifest id hash collision; using exact linear idref lookup");
+      } else {
+        self->useItemIndex = true;
+        LOG_DBG("COF", "Using fast index for %zu manifest items", self->itemIndex.size());
+      }
     }
     return;
   }
@@ -469,8 +507,12 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
   if (self->state == IN_MANIFEST && isItemTag(name)) {
     std::string itemId;
     std::string href;
-    std::string mediaType;
-    std::string properties;
+    // media-type/properties are only INSPECTED, never stored: keep them as pointers into the
+    // parser's attribute array (valid for this callback) instead of copying to std::string.
+    // The dominant media type, application/xhtml+xml, is 21 chars — past SSO — so the old copy
+    // heap-allocated once per item (~1500 alloc/free pairs on a large Calibre manifest).
+    const char* mediaType = nullptr;
+    const char* properties = nullptr;
 
     for (int i = 0; atts[i]; i += 2) {
       if (strcmp(atts[i], "id") == 0) {
@@ -484,68 +526,82 @@ void ContentOpfParser::startElement(void* userData, const char* name, const char
       }
     }
 
-    // Record index entry for fast lookup later
+    // Manifests group items of one media type together (all chapters, then all images, ...),
+    // so the previous item's classification almost always applies: one strcmp against the memo
+    // replaces the per-item prefix/equality chain. A distinct value is classified once and
+    // cached in the fixed member buffer (no heap; values longer than the buffer classify
+    // per-item, which no real media type triggers).
+    MediaClass mediaClass = MediaClass::Other;
+    if (mediaType != nullptr) {
+      if (strcmp(mediaType, self->lastMediaType_) == 0) {
+        mediaClass = static_cast<MediaClass>(self->lastMediaClass_);
+      } else {
+        mediaClass = classifyMediaType(mediaType);
+        if (strlen(mediaType) < sizeof(self->lastMediaType_)) {
+          strcpy(self->lastMediaType_, mediaType);
+          self->lastMediaClass_ = static_cast<uint8_t>(mediaClass);
+        }
+      }
+    }
+
+    // Write items down to SD card (buffered — thousands of tiny field writes otherwise cost a
+    // full FsFile call each). The index entry records the position AFTER the id string:
+    // hash-trusted lookups seek straight to the href and never re-read the id.
+    self->itemWriter_->writeString(itemId);
     if (self->tempItemStore) {
       ItemIndexEntry entry;
       entry.idHash = fnvHash(itemId);
       entry.idLen = static_cast<uint16_t>(itemId.size());
-      entry.fileOffset = static_cast<uint32_t>(self->tempItemStore.position());
+      entry.hrefOffset = self->itemWriter_->position();
       self->itemIndex.push_back(entry);
     }
-
-    // Write items down to SD card
-    serialization::writeString(self->tempItemStore, itemId);
-    serialization::writeString(self->tempItemStore, href);
+    self->itemWriter_->writeString(href);
 
     if (itemId == self->coverItemId) {
       // Some EPUBs set meta name="cover" to an XHTML wrapper item.
       // Only treat it as a cover image when the manifest media-type is image/*.
-      if (startsWithImageMediaType(mediaType)) {
+      if (mediaClass == MediaClass::Image) {
         self->coverItemHref = href;
       } else {
         LOG_DBG("COF", "Ignoring meta cover item '%s' with non-image media type: %s", itemId.c_str(),
-                mediaType.c_str());
+                mediaType != nullptr ? mediaType : "(none)");
       }
     }
 
-    if (mediaType == MEDIA_TYPE_NCX) {
-      if (self->tocNcxPath.empty()) {
-        self->tocNcxPath = href;
-      } else {
-        LOG_DBG("COF", "Warning: Multiple NCX files found in manifest. Ignoring duplicate: %s", href.c_str());
-      }
+    switch (mediaClass) {
+      case MediaClass::Ncx:
+        if (self->tocNcxPath.empty()) {
+          self->tocNcxPath = href;
+        } else {
+          LOG_DBG("COF", "Warning: Multiple NCX files found in manifest. Ignoring duplicate: %s", href.c_str());
+        }
+        break;
+      // EPUB 2.01 page-map.xml — separate top-level file mapping printed page numbers to spine
+      // locations (e.g. <page name="1" href="OEBPS/c9_split_000.xhtml"/>). Spine references it
+      // via <spine page-map="..."> but only the manifest item carries the canonical href.
+      case MediaClass::PageMap:
+        if (self->pageMapPath.empty()) {
+          self->pageMapPath = href;
+          LOG_DBG("COF", "Found EPUB 2.01 page-map: %s", href.c_str());
+        }
+        break;
+      case MediaClass::Css:
+        self->cssFiles.push_back(href);
+        break;
+      case MediaClass::Image:
+      case MediaClass::Other:
+        break;
     }
 
-    // EPUB 2.01 page-map.xml — separate top-level file mapping printed page numbers to spine
-    // locations (e.g. <page name="1" href="OEBPS/c9_split_000.xhtml"/>). Spine references it
-    // via <spine page-map="..."> but only the manifest item carries the canonical href.
-    if (mediaType == MEDIA_TYPE_PAGEMAP) {
-      if (self->pageMapPath.empty()) {
-        self->pageMapPath = href;
-        LOG_DBG("COF", "Found EPUB 2.01 page-map: %s", href.c_str());
-      }
+    // EPUB 3: Check for nav document (properties contains "nav" as a whole token)
+    if (self->tocNavPath.empty() && hasPropertyWord(properties, "nav")) {
+      self->tocNavPath = href;
+      LOG_DBG("COF", "Found EPUB 3 nav document: %s", href.c_str());
     }
 
-    // Collect CSS files
-    if (mediaType == MEDIA_TYPE_CSS) {
-      self->cssFiles.push_back(href);
-    }
-
-    // EPUB 3: Check for nav document (properties contains "nav")
-    if (!properties.empty() && self->tocNavPath.empty()) {
-      // Properties is space-separated, check if "nav" is present as a word
-      if (properties == "nav" || properties.find("nav ") == 0 || properties.find(" nav") != std::string::npos) {
-        self->tocNavPath = href;
-        LOG_DBG("COF", "Found EPUB 3 nav document: %s", href.c_str());
-      }
-    }
-
-    // EPUB 3: Check for cover image (properties contains "cover-image")
-    if (!properties.empty() && self->coverItemHref.empty()) {
-      if (properties == "cover-image" || properties.find("cover-image ") == 0 ||
-          properties.find(" cover-image") != std::string::npos) {
-        self->coverItemHref = href;
-      }
+    // EPUB 3: Check for cover image (properties contains "cover-image" as a whole token)
+    if (self->coverItemHref.empty() && hasPropertyWord(properties, "cover-image")) {
+      self->coverItemHref = href;
     }
     return;
   }
@@ -634,6 +690,7 @@ void ContentOpfParser::endElement(void* userData, const char* name) {
 
   if (self->state == IN_SPINE && isSpineTag(name)) {
     self->state = IN_PACKAGE;
+    self->itemReader_.reset();
     self->tempItemStore.close();
     return;
   }
@@ -646,6 +703,11 @@ void ContentOpfParser::endElement(void* userData, const char* name) {
 
   if (self->state == IN_MANIFEST && isManifestTag(name)) {
     self->state = IN_PACKAGE;
+    // Flush buffered item records before the file closes; the spine pass reads them back.
+    if (self->itemWriter_.has_value()) {
+      self->itemWriter_->flush();
+      self->itemWriter_.reset();
+    }
     self->tempItemStore.close();
     return;
   }

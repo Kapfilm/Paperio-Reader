@@ -422,7 +422,10 @@ void Epub::parseCssFiles() const {
   // Larger files risk memory exhaustion on ESP32
   constexpr size_t MAX_CSS_FILE_SIZE = 128 * 1024;  // 128KB
   // Minimum heap required before attempting CSS parsing
-  constexpr size_t MIN_HEAP_FOR_CSS_PARSING = 64 * 1024;  // 64KB
+  // Base heap for a compile-mode CSS parse (parser state + SD buffers + reserve); the per-file
+  // gate adds the stylesheet's size on top. Replaces a flat 64 KB gate that rejected small
+  // stylesheets whenever the reader opened with a resident framebuffer and modest free heap.
+  constexpr size_t CSS_PARSE_BASE_HEAP_BYTES = 24 * 1024;
 
   if (cssFiles.empty()) {
     LOG_DBG("EBP", "No CSS files to parse, but CssParser created for inline styles");
@@ -442,16 +445,9 @@ void Epub::parseCssFiles() const {
     return;
   }
 
+  bool skippedForLowHeap = false;
   for (const auto& cssPath : cssFiles) {
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
-
-    // Check heap before parsing - CSS parsing allocates heavily
-    const uint32_t freeHeap = ESP.getFreeHeap();
-    if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
-      LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
-              MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
-      continue;
-    }
 
     // Check CSS file size before decompressing - skip files that are too large
     size_t cssFileSize = 0;
@@ -461,6 +457,21 @@ void Epub::parseCssFiles() const {
                 cssPath.c_str());
         continue;
       }
+    }
+
+    // Dynamic heap gate: the compile-mode parse streams characters through fixed-size buffers and
+    // stages rules to a temp SD file, so its heap need is a small base working set plus
+    // per-selector bookkeeping that scales with the stylesheet — not the flat 64 KB the old gate
+    // demanded (observed skipping a 3.3 KB stylesheet at 63.8 KB free, silently stripping the
+    // book's styles). Base covers parser state + SD buffers + reserve; 1x file size generously
+    // covers the selector-offset staging. Unknown size (lookup failed) gates on the base alone.
+    const uint32_t freeHeap = ESP.getFreeHeap();
+    const size_t neededHeap = CSS_PARSE_BASE_HEAP_BYTES + cssFileSize;
+    if (freeHeap < neededHeap) {
+      LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap, neededHeap,
+              cssPath.c_str());
+      skippedForLowHeap = true;
+      continue;
     }
 
     // Extract CSS file to temp location
@@ -489,6 +500,18 @@ void Epub::parseCssFiles() const {
     }
     tempCssFile.close();
     Storage.remove(tmpCssPath.c_str());
+  }
+
+  // A stylesheet skipped for low heap must NOT produce a persisted cache: an incomplete (or
+  // empty) index loads as valid on every later open — hasCache() then short-circuits the
+  // re-parse — so one low-heap open would permanently strip the book's styles (observed
+  // on-device). Abort instead; with no cache on disk the next open re-parses, and that
+  // missing-cache path also invalidates the section caches built unstyled this session.
+  if (skippedForLowHeap) {
+    cssParser->abortCacheCompile();
+    LOG_ERR("EBP", "CSS cache not persisted (stylesheet skipped on low heap); will re-parse on next open");
+    cssParser->clear();
+    return;
   }
 
   // Finalize compact cache for next time.

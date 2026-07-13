@@ -802,8 +802,10 @@ void loop() {
   if (Serial && millis() - lastMemPrint >= 10000) {
     // Keep runtime log lightweight: ESP.getMaxAllocHeap() walks heap metadata
     // and has triggered interrupt WDTs under heavy allocation churn.
-    LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes", ESP.getFreeHeap(), ESP.getHeapSize(),
-            ESP.getMinFreeHeap());
+    // CPU MHz included so the power-saving state (10 = idle low-power /
+    // waveform wait, 160 = normal) is visible in a steady-state log.
+    LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, CPU: %lu MHz", ESP.getFreeHeap(),
+            ESP.getHeapSize(), ESP.getMinFreeHeap(), static_cast<unsigned long>(getCpuFrequencyMhz()));
     // Right-sizing aid for the background button sampler task (2 KB allocated).
     // High-water is the min free stack ever seen; shrink the xTaskCreate size if
     // this stays comfortably high across a session.

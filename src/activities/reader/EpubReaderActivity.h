@@ -356,6 +356,12 @@ class EpubReaderActivity final : public Activity {
   // Spine for which the incremental build failed/degraded and must be retried with the old
   // blocking (secondary-buffer-released) path instead of Background-C. -1 = no such latch.
   int forceBlockingBuildSpine_ = -1;
+  // Spine whose RESIDENT Background-C build aborted on the proactive low-heap guard and must be
+  // retried as IncrementalReleased (buffer freed, still sliced — the first page still appears
+  // mid-build). Distinct from forceBlockingBuildSpine_: a low-heap abort is a headroom problem
+  // the release solves, not a parse failure, so it must not collapse to the blocking path
+  // (which indexes the whole section before showing anything). -1 = no such latch.
+  int forceReleasedBuildSpine_ = -1;
   // Debug-only Background A glyph for the status-bar overlay. The transient flags
   // (pendingPreRender / preRenderedPage.ready) are cleared at the top of render()
   // before the status bar is drawn, so the overlay could never sample a non-idle
@@ -482,7 +488,11 @@ class EpubReaderActivity final : public Activity {
   BuildOutcome compileSectionCache(const RenderLayout& layout, bool embeddedStyle, uint8_t imageRendering);
   // True when heap is ample enough to build the current section WITHOUT releasing the secondary
   // buffer (the in-place path). Reuses Section::heapAllowsEmbeddedStyle for CSS books.
-  bool heapAllowsInPlaceBuild(bool embeddedStyle) const;
+  // inflatedSize is the spine's uncompressed size: the extraction phase holds an inflate ring
+  // sized to the entry (≤32 KB), a per-spine cost the static floors don't cover — a big spine
+  // must clear floor+ring or the resident build is doomed to the low-heap abort. 0 = unknown
+  // (fall back to the static floors alone).
+  bool heapAllowsInPlaceBuild(bool embeddedStyle, size_t inflatedSize) const;
   // Normal pass: load the current page from the section cache, render it, persist progress.
   void renderNormalPass(RenderLock& lock, const RenderLayout& layout);
   // SectionBuilding pass: while Background-C builds the current section, draw the requested
@@ -530,7 +540,8 @@ class EpubReaderActivity final : public Activity {
   // (its baseline lives in the controller, so a resident buffer only starves the build); X4
   // releases for CSS books (resident reliably css-degrades) and for non-CSS books that don't fit
   // the in-place floors, keeping the buffer resident only for non-CSS builds that do fit.
-  SectionBuildMode chooseSectionBuildMode(bool embeddedStyle) const;
+  // inflatedSize: the spine's uncompressed size (see heapAllowsInPlaceBuild); 0 = unknown.
+  SectionBuildMode chooseSectionBuildMode(bool embeddedStyle, size_t inflatedSize) const;
   // Render params for a section build of `spineIndex`, identical to what buildSection()
   // passes to createSectionFile — B must build the exact variant the foreground will load.
   Section::BuildParams makeSectionBuildParams() const;

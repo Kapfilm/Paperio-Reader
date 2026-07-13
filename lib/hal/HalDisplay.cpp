@@ -1,6 +1,7 @@
 #include <BootHeapProbe.h>
 #include <HalDisplay.h>
 #include <HalGPIO.h>
+#include <HalPowerManager.h>
 #include <Logging.h>
 #include <esp_heap_caps.h>
 
@@ -20,6 +21,13 @@ void HalDisplay::begin(bool seamless) {
   if (gpio.deviceIsX3()) {
     einkDisplay.setDisplayX3();
   }
+
+  // Drop the CPU clock while the render task sleeps out a waveform (any BUSY
+  // wait that proves long — the SDK's bus fires the hooks around the ISR sleep
+  // or the poll loop) and restore it before the post-waveform SPI work. Policy
+  // (WiFi / lock / idle low-power guards) lives in HalPowerManager; the driver
+  // just brackets the wait.
+  einkDisplay.setBusyWaitHooks([] { powerManager.enterWaveformWait(); }, [] { powerManager.exitWaveformWait(); });
 
   einkDisplay.begin();
 
@@ -158,6 +166,12 @@ void HalDisplay::triggerDisplay(RefreshMode mode, bool turnOffScreen) {
 }
 
 void HalDisplay::completeDisplay() { einkDisplay.completeDisplay(); }
+
+void HalDisplay::triggerDisplayAsync(RefreshMode mode, bool turnOffScreen) {
+  einkDisplay.triggerDisplayAsync(convertRefreshMode(mode), turnOffScreen);
+}
+
+void HalDisplay::finishDisplayAsync() { einkDisplay.finishDisplayAsync(); }
 
 bool HalDisplay::isRefreshPending() const { return einkDisplay.isRefreshPending(); }
 bool HalDisplay::isRedRamSynced() const { return einkDisplay.isRedRamSynced(); }

@@ -1,8 +1,11 @@
 #pragma once
 
+#include <BufferedFileIO.h>
 #include <HalStorage.h>
 
 #include <algorithm>
+#include <deque>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,14 +63,24 @@ class BookMetadataCache {
   // Temp file handles during build
   FsFile spineFile;
   FsFile tocFile;
+  // Buffered views over the temp files during their write phases (createSpineEntry /
+  // createTocEntry stream one small record per manifest itemref / TOC entry — unbuffered,
+  // each field is a separate ~1.5 ms FsFile call). Engaged by the begin*Pass methods,
+  // flushed and dropped by the matching end*Pass. Degrade internally to pass-through on OOM.
+  std::optional<serialization::BufferedFileWriter> spineWriter_;
+  std::optional<serialization::BufferedFileWriter> tocWriter_;
 
-  // Index for fast href→spineIndex lookup (used only for large EPUBs)
+  // Index for fast href→spineIndex lookup (used only for large EPUBs).
+  // Deque, not vector: ~21 KB at 1732 spines, and a vector would demand that as one contiguous
+  // block on a possibly-fragmented heap (bare operator new aborts under -fno-exceptions).
+  // Deque's ~512-byte chunks remove the contiguity demand; its random-access iterators keep
+  // std::sort / lower_bound working.
   struct SpineHrefIndexEntry {
     uint64_t hrefHash;  // FNV-1a 64-bit hash
     uint16_t hrefLen;   // length for collision reduction
     int16_t spineIndex;
   };
-  std::vector<SpineHrefIndexEntry> spineHrefIndex;
+  std::deque<SpineHrefIndexEntry> spineHrefIndex;
   bool useSpineHrefIndex = false;
 
   // Batch ZIP size lookup and fast spine-href index are always better when N is
@@ -84,6 +97,11 @@ class BookMetadataCache {
   // would otherwise fragment the heap during book.bin construction.
   void readSpineEntry(FsFile& file, SpineEntry& out) const;
   void readTocEntry(FsFile& file, TocEntry& out) const;
+  // Buffered counterparts for the build loops (identical wire format).
+  uint32_t writeSpineEntry(serialization::BufferedFileWriter& out, const SpineEntry& entry) const;
+  uint32_t writeTocEntry(serialization::BufferedFileWriter& out, const TocEntry& entry) const;
+  void readSpineEntry(serialization::BufferedFileReader& in, SpineEntry& out) const;
+  void readTocEntry(serialization::BufferedFileReader& in, TocEntry& out) const;
 
  public:
   BookMetadata coreMetadata;

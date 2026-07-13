@@ -1,6 +1,7 @@
 #pragma once
 #include <HalStorage.h>
 
+#include <deque>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -75,8 +76,11 @@ class ZipFile {
   bool getInflatedFileSize(const char* filename, size_t* size);
   // Batch lookup: scan ZIP central dir once and fill sizes for matching targets.
   // targets must be sorted by (hash, len). sizes[target.index] receives uncompressedSize.
-  // Returns number of targets matched.
-  int fillUncompressedSizes(const std::vector<SizeTarget>& targets, std::vector<uint32_t>& sizes);
+  // Returns number of targets matched. Deques, not vectors: a 1700-spine book needs ~28 KB of
+  // targets, and demanding that as ONE contiguous block aborts on a fragmented heap (bare
+  // operator new under -fno-exceptions) — deque's ~512-byte chunks drop the contiguity
+  // requirement while keeping the random-access iterators lower_bound needs.
+  int fillUncompressedSizes(const std::deque<SizeTarget>& targets, std::deque<uint32_t>& sizes);
   // Due to the memory required to run each of these, it is recommended to not preopen the zip file for multiple
   // These functions will open and close the zip as needed
   uint8_t* readFileToMemory(const char* filename, size_t* size = nullptr, bool trailingNullByte = false);

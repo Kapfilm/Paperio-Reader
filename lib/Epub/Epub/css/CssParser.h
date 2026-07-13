@@ -155,6 +155,11 @@ class CssParser {
   bool beginCacheCompile();
   bool appendCompiledFromStream(FsFile& source);
   bool endCacheCompile();
+  // Abort a streaming compile (e.g. a stylesheet was skipped for low heap): discards the staged
+  // temp file and persists NOTHING, so hasCache() stays false and the next open re-parses.
+  // Persisting a partial compile is poison: an empty/incomplete index loads as VALID on every
+  // later open, permanently stripping the book's styles until the cache is manually cleared.
+  void abortCacheCompile();
 
   // CSS lookup telemetry helpers for tuning memory/caching behavior on-device.
   void resetResolveStats() const;

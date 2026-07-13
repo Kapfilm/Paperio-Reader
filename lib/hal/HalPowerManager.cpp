@@ -61,6 +61,43 @@ void HalPowerManager::setPowerSaving(bool enabled) {
   // Otherwise, no change needed
 }
 
+void HalPowerManager::enterWaveformWait() {
+  if (normalFreq <= 0) {
+    return;  // begin() not called yet — nothing to restore to
+  }
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    return;  // WiFi requires the 80 MHz APB clock
+  }
+  xSemaphoreTake(modeMutex, portMAX_DELAY);
+  // A NormalSpeed lock held by ANOTHER task means full-speed code is running
+  // concurrently — don't downclock. Our own lock (the render task's per-render
+  // Lock) is fine: this task is about to sleep and only resumes after
+  // exitWaveformWait() restores the clock.
+  const bool foreignLock =
+      currentLockMode.load(std::memory_order_relaxed) != None && lockOwnerTask_ != xTaskGetCurrentTaskHandle();
+  // Already at the low clock from idle power saving — leave ownership of the
+  // restore with setPowerSaving(); don't double-track it here.
+  if (!foreignLock && !isLowPower && setCpuFrequencyMhz(LOW_POWER_FREQ)) {
+    waveformLowPower_ = true;
+    LOG_DBG("PWR", "Waveform wait: CPU down to %d MHz", LOW_POWER_FREQ);
+  }
+  xSemaphoreGive(modeMutex);
+}
+
+void HalPowerManager::exitWaveformWait() {
+  xSemaphoreTake(modeMutex, portMAX_DELAY);
+  if (waveformLowPower_) {
+    waveformLowPower_ = false;
+    // If idle power saving engaged meanwhile (loop task), the low clock is now
+    // intentional — keep it and let setPowerSaving(false) restore it later.
+    if (!isLowPower) {
+      setCpuFrequencyMhz(normalFreq);
+      LOG_DBG("PWR", "Waveform wait: CPU restored to %d MHz", normalFreq);
+    }
+  }
+  xSemaphoreGive(modeMutex);
+}
+
 void HalPowerManager::startDeepSleep(HalGPIO& gpio, bool keepClockAlive) const {
   LOG_DBG("PWR", "startDeepSleep: isPressed=%d, rawPin=%d, keepClock=%d", gpio.isPressed(HalGPIO::BTN_POWER),
           digitalRead(InputManager::POWER_BUTTON_PIN) == LOW, keepClockAlive);
@@ -153,6 +190,7 @@ HalPowerManager::Lock::Lock() {
     valid = false;
   } else {
     powerManager.currentLockMode.store(NormalSpeed, std::memory_order_relaxed);
+    powerManager.lockOwnerTask_ = xTaskGetCurrentTaskHandle();
     valid = true;
   }
   xSemaphoreGive(powerManager.modeMutex);
@@ -166,6 +204,7 @@ HalPowerManager::Lock::~Lock() {
   xSemaphoreTake(powerManager.modeMutex, portMAX_DELAY);
   if (valid) {
     powerManager.currentLockMode.store(None, std::memory_order_relaxed);
+    powerManager.lockOwnerTask_ = nullptr;
   }
   xSemaphoreGive(powerManager.modeMutex);
 }
