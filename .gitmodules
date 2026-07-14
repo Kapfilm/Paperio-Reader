@@ -1,4 +1,4 @@
 [submodule "freeink-sdk"]
 	path = freeink-sdk
-	url = https://github.com/jpirnay/freeink-sdk.git
-	branch = feature/x4-async-trigger-split
+	url = https://github.com/Free-Ink/freeink-sdk.git
+	branch = main
