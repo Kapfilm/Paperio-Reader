@@ -55,6 +55,10 @@ class SecureHttpClient {
   void clearHeaders() { _headers.clear(); }
   // Max redirect hops to follow (default 5; 0 disables following).
   void setMaxRedirects(int n) { _maxRedirects = n; }
+  // Allow a redirect to step down from https to http. Off by default, because
+  // the downgrade silently drops transport security; when refused, following
+  // stops and the caller sees the 3xx status.
+  void setAllowRedirectDowngrade(bool allow) { _allowRedirectDowngrade = allow; }
 
   // --- requests ---
   // Streaming GET: body is delivered to sink in chunks. Returns the final HTTP
@@ -101,9 +105,26 @@ class SecureHttpClient {
   static bool parseUrl(const std::string& in, Url& out);
   static std::string resolveRedirect(const Url& base, const std::string& location);
 
+  // Response status line + header fields that drive body framing and reuse.
+  struct ResponseMeta {
+    int status = 0;
+    long contentLength = -1;
+    bool chunked = false;
+    bool keepAlive = true;
+    std::string location;
+  };
+
+  // True when the kept-open connection matches (scheme,host,port) and still
+  // looks alive. "Looks" is best-effort: the server may have closed it already,
+  // which transact() handles with its one-shot retry.
+  bool connectionMatches(const Url& u);
   // Ensure a live connection to (scheme,host,port); reuse the kept-open one when
   // it matches, else (re)open. Returns false on connect failure.
   bool ensureConnected(const Url& u);
+  // Connect (or reuse), send the request, and read the response headers — with
+  // one transparent retry when a reused keep-alive socket turns out to be dead.
+  // Returns 0, or a negative SecureHttpError.
+  int transact(const char* method, const Url& u, const uint8_t* body, size_t bodyLen, ResponseMeta& meta);
   // Send the request line + headers (+ body for POST/PUT). Returns false on write failure.
   bool sendRequest(const char* method, const Url& u, const uint8_t* body, size_t bodyLen);
   // Read status line + headers. Fills status, and out params for body framing.
@@ -131,6 +152,7 @@ class SecureHttpClient {
   std::string _pass;
   std::vector<std::string> _headers;
   int _maxRedirects = 5;
+  bool _allowRedirectDowngrade = false;
 
   // per-request result
   std::string _body;

@@ -39,7 +39,13 @@ namespace {
 int wcSend(WOLFSSL* /*ssl*/, char* buf, int sz, void* ctx) {
   auto* t = static_cast<WiFiClient*>(ctx);
   const int n = t->write(reinterpret_cast<const uint8_t*>(buf), sz);
-  if (n <= 0) return WOLFSSL_CBIO_ERR_WANT_WRITE;
+  if (n <= 0) {
+    // A dead transport must surface as CONN_CLOSE: mapping it to WANT_WRITE
+    // makes the handshake spin until the deadline instead of failing fast.
+    // (Ported from Free-Ink/freeink-sdk 43132fc.)
+    if (!t->connected()) return WOLFSSL_CBIO_ERR_CONN_CLOSE;
+    return WOLFSSL_CBIO_ERR_WANT_WRITE;
+  }
   return n;
 }
 int wcRecv(WOLFSSL* /*ssl*/, char* buf, int sz, void* ctx) {
@@ -162,6 +168,10 @@ int SecureClient::connectAtVerify(const char* host, uint16_t port, bool verifyPe
 
 int SecureClient::connect(const char* host, uint16_t port) {
   _lastWasInsecure = false;
+  // Must not leak across connects: a TCP/DNS failure records no handshake
+  // error, and a stale verification code from an earlier attempt would
+  // misclassify it and trigger a pointless insecure-fallback retry.
+  _lastConnectErr = 0;
   _handshakeMinFree = SIZE_MAX;
   _handshakeMinLargest = SIZE_MAX;
 

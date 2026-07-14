@@ -60,11 +60,13 @@ void SecureHttpClient::close() {
   _connectedHttps = false;
 }
 
+bool SecureHttpClient::connectionMatches(const Url& u) {
+  return _client && _client->connected() && _connectedHttps == u.https() && _connHost == u.host && _connPort == u.port;
+}
+
 bool SecureHttpClient::ensureConnected(const Url& u) {
   // Reuse a matching kept-open connection.
-  if (_client && _client->connected() && _connectedHttps == u.https() && _connHost == u.host && _connPort == u.port) {
-    return true;
-  }
+  if (connectionMatches(u)) return true;
   close();
 
   if (u.https()) {
@@ -117,6 +119,32 @@ bool SecureHttpClient::sendRequest(const char* method, const Url& u, const uint8
   return true;
 }
 
+// Connect (or reuse), send, and read headers — with one transparent retry: a
+// keep-alive server may close the socket between requests at any time, and the
+// race surfaces as a failed write or a missing status line on a socket that
+// looked connected. That failure belongs to the reused connection, not the
+// request, so it earns exactly one attempt on a fresh connection. A request
+// that failed on a fresh connection is a real error and is not retried.
+int SecureHttpClient::transact(const char* method, const Url& u, const uint8_t* body, size_t bodyLen,
+                               ResponseMeta& meta) {
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    const bool reusing = connectionMatches(u);
+    if (!ensureConnected(u)) return ERR_CONNECT;
+    if (!sendRequest(method, u, body, bodyLen)) {
+      close();
+      if (reusing && attempt == 0) continue;
+      return ERR_SEND;
+    }
+    if (!readHeaders(meta.status, meta.contentLength, meta.chunked, meta.keepAlive, meta.location)) {
+      close();
+      if (reusing && attempt == 0) continue;
+      return ERR_TIMEOUT;
+    }
+    return 0;
+  }
+  return ERR_SEND;  // unreachable: the second attempt always returns above
+}
+
 bool SecureHttpClient::readLine(std::string& line, uint32_t deadline) {
   line.clear();
   while (static_cast<int32_t>(millis() - deadline) < 0) {
@@ -150,6 +178,9 @@ bool SecureHttpClient::readHeaders(int& status, long& contentLength, bool& chunk
   // "HTTP/1.1 200 OK" -> code at offset 9
   status = line.size() >= 12 ? atoi(line.c_str() + 9) : 0;
   if (status == 0) return false;
+  // HTTP/1.0 peers default to connection-per-request; only an explicit
+  // Connection: keep-alive header (parsed below) overrides that.
+  if (line.compare(0, 9, "HTTP/1.0 ") == 0) keepAlive = false;
 
   while (readLine(line, deadline)) {
     if (line.empty()) return true;  // end of headers
@@ -192,7 +223,14 @@ int SecureHttpClient::readBody(const BodySink& sink, const ProgressFn& progress,
     for (;;) {
       if (!readLine(line, millis() + _timeoutMs)) return ERR_TRUNCATED;
       const size_t semi = line.find(';');
-      const long sz = strtol((semi == std::string::npos ? line : line.substr(0, semi)).c_str(), nullptr, 16);
+      const std::string sizeText = semi == std::string::npos ? line : line.substr(0, semi);
+      char* parseEnd = nullptr;
+      const unsigned long sz = strtoul(sizeText.c_str(), &parseEnd, 16);
+      // A garbage size line must fail loudly: signed strtol's 0-on-garbage was
+      // previously taken for the final chunk, reporting a truncated body as
+      // success (and a negative value became a huge size_t that hung until
+      // the timeout).
+      if (parseEnd == sizeText.c_str()) return ERR_TRUNCATED;
       if (sz == 0) {  // last chunk; drain trailers
         while (readLine(line, millis() + _timeoutMs) && !line.empty()) {
         }
@@ -256,34 +294,34 @@ int SecureHttpClient::get(const std::string& url, const BodySink& sink, const Pr
   for (int hop = 0; hop <= _maxRedirects; ++hop) {
     Url u;
     if (!parseUrl(current, u)) return ERR_BAD_URL;
-    if (!ensureConnected(u)) return ERR_CONNECT;
-    if (!sendRequest("GET", u, nullptr, 0)) {
-      close();
-      return ERR_SEND;
-    }
-    int status;
-    long contentLength;
-    bool chunked, keepAlive;
-    std::string location;
-    if (!readHeaders(status, contentLength, chunked, keepAlive, location)) {
-      close();
-      return ERR_TIMEOUT;
-    }
-    _status = status;
+    ResponseMeta meta;
+    const int trc = transact("GET", u, nullptr, 0, meta);
+    if (trc < 0) return trc;
+    _status = meta.status;
 
-    if (isRedirect(status) && !location.empty()) {
-      // Drain the redirect's (usually empty) body to keep the socket usable, then hop.
-      readBody(nullptr, nullptr, contentLength, chunked, keepAlive);
-      if (!keepAlive) close();
-      current = resolveRedirect(u, location);
+    if (isRedirect(meta.status) && !meta.location.empty()) {
+      // Drain the redirect's (usually empty) body to keep the socket usable for
+      // the next hop; a failed drain leaves undrained bytes, so close instead.
+      if (readBody(nullptr, nullptr, meta.contentLength, meta.chunked, meta.keepAlive) < 0 || !meta.keepAlive) close();
+      current = resolveRedirect(u, meta.location);
+      // Refuse to drop TLS silently: stop following a https -> http downgrade
+      // and surface the 3xx to the caller (setAllowRedirectDowngrade opts in).
+      Url next;
+      if (u.https() && !_allowRedirectDowngrade && parseUrl(current, next) && !next.https()) return meta.status;
       if (hop == _maxRedirects) return ERR_TOO_MANY_REDIRECTS;
       continue;
     }
 
-    const int rc = readBody(sink, progress, contentLength, chunked, keepAlive);
-    if (!keepAlive) close();
-    if (rc < 0) return rc;
-    return status;
+    const int rc = readBody(sink, progress, meta.contentLength, meta.chunked, meta.keepAlive);
+    if (rc < 0) {
+      // Undrained body bytes would poison the kept-alive socket: the next
+      // request would parse the leftovers as its status line.
+      close();
+      return rc;
+    }
+    // A close-delimited body (no framing) ends WITH the connection; never keep it.
+    if (!meta.keepAlive || (meta.contentLength < 0 && !meta.chunked)) close();
+    return meta.status;
   }
   return ERR_TOO_MANY_REDIRECTS;
 }
@@ -301,30 +339,25 @@ int SecureHttpClient::request(const char* method, const std::string& url, const 
   for (int hop = 0; hop <= _maxRedirects; ++hop) {
     Url u;
     if (!parseUrl(current, u)) return ERR_BAD_URL;
-    if (!ensureConnected(u)) return ERR_CONNECT;
+    ResponseMeta meta;
     const bool hasBody = !activeBody.empty();
-    if (!sendRequest(activeMethod.c_str(), u, hasBody ? reinterpret_cast<const uint8_t*>(activeBody.data()) : nullptr,
-                     activeBody.size())) {
-      close();
-      return ERR_SEND;
-    }
-    int status;
-    long contentLength;
-    bool chunked, keepAlive;
-    std::string location;
-    if (!readHeaders(status, contentLength, chunked, keepAlive, location)) {
-      close();
-      return ERR_TIMEOUT;
-    }
-    _status = status;
+    const int trc =
+        transact(activeMethod.c_str(), u, hasBody ? reinterpret_cast<const uint8_t*>(activeBody.data()) : nullptr,
+                 activeBody.size(), meta);
+    if (trc < 0) return trc;
+    _status = meta.status;
 
-    if (isRedirect(status) && !location.empty()) {
-      readBody(nullptr, nullptr, contentLength, chunked, keepAlive);
-      if (!keepAlive) close();
-      current = resolveRedirect(u, location);
+    if (isRedirect(meta.status) && !meta.location.empty()) {
+      // See get(): drain to keep the socket usable, close on a failed drain.
+      if (readBody(nullptr, nullptr, meta.contentLength, meta.chunked, meta.keepAlive) < 0 || !meta.keepAlive) close();
+      current = resolveRedirect(u, meta.location);
+      // Refuse to drop TLS silently: stop following a https -> http downgrade
+      // and surface the 3xx to the caller (setAllowRedirectDowngrade opts in).
+      Url next;
+      if (u.https() && !_allowRedirectDowngrade && parseUrl(current, next) && !next.https()) return meta.status;
       // 303 always -> GET; 301/302 commonly downgrade POST->GET too. 307/308
       // preserve method + body. When downgrading to GET, drop the request body.
-      if (status == 303 || status == 301 || status == 302) {
+      if (meta.status == 303 || meta.status == 301 || meta.status == 302) {
         activeMethod = "GET";
         activeBody.clear();
       }
@@ -332,10 +365,16 @@ int SecureHttpClient::request(const char* method, const std::string& url, const 
       continue;
     }
 
-    const int rc = readBody(sink, nullptr, contentLength, chunked, keepAlive);
-    if (!keepAlive) close();
-    if (rc < 0) return rc;
-    return status;
+    const int rc = readBody(sink, nullptr, meta.contentLength, meta.chunked, meta.keepAlive);
+    if (rc < 0) {
+      // Undrained body bytes would poison the kept-alive socket: the next
+      // request would parse the leftovers as its status line.
+      close();
+      return rc;
+    }
+    // A close-delimited body (no framing) ends WITH the connection; never keep it.
+    if (!meta.keepAlive || (meta.contentLength < 0 && !meta.chunked)) close();
+    return meta.status;
   }
   return ERR_TOO_MANY_REDIRECTS;
 }
