@@ -176,8 +176,8 @@ inline std::vector<SettingInfo> buildSettingsList() {
                          .withSubmenu(StrId::STR_MENU_READER_FONT));
   // X3-only fast AA LUT toggle. Swaps the 53-frame OEM grayscale waveform
   // (~2.4 s panel time, X4-accurate grays) for the 7-frame community LUT
-  // (~130 ms, mid-tones slightly darker). See open-x4-sdk
-  // EInkDisplay::setFastGrayscaleLut for trade-offs.
+  // (~130 ms, mid-tones slightly darker). See freeink-sdk
+  // FreeInkDisplay::setFastGrayscaleLut for trade-offs.
   settings.push_back(SettingInfo::Toggle(StrId::STR_FAST_AA, &CrossPointSettings::fastAntiAliasing,
                                          "fastAntiAliasingV2", StrId::STR_CAT_READER)
                          .withSubmenu(StrId::STR_MENU_READER_FONT)
