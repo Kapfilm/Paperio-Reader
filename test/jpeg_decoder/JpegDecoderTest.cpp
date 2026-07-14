@@ -232,3 +232,44 @@ TEST(JpegToBmpConverter, EvenDimensionThumbnailDecodesAllRows) {
   EXPECT_EQ(le32(out.buf, 18), 40);
   EXPECT_EQ(le32(out.buf, 22), -26);
 }
+
+// ---------------------------------------------------------------------------
+// Crop mode must emit EXACTLY the requested dimensions, whichever axis overfills.
+// crop=true scales by the larger fit factor, so a source whose aspect differs from
+// the target overfills one dimension; older builds wrote that overfill into the
+// file (e.g. a 340x561 BMP in thumb_340x540.bmp). The home themes draw thumbs 1:1,
+// so the mismatch forced GfxRenderer::drawBitmap to rescale the already-dithered
+// 1-bit image — aliasing the dither into a visible grid on covers. The converter
+// now center-crops to the exact target.
+// ---------------------------------------------------------------------------
+TEST(JpegToBmpConverter, CropModeEmitsExactTargetWidthOverfill) {
+  FsFile f;
+  ASSERT_TRUE(f.openForRead(fixture("contrast_420.jpg")));
+
+  MemoryPrint out;
+  // 96x64 landscape into a 20x40 portrait box: scale = max(20/96, 40/64) = 0.625
+  // -> scaled 60x40, width overfills (60 > 20) and must be center-cropped away.
+  const bool ok = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(f, out, 20, 40);
+  f.close();
+
+  ASSERT_TRUE(ok);
+  ASSERT_GE(out.buf.size(), 62u);
+  EXPECT_EQ(le32(out.buf, 18), 20);   // exact target width, no overfill
+  EXPECT_EQ(le32(out.buf, 22), -40);  // exact target height (top-down => negative)
+}
+
+TEST(JpegToBmpConverter, CropModeEmitsExactTargetHeightOverfill) {
+  FsFile f;
+  ASSERT_TRUE(f.openForRead(fixture("contrast_420.jpg")));
+
+  MemoryPrint out;
+  // 96x64 into a 30x10 box: scale = max(30/96, 10/64) = 0.3125 -> scaled 30x20,
+  // height overfills (20 > 10) — the vertical-overfill case observed on-device.
+  const bool ok = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(f, out, 30, 10);
+  f.close();
+
+  ASSERT_TRUE(ok);
+  ASSERT_GE(out.buf.size(), 62u);
+  EXPECT_EQ(le32(out.buf, 18), 30);
+  EXPECT_EQ(le32(out.buf, 22), -10);
+}

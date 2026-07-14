@@ -31,7 +31,7 @@ class PngDecodeSession {
   // Open pngFile and bmpFile (already opened for read/write respectively),
   // parse the PNG header, write the BMP header, allocate buffers.
   // targetWidth/targetHeight: desired output size. crop=true fills the target (scale to the
-  // LARGER fit factor, overflow kept) so the binding dimension matches the target exactly —
+  // LARGER fit factor) and center-crops the overflow, so the BMP is EXACTLY the target size —
   // this mirrors the synchronous pngFileTo1BitBmpStreamWithSize (crop=true) so cover thumbnails
   // are drawn 1:1 with no rescale (a fractional rescale of an already-dithered 1-bit image
   // produces a moiré grid). crop=false fits inside the target (scale to the SMALLER factor).
@@ -62,6 +62,12 @@ class PngDecodeSession {
   bool needsScaling_ = false;
   uint32_t scaleX_fp_ = 65536;
   uint32_t scaleY_fp_ = 65536;
+  // Center-crop window emitted to the BMP (crop=true trims the overfill dimension;
+  // see begin()). The full outWidth_ row is still dithered for diffusion correctness.
+  int outCropX_ = 0;
+  int outCropY_ = 0;
+  int finalW_ = 0;
+  int finalH_ = 0;
 
   // Row-loop state
   uint32_t srcY_ = 0;

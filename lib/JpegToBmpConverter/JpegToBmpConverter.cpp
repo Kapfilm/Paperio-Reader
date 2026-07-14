@@ -204,6 +204,17 @@ struct BmpConvertCtx {
   uint32_t scaleX_fp;  // source pixels per output pixel, 16.16 fixed-point
   uint32_t scaleY_fp;
 
+  // Center-crop window emitted to the BMP (crop mode overfills the target box in
+  // one dimension by design; the excess must be trimmed HERE, not by the drawing
+  // code — rescaling an already-dithered 1-bit image at draw time aliases the
+  // dither pattern into a visible grid). The full outWidth row is still dithered
+  // so error diffusion stays correct; only columns [outCropX, outCropX+finalW)
+  // and rows [outCropY, outCropY+finalH) reach the file.
+  int outCropX;
+  int outCropY;
+  int finalW;
+  int finalH;
+
   // Accumulates one MCU row (up to MAX_MCU_HEIGHT source rows × srcWidth pixels)
   // Filled column-by-column as TJpgDec output callbacks arrive for the same MCU row
   uint8_t* mcuBuf;
@@ -223,19 +234,24 @@ struct BmpConvertCtx {
   bool error;
 };
 
-// Write a fully-assembled output row (grayscale bytes, length outWidth) to BMP
+// Write a fully-assembled output row (grayscale bytes, length outWidth) to BMP.
+// The whole row is dithered (diffusion state must see every pixel), but only the
+// crop window columns are packed, and rows outside the vertical window are
+// dithered-then-dropped (see BmpConvertCtx::outCropX).
 static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) {
   memset(ctx->bmpRow, 0, ctx->bytesPerRow);
 
   if (USE_8BIT_OUTPUT && !ctx->oneBit) {
     for (int x = 0; x < ctx->outWidth; x++) {
-      ctx->bmpRow[x] = adjustPixel(srcRow[x]);
+      const int ox = x - ctx->outCropX;
+      if (ox >= 0 && ox < ctx->finalW) ctx->bmpRow[ox] = adjustPixel(srcRow[x]);
     }
   } else if (ctx->oneBit) {
     for (int x = 0; x < ctx->outWidth; x++) {
       const uint8_t bit = ctx->atkinson1BitDitherer ? ctx->atkinson1BitDitherer->processPixel(srcRow[x], x)
                                                     : quantize1bit(srcRow[x], x, outY);
-      ctx->bmpRow[x / 8] |= (bit << (7 - (x % 8)));
+      const int ox = x - ctx->outCropX;
+      if (ox >= 0 && ox < ctx->finalW) ctx->bmpRow[ox / 8] |= (bit << (7 - (ox % 8)));
     }
     if (ctx->atkinson1BitDitherer) ctx->atkinson1BitDitherer->nextRow();
   } else {
@@ -249,7 +265,8 @@ static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) 
       } else {
         twoBit = quantize(gray, x, outY);
       }
-      ctx->bmpRow[(x * 2) / 8] |= (twoBit << (6 - ((x * 2) % 8)));
+      const int ox = x - ctx->outCropX;
+      if (ox >= 0 && ox < ctx->finalW) ctx->bmpRow[(ox * 2) / 8] |= (twoBit << (6 - ((ox * 2) % 8)));
     }
     if (ctx->atkinsonDitherer)
       ctx->atkinsonDitherer->nextRow();
@@ -257,24 +274,29 @@ static void writeOutputRow(BmpConvertCtx* ctx, const uint8_t* srcRow, int outY) 
       ctx->fsDitherer->nextRow();
   }
 
-  ctx->bmpOut->write(ctx->bmpRow, ctx->bytesPerRow);
+  if (outY >= ctx->outCropY && outY < ctx->outCropY + ctx->finalH) {
+    ctx->bmpOut->write(ctx->bmpRow, ctx->bytesPerRow);
+  }
 }
 
-// Flush one scaled output row from Y-axis accumulators and advance currentOutY
+// Flush one scaled output row from Y-axis accumulators and advance currentOutY.
+// Same crop-window rules as writeOutputRow.
 static void flushScaledRow(BmpConvertCtx* ctx) {
   memset(ctx->bmpRow, 0, ctx->bytesPerRow);
 
   if (USE_8BIT_OUTPUT && !ctx->oneBit) {
     for (int x = 0; x < ctx->outWidth; x++) {
       const uint8_t gray = (ctx->rowCount[x] > 0) ? (ctx->rowAccum[x] / ctx->rowCount[x]) : 0;
-      ctx->bmpRow[x] = adjustPixel(gray);
+      const int ox = x - ctx->outCropX;
+      if (ox >= 0 && ox < ctx->finalW) ctx->bmpRow[ox] = adjustPixel(gray);
     }
   } else if (ctx->oneBit) {
     for (int x = 0; x < ctx->outWidth; x++) {
       const uint8_t gray = (ctx->rowCount[x] > 0) ? (ctx->rowAccum[x] / ctx->rowCount[x]) : 0;
       const uint8_t bit = ctx->atkinson1BitDitherer ? ctx->atkinson1BitDitherer->processPixel(gray, x)
                                                     : quantize1bit(gray, x, ctx->currentOutY);
-      ctx->bmpRow[x / 8] |= (bit << (7 - (x % 8)));
+      const int ox = x - ctx->outCropX;
+      if (ox >= 0 && ox < ctx->finalW) ctx->bmpRow[ox / 8] |= (bit << (7 - (ox % 8)));
     }
     if (ctx->atkinson1BitDitherer) ctx->atkinson1BitDitherer->nextRow();
   } else {
@@ -288,7 +310,8 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
       } else {
         twoBit = quantize(gray, x, ctx->currentOutY);
       }
-      ctx->bmpRow[(x * 2) / 8] |= (twoBit << (6 - ((x * 2) % 8)));
+      const int ox = x - ctx->outCropX;
+      if (ox >= 0 && ox < ctx->finalW) ctx->bmpRow[(ox * 2) / 8] |= (twoBit << (6 - ((ox * 2) % 8)));
     }
     if (ctx->atkinsonDitherer)
       ctx->atkinsonDitherer->nextRow();
@@ -296,7 +319,9 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
       ctx->fsDitherer->nextRow();
   }
 
-  ctx->bmpOut->write(ctx->bmpRow, ctx->bytesPerRow);
+  if (ctx->currentOutY >= ctx->outCropY && ctx->currentOutY < ctx->outCropY + ctx->finalH) {
+    ctx->bmpOut->write(ctx->bmpRow, ctx->bytesPerRow);
+  }
   ctx->currentOutY++;
 }
 
@@ -542,17 +567,39 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
             targetWidth, targetHeight);
   }
 
-  // Write BMP header with output dimensions
+  // crop mode scales by the LARGER fit factor, so the scaled image overfills the
+  // target box in one dimension (e.g. a taller-than-box cover overfills vertically).
+  // Emit only the centered target window: the BMP file must be EXACTLY the size its
+  // callers asked for (and name it, e.g. thumb_340x540.bmp), because the home themes
+  // draw these 1:1 — any dimension mismatch makes GfxRenderer::drawBitmap rescale an
+  // already-dithered 1-bit image, which aliases the dither into a visible grid
+  // (observed on-device: a 340x561 BMP in thumb_340x540.bmp, decimated to 96%).
+  int outCropX = 0;
+  int outCropY = 0;
+  int finalW = outWidth;
+  int finalH = outHeight;
+  if (crop && targetWidth > 0 && targetHeight > 0) {
+    if (outWidth > targetWidth) {
+      outCropX = (outWidth - targetWidth) / 2;
+      finalW = targetWidth;
+    }
+    if (outHeight > targetHeight) {
+      outCropY = (outHeight - targetHeight) / 2;
+      finalH = targetHeight;
+    }
+  }
+
+  // Write BMP header with the emitted (cropped) dimensions
   int bytesPerRow;
   if (USE_8BIT_OUTPUT && !oneBit) {
-    writeBmpHeader8bit(bmpOut, outWidth, outHeight);
-    bytesPerRow = (outWidth + 3) / 4 * 4;
+    writeBmpHeader8bit(bmpOut, finalW, finalH);
+    bytesPerRow = (finalW + 3) / 4 * 4;
   } else if (oneBit) {
-    writeBmpHeader1bit(bmpOut, outWidth, outHeight);
-    bytesPerRow = (outWidth + 31) / 32 * 4;
+    writeBmpHeader1bit(bmpOut, finalW, finalH);
+    bytesPerRow = (finalW + 31) / 32 * 4;
   } else {
-    writeBmpHeader2bit(bmpOut, outWidth, outHeight);
-    bytesPerRow = (outWidth * 2 + 31) / 32 * 4;
+    writeBmpHeader2bit(bmpOut, finalW, finalH);
+    bytesPerRow = (finalW * 2 + 31) / 32 * 4;
   }
 
   BmpConvertCtx ctx = {};
@@ -566,6 +613,10 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
   ctx.needsScaling = needsScaling;
   ctx.scaleX_fp = scaleX_fp;
   ctx.scaleY_fp = scaleY_fp;
+  ctx.outCropX = outCropX;
+  ctx.outCropY = outCropY;
+  ctx.finalW = finalW;
+  ctx.finalH = finalH;
   ctx.error = false;
 
   // RAII guard: frees all heap resources on any return path (the TJpgDec work pool is
