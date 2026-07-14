@@ -114,16 +114,17 @@ std::unique_ptr<ReaderActivity::CoverExtractSession> ReaderActivity::beginCoverE
   Epub epub(bookPath, "/.crosspoint");
   if (!epub.load(true, true)) return nullptr;
 
-  // If cover.img already exists and is valid, no extraction needed.
+  // If cover.img already exists and is a recognized image format, no extraction
+  // needed. Must match the decode side's validity check (coverImageCachedValidOnly,
+  // which also checks magic bytes) rather than a size-only check: a stale/corrupt
+  // cover.img (e.g. left by an interrupted earlier extraction) is non-empty but
+  // has no recognized format, so a size-only check here would treat it as
+  // "already cached" forever while generateThumbBmp() perpetually reports it
+  // invalid — a silent deadlock with no ERR log (observed as an EPUB whose cover
+  // renders fine in-book but never produces a home-screen thumbnail).
+  // openFileForWrite() truncates (O_TRUNC), so begin() below safely overwrites it.
   const std::string coverImgPath = epub.getCoverImageCachePath();
-  if (Storage.exists(coverImgPath.c_str())) {
-    FsFile existing;
-    if (Storage.openFileForRead("CEX", coverImgPath, existing)) {
-      const bool valid = existing.size() > 0;
-      existing.close();
-      if (valid) return nullptr;  // already cached
-    }
-  }
+  if (epub.coverImageCachedValidOnly()) return nullptr;  // already cached
 
   const std::string coverHref = epub.getCoverItemHref();
   if (coverHref.empty()) {
