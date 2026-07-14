@@ -53,7 +53,11 @@ class ReaderActivity final : public Activity {
   // whose write was interrupted (reboot/abort mid-decode) is left truncated on the SD card; it
   // passes a naive size>0 check but fails to draw partway (GFX "Failed to read row N"). Treating
   // such a file as invalid lets the caller regenerate it instead of drawing/keeping it forever.
-  static bool isCoverThumbComplete(const std::string& path);
+  // When expectedWidth/Height are given (> 0), a BMP LARGER than that in either dimension is
+  // also invalid: older builds' crop mode kept the overfill dimension, and drawing such a thumb
+  // 1:1-sized slots forces a rescale of the dithered image (visible grid). Regeneration with the
+  // current converters yields an exact-size thumb.
+  static bool isCoverThumbComplete(const std::string& path, int expectedWidth = 0, int expectedHeight = 0);
   // Write a minimal but VALID 1-bit BMP (white box with a black frame) at the thumbnail path, used
   // to mark a book that has no extractable cover. Being a complete BMP it passes
   // isCoverThumbComplete(), so the cover loops treat the book as resolved and never re-open the EPUB

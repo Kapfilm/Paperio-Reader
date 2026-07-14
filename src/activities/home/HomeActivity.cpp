@@ -195,7 +195,7 @@ void HomeActivity::giveUpCover(RecentBook& book, ThumbResult res, const std::vec
   if (permanent) {
     bool allWritten = !slots.empty();
     for (const auto& slot : slots) {
-      if (!ReaderActivity::isCoverThumbComplete(slot.path) &&
+      if (!ReaderActivity::isCoverThumbComplete(slot.path, slot.width, slot.height) &&
           !ReaderActivity::writeCoverPlaceholderBmp(slot.path, slot.width, slot.height)) {
         allWritten = false;
       }
@@ -394,9 +394,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       for (size_t i = nextThumbSizeIndex; i < thumbSizes.size(); i++) {
         const auto& sz = thumbSizes[i];
         const std::string path = UITheme::getCoverThumbPath(placeholder, sz.first, sz.second);
-        // Require a complete BMP (all pixel rows present), not just size>0: a thumbnail truncated by
-        // an interrupted write passes size>0 but fails to draw, and would never be regenerated.
-        const bool validThumb = ReaderActivity::isCoverThumbComplete(path);
+        // Require a complete BMP (all pixel rows present) at no more than the slot size — not just
+        // size>0: a thumbnail truncated by an interrupted write passes size>0 but fails to draw, and
+        // an oversized thumb from an older build's crop mode would be rescaled at draw time
+        // (aliasing the dither into a grid); neither would ever be regenerated.
+        const bool validThumb = ReaderActivity::isCoverThumbComplete(path, sz.first, sz.second);
         LOG_DBG("HOME", "Cover check [%dx%d] path=%s valid=%d", sz.first, sz.second, path.c_str(), validThumb ? 1 : 0);
 
         if (!validThumb) {
@@ -505,11 +507,12 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       }
       // All sizes were already cached — no decode work done, continue to next book immediately.
     } else {
-      // Single-height path (non-carousel themes).
+      // Single-height path (non-carousel themes). Expected size mirrors ensureCoverThumb(height):
+      // width = height * 0.6.
       const std::string path = UITheme::getCoverThumbPath(placeholder, coverHeight);
-      // Require a complete BMP (all pixel rows present), not just size>0: a thumbnail truncated by
-      // an interrupted write passes size>0 but fails to draw, and would never be regenerated.
-      const bool validThumb = ReaderActivity::isCoverThumbComplete(path);
+      // Require a complete BMP (all pixel rows present) at no more than the slot size — see the
+      // multi-size path above for why truncated AND oversized thumbs must both be regenerated.
+      const bool validThumb = ReaderActivity::isCoverThumbComplete(path, coverHeight * 6 / 10, coverHeight);
       LOG_DBG("HOME", "Cover check [h=%d] path=%s valid=%d", coverHeight, path.c_str(), validThumb ? 1 : 0);
 
       LOG_DBG("HOME", "loadRecentCovers[%zu]: coverBmpPath=%s placeholder=%s anyMissing=%d", nextRecentCoverIndex,

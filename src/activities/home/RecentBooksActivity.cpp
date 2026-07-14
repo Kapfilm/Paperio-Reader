@@ -115,11 +115,13 @@ bool RecentBooksActivity::loadNextCover() {
     const std::string placeholder = ReaderActivity::coverThumbPlaceholder(book.path);
     const std::string thumbPath = gridThumbPath(placeholder, tw, th);
 
-    // Require a COMPLETE BMP (all pixel rows present), not just size>0: a thumbnail truncated by an
-    // interrupted write passes size>0 but fails to draw partway, so regenerate it. A no-cover book's
-    // placeholder BMP (written below) is also a complete BMP, so it passes here and is treated as a
+    // Require a COMPLETE BMP (all pixel rows present) at no more than the slot size, not just
+    // size>0: a thumbnail truncated by an interrupted write passes size>0 but fails to draw
+    // partway, and an oversized thumb from an older build's crop mode gets rescaled at draw time
+    // (aliasing the dither into a grid) — regenerate both. A no-cover book's placeholder BMP
+    // (written below) is also a complete exact-size BMP, so it passes here and is treated as a
     // resolved cover — no re-opening the EPUB three times per scan to rediscover it has no cover.
-    const bool valid = ReaderActivity::isCoverThumbComplete(thumbPath);
+    const bool valid = ReaderActivity::isCoverThumbComplete(thumbPath, tw, th);
     if (!valid) {
       const bool ok = (ReaderActivity::ensureCoverThumb(book.path, tw, th) == ThumbResult::Ok);
       const bool wasPostFailure = pngSessionFailed;
