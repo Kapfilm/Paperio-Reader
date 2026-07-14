@@ -22,7 +22,6 @@
 #include "../reader/XtcReaderActivity.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
@@ -121,9 +120,12 @@ bool renderPngSleepScreen(const std::string& filename, GfxRenderer& renderer, co
     return false;
   }
   drawOverlay();
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  // Fire the BW scrub without waiting: the waveform runs on the controller's own RAM,
+  // so the LSB decode below (CPU/SD-only work) overlaps it. copyGrayscaleLsbBuffers()
+  // drains the pending finish before its SPI plane write.
+  renderer.triggerDisplayAsync(HalDisplay::HALF_REFRESH);
 
-  // Pass 2: GRAYSCALE_LSB plane.
+  // Pass 2: GRAYSCALE_LSB plane, decoded while the BW waveform is still running.
   renderer.clearScreen(0x00);
   renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
   if (!decoder.decodeToFramebuffer(filename, renderer, config)) {
@@ -231,15 +233,14 @@ void SleepActivity::onEnter() {
     return renderLastScreenSleepScreen();
   }
 
-  // For OVERLAY mode the popup is suppressed so the frame buffer (reader page) stays intact.
-  // OVERLAY manages its own orientation (renderOverlaySleepScreen), so leave it untouched here.
+  // No "Entering sleep..." popup here: it shipped a full extra refresh (~500 ms on X3)
+  // before the sleep screen's own refresh; the sleep screen appearing is the feedback.
+  // The renderers below all expect portrait: the cover BMP is generated portrait-sized
+  // (getDisplayHeight x getDisplayWidth) and the custom/default screens are laid out
+  // portrait. A timeout sleep bypasses the reader's onExit() orientation reset, so force
+  // portrait here or a landscape cover overflows the edges / mis-centers. OVERLAY manages
+  // its own orientation (renderOverlaySleepScreen), so leave it untouched here.
   if (SETTINGS.sleepScreen != CrossPointSettings::SLEEP_SCREEN_MODE::OVERLAY) {
-    // The popup is drawn in the reader's current orientation so it matches the page the user
-    // was looking at. The sleep-screen renderers below, however, all expect portrait: the cover
-    // BMP is generated portrait-sized (getDisplayHeight x getDisplayWidth) and the custom/default
-    // screens are laid out portrait. A timeout sleep bypasses the reader's onExit() orientation
-    // reset, so force portrait here or a landscape cover overflows the edges / mis-centers.
-    GUI.drawPopup(renderer, tr(STR_ENTERING_SLEEP));
     renderer.setOrientation(GfxRenderer::Portrait);
   }
   switch (SETTINGS.sleepScreen) {
@@ -584,9 +585,13 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
 
   drawOverlay();
 
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
-
-  if (hasGreyscale) {
+  if (!hasGreyscale) {
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  } else {
+    // Fire the BW scrub without waiting: the waveform runs on the controller's own RAM,
+    // so the LSB draw below (CPU/SD-only work) overlaps it. copyGrayscaleLsbBuffers()
+    // drains the pending finish before its SPI plane write.
+    renderer.triggerDisplayAsync(HalDisplay::HALF_REFRESH);
     bitmap.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
