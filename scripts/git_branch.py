@@ -122,6 +122,44 @@ def get_git_repository(project_dir):
     return None
 
 
+def get_display_sdk(project_dir):
+    """Identify the display/hardware SDK the firmware is being built against.
+
+    Resolves the SDK directory from the `EInkDisplay=symlink://<dir>/...` lib_dep
+    in platformio.ini, then reads that directory's Git description for a version.
+    Works whether the SDK is a submodule or a local junction (git -C follows it).
+    Returns a string like "FreeInk 61aa2aa" or None if it cannot be resolved.
+    """
+    ini_path = os.path.join(project_dir, 'platformio.ini')
+    try:
+        with open(ini_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+    except OSError as e:
+        warn(f'could not read platformio.ini for display SDK: {e}')
+        return None
+
+    match = re.search(r'EInkDisplay\s*=\s*symlink://([^/\s]+)/libs/display/(\S+)', text)
+    if not match:
+        return None
+    sdk_dir = match.group(1)
+    disp_lib = match.group(2)
+    name = 'FreeInk' if ('freeink' in sdk_dir.lower() or disp_lib.lower().startswith('freeink')) else sdk_dir
+
+    sdk_path = os.path.join(project_dir, sdk_dir)
+    version = 'nogit'
+    for args in (('describe', '--tags', '--always', '--dirty'), ('rev-parse', '--short', 'HEAD')):
+        try:
+            version = run_git_command(*args, project_dir=sdk_path)
+            break
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            continue
+        except Exception as e:  # noqa: BLE001 — never fail the build over a version string
+            warn(f'unexpected error reading display SDK version: {e}')
+            break
+    version = ''.join(c for c in version if c not in '"\\')
+    return f'{name} {version}'
+
+
 def get_base_version(project_dir):
     ini_path = os.path.join(project_dir, 'platformio.ini')
     if not os.path.isfile(ini_path):
@@ -148,6 +186,13 @@ def inject_version(env):
     if git_repository:
         env.Append(CPPDEFINES=[('CROSSPOINT_GIT_REPOSITORY', f'\\"{git_repository}\\"')])
         print(f'CrossPoint Git repository: {git_repository}')
+
+    # Which display/hardware SDK this firmware links against, for the System
+    # Information screen. Injected for every environment (unlike the version).
+    display_sdk = get_display_sdk(project_dir)
+    if display_sdk:
+        env.Append(CPPDEFINES=[('CROSSPOINT_DISPLAY_SDK', f'\\"{display_sdk}\\"')])
+        print(f'CrossPoint display SDK: {display_sdk}')
 
     # Release candidate builds use the CI-provided RC tag when available, but
     # keep local gh_release_rc builds identifiable instead of leaving the

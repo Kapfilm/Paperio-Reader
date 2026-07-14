@@ -158,6 +158,10 @@ class GfxRenderer {
   bool hasRefreshOverridePending() const {
     return refreshOverride.load(std::memory_order_acquire) != REFRESH_OVERRIDE_NONE;
   }
+  // Discard a pending setNextDisplayRefreshMode() override without applying it, so the next display
+  // uses its own requested mode. Use when the armed override should move to a later refresh — e.g.
+  // the reader keeps the indexing popup FAST but forces the following content page to HALF itself.
+  void clearRefreshOverride() const { consumeRefreshOverride(HalDisplay::FAST_REFRESH); }
   // Make the write framebuffer match the currently displayed frame. Call before
   // a partial repaint that patches a few regions and re-displays without
   // re-rendering the full frame: displayBuffer() ends with swapBuffers(), so
@@ -196,10 +200,12 @@ class GfxRenderer {
   void finishDisplayAsync() const { display.finishDisplayAsync(); }
   void completeDisplay() const {
     display.completeDisplay();
-    // Match displayBuffer(): reseed RED RAM from the current BW frame after the
-    // refresh pipeline settles. On X3 this is a no-op; on X4 it restores the
-    // expected differential baseline for the next fast update.
-    display.syncRedRamFromFrameBuffer();
+    // No per-page RED reseed here — same rationale as displayBuffer(): the
+    // display driver keeps the RED (previous-frame) plane current on every
+    // refresh (writes RED from prev on dual-buffer fast, resyncs it after
+    // single-buffer refreshes), so a syncRedRamFromFrameBuffer() here is a
+    // redundant ~48 KB SPI write per page turn. The explicit seed lives at the
+    // dual->single transition (release sites) only.
   }
   bool isRefreshPending() const { return display.isRefreshPending(); }
   bool isRedRamSynced() const { return display.isRedRamSynced(); }

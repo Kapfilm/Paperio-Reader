@@ -12,10 +12,18 @@
 #include "HalGPIO.h"
 #include "HalPowerManager.h"
 
+// Display/hardware SDK identity, injected by scripts/git_branch.py from the
+// EInkDisplay lib_dep (e.g. "FreeInk 61aa2aa"). Fallback keeps builds compiling
+// if the pre-script could not resolve it.
+#ifndef CROSSPOINT_DISPLAY_SDK
+#define CROSSPOINT_DISPLAY_SDK "unknown"
+#endif
+
 // Snapshot of device system status, shared between the web server and the
 // System Information activity so both surfaces show consistent data.
 struct SystemStatus {
   const char* version;
+  const char* displaySdk;  // display/hardware SDK name + version (CROSSPOINT_DISPLAY_SDK)
   const char* deviceType;  // "X3" or "X4"
   uint16_t displayWidth;   // Native panel width in pixels (long edge)
   uint16_t displayHeight;  // Native panel height in pixels (short edge)
@@ -42,6 +50,7 @@ struct SystemStatus {
   static SystemStatus collectFast() {
     SystemStatus s;
     s.version = CROSSPOINT_VERSION;
+    s.displaySdk = CROSSPOINT_DISPLAY_SDK;
     if (gpio.deviceIsX3()) {
       s.deviceType = "X3";
       s.displayWidth = 792;

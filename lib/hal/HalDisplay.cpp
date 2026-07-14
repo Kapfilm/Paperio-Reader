@@ -22,12 +22,12 @@ void HalDisplay::begin(bool seamless) {
     einkDisplay.setDisplayX3();
   }
 
-  // Drop the CPU clock while the render task sleeps on the BUSY-ISR semaphore
-  // during a waveform (X3: completeDisplay, X4: inside refreshDisplay) and
-  // restore it before the post-waveform SPI work. Policy (WiFi / lock / idle
-  // low-power guards) lives in HalPowerManager; the driver just brackets the
-  // sleep.
-  einkDisplay.setWaveformWaitHooks([] { powerManager.enterWaveformWait(); }, [] { powerManager.exitWaveformWait(); });
+  // Drop the CPU clock while the render task sleeps out a waveform (any BUSY
+  // wait that proves long — the SDK's bus fires the hooks around the ISR sleep
+  // or the poll loop) and restore it before the post-waveform SPI work. Policy
+  // (WiFi / lock / idle low-power guards) lives in HalPowerManager; the driver
+  // just brackets the wait.
+  einkDisplay.setBusyWaitHooks([] { powerManager.enterWaveformWait(); }, [] { powerManager.exitWaveformWait(); });
 
   einkDisplay.begin();
 
