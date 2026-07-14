@@ -11,9 +11,12 @@
 #include "../converters/DirectPixelWriter.h"
 #include "../converters/ImageDecoderFactory.h"
 #include "../converters/JpegToFramebufferConverter.h"
+#include "../converters/PixelCache.h"
 #include "../converters/PngToFramebufferConverter.h"
 
-// Cache file format:
+// Cache file format (see PixelCache::PXC_MAGIC):
+// - uint16_t magic/version (high bit always set, distinguishing it from the legacy
+//   header that began with the width; legacy files are deleted on read)
 // - uint16_t width
 // - uint16_t height
 // - uint8_t pixels[...] - 2 bits per pixel, packed (4 pixels per byte), row-major order
@@ -73,6 +76,18 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
     return false;
   }
 
+  // Version check first: a .pxc written by an older firmware may carry pixel
+  // content with known rendering bugs baked in (e.g. the MCU-order dither grid),
+  // and would otherwise be replayed forever without re-decoding. Delete it so
+  // the caller falls through to a fresh decode, which rewrites the cache.
+  uint16_t magic;
+  if (cacheFile.read(&magic, 2) != 2 || magic != PixelCache::PXC_MAGIC) {
+    cacheFile.close();
+    LOG_INF("IMG", "Stale/unversioned pixel cache (0x%04X), deleting: %s", magic, cachePath.c_str());
+    Storage.remove(cachePath.c_str());
+    return false;
+  }
+
   uint16_t cachedWidth, cachedHeight;
   if (cacheFile.read(&cachedWidth, 2) != 2 || cacheFile.read(&cachedHeight, 2) != 2) {
     cacheFile.close();
@@ -104,9 +119,10 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   const int bytesPerRow = (cachedWidth + 3) / 4;  // 2 bits per pixel, 4 pixels per byte
 
   // Seek directly to the first row of interest — no need to iterate skipped rows.
-  // Cache layout: 4-byte header (width + height) followed by rows in order.
+  // Cache layout: header (magic + width + height) followed by rows in order.
   if (srcYOffset > 0) {
-    const uint32_t seekPos = 4u + static_cast<uint32_t>(srcYOffset) * static_cast<uint32_t>(bytesPerRow);
+    const uint32_t seekPos = static_cast<uint32_t>(PixelCache::PXC_HEADER_BYTES) +
+                             static_cast<uint32_t>(srcYOffset) * static_cast<uint32_t>(bytesPerRow);
     if (!cacheFile.seekSet(seekPos)) {
       LOG_ERR("IMG", "Cache seek failed to row %d", srcYOffset);
       cacheFile.close();

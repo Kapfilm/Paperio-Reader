@@ -64,6 +64,15 @@ struct PixelCache {
   static constexpr int MIN_BAND_ROWS = 16;
   static constexpr size_t MAX_BAND_BYTES = 24 * 1024;  // band working-set ceiling
 
+  // .pxc format stamp, first uint16 of the file. The high bit distinguishes it from
+  // the legacy unversioned header (which began with the width, capped at 0x7FFF by
+  // validateImageDimensions), so readers can detect and delete pre-versioning files.
+  // The low bits are the format version: bump when the *pixel content* semantics
+  // change (e.g. the MCU-order dither fix), not just on code refactors — cached
+  // files persist on SD across firmware updates and are replayed without re-decode.
+  static constexpr uint16_t PXC_MAGIC = 0x8002;
+  static constexpr size_t PXC_HEADER_BYTES = 6;  // magic + width + height
+
   // Open the cache file, write the header, and allocate a band buffer big enough
   // to hold the tallest single decode block (maxBlockDstRows output rows).
   bool begin(const std::string& cachePath, int w, int h, int ox, int oy, int maxBlockDstRows) {
@@ -111,9 +120,10 @@ struct PixelCache {
     }
     cachePathStr = cachePath;
 
+    const uint16_t magic = PXC_MAGIC;
     uint16_t w16 = (uint16_t)w;
     uint16_t h16 = (uint16_t)h;
-    if (file.write(&w16, 2) != 2 || file.write(&h16, 2) != 2) {
+    if (file.write(&magic, 2) != 2 || file.write(&w16, 2) != 2 || file.write(&h16, 2) != 2) {
       LOG_ERR("IMG", "Failed to write cache header: %s", cachePath.c_str());
       abort();
       return false;
@@ -165,7 +175,7 @@ struct PixelCache {
     }
     file.close();
     LOG_DBG("IMG", "Cache written: %s (%dx%d, %d bytes)", cachePathStr.c_str(), width, height,
-            4 + bytesPerRow * height);
+            (int)PXC_HEADER_BYTES + bytesPerRow * height);
     ok = false;  // file handed off; nothing left to clean up
     return true;
   }
