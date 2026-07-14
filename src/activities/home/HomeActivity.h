@@ -121,5 +121,12 @@ class HomeActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
-  bool skipLoopDelay() override { return recentsLoading || extractSession != nullptr || pngSession != nullptr; }
+  // Covers still resolving (not just mid-pass): loadRecentCovers() clears recentsLoading at
+  // every yield point so loop() re-enters it, which briefly makes the activity look idle. If
+  // skipLoopDelay went false in that window, the main loop's inactivity governor could drop
+  // the CPU to 10 MHz mid-burst and the next decode tick would crawl (observed: a ~1.5 s
+  // cover decode taking ~25 s). Hold full speed until every recent cover is resolved.
+  bool skipLoopDelay() override {
+    return (firstRenderDone && !recentsLoaded) || recentsLoading || extractSession != nullptr || pngSession != nullptr;
+  }
 };
