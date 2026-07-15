@@ -381,6 +381,14 @@ inline std::vector<SettingInfo> buildSettingsList() {
                          .withSubmenu(StrId::STR_SHOW_FILES));
   settings.push_back(SettingInfo::Toggle(StrId::STR_INCLUDE_BETA_UPDATES, &CrossPointSettings::includeBetaUpdates,
                                          "includeRcUpdates", StrId::STR_CAT_SYSTEM));
+  // OPDS download settings are edited from the OPDS server list. Keep them
+  // category-less so they persist and remain available to the web API without
+  // cluttering the device settings screen.
+  settings.push_back(SettingInfo::String(StrId::STR_OPDS_DOWNLOAD_FOLDER, SETTINGS.opdsDownloadFolder,
+                                         sizeof(SETTINGS.opdsDownloadFolder), "opdsDownloadFolder"));
+  settings.push_back(SettingInfo::Enum(StrId::STR_OPDS_FILENAME_FORMAT, &CrossPointSettings::opdsFilenameFormat,
+                                       {StrId::STR_FMT_AUTHOR_TITLE, StrId::STR_FMT_TITLE_AUTHOR, StrId::STR_FMT_TITLE},
+                                       "opdsFilenameFormat"));
   // Will be dealt with separately, so these receive none of the main categories and
   // are visible in the web UI but not the device UI.
   settings.push_back(

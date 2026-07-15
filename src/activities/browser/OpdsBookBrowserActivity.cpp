@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <memory>
 
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "OpdsFormatLabel.h"
 #include "SilentRestart.h"
@@ -26,6 +27,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
+#include "util/OpdsFilename.h"
 #include "util/StringUtils.h"
 #include "util/UrlUtils.h"
 
@@ -785,10 +787,25 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book, const OpdsAcqu
 
   std::string downloadUrl =
       (acquisition.href.rfind("http", 0) == 0) ? acquisition.href : UrlUtils::buildUrl(server.url, acquisition.href);
-  std::string filename = "/" +
-                         StringUtils::sanitizeFilename((book.author.empty() ? "" : book.author + " - ") + book.title) +
-                         acquisition.fileExtension;
+  const char* folder = SETTINGS.opdsDownloadFolder;  // "" => SD root
+  bool haveFolder = folder[0] != '\0';
+  if (haveFolder && !Storage.exists(folder) && !Storage.mkdir(folder)) {
+    // exists()-guard first: mkdir's return-on-existing is unconfirmed, and every
+    // existing caller checks exists() before mkdir. On real failure, fall back
+    // to SD root so the download is never lost.
+    LOG_ERR("OPDS", "mkdir failed for %s, using SD root", folder);
+    haveFolder = false;
+  }
 
+  // downloadToFile() needs a std::string, and titles are unbounded (a fixed
+  // char[] would truncate). Cold path (a multi-second download follows), so one
+  // reserve'd, in-place-appended owning string is the right call.
+  std::string filename;
+  filename.reserve(96);
+  if (haveFolder) filename += folder;
+  filename += '/';
+  filename += opdsBookFilename(book.author, book.title, static_cast<OpdsFilenameFormat>(SETTINGS.opdsFilenameFormat),
+                               acquisition.fileExtension);
   LOG_DBG("OPDS", "Downloading: %s -> %s", downloadUrl.c_str(), filename.c_str());
 
   uint32_t lastProgressUpdateMs = 0;
