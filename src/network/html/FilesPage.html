@@ -5851,8 +5851,6 @@
     async function loadMoveFolderOptions() {
       const options = new Set();
       options.add('/');
-      const parent = getParentPath(currentPath);
-      if (parent) options.add(parent);
       options.add('/.sleep');
       options.add('/.crosspoint');
 
@@ -5866,24 +5864,20 @@
         }
       }
 
-      const rootFiles = await fetchFolders('/');
-      rootFiles.forEach(file => {
-        if (file.isDirectory) {
-          options.add('/' + file.name);
-        }
-      });
+      async function collectFolders(path) {
+        const files = await fetchFolders(path);
+        for (const file of files) {
+          if (!file.isDirectory) continue;
 
-      if (currentPath !== '/') {
-        const currentFiles = await fetchFolders(currentPath);
-        currentFiles.forEach(file => {
-          if (file.isDirectory) {
-            let folderPath = currentPath;
-            if (!folderPath.endsWith('/')) folderPath += '/';
-            folderPath += file.name;
-            options.add(folderPath);
-          }
-        });
+          const folderPath = normalizePath((path === '/' ? '' : path) + '/' + file.name);
+          if (options.has(folderPath)) continue;
+
+          options.add(folderPath);
+          await collectFolders(folderPath);
+        }
       }
+
+      await collectFolders('/');
 
       const select = document.getElementById('moveDestPath');
       const prevValue = select.value;
