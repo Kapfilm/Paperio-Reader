@@ -1853,6 +1853,17 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
     } else {
       return false;
     }
+    // Persist mid-build turns too: the SectionBuilding pass never arms pendingProgressSave, so
+    // without this a sleep/power-off during a long build resumes at the build-entry page (issue
+    // #75). pageCount 0 = "unknown until completion" — the loader skips rescaling for it and the
+    // first post-build render overwrites with the real count. Skipped when the back-cross branch
+    // reset the section (position resolves when the previous spine loads).
+    if (section) {
+      pendingProgressSave.spineIndex = currentSpineIndex;
+      pendingProgressSave.page = section->currentPage;
+      pendingProgressSave.pageCount = 0;
+      pendingProgressSave.pending.store(true, std::memory_order_release);
+    }
     lastPageTurnTime = millis();
     forceLoadLargeImages = false;
     pageHasPlaceholders = false;
@@ -2916,9 +2927,16 @@ bool EpubReaderActivity::maybeRestartForFragmentedHeap(const uint32_t freeHeap, 
 
   fragmentationRecoveryRestartAttempted_ = true;
 
+  // Persist the live position only when it is authoritative. During a section (re)build
+  // (readerPhase_ != READING, or section already reset for one) the saved navTarget has not
+  // been applied yet — a fresh Section still sits at currentPage 0 — and saving that would
+  // clobber the user's real position in progress.bin, which already holds the correct value
+  // (issue #75: progress reset to the chapter start after a heap-recovery reboot).
   const int page = (section ? section->currentPage : 0);
   const int pageCount = (section ? section->pageCount : 0);
-  saveProgress(currentSpineIndex, page, pageCount);
+  if (section && readerPhase_ == ReaderPhase::READING) {
+    saveProgress(currentSpineIndex, page, pageCount);
+  }
 
   // Release both framebuffers (primary + secondary already gone) to free ~48 KB
   // more contiguous heap, then do a pre-reboot warm pass for any images that
@@ -2974,7 +2992,12 @@ void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
     LOG_ERR("ERS", "Could not save progress!");
     return;
   }
-  globalReadingSessionTracker().updateProgress(percent);
+  // pageCount 0 means the percent is the "unknown" placeholder (see epubProgressPercentByte),
+  // e.g. a mid-build page turn. Don't push it into the session tracker: recordSession()
+  // overwrites the stored per-book progress, so an unknown 0 at session end would regress it.
+  if (pageCount > 0) {
+    globalReadingSessionTracker().updateProgress(percent);
+  }
   LOG_DBG("ERS", "Progress saved: Chapter %d, Page %d (%d%%)", spineIndex, currentPage, percent);
 }
 void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> page, const int orientedMarginTop,
