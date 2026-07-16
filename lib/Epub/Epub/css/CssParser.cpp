@@ -653,6 +653,12 @@ CssStyle CssParser::parseDeclarations(const std::string& declBlock) {
 // Rule processing
 
 void CssParser::processRuleBlockWithStyle(const std::string& selectorGroup, const CssStyle& style) {
+  // Inspired by crosspoint-reader#2604: a selector with no renderer-supported
+  // declarations only consumes scarce rule-map and cache-index capacity.
+  if (!style.defined.anySet()) {
+    return;
+  }
+
   // Check if we've reached the rule limit before processing
   if (rulesBySelector_.size() >= MAX_RULES) {
     LOG_DBG("CSS", "Reached max rules limit (%zu), stopping CSS parsing", MAX_RULES);

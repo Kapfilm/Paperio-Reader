@@ -237,6 +237,23 @@ struct FreeHeapGuard {
 // test/fixtures/test_large_css.epub.
 constexpr size_t kFixtureRuleCount = 1500;
 
+TEST(CssParser, SkipsRulesWithoutSupportedDeclarations) {
+  const std::vector<uint8_t> cssData = {'.', 'i', 'g', 'n', 'o', 'r', 'e', 'd', ' ', '{', ' ',  'c', 'o', 'l',
+                                        'o', 'r', ':', ' ', 'r', 'e', 'd', ';', ' ', '}', '\n', '.', 'k', 'e',
+                                        'p', 't', ' ', '{', ' ', 'f', 'o', 'n', 't', '-', 'w',  'e', 'i', 'g',
+                                        'h', 't', ':', ' ', 'b', 'o', 'l', 'd', ';', ' ', '}',  '\n'};
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(cssData, cssPath));
+
+  CssParser parser("");
+  FsFile cssFile;
+  ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), cssFile));
+  ASSERT_TRUE(parser.loadFromStream(cssFile));
+  EXPECT_EQ(parser.ruleCount(), 1u);
+
+  std::filesystem::remove(cssPath);
+}
+
 TEST(CssParserPerf, ParseLargeCssEpub) {
   const std::string epubPath = FIXTURE_EPUB;
   const char* cssEntry = "OEBPS/styles/large.css";

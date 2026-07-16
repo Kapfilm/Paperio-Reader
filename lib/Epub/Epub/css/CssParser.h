@@ -62,7 +62,8 @@ class CssParser {
   // v14: style payload gains a block-flags byte persisting listStyleNone and
   //      pageBreakBefore/After — the same dropped-through-the-cache defect as v13, so
   //      stylesheet-driven list markers and page breaks now actually reach the parser.
-  static constexpr uint8_t CSS_CACHE_VERSION = 14;
+  // v15: rules with no renderer-supported declarations are omitted from the cache.
+  static constexpr uint8_t CSS_CACHE_VERSION = 15;
 
   // Retained RAM per rule in disk-backed lookup mode (the sorted SelectorEntry index).
   // Heap gates (Section::heapAllowsEmbeddedStyle) size their contiguous-block floor
