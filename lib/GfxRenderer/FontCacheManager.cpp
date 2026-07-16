@@ -84,17 +84,9 @@ void FontCacheManager::resetStats() {
 bool FontCacheManager::isScanning() const { return scanMode_ == ScanMode::Scanning; }
 
 void FontCacheManager::recordText(const char* text, int fontId, EpdFontFamily::Style style) {
-  // Accumulate per fontId so a page that mixes fonts (e.g. heading + body) prewarms each.
-  ScanEntry& entry = scanByFont_[fontId];
-  entry.text += text;
-  const uint8_t baseStyle = static_cast<uint8_t>(style) & 0x03;
-  const unsigned char* p = reinterpret_cast<const unsigned char*>(text);
-  uint32_t cpCount = 0;
-  while (*p) {
-    if ((*p & 0xC0) != 0x80) cpCount++;
-    p++;
-  }
-  entry.styleCounts[baseStyle] += cpCount;
+  // Accumulate per fontId AND per base style so a page that mixes fonts (heading + body)
+  // prewarms each, and each style is later warmed with only its own glyphs.
+  scanByFont_[fontId].textByStyle[static_cast<uint8_t>(style) & 0x03] += text;
 }
 
 // --- PrewarmScope implementation ---
@@ -109,34 +101,33 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
   manager_->scanMode_ = ScanMode::None;
   if (manager_->scanByFont_.empty()) return;
 
-  // One batch clear for the whole page; the per-font prewarmCache calls below append
-  // into the freed slots (FontDecompressor dedupes across slots between calls).
+  // One batch clear for the whole page; the per-(font,style) prewarmCache calls below
+  // append into the freed slots (FontDecompressor dedupes across slots between calls).
   manager_->clearCache();
 
-  // Prewarm every font that appeared during the scan (typically 1, occasionally 2 for a
-  // heading + body page). Without this, only one font is warmed and the render thrashes the
-  // glyph cache on the others.
-  //
-  // The decompressor's page slots are limited (MAX_PAGE_SLOTS), so prewarm the font with the
-  // MOST text first: the body font (the bulk of the glyphs, ~hundreds) must win the slots over
-  // a short heading (a handful of glyphs). If the heading then can't get a slot, its few glyphs
-  // fall back cheaply — far better than the body thrashing.
-  std::vector<const std::pair<const int, ScanEntry>*> order;
-  order.reserve(manager_->scanByFont_.size());
+  // Prewarm every (font, style) pair that appeared during the scan, each with only the text
+  // drawn in that style. The page slots are limited (MAX_PAGE_SLOTS), so warm the pair with
+  // the MOST text first: the body font's dominant style (~hundreds of glyphs) must win the
+  // slots over a short heading or a few styled words. Losers fall back cheaply per glyph —
+  // far better than the body thrashing.
+  struct PrewarmItem {
+    int fontId;
+    uint8_t style;
+    const std::string* text;
+  };
+  std::vector<PrewarmItem> order;
+  order.reserve(manager_->scanByFont_.size() * 4);  // worst case: every style seen in every font
   for (const auto& kv : manager_->scanByFont_) {
-    if (!kv.second.text.empty()) order.push_back(&kv);
+    for (uint8_t i = 0; i < 4; i++) {
+      const std::string& text = kv.second.textByStyle[i];
+      if (!text.empty()) order.push_back({kv.first, i, &text});
+    }
   }
   std::sort(order.begin(), order.end(),
-            [](const auto* a, const auto* b) { return a->second.text.size() > b->second.text.size(); });
+            [](const PrewarmItem& a, const PrewarmItem& b) { return a.text->size() > b.text->size(); });
 
-  for (const auto* kv : order) {
-    const ScanEntry& entry = kv->second;
-    uint8_t styleMask = 0;
-    for (uint8_t i = 0; i < 4; i++) {
-      if (entry.styleCounts[i] > 0) styleMask |= (1 << i);
-    }
-    if (styleMask == 0) styleMask = 1;  // default to regular
-    manager_->prewarmCache(kv->first, entry.text.c_str(), styleMask);
+  for (const auto& item : order) {
+    manager_->prewarmCache(item.fontId, item.text->c_str(), static_cast<uint8_t>(1u << item.style));
   }
 
   manager_->scanByFont_.clear();

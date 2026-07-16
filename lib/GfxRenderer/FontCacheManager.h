@@ -58,9 +58,13 @@ class FontCacheManager {
   // fonts — e.g. a chapter opener with an h1/h2 heading in a taller font plus body text — must
   // prewarm every font it uses, or the render thrashes the glyph cache (seconds of per-glyph
   // flash decode) on whichever font wasn't warmed. Typically 1-2 entries.
+  //
+  // Within a font, text is kept PER BASE STYLE (R/B/I/BI) so each style slot is warmed with
+  // only the glyphs actually drawn in that style. Sharing one text buffer across styles warmed
+  // the WHOLE page into every style that appeared — one italic word cost a full ~4-5 KB italic
+  // slot, and a bionic page held 4 full slots (~20-26 KB of page buffers instead of ~5-8 KB).
   struct ScanEntry {
-    std::string text;
-    uint32_t styleCounts[4] = {};
+    std::string textByStyle[4];
   };
   std::map<int, ScanEntry> scanByFont_;
 };
