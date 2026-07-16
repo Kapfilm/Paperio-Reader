@@ -459,6 +459,11 @@ class EpubReaderActivity final : public Activity {
   // --- render() pass dispatch (see RenderPass) ---
   // Opportunistically restore the secondary display buffer if a prior OOM degraded it.
   void recoverSecondaryBufferIfNeeded();
+  // Realloc the secondary buffer, evicting rebuildable caches (FDC page slots, CSS
+  // resolve caches) that a released build may have planted inside the freed hole and
+  // retrying once before reporting failure. Shared by the post-build and opportunistic
+  // recovery paths.
+  bool reallocSecondaryEvictingCaches();
   // Clamp currentSpineIndex into [0, spineCount]. spineCount itself is the finished-book sentinel.
   void clampSpineIndex(int spineCount);
   // Compute oriented + padded margins and the derived viewport for this render.

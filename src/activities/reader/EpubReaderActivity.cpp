@@ -437,7 +437,7 @@ void EpubReaderActivity::onExit() {
   // Background-C may have released the secondary buffer for headroom; the build is now aborted,
   // so restore the global "buffer resident" invariant before the next activity renders.
   if (secondaryBufferDegraded_ && !renderer.hasSecondaryBuffer()) {
-    if (renderer.reallocSecondaryBuffer()) {
+    if (reallocSecondaryEvictingCaches()) {
       LOG_INF("ERS", "onExit: restored secondary buffer released by Background-C");
     }
     secondaryBufferDegraded_ = false;
@@ -2059,6 +2059,38 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
   requestUpdate();
 }
 
+bool EpubReaderActivity::reallocSecondaryEvictingCaches() {
+  // The FDC page slots are per-page state (every prewarmed render batch-clears and refills
+  // them via endScanAndPrewarm), but a render done mid-released-build leaves the last page's
+  // ~4 KB slot buffers allocated — frequently inside the released-framebuffer hole this
+  // realloc is about to ask back as one contiguous block. Dropping them first is free (the
+  // next render re-prewarms regardless) and deterministic, so do it before the first attempt.
+  if (FontCacheManager* fontCache = renderer.getFontCacheManager()) {
+    fontCache->clearCache();
+  }
+  if (renderer.reallocSecondaryBuffer()) {
+    return true;
+  }
+  // Still blocked: evict the CSS resolve caches (hot/negative caches, container bucket
+  // arrays and the retained selector index all reload lazily from SD, worst case ~240 ms
+  // at the next section-build start) and drop Background-B's section — an in-flight B
+  // build holds a parser plus its inflate ring, and even a settled one keeps LUT/TOC
+  // state; B re-probes on its own cadence, so the only cost is redoing lookahead work.
+  // All far cheaper than the recovery reboot this call stands between. Retry once.
+  if (epub && epub->getCssParser()) {
+    epub->getCssParser()->clearCaches(/*evictEverything=*/true);
+  }
+  if (backgroundSection_) {
+    LOG_INF("ERS", "Dropping Background-B section (spine=%d) for secondary realloc", backgroundBuildSpineIndex_);
+    resetBackgroundBuild();
+  }
+  if (renderer.reallocSecondaryBuffer()) {
+    LOG_INF("ERS", "Secondary realloc succeeded after cache eviction");
+    return true;
+  }
+  return false;
+}
+
 void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
   // While Background-C is building with the buffer released for headroom, leave it released —
   // reallocating now would reclaim the ~48–52 KB the build is using. The buffer is restored here
@@ -2069,7 +2101,7 @@ void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
   // Opportunistic recovery: after an OOM during chapter indexing, or after a Background-C
   // released build, restore the secondary buffer when heap is healthy again.
   if (secondaryBufferDegraded_ && !renderer.hasSecondaryBuffer()) {
-    if (renderer.reallocSecondaryBuffer()) {
+    if (reallocSecondaryEvictingCaches()) {
       secondaryBufferDegraded_ = false;
       // Undo the IncrementalReleased opt-in (see chooseSectionBuildMode/buildSection): once the
       // secondary buffer is back, double-buffer fast-diff is correct again and this flag would
@@ -2083,11 +2115,24 @@ void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
       LOG_INF("ERS", "Secondary display buffer restored; re-enabling normal refresh/AA paths");
     } else {
       const uint32_t freeHeap = esp_get_free_heap_size();
-      LOG_ERR("ERS", "Secondary display buffer realloc failed (free=%lu); AA stays off, will retry", freeHeap);
-      // Opportunistic retries alone never recover from a fragmented heap (no allocation
-      // pattern here returns memory to the heap), so escalate to a recovery reboot once
-      // free heap is plentiful but a 52 KB contiguous block still can't be found.
-      maybeRestartForFragmentedHeap(freeHeap, 0);
+      // Safe to walk the heap here (unlike the post-index OOM path): this is a routine
+      // render-start recovery, not the aftermath of decode failures under pressure.
+      const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+      LOG_ERR("ERS", "Secondary display buffer realloc failed (free=%lu contig=%lu); AA stays off, will retry",
+              freeHeap, contigHeap);
+      // One-shot forensic dump so field logs identify WHAT is pinning the released hole
+      // (address + size of every block). Once per boot: the block map barely changes
+      // between failed retries and the dump is hundreds of serial lines.
+      static bool dumpedHeapOnce = false;
+      if (!dumpedHeapOnce) {
+        dumpedHeapOnce = true;
+        LOG_ERR("ERS", "Heap block dump (one-shot, pin forensics):");
+        heap_caps_dump(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+      }
+      // Cache eviction plus opportunistic retries did not recover a framebuffer-sized
+      // contiguous block, so escalate to a recovery reboot once free heap is plentiful
+      // but the block still can't be found.
+      maybeRestartForFragmentedHeap(freeHeap, contigHeap);
     }
   } else if (secondaryBufferDegraded_ && renderer.hasSecondaryBuffer()) {
     secondaryBufferDegraded_ = false;
@@ -2417,7 +2462,7 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
   // refresh.
   const BuildOutcome outcome = createOk ? BuildOutcome::Built : BuildOutcome::Failed;
   if (released) {
-    if (!renderer.reallocSecondaryBuffer()) {
+    if (!reallocSecondaryEvictingCaches()) {
       LOG_ERR("ERS", "Failed to reallocate secondary display buffer — display quality degraded");
       secondaryBufferDegraded_ = true;
       const uint32_t freeAfterIndex = esp_get_free_heap_size();
@@ -3085,7 +3130,9 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   // to whatever frees next. Mirrors the after_createSectionFile tripwire.
   checkHeapIntegrity("after_image_warm_pass");
   if (releasedSecondaryForWarm) {
-    if (!renderer.reallocSecondaryBuffer()) {
+    // Safe to evict here: the font prewarm for this page runs AFTER this realloc (image
+    // warm is deliberately ordered before it), so cleared glyph slots are rebuilt anyway.
+    if (!reallocSecondaryEvictingCaches()) {
       LOG_ERR("ERS", "Failed to reallocate secondary buffer after image warm — display quality degraded");
       secondaryBufferDegraded_ = true;
       const uint32_t freeAfterWarm = esp_get_free_heap_size();

@@ -1032,11 +1032,23 @@ size_t CssParser::ruleCount() const {
   return 0;
 }
 
-void CssParser::clearCaches() {
+void CssParser::clearCaches(const bool evictEverything) {
   rulesBySelector_.clear();
   hotRuleCache_.clear();
   hotRuleLru_.clear();
   negativeRuleCache_.clear();
+  if (evictEverything) {
+    // Defragmentation eviction: swap the unordered containers down so their bucket
+    // arrays are freed too (clear() keeps them), and drop the retained disk index.
+    // Everything here reloads lazily from SD on the next resolve.
+    std::unordered_map<std::string, CssStyle>().swap(rulesBySelector_);
+    std::unordered_map<std::string, std::pair<CssStyle, std::list<std::string>::iterator>>().swap(hotRuleCache_);
+    std::unordered_set<std::string>().swap(negativeRuleCache_);
+    std::vector<SelectorEntry>().swap(cacheRuleOffsets_);
+    cacheIndexLoaded_ = false;
+    cachedRuleCount_ = 0;
+    return;
+  }
   // Retain the sorted disk index if it fits in 10 KB — avoids a cold SD re-read
   // (~240 ms) at the start of each section build. Evict if larger to protect heap.
   if (cacheRuleOffsets_.size() * CSS_INDEX_BYTES_PER_RULE > 10 * 1024) {

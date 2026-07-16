@@ -122,8 +122,14 @@ class CssParser {
    * Clear per-section caches (hot/negative LRU) between section builds.
    * Retains the disk index in RAM if it fits within 10 KB, avoiding a cold SD
    * re-read (~240 ms) on the next section. Evicts if larger to protect heap.
+   *
+   * evictEverything=true is the defragmentation variant: it also drops the
+   * retained disk index (lazily re-read from SD on the next resolve) and swaps
+   * the unordered containers down so their bucket arrays are returned to the
+   * heap — plain clear() keeps buckets allocated, and those small blocks can
+   * pin the released-framebuffer hole a secondary-buffer realloc needs back.
    */
-  void clearCaches();
+  void clearCaches(bool evictEverything = false);
 
   /**
    * Check if CSS rules cache file exists
