@@ -4,6 +4,7 @@
 #include <ESPmDNS.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
+#include <Memory.h>
 #include <WiFi.h>
 #include <esp_task_wdt.h>
 
@@ -27,6 +28,10 @@ constexpr const char* AP_PASSWORD = nullptr;  // Open network for ease of use
 constexpr const char* AP_HOSTNAME = "crosspoint";
 constexpr uint8_t AP_CHANNEL = 1;
 constexpr uint8_t AP_MAX_CONNECTIONS = 2;  // reduce from default 4 to save resources
+// Fixed AP addressing (the esp32 softAP default, pinned explicitly) so the
+// QR/URL screen can be painted before the WiFi stack starts.
+const IPAddress AP_IP(192, 168, 4, 1);
+const IPAddress AP_NETMASK(255, 255, 255, 0);
 constexpr int QR_CODE_WIDTH = 198;
 constexpr int QR_CODE_HEIGHT = 198;
 
@@ -175,6 +180,18 @@ void CrossPointWebServerActivity::onWifiSelectionComplete(const bool connected) 
 
 void CrossPointWebServerActivity::startAccessPoint() {
   LOG_DBG("WEBACT", "Starting Access Point mode...");
+
+  // Everything on the server screen is known before WiFi starts: the SSID is a
+  // constant and the AP IP is pinned via softAPConfig below. Paint and release
+  // the frame buffers (~100KB) first so the WiFi stack + mDNS + DNS server
+  // (~66KB) start against a roomy heap; painting after AP start left the X3
+  // with <5KB free and aborted in the QR render.
+  connectedSSID = AP_SSID;
+  char ipStr[16];
+  snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", AP_IP[0], AP_IP[1], AP_IP[2], AP_IP[3]);
+  connectedIP = ipStr;
+  showServerScreenAndReleaseBuffers();
+
   LOG_DBG("WEBACT", "Free heap before AP start: %d bytes", ESP.getFreeHeap());
 
   // Configure and start the AP
@@ -196,14 +213,12 @@ void CrossPointWebServerActivity::startAccessPoint() {
     return;
   }
 
-  delay(100);  // Wait for AP to fully initialize
+  // Pin the AP address to what the already-painted screen promises.
+  if (!WiFi.softAPConfig(AP_IP, AP_IP, AP_NETMASK)) {
+    LOG_ERR("WEBACT", "ERROR: softAPConfig failed");
+  }
 
-  // Get AP IP address
-  const IPAddress apIP = WiFi.softAPIP();
-  char ipStr[16];
-  snprintf(ipStr, sizeof(ipStr), "%d.%d.%d.%d", apIP[0], apIP[1], apIP[2], apIP[3]);
-  connectedIP = ipStr;
-  connectedSSID = AP_SSID;
+  delay(100);  // Wait for AP to fully initialize
 
   LOG_DBG("WEBACT", "Access Point started!");
   LOG_DBG("WEBACT", "SSID: %s", AP_SSID);
@@ -219,10 +234,16 @@ void CrossPointWebServerActivity::startAccessPoint() {
   // Start DNS server for captive portal behavior
   // This redirects all DNS queries to our IP, making any domain typed resolve to us
   stopDnsServer();
-  dnsServer = new DNSServer();
-  dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
-  dnsServer->start(DNS_PORT, "*", apIP);
-  LOG_DBG("WEBACT", "DNS server started for captive portal");
+  // Raw nothrow new: owned by the module-scope dnsServer pointer, freed in
+  // stopDnsServer(). On OOM the captive portal degrades to direct IP/mDNS access.
+  dnsServer = new (std::nothrow) DNSServer();
+  if (dnsServer) {
+    dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
+    dnsServer->start(DNS_PORT, "*", AP_IP);
+    LOG_DBG("WEBACT", "DNS server started for captive portal");
+  } else {
+    LOG_ERR("WEBACT", "OOM allocating DNS server, captive portal disabled");
+  }
 
   LOG_DBG("WEBACT", "Free heap after AP start: %d bytes", ESP.getFreeHeap());
 
@@ -230,10 +251,8 @@ void CrossPointWebServerActivity::startAccessPoint() {
   startWebServer();
 }
 
-void CrossPointWebServerActivity::startWebServer() {
-  LOG_DBG("WEBACT", "Starting web server...");
-
-  // Free SD font heap before starting the web server. A loaded SD font
+void CrossPointWebServerActivity::showServerScreenAndReleaseBuffers() {
+  // Free SD font heap for the web server session. A loaded SD font
   // (Literata etc.) holds ~24-60KB of kern/ligature/glyph data that is
   // completely unused during the web server session. The device restarts
   // after the web server exits (silentRestart in onExit), so the font
@@ -242,7 +261,7 @@ void CrossPointWebServerActivity::startWebServer() {
   sdFontSystem.unload(renderer);
   LOG_DBG("WEBACT", "Free heap after SD font unload: %d bytes", ESP.getFreeHeap());
 
-  // Set running state now so the initial paint below uses the correct UI branch.
+  // Set running state now so the paint below uses the correct UI branch.
   state = WebServerActivityState::SERVER_RUNNING;
   if (!isApMode) {
     currentRssi = WiFi.RSSI();
@@ -250,8 +269,8 @@ void CrossPointWebServerActivity::startWebServer() {
   }
 
   // Paint the QR / URL screen while both frame buffers are still available,
-  // then release them before allocating the web server. The e-ink controller
-  // retains the image in its own RAM — no framebuffer needed after displayBuffer().
+  // then release them. The e-ink controller retains the image in its own RAM —
+  // no framebuffer needed after displayBuffer().
   LOG_DBG("WEBACT", "Free heap before frame buffer release: %d bytes", ESP.getFreeHeap());
   renderer.clearScreen();
   renderServerRunning();
@@ -259,9 +278,25 @@ void CrossPointWebServerActivity::startWebServer() {
   buffersReleased = true;
   renderer.releaseFrameBuffers();
   LOG_DBG("WEBACT", "Free heap after frame buffer release: %d bytes", ESP.getFreeHeap());
+}
+
+void CrossPointWebServerActivity::startWebServer() {
+  LOG_DBG("WEBACT", "Starting web server...");
+
+  // AP mode paints and releases the buffers before the WiFi stack starts
+  // (startAccessPoint). The STA path can only do it here, once the join
+  // succeeded and the assigned IP is known.
+  if (!buffersReleased) {
+    showServerScreenAndReleaseBuffers();
+  }
 
   // Create the web server instance
-  webServer.reset(new CrossPointWebServer());
+  webServer = makeUniqueNoThrow<CrossPointWebServer>();
+  if (!webServer) {
+    LOG_ERR("WEBACT", "OOM allocating web server");
+    onGoHome();
+    return;
+  }
   webServer->begin();
 
   if (webServer->isRunning()) {

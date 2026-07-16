@@ -1,5 +1,6 @@
 #include "QrUtils.h"
 
+#include <Memory.h>
 #include <Utf8.h>
 #include <qrcodegen.h>
 
@@ -15,6 +16,21 @@ bool hasNonAscii(const uint8_t* data, size_t len) {
     if (data[i] > 0x7F) return true;
   }
   return false;
+}
+
+// Byte-mode data capacity (bytes) at ECC LOW for QR versions 1-40
+// (ISO/IEC 18004; matches qrcodegen's internal limits). Byte mode is the
+// pessimistic bound — numeric/alphanumeric payloads fit more, never less.
+constexpr uint16_t BYTE_CAPACITY_ECC_LOW[qrcodegen_VERSION_MAX] = {
+    17,   32,   53,   78,   106,  134,  154,  192,  230,  271,  321,  367,  425,  458,
+    520,  586,  644,  718,  792,  858,  929,  1003, 1091, 1171, 1273, 1367, 1465, 1528,
+    1628, 1732, 1840, 1952, 2068, 2188, 2303, 2431, 2563, 2699, 2809, 2953};
+
+int versionForByteLen(size_t len) {
+  for (int v = qrcodegen_VERSION_MIN; v <= qrcodegen_VERSION_MAX; v++) {
+    if (BYTE_CAPACITY_ECC_LOW[v - 1] >= len) return v;
+  }
+  return qrcodegen_VERSION_MAX;
 }
 
 }  // namespace
@@ -34,15 +50,26 @@ bool QrUtils::drawQrCode(const GfxRenderer& renderer, const Rect& bounds, const 
     LOG_DBG("QR", "Truncated payload from %u to %u bytes", textPayload.size(), len);
   }
 
-  // Heap-allocate both buffers (each ~3918 bytes for version 40)
-  constexpr size_t bufLen = qrcodegen_BUFFER_LEN_FOR_VERSION(qrcodegen_VERSION_MAX);
-  auto qrcode = std::make_unique<uint8_t[]>(bufLen);
-  auto tempBuf = std::make_unique<uint8_t[]>(bufLen);
+  const auto* rawData = reinterpret_cast<const uint8_t*>(text);
+  const bool nonAscii = hasNonAscii(rawData, len);
+
+  // ASCII payloads size both work buffers for the smallest version that fits
+  // (a ~40-byte URL needs ~2x200 bytes instead of 2x3918), so short QR paints
+  // survive low-heap phases. The ECI path keeps VERSION_MAX buffers because
+  // qrcodegen_encodeSegmentsAdvanced documents its buffer requirement against
+  // qrcodegen_VERSION_MAX, not the maxVersion argument.
+  const int maxVersion = nonAscii ? qrcodegen_VERSION_MAX : versionForByteLen(len);
+  const size_t bufLen = qrcodegen_BUFFER_LEN_FOR_VERSION(maxVersion);
+  auto qrcode = makeUniqueNoThrow<uint8_t[]>(bufLen);
+  auto tempBuf = makeUniqueNoThrow<uint8_t[]>(bufLen);
+  if (!qrcode || !tempBuf) {
+    LOG_ERR("QR", "OOM allocating 2x%u byte QR buffers, skipping QR", bufLen);
+    return truncated;
+  }
 
   bool ok = false;
-  const auto* rawData = reinterpret_cast<const uint8_t*>(text);
 
-  if (hasNonAscii(rawData, len)) {
+  if (nonAscii) {
     // Non-ASCII content: use ECI mode 26 (UTF-8) + byte segment via the low-level API
     // so scanners know the encoding rather than assuming ISO 8859-1.
     uint8_t eciBuf[4] = {};
@@ -50,7 +77,11 @@ bool QrUtils::drawQrCode(const GfxRenderer& renderer, const Rect& bounds, const 
 
     // Build byte segment — the segment data buffer can overlap with tempBuf
     const size_t segBufSize = qrcodegen_calcSegmentBufferSize(qrcodegen_Mode_BYTE, len);
-    auto segBuf = std::make_unique<uint8_t[]>(segBufSize);
+    auto segBuf = makeUniqueNoThrow<uint8_t[]>(segBufSize);
+    if (!segBuf) {
+      LOG_ERR("QR", "OOM allocating %u byte QR segment buffer, skipping QR", segBufSize);
+      return truncated;
+    }
     struct qrcodegen_Segment byteSeg = qrcodegen_makeBytes(rawData, len, segBuf.get());
 
     struct qrcodegen_Segment segs[2] = {eciSeg, byteSeg};
@@ -58,8 +89,8 @@ bool QrUtils::drawQrCode(const GfxRenderer& renderer, const Rect& bounds, const 
                                           qrcodegen_Mask_AUTO, false, tempBuf.get(), qrcode.get());
   } else {
     // ASCII-only: let the library auto-select the optimal mode (numeric/alphanumeric/byte)
-    ok = qrcodegen_encodeText(text, tempBuf.get(), qrcode.get(), qrcodegen_Ecc_LOW, qrcodegen_VERSION_MIN,
-                              qrcodegen_VERSION_MAX, qrcodegen_Mask_AUTO, false);
+    ok = qrcodegen_encodeText(text, tempBuf.get(), qrcode.get(), qrcodegen_Ecc_LOW, qrcodegen_VERSION_MIN, maxVersion,
+                              qrcodegen_Mask_AUTO, false);
   }
 
   if (ok) {

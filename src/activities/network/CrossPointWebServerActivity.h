@@ -58,6 +58,10 @@ class CrossPointWebServerActivity final : public Activity {
 
   void onNetworkModeSelected(NetworkMode mode);
   void onWifiSelectionComplete(bool connected);
+  // Unload SD fonts, paint the QR/URL screen, and release both frame buffers.
+  // AP mode calls this before the WiFi stack starts so it gets the ~100KB of
+  // headroom; STA mode calls it from startWebServer once the IP is known.
+  void showServerScreenAndReleaseBuffers();
   void startAccessPoint();
   void startWebServer();
 
