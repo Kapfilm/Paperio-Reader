@@ -1864,14 +1864,17 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
     if (navTarget.kind != NavigationTarget::Kind::Page) {
       return false;
     }
+    // The lock must cover the GUARDS, not just the mutation: the PreRender pass temporarily
+    // sets section->currentPage to the page it is laying out, so a guard evaluated unlocked
+    // can pass on that transient value and the mutation then lands on the restored one —
+    // observed on-device as a back turn at page 0 reading a transient 1, then decrementing
+    // the restored 0 to -1 (a visible "out of bounds" frame).
+    RenderLock lock(*this);
     if (isForwardTurn) {
-      RenderLock lock(*this);
       section->currentPage++;
     } else if (section->currentPage > 0) {
-      RenderLock lock(*this);
       section->currentPage--;
     } else if (currentSpineIndex > 0) {
-      RenderLock lock(*this);
       navTarget = NavigationTarget::makeLastPage();
       currentSpineIndex--;
       section.reset();
@@ -1895,6 +1898,14 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
     return true;
   }
 
+  // Serialize the WHOLE step decision against the render task, guards included: the
+  // PreRender pass temporarily writes section->currentPage while laying out the next page,
+  // so a guard evaluated outside the lock can pass on that transient value and the mutation
+  // then lands on the restored one. Observed on-device: a back turn at page 0 read the
+  // pre-render's transient 1, blocked on the lock, then decremented the restored 0 to -1 —
+  // a visible "out of bounds" frame. The forward mirror can double-advance past the end.
+  RenderLock lock(*this);
+
   // A 0-page section (permanently unparse-able chapter) has no within-chapter navigation,
   // but the user must still be able to cross spine boundaries to escape it.
   const bool hasPages = section->pageCount > 0;
@@ -1905,17 +1916,12 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
   // the release site immediately calls syncRedRamFromFrameBuffer() to restore the correct baseline.
   if (isForwardTurn) {
     if (hasPages && section->currentPage < section->pageCount - 1) {
-      // Serialize against the render task: it reads section->currentPage (and the
-      // PreRender pass temporarily writes it), so the advance must not race.
-      RenderLock lock(*this);
       section->currentPage++;
     } else if (currentSpineIndex + 1 < epub->getSpineItemsCount()) {
-      RenderLock lock(*this);
       navTarget = NavigationTarget::makePage(0);
       currentSpineIndex++;
       section.reset();
     } else if (currentSpineIndex + 1 == epub->getSpineItemsCount()) {
-      RenderLock lock(*this);
       navTarget = NavigationTarget::makeLastPage();
       currentSpineIndex++;
       section.reset();
@@ -1924,10 +1930,8 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
     }
   } else {
     if (hasPages && section->currentPage > 0) {
-      RenderLock lock(*this);
       section->currentPage--;
     } else if (currentSpineIndex > 0) {
-      RenderLock lock(*this);
       navTarget = NavigationTarget::makeLastPage();
       currentSpineIndex--;
       section.reset();
