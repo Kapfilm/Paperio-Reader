@@ -196,6 +196,20 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   if (word.empty()) return;
 
   word = utf8NfcNorm(std::move(word));
+
+  const size_t requiredSize = words.size() + 1;
+  if (words.capacity() < requiredSize || wordStyles.capacity() < requiredSize ||
+      wordContinues.capacity() < requiredSize || wordSizes.capacity() < requiredSize) {
+    size_t newCapacity = std::max<size_t>(16, words.capacity());
+    while (newCapacity < requiredSize) {
+      newCapacity *= 2;
+    }
+    words.reserve(newCapacity);
+    wordStyles.reserve(newCapacity);
+    wordContinues.reserve(newCapacity);
+    wordSizes.reserve(newCapacity);
+  }
+
   words.push_back(std::move(word));
   EpdFontFamily::Style combinedStyle = fontStyle;
   if (underline) {
