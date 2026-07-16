@@ -590,6 +590,7 @@ bool JsonSettingsIO::saveRecentBooks(const RecentBooksStore& store, const char* 
     obj["paragraphAlignmentOverride"] = book.paragraphAlignmentOverride;
     obj["textAntiAliasingOverride"] = book.textAntiAliasingOverride;
     obj["hyphenationOverride"] = book.hyphenationOverride;
+    obj["guideDotsOverride"] = book.guideDotsOverride;
   }
 
   String json;
@@ -637,6 +638,7 @@ bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) 
         clampInt8(obj["paragraphAlignmentOverride"] | -1, -1, CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT - 1, -1);
     book.textAntiAliasingOverride = clampInt8(obj["textAntiAliasingOverride"] | -1, -1, 1, -1);
     book.hyphenationOverride = clampInt8(obj["hyphenationOverride"] | -1, -1, 1, -1);
+    book.guideDotsOverride = clampInt8(obj["guideDotsOverride"] | -1, -1, 1, -1);
     store.recentBooks.push_back(book);
   }
 

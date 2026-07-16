@@ -40,6 +40,9 @@ struct MenuResult {
   uint8_t sortDirection = 0;
   uint8_t showHiddenFiles = 0;
   uint8_t showFileExtensions = 0;
+  // Also appended for positional-initialiser safety. Tri-state like the other
+  // reader overrides: -1 = default, 0 = off, 1 = on.
+  int8_t guideDotsOverride = -1;
 };
 
 struct ChapterResult {

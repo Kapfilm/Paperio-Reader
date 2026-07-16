@@ -313,6 +313,9 @@ class CrossPointSettings {
   uint8_t syntheticTocFallback = 1;
   // Default bionic reading in EPUB pages when no per-book override is set (1 = enabled, 0 = disabled)
   uint8_t bionicReading = 0;
+  // Guide dots reading aid in EPUB pages: a small dot centered in each inter-word gap
+  // (1 = enabled, 0 = disabled). Idea from CrossInk (https://github.com/uxjulia/CrossInk).
+  uint8_t guideDots = 0;
   // Automatically push reading progress to the KOReader sync server when leaving the reader
   // (1 = enabled, 0 = disabled). The push only fires when credentials are configured and the
   // reader session advanced at least 3 pages, and is skipped when remote progress is already ahead.

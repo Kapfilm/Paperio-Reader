@@ -63,9 +63,9 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const int8_t initialEmbeddedStyleOverride, const int8_t initialImageRenderingOverride,
     const int8_t initialFontFamilyOverride, const std::string& initialSdFontFamilyOverride,
     const int8_t initialFontSizeOverride, const uint8_t initialTextDarkness, const bool initialBionicReadingOverride,
-    const int8_t initialParagraphAlignmentOverride, const int8_t initialTextAntiAliasingOverride,
-    const int8_t initialHyphenationOverride, const bool hasStarredPages, const bool isCurrentPageStarred,
-    const bool hasPrintedPages)
+    const int8_t initialGuideDotsOverride, const int8_t initialParagraphAlignmentOverride,
+    const int8_t initialTextAntiAliasingOverride, const int8_t initialHyphenationOverride, const bool hasStarredPages,
+    const bool isCurrentPageStarred, const bool hasPrintedPages)
     : MenuListActivity("EpubReaderMenu", renderer, mappedInput),
       currentPageStarred(isCurrentPageStarred),
       pendingOrientation(currentOrientation),
@@ -76,6 +76,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
       pendingFontSizeOverride(initialFontSizeOverride),
       pendingTextDarkness(initialTextDarkness),
       pendingBionicReading(initialBionicReadingOverride),
+      pendingGuideDotsOverride(initialGuideDotsOverride),
       pendingParagraphAlignmentOverride(initialParagraphAlignmentOverride),
       pendingTextAntiAliasingOverride(initialTextAntiAliasingOverride),
       pendingHyphenationOverride(initialHyphenationOverride),
@@ -253,6 +254,19 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
           [](void* ctx, uint8_t v) { static_cast<EpubReaderMenuActivity*>(ctx)->pendingBionicReading = (v != 0); })
           .withSubmenu(StrId::STR_READER_OVERRIDES));
 
+  // Guide dots: default / on / off (mirrors QuickOverrides)
+  menuItems.push_back(
+      SettingInfo::DynamicEnumCtx(
+          StrId::STR_GUIDE_DOTS, {StrId::STR_DEFAULT_VALUE, StrId::STR_STATE_ON, StrId::STR_STATE_OFF}, self,
+          [](const void* ctx) -> uint8_t {
+            return threeStateSlotFromOverride(
+                static_cast<const EpubReaderMenuActivity*>(ctx)->pendingGuideDotsOverride);
+          },
+          [](void* ctx, uint8_t v) {
+            static_cast<EpubReaderMenuActivity*>(ctx)->pendingGuideDotsOverride = threeStateOverrideFromSlot(v);
+          })
+          .withSubmenu(StrId::STR_READER_OVERRIDES));
+
   // Paragraph alignment: default(-1) + the 5 global options
   menuItems.push_back(SettingInfo::DynamicEnumCtx(
                           StrId::STR_PARA_ALIGNMENT,
@@ -393,11 +407,23 @@ EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForSettingActio
 }
 
 void EpubReaderMenuActivity::finishWithAction(MenuAction action) {
-  setResult(MenuResult{static_cast<int>(action), -1, pendingOrientation, selectedPageTurnOption,
-                       pendingEmbeddedStyleOverride, pendingImageRenderingOverride, pendingFontFamilyOverride,
-                       pendingSdFontFamilyOverride, pendingFontSizeOverride, pendingTextDarkness,
-                       static_cast<uint8_t>(pendingBionicReading), pendingParagraphAlignmentOverride,
-                       pendingTextAntiAliasingOverride, pendingHyphenationOverride});
+  MenuResult payload{static_cast<int>(action),
+                     -1,
+                     pendingOrientation,
+                     selectedPageTurnOption,
+                     pendingEmbeddedStyleOverride,
+                     pendingImageRenderingOverride,
+                     pendingFontFamilyOverride,
+                     pendingSdFontFamilyOverride,
+                     pendingFontSizeOverride,
+                     pendingTextDarkness,
+                     static_cast<uint8_t>(pendingBionicReading),
+                     pendingParagraphAlignmentOverride,
+                     pendingTextAntiAliasingOverride,
+                     pendingHyphenationOverride};
+  // Appended after the file-browser fields, so set by name rather than position.
+  payload.guideDotsOverride = pendingGuideDotsOverride;
+  setResult(std::move(payload));
   finish();
 }
 
@@ -422,20 +448,23 @@ void EpubReaderMenuActivity::onSettingToggled(int /*index*/) {
 void EpubReaderMenuActivity::onBackPressed() {
   ActivityResult result;
   result.isCancelled = true;
-  result.data = MenuResult{-1,
-                           -1,
-                           pendingOrientation,
-                           selectedPageTurnOption,
-                           pendingEmbeddedStyleOverride,
-                           pendingImageRenderingOverride,
-                           pendingFontFamilyOverride,
-                           pendingSdFontFamilyOverride,
-                           pendingFontSizeOverride,
-                           pendingTextDarkness,
-                           static_cast<uint8_t>(pendingBionicReading),
-                           pendingParagraphAlignmentOverride,
-                           pendingTextAntiAliasingOverride,
-                           pendingHyphenationOverride};
+  MenuResult payload{-1,
+                     -1,
+                     pendingOrientation,
+                     selectedPageTurnOption,
+                     pendingEmbeddedStyleOverride,
+                     pendingImageRenderingOverride,
+                     pendingFontFamilyOverride,
+                     pendingSdFontFamilyOverride,
+                     pendingFontSizeOverride,
+                     pendingTextDarkness,
+                     static_cast<uint8_t>(pendingBionicReading),
+                     pendingParagraphAlignmentOverride,
+                     pendingTextAntiAliasingOverride,
+                     pendingHyphenationOverride};
+  // Appended after the file-browser fields, so set by name rather than position.
+  payload.guideDotsOverride = pendingGuideDotsOverride;
+  result.data = std::move(payload);
   setResult(std::move(result));
   finish();
 }
@@ -498,6 +527,10 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
       const auto defaultEffective = (SETTINGS.hyphenationEnabled != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
       return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
     }
+    if (item.nameId == StrId::STR_GUIDE_DOTS && pendingGuideDotsOverride < 0) {
+      const auto defaultEffective = (SETTINGS.guideDots != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+    }
   }
 
   // DynamicEnum items use the standard display
@@ -544,6 +577,10 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
     }
     if (item.nameId == StrId::STR_HYPHENATION && pendingHyphenationOverride < 0) {
       const auto defaultEffective = (SETTINGS.hyphenationEnabled != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+    }
+    if (item.nameId == StrId::STR_GUIDE_DOTS && pendingGuideDotsOverride < 0) {
+      const auto defaultEffective = (SETTINGS.guideDots != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
       return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
     }
     return item.getDisplayValue();
