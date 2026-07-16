@@ -756,7 +756,21 @@ void ReaderActivity::onEnter() {
     auto epub = loadEpub(initialBookPath);
     if (releasedForIndexing) {
       RenderLock lock;
-      if (renderer.reallocSecondaryBuffer()) {
+      bool restored = renderer.reallocSecondaryBuffer();
+      if (!restored && epub) {
+        // The indexing pass ran with the framebuffer's block free, so some of the Epub's
+        // book-lifetime allocations (spine/TOC vectors, CSS index) can now sit inside it —
+        // unevictable while the object lives, and the reason the realloc just missed.
+        // The indexing caches were written to SD above, so drop the object, reclaim the
+        // block, and reload on the warm-cache path (~50 ms, needs no released headroom).
+        // Field-observed on X3: this exact miss previously cost a heap-recovery restart.
+        epub.reset();
+        restored = renderer.reallocSecondaryBuffer();
+        LOG_INF("READER", "Dropped ePub to unpin framebuffer block (realloc %s); reloading from warm cache",
+                restored ? "ok" : "still failing");
+        epub = loadEpub(initialBookPath);
+      }
+      if (restored) {
         renderer.setSingleBufferFastDiff(false);
         LOG_INF("READER", "Restored secondary framebuffer after first-open indexing");
       } else {
