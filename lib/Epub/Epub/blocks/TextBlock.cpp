@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <cstring>
 
+bool TextBlock::guideDotsEnabled = false;
+
 TextBlock::ArenaOffsets TextBlock::arenaOffsets(const uint16_t wordCount, const bool hasSizes) {
   // Layout documented in TextBlock.h: 16-bit arrays first (textOff, xpos), then
   // 8-bit arrays (styles, optional sizes), then the text blob. textOff sits at 0.
@@ -139,6 +141,12 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
   if (sizesPresent) {
     lineAscender = renderer.getFontAscenderSizeScaled(effFontId, blockScale * (maxSizePct() / 100.0f));
   }
+  // Guide dots (see setGuideDots): one dot centered in each inter-word gap.
+  // Sized and vertically anchored off the block's base metrics, not per-word
+  // scales, so the dot row stays level across inline size changes.
+  const bool guideDots = guideDotsEnabled && !scanning;
+  const int dotSize = std::max(2, blockAscender / 8);
+  int prevWordEndX = 0;  // right edge of the previous word; valid once i > 0
   // Cache per-word ascender calculations (typically 2-3 unique scales per block).
   // Avoids the per-word function call overhead on ESP32-C3 for typical books where
   // per-word font sizing is rare or uniform.
@@ -179,10 +187,29 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
     const bool hasDecoration =
         !scanning && (currentStyle & (EpdFontFamily::UNDERLINE | EpdFontFamily::STRIKETHROUGH)) != 0;
-    if (hasDecoration) {
-      const int lineWidth = (scale == 1.0f) ? renderer.getTextWidth(effFontId, word, currentStyle)
-                                            : renderer.getTextWidthScaled(effFontId, word, currentStyle, scale);
+    int lineWidth = 0;
+    if (guideDots || hasDecoration) {
+      lineWidth = (scale == 1.0f) ? renderer.getTextWidth(effFontId, word, currentStyle)
+                                  : renderer.getTextWidthScaled(effFontId, word, currentStyle, scale);
+    }
 
+    if (guideDots) {
+      if (i > 0) {
+        const int gap = wordX - prevWordEndX;
+        // Skip cramped gaps (zero-width joins of adjacent styled runs): the dot
+        // needs at least a pixel of clearance on each side to read as a dot.
+        if (gap >= dotSize + 2) {
+          const int dotX = prevWordEndX + (gap - dotSize) / 2;
+          // A third of the ascender above the shared baseline -- roughly mid
+          // x-height, like a typographic middle dot.
+          const int dotY = y + lineAscender - blockAscender / 3 - dotSize / 2;
+          renderer.fillRect(dotX, dotY, dotSize, dotSize, true);
+        }
+      }
+      prevWordEndX = wordX + lineWidth;
+    }
+
+    if (hasDecoration) {
       if ((currentStyle & EpdFontFamily::UNDERLINE) != 0) {
         const int underlineY = y + lineAscender + 3;
         renderer.drawLine(wordX, underlineY, wordX + lineWidth, underlineY, 2, true);

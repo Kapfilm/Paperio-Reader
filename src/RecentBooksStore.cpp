@@ -35,6 +35,7 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
     newBook.paragraphAlignmentOverride = it->paragraphAlignmentOverride;
     newBook.textAntiAliasingOverride = it->textAntiAliasingOverride;
     newBook.hyphenationOverride = it->hyphenationOverride;
+    newBook.guideDotsOverride = it->guideDotsOverride;
     recentBooks.erase(it);
   }
 
@@ -176,14 +177,16 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
   }
   return setReaderOverrides(path, embeddedStyleOverride, imageRenderingOverride, fontFamilyOverride,
                             sdFontFamilyOverride, fontSizeOverride, static_cast<int8_t>(bionicReadingOverride ? 1 : 0),
-                            paragraphAlignmentOverride, it->textAntiAliasingOverride, it->hyphenationOverride);
+                            paragraphAlignmentOverride, it->textAntiAliasingOverride, it->hyphenationOverride,
+                            it->guideDotsOverride);
 }
 
 bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t embeddedStyleOverride,
                                           const int8_t imageRenderingOverride, const int8_t fontFamilyOverride,
                                           const std::string& sdFontFamilyOverride, const int8_t fontSizeOverride,
                                           const int8_t bionicReadingOverride, const int8_t paragraphAlignmentOverride,
-                                          const int8_t textAntiAliasingOverride, const int8_t hyphenationOverride) {
+                                          const int8_t textAntiAliasingOverride, const int8_t hyphenationOverride,
+                                          const int8_t guideDotsOverride) {
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it == recentBooks.end()) {
@@ -199,6 +202,7 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
   it->paragraphAlignmentOverride = paragraphAlignmentOverride;
   it->textAntiAliasingOverride = textAntiAliasingOverride;
   it->hyphenationOverride = hyphenationOverride;
+  it->guideDotsOverride = guideDotsOverride;
   return saveToFile();
 }
 

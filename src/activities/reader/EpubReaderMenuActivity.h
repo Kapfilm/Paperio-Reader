@@ -43,7 +43,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
                                   const int8_t initialFontFamilyOverride,
                                   const std::string& initialSdFontFamilyOverride, const int8_t initialFontSizeOverride,
                                   const uint8_t initialTextDarkness, const bool initialBionicReadingOverride,
-                                  const int8_t initialParagraphAlignmentOverride,
+                                  const int8_t initialGuideDotsOverride, const int8_t initialParagraphAlignmentOverride,
                                   const int8_t initialTextAntiAliasingOverride, const int8_t initialHyphenationOverride,
                                   const bool hasStarredPages, const bool isCurrentPageStarred,
                                   const bool hasPrintedPages);
@@ -79,6 +79,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   int8_t pendingFontSizeOverride = -1;
   uint8_t pendingTextDarkness = 1;
   bool pendingBionicReading = false;
+  int8_t pendingGuideDotsOverride = -1;
   int8_t pendingParagraphAlignmentOverride = -1;
   int8_t pendingTextAntiAliasingOverride = -1;
   int8_t pendingHyphenationOverride = -1;

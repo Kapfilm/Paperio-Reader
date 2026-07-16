@@ -34,6 +34,15 @@ class GfxRenderer {
   };
   mutable std::vector<DrawCall> drawCalls;
 
+  struct RectCall {
+    int x;
+    int y;
+    int w;
+    int h;
+    bool state;
+  };
+  mutable std::vector<RectCall> fillRectCalls;
+
   static int countCodepoints(const char* text) {
     int count = 0;
     for (const auto* p = reinterpret_cast<const unsigned char*>(text); *p != 0; ++p) {
@@ -80,4 +89,7 @@ class GfxRenderer {
     drawCalls.push_back({text, fontId, x, y, scale, style});
   }
   void drawLine(int /*x1*/, int /*y1*/, int /*x2*/, int /*y2*/, int /*lineWidth*/, bool /*state*/) const {}
+  void fillRect(int x, int y, int width, int height, bool state = true) const {
+    fillRectCalls.push_back({x, y, width, height, state});
+  }
 };

@@ -217,7 +217,11 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled,
                                          "hyphenationEnabled", StrId::STR_CAT_READER));
   settings.push_back(SettingInfo::Toggle(StrId::STR_BIONIC_READING, &CrossPointSettings::bionicReading, "bionicReading",
-                                         StrId::STR_CAT_READER));
+                                         StrId::STR_CAT_READER)
+                         .withSubmenu(StrId::STR_READING_AIDS));
+  settings.push_back(
+      SettingInfo::Toggle(StrId::STR_GUIDE_DOTS, &CrossPointSettings::guideDots, "guideDots", StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_READING_AIDS));
   settings.push_back(
       SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                         {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},

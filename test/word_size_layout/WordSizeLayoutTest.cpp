@@ -450,3 +450,63 @@ TEST(WordSizeRender, BlockMultiplierComposesWithWordSize) {
   EXPECT_FLOAT_EQ(renderer.drawCalls[0].scale, 1.5f);   // block multiplier alone
   EXPECT_FLOAT_EQ(renderer.drawCalls[1].scale, 0.75f);  // 1.5 x 50%
 }
+
+// ---------------------------------------------------------------------------
+// Guide dots (render-time reading aid; idea from CrossInk)
+// ---------------------------------------------------------------------------
+
+// setGuideDots is a process-wide render option: always reset it so a failing
+// test can't leak the enabled state into unrelated render tests.
+class GuideDotsRender : public ::testing::Test {
+ protected:
+  void SetUp() override { TextBlock::setGuideDots(true); }
+  void TearDown() override { TextBlock::setGuideDots(false); }
+};
+
+TEST_F(GuideDotsRender, DotCenteredInEachGapOnlyBetweenWords) {
+  GfxRenderer renderer;
+  // Fixed-width metrics: "aa"/"bb"/"cc" are 20 px wide, laid out with 5 px gaps.
+  TextBlock line({"aa", "bb", "cc"}, {0, 25, 50},
+                 {EpdFontFamily::REGULAR, EpdFontFamily::REGULAR, EpdFontFamily::REGULAR}, noIndentStyle());
+  line.render(renderer, kFontId, 0, 100);
+
+  // 3 words -> exactly 2 dots: none before the first word, none after the last.
+  ASSERT_EQ(renderer.fillRectCalls.size(), 2u);
+  // ASCENDER=16 -> dotSize 2. Gap [20,25): centered dot at 20 + (5-2)/2 = 21.
+  EXPECT_EQ(renderer.fillRectCalls[0].x, 21);
+  EXPECT_EQ(renderer.fillRectCalls[1].x, 46);
+  // A third of the ascender above the baseline: 100 + 16 - 16/3 - 2/2 = 110.
+  EXPECT_EQ(renderer.fillRectCalls[0].y, 110);
+  EXPECT_EQ(renderer.fillRectCalls[0].w, 2);
+  EXPECT_EQ(renderer.fillRectCalls[0].h, 2);
+  EXPECT_TRUE(renderer.fillRectCalls[0].state);
+}
+
+TEST_F(GuideDotsRender, DisabledDrawsNoDots) {
+  TextBlock::setGuideDots(false);
+  GfxRenderer renderer;
+  TextBlock line({"aa", "bb"}, {0, 25}, {EpdFontFamily::REGULAR, EpdFontFamily::REGULAR}, noIndentStyle());
+  line.render(renderer, kFontId, 0, 100);
+
+  EXPECT_EQ(renderer.fillRectCalls.size(), 0u);
+  EXPECT_EQ(renderer.drawCalls.size(), 2u);  // words still render
+}
+
+TEST_F(GuideDotsRender, CrampedGapGetsNoDot) {
+  GfxRenderer renderer;
+  // Adjacent styled runs of one word: "a" ends at x=10 and "b" starts there,
+  // so there is no empty space to mark.
+  const auto bold = static_cast<EpdFontFamily::Style>(EpdFontFamily::BOLD);
+  TextBlock line({"a", "b"}, {0, 10}, {bold, EpdFontFamily::REGULAR}, noIndentStyle());
+  line.render(renderer, kFontId, 0, 100);
+
+  EXPECT_EQ(renderer.fillRectCalls.size(), 0u);
+}
+
+TEST_F(GuideDotsRender, SingleWordLineGetsNoDot) {
+  GfxRenderer renderer;
+  TextBlock line({"alone"}, {0}, {EpdFontFamily::REGULAR}, noIndentStyle());
+  line.render(renderer, kFontId, 0, 100);
+
+  EXPECT_EQ(renderer.fillRectCalls.size(), 0u);
+}

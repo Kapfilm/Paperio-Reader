@@ -441,6 +441,7 @@ class EpubReaderActivity final : public Activity {
   int8_t bookParagraphAlignmentOverride = -1;
   int8_t bookTextAntiAliasingOverride = -1;
   int8_t bookHyphenationOverride = -1;
+  int8_t bookGuideDotsOverride = -1;
 
   // Bookmarks (starred pages)
   BookmarkStore bookmarkStore;
@@ -612,13 +613,13 @@ class EpubReaderActivity final : public Activity {
   void applyBookReaderOverrides(int8_t embeddedStyleOverride, int8_t imageRenderingOverride, int8_t fontFamilyOverride,
                                 const std::string& sdFontFamilyOverride, int8_t fontSizeOverride,
                                 bool bionicReadingOverride, int8_t paragraphAlignmentOverride);
-  // Wider variant that also covers AA and hyphenation. Used by QuickOverridesActivity;
-  // the narrower overload above funnels through here, preserving the AA/hyphenation
-  // values currently held on this activity.
+  // Wider variant that also covers AA, hyphenation and guide dots. Used by
+  // QuickOverridesActivity; the narrower overload above funnels through here,
+  // preserving the AA/hyphenation/guide-dots values currently held on this activity.
   void applyBookReaderOverrides(int8_t embeddedStyleOverride, int8_t imageRenderingOverride, int8_t fontFamilyOverride,
                                 const std::string& sdFontFamilyOverride, int8_t fontSizeOverride,
                                 int8_t bionicReadingOverride, int8_t paragraphAlignmentOverride,
-                                int8_t textAntiAliasingOverride, int8_t hyphenationOverride);
+                                int8_t textAntiAliasingOverride, int8_t hyphenationOverride, int8_t guideDotsOverride);
   void openReaderMenu();
   void openQuickOverrides();
   bool getEffectiveEmbeddedStyle() const;
@@ -627,6 +628,7 @@ class EpubReaderActivity final : public Activity {
   uint8_t getEffectiveParagraphAlignment() const;
   bool getEffectiveTextAntiAliasing() const;
   bool getEffectiveHyphenation() const;
+  bool getEffectiveGuideDots() const;
   int getEffectiveReaderFontId() const;
   float getEffectiveReaderLineCompression() const;
   bool stepPageState(bool isForwardTurn);
