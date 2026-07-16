@@ -442,6 +442,7 @@ class EpubReaderActivity final : public Activity {
   int8_t bookTextAntiAliasingOverride = -1;
   int8_t bookHyphenationOverride = -1;
   int8_t bookGuideDotsOverride = -1;
+  int8_t bookInlineFootnotePreviewsOverride = -1;
 
   // Bookmarks (starred pages)
   BookmarkStore bookmarkStore;
@@ -464,6 +465,14 @@ class EpubReaderActivity final : public Activity {
   // retrying once before reporting failure. Shared by the post-build and opportunistic
   // recovery paths.
   bool reallocSecondaryEvictingCaches();
+  // One-time foreground gather of the book-level footnote preview cache (footnotes.bin),
+  // with a "Gathering footnotes" popup. No-op when previews are effectively off or the
+  // cache already exists. Returns true when the cache is usable.
+  bool ensureFootnotePreviewCache();
+  // True once footnotes.bin is known to exist for this book (primed in onEnter, set by
+  // ensureFootnotePreviewCache). Gates Background-B so it never bakes a preview-enabled
+  // section variant before the cache is gathered.
+  bool footnotePreviewCacheReady_ = false;
   // Clamp currentSpineIndex into [0, spineCount]. spineCount itself is the finished-book sentinel.
   void clampSpineIndex(int spineCount);
   // Compute oriented + padded margins and the derived viewport for this render.
@@ -624,7 +633,8 @@ class EpubReaderActivity final : public Activity {
   void applyBookReaderOverrides(int8_t embeddedStyleOverride, int8_t imageRenderingOverride, int8_t fontFamilyOverride,
                                 const std::string& sdFontFamilyOverride, int8_t fontSizeOverride,
                                 int8_t bionicReadingOverride, int8_t paragraphAlignmentOverride,
-                                int8_t textAntiAliasingOverride, int8_t hyphenationOverride, int8_t guideDotsOverride);
+                                int8_t textAntiAliasingOverride, int8_t hyphenationOverride, int8_t guideDotsOverride,
+                                int8_t inlineFootnotePreviewsOverride);
   void openReaderMenu();
   void openQuickOverrides();
   bool getEffectiveEmbeddedStyle() const;
@@ -634,6 +644,7 @@ class EpubReaderActivity final : public Activity {
   bool getEffectiveTextAntiAliasing() const;
   bool getEffectiveHyphenation() const;
   bool getEffectiveGuideDots() const;
+  bool getEffectiveInlineFootnotePreviews() const;
   int getEffectiveReaderFontId() const;
   float getEffectiveReaderLineCompression() const;
   bool stepPageState(bool isForwardTurn);

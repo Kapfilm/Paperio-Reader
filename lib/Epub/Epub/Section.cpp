@@ -3,6 +3,7 @@
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Serialization.h>
 #include <ZipFile.h>
 #include <esp_heap_caps.h>
@@ -10,8 +11,10 @@
 #include <esp_task_wdt.h>
 
 #include <algorithm>
+#include <cstring>
 
 #include "Epub/css/CssParser.h"
+#include "FootnotePreviews.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
@@ -114,7 +117,7 @@ uint32_t fnv1a(const uint8_t* data, size_t length) {
 uint32_t Section::calculatePropertyHash(int fontId, float lineCompression, bool extraParagraphSpacing,
                                         uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
                                         bool hyphenationEnabled, bool embeddedStyle, bool bionicReadingEnabled,
-                                        uint8_t imageRendering) {
+                                        bool inlineFootnotePreviews, uint8_t imageRendering) {
   uint8_t buffer[64];
   size_t offset = 0;
 
@@ -132,6 +135,7 @@ uint32_t Section::calculatePropertyHash(int fontId, float lineCompression, bool 
   append(&hyphenationEnabled, sizeof(hyphenationEnabled));
   append(&embeddedStyle, sizeof(embeddedStyle));
   append(&bionicReadingEnabled, sizeof(bionicReadingEnabled));
+  append(&inlineFootnotePreviews, sizeof(inlineFootnotePreviews));
   append(&imageRendering, sizeof(imageRendering));
 
   return fnv1a(buffer, offset);
@@ -279,21 +283,22 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
 bool Section::loadSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                               const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                               const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
-                              const bool bionicReadingEnabled, const uint8_t imageRendering) {
+                              const bool bionicReadingEnabled, const bool inlineFootnotePreviews,
+                              const uint8_t imageRendering) {
   truncatedCache = false;
   embeddedStyleFallback = false;
-  uint32_t propertyHash =
-      calculatePropertyHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
-                            viewportHeight, hyphenationEnabled, embeddedStyle, bionicReadingEnabled, imageRendering);
+  uint32_t propertyHash = calculatePropertyHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment,
+                                                viewportWidth, viewportHeight, hyphenationEnabled, embeddedStyle,
+                                                bionicReadingEnabled, inlineFootnotePreviews, imageRendering);
   filePath = getSectionFilePath(propertyHash);
 
   bool usingEmbeddedStyleFallback = false;
   if (!Storage.openFileForRead("SCT", filePath, file)) {
     // Fallback: allow loading a no-CSS cache variant when embedded CSS is enabled.
     if (embeddedStyle) {
-      const uint32_t fallbackHash =
-          calculatePropertyHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
-                                viewportHeight, hyphenationEnabled, false, bionicReadingEnabled, imageRendering);
+      const uint32_t fallbackHash = calculatePropertyHash(
+          fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth, viewportHeight,
+          hyphenationEnabled, false, bionicReadingEnabled, inlineFootnotePreviews, imageRendering);
       const std::string fallbackPath = getSectionFilePath(fallbackHash);
       if (Storage.openFileForRead("SCT", fallbackPath, file)) {
         filePath = fallbackPath;
@@ -460,6 +465,10 @@ struct Section::BuildState {
   FsFile tempFile;
   std::string tempPath;
   size_t tempBytesFed = 0;
+  // Disk-backed book-level footnote preview lookup (footnotes.bin), opened at setup when
+  // the build wants inline previews. Owned here so the visitor's non-owning pointer stays
+  // valid across build slices.
+  std::unique_ptr<FootnotePreviews::Lookup> footnotePreviewLookup;
   // Property hash of the params as requested by the caller, before any low-heap CSS
   // downgrade. Lets stepSectionBuild detect a stale partial build (variant changed)
   // without a heap-forced no-CSS build reading as a mismatch against its own request.
@@ -485,7 +494,7 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   const BuildParams& p = st.params;
   st.propertyHash = calculatePropertyHash(p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment,
                                           p.viewportWidth, p.viewportHeight, p.hyphenationEnabled, p.embeddedStyle,
-                                          p.bionicReadingEnabled, p.imageRendering);
+                                          p.bionicReadingEnabled, p.inlineFootnotePreviews, p.imageRendering);
   filePath = getSectionFilePath(st.propertyHash);
 
   st.localPath = epub->getSpineItem(spineIndex).href;
@@ -585,6 +594,19 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   st.visitor->setExternalPageBreakAnchors(std::move(externalPageBreakAnchors));
   st.visitor->setFontSizeLadder(p.fontSizeLadder);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
+
+  // Inline footnote previews come from the book-level footnotes.bin gathered up front
+  // (foreground, EpubReaderActivity). Missing/empty cache: build proceeds without
+  // previews — the reader guarantees the gather ran before any preview-enabled build.
+  if (p.inlineFootnotePreviews) {
+    st.footnotePreviewLookup = makeUniqueNoThrow<FootnotePreviews::Lookup>();
+    if (st.footnotePreviewLookup && st.footnotePreviewLookup->open(epub->getCachePath(), epub.get(), spineIndex)) {
+      st.visitor->setInlineFootnotePreviews(st.footnotePreviewLookup.get());
+    } else {
+      LOG_DBG("SCT", "Footnote preview cache unavailable for spine %d; building without previews", spineIndex);
+      st.footnotePreviewLookup.reset();
+    }
+  }
 
   if (!st.visitor->setup(st.inflatedSize)) {
     LOG_ERR("SCT", "Failed to set up chapter parser");
@@ -740,7 +762,9 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
   }
 
   // Phase (b): feed the visitor — from the temp file (sliced path, no ZIP state live)
-  // or straight from the inflate stream (blocking path).
+  // or straight from the inflate stream (blocking path). Inline footnote previews need
+  // no prepass here: the visitor resolves them against the book-level footnotes.bin
+  // lookup opened in runBuildSetup.
   if (!streamFailed) {
     if (st.useTempExtract) {
       while (true) {
@@ -986,9 +1010,9 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
 bool Section::createSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                                 const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
-                                const bool bionicReadingEnabled, const uint8_t imageRendering,
-                                const std::function<void(int)>& progressFn, const bool skipEviction,
-                                const FontSizeLadder& fontSizeLadder) {
+                                const bool bionicReadingEnabled, const bool inlineFootnotePreviews,
+                                const uint8_t imageRendering, const std::function<void(int)>& progressFn,
+                                const bool skipEviction, const FontSizeLadder& fontSizeLadder) {
   if (!skipEviction) {
     evictOldVariants();
   }
@@ -1003,6 +1027,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   params.hyphenationEnabled = hyphenationEnabled;
   params.embeddedStyle = embeddedStyle;
   params.bionicReadingEnabled = bionicReadingEnabled;
+  params.inlineFootnotePreviews = inlineFootnotePreviews;
   params.imageRendering = imageRendering;
   params.fontSizeLadder = fontSizeLadder;
 
@@ -1067,7 +1092,7 @@ Section::BuildStep Section::stepSectionBuild(const BuildParams& params, const ui
   const uint32_t requestedHash = calculatePropertyHash(
       params.fontId, params.lineCompression, params.extraParagraphSpacing, params.paragraphAlignment,
       params.viewportWidth, params.viewportHeight, params.hyphenationEnabled, params.embeddedStyle,
-      params.bionicReadingEnabled, params.imageRendering);
+      params.bionicReadingEnabled, params.inlineFootnotePreviews, params.imageRendering);
   // A live partial build is only resumable for the exact variant it was started for;
   // when the request changed (font/margins/...) the partial cache is the wrong file.
   if (buildState_ && buildState_->requestedHash != requestedHash) {

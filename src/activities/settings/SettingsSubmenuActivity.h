@@ -13,6 +13,7 @@ class SettingsSubmenuActivity final : public MenuListActivity {
   StrId titleId;
   std::function<std::string(const SettingInfo&)> itemValueStringOverride;
   bool needsHalfRefresh = false;
+  bool persistSettingsOnChange = true;
 
   // MenuListActivity overrides
   void onEnter() override;
@@ -24,10 +25,12 @@ class SettingsSubmenuActivity final : public MenuListActivity {
  public:
   explicit SettingsSubmenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, StrId titleId,
                                    std::vector<SettingInfo> items,
-                                   std::function<std::string(const SettingInfo&)> itemValueStringOverride = {})
+                                   std::function<std::string(const SettingInfo&)> itemValueStringOverride = {},
+                                   bool persistSettingsOnChange = true)
       : MenuListActivity("SettingsSubmenu", renderer, mappedInput),
         titleId(titleId),
-        itemValueStringOverride(std::move(itemValueStringOverride)) {
+        itemValueStringOverride(std::move(itemValueStringOverride)),
+        persistSettingsOnChange(persistSettingsOnChange) {
     menuItems = std::move(items);
   }
 
