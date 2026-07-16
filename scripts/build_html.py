@@ -1,9 +1,10 @@
 import configparser
 import os
 import re
-import gzip
 import subprocess
 import sys
+
+import zopfli.gzip  # type: ignore[import-not-found]
 
 SRC_DIR = "src"
 
@@ -267,9 +268,9 @@ for root, _, files in os.walk(SRC_DIR):
             else:
                 processed = content
 
-            # Compress with gzip (compresslevel 9 is maximum compression)
+            # Zopfli emits a standards-compatible gzip stream with maximal compression.
             # IMPORTANT: we don't use brotli because Firefox doesn't support brotli with insecured context (only supported on HTTPS)
-            compressed = gzip.compress(processed.encode("utf-8"), compresslevel=9)
+            compressed = zopfli.gzip.compress(processed.encode("utf-8"))
 
             # Create valid C identifier from filename
             # Use appropriate suffix based on file type
