@@ -2175,7 +2175,9 @@ bool ChapterHtmlSlimParser::setup(const size_t totalInflatedSize) {
 
   // Handle HTML entities (like &nbsp;) that aren't in XML spec or DTD.
   // Using DefaultHandlerExpand preserves normal entity expansion from DOCTYPE.
-  if (!saxParser_.init(this, startElement, endElement, characterData, defaultHandlerExpand)) {
+  // Chapter XHTML is HTML-flavored: enable bare-void-tag repair (<br>, <img>, ...).
+  if (!saxParser_.init(this, startElement, endElement, characterData, defaultHandlerExpand,
+                       /*htmlVoidTagRepair=*/true)) {
     LOG_ERR("EHP", "Couldn't allocate memory for parser");
     return false;
   }
