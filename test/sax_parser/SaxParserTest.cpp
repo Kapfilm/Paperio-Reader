@@ -290,3 +290,143 @@ TEST(SaxParser, TruncationFlagsReportMaxAttrs) {
   // flag when the parser actually reports truncation support.
   EXPECT_TRUE(p.truncationFlags() & SaxParser::kTruncMaxAttrs);
 }
+
+// ---------------------------------------------------------------------------
+// HTML void-element repair
+//
+// Real-world EPUB/OPDS content frequently uses HTML-style void elements
+// (<br>, <hr>, ...) without the XML-required self-closing slash. yxml is a
+// strict well-formed-XML engine, so without repair these fail the parse the
+// same way expat did. The pre-processor in SaxParserYxml.cpp turns "<br>"
+// into "<br/>" before yxml ever sees it.
+// ---------------------------------------------------------------------------
+
+TEST(SaxParser, UnclosedBrIsAutoClosed) {
+  const char* xml = "<p>Hello<br>World</p>";
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, strlen(xml)));
+  ASSERT_TRUE(p.finalize());
+
+  ASSERT_EQ(c.events.size(), 6u);
+  EXPECT_EQ(c.events[0].name, "p");
+  EXPECT_EQ(c.events[1].text, "Hello");
+  EXPECT_EQ(c.events[2].type, Event::Type::Start);
+  EXPECT_EQ(c.events[2].name, "br");
+  EXPECT_EQ(c.events[3].type, Event::Type::End);
+  EXPECT_EQ(c.events[3].name, "br");
+  EXPECT_EQ(c.events[4].text, "World");
+  EXPECT_EQ(c.events[5].name, "p");
+
+  EXPECT_TRUE(p.truncationFlags() & SaxParser::kVoidTagRepaired);
+}
+
+TEST(SaxParser, UnclosedHrWithAttributeIsAutoClosed) {
+  const char* xml = "<div>Section<hr class=\"sep\">Next</div>";
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, strlen(xml)));
+  ASSERT_TRUE(p.finalize());
+
+  bool sawHrStart = false, sawHrEnd = false;
+  for (const auto& e : c.events) {
+    if (e.type == Event::Type::Start && e.name == "hr") sawHrStart = true;
+    if (e.type == Event::Type::End && e.name == "hr") sawHrEnd = true;
+  }
+  EXPECT_TRUE(sawHrStart);
+  EXPECT_TRUE(sawHrEnd);
+  EXPECT_TRUE(p.truncationFlags() & SaxParser::kVoidTagRepaired);
+}
+
+TEST(SaxParser, UnclosedVoidTagIsCaseInsensitive) {
+  const char* xml = "<p>Hello<BR>World</p>";
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, strlen(xml)));
+  ASSERT_TRUE(p.finalize());
+
+  EXPECT_TRUE(p.truncationFlags() & SaxParser::kVoidTagRepaired);
+}
+
+TEST(SaxParser, AlreadySelfClosedVoidTagDoesNotSetRepairFlag) {
+  const char* xml = "<p>Hello<br/>World</p>";
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, strlen(xml)));
+  ASSERT_TRUE(p.finalize());
+
+  EXPECT_FALSE(p.truncationFlags() & SaxParser::kVoidTagRepaired);
+}
+
+TEST(SaxParser, VoidTagRepairIgnoresGreaterThanInAttributeValue) {
+  // A '>' inside a quoted attribute value must not be mistaken for the tag
+  // terminator that would trigger (or skip) the self-close injection.
+  const char* xml = "<p title=\"a>b\">text<br>x</p>";
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, strlen(xml)));
+  ASSERT_TRUE(p.finalize());
+
+  bool sawBrEnd = false;
+  for (const auto& e : c.events) {
+    if (e.type == Event::Type::End && e.name == "br") sawBrEnd = true;
+  }
+  EXPECT_TRUE(sawBrEnd);
+}
+
+TEST(SaxParser, UnclosedNonVoidElementStillFails) {
+  // Repair is scoped to known HTML void elements; an unrelated unclosed
+  // element (<span>) must continue to be a genuine parse error.
+  const char* xml = "<p>Hello<span>World</p>";
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  p.feed(bytes, strlen(xml));
+  EXPECT_FALSE(p.finalize());
+}
+
+TEST(SaxParser, UnclosedVoidTagSplitAcrossChunks) {
+  // Split the feed right in the middle of "<br>" to make sure the tag-scan
+  // state machine survives a chunk boundary mid-tag.
+  const char* xml = "<p>Hello<br>World</p>";
+  const size_t split = 10;  // "<p>Hello<b" | "r>World</p>"
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, split));
+  ASSERT_TRUE(p.feed(bytes + split, strlen(xml) - split));
+  ASSERT_TRUE(p.finalize());
+
+  bool sawBrEnd = false;
+  for (const auto& e : c.events) {
+    if (e.type == Event::Type::End && e.name == "br") sawBrEnd = true;
+  }
+  EXPECT_TRUE(sawBrEnd);
+  EXPECT_TRUE(p.truncationFlags() & SaxParser::kVoidTagRepaired);
+}

@@ -43,17 +43,19 @@ class SaxParser {
   uint32_t byteOffset() const;
 
   // Diagnostic: bitmask of fixed-capacity limits that were hit (and therefore
-  // silently truncated) during parsing. The yxml backend uses fixed buffers
-  // sized from measured real-world maxima; if a document exceeds them the
-  // parser degrades gracefully (drops the excess) rather than overflowing, but
-  // the result is lossy. Callers with logging should surface a non-zero value
-  // so field cases that exceed the bounds are diagnosable. Always 0 for expat.
+  // silently truncated) during parsing, plus other silent repairs the parser
+  // made to keep going. The yxml backend uses fixed buffers sized from
+  // measured real-world maxima; if a document exceeds them the parser
+  // degrades gracefully (drops the excess) rather than overflowing, but the
+  // result is lossy. Callers with logging should surface a non-zero value so
+  // field cases that exceed the bounds are diagnosable. Always 0 for expat.
   enum TruncationFlag : uint32_t {
-    kTruncElemName = 1u << 0,   // element name longer than kElemNameLen
-    kTruncAttrName = 1u << 1,   // attribute name longer than kElemNameLen
-    kTruncAttrValue = 1u << 2,  // attribute value longer than kAttrValueLen
-    kTruncMaxAttrs = 1u << 3,   // more than kMaxAttrs attributes on one element
-    kTruncMaxDepth = 1u << 4,   // nesting deeper than kMaxDepth
+    kTruncElemName = 1u << 0,    // element name longer than kElemNameLen
+    kTruncAttrName = 1u << 1,    // attribute name longer than kElemNameLen
+    kTruncAttrValue = 1u << 2,   // attribute value longer than kAttrValueLen
+    kTruncMaxAttrs = 1u << 3,    // more than kMaxAttrs attributes on one element
+    kTruncMaxDepth = 1u << 4,    // nesting deeper than kMaxDepth
+    kVoidTagRepaired = 1u << 5,  // HTML-style unclosed void tag (<br>, <hr>, ...) auto-closed
   };
   uint32_t truncationFlags() const;
 

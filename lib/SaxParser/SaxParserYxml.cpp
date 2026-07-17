@@ -98,11 +98,46 @@ struct SaxParserImpl {
   // Longest standard HTML entity name is ~8 chars; 24 bytes covers all cases.
   char entityBuf[24];
   int entityLen = 0;  // 0 = not accumulating
+
+  // Void-element pre-processor: tracks raw start-tag bytes independently of
+  // yxml's own token stream so an HTML-style unclosed void tag (<br>, <hr>, ...)
+  // can be turned into a self-closing one (<br/>) before yxml ever sees it.
+  enum class TagScan : uint8_t {
+    kNone,         // not inside a tag
+    kPendingKind,  // just saw '<', deciding what kind of tag this is
+    kName,         // accumulating the start-tag name
+    kBody,         // past the name, watching for the terminating '>'
+  };
+  TagScan tagScan = TagScan::kNone;
+  char tagNameBuf[kElemNameLen];
+  size_t tagNameLen = 0;
+  bool tagIsVoid = false;
+  char tagQuote = 0;          // 0, '\'' or '"' — attribute value quote currently open
+  bool tagPrevSlash = false;  // last unquoted body byte was '/' (already self-closing)
 };
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// HTML5 void elements — never carry content or a matching end tag. Compared
+// case-insensitively since sloppy converters aren't consistent about case.
+static bool isHtmlVoidElement(const char* name) {
+  static const char* const kVoidElements[] = {"area",  "base", "br",   "col",   "embed",  "hr",    "img",
+                                              "input", "link", "meta", "param", "source", "track", "wbr"};
+  for (const char* v : kVoidElements) {
+    const char* a = name;
+    const char* b = v;
+    while (*a && *b) {
+      char ca = (*a >= 'A' && *a <= 'Z') ? static_cast<char>(*a + 32) : *a;
+      if (ca != *b) break;
+      ++a;
+      ++b;
+    }
+    if (*a == '\0' && *b == '\0') return true;
+  }
+  return false;
+}
 
 static void flushChar(SaxParserImpl* impl) {
   if (impl->charCb && impl->charLen > 0) {
@@ -271,10 +306,91 @@ bool SaxParser::feed(const uint8_t* buf, size_t len) {
   // Feed one byte to yxml and dispatch the result.
   auto feedByte = [&](unsigned char c) -> bool { return dispatchToken(yxml_parse(&impl->x, static_cast<int>(c))); };
 
+  // ---------------------------------------------------------------------------
+  // HTML void-element pre-processor
+  //
+  // Real-world EPUB/OPDS/XHTML content frequently contains HTML-style void
+  // elements (<br>, <hr>, <img src="..">, ...) without the XML-required
+  // self-closing slash. yxml is a strict well-formed-XML engine: an unclosed
+  // <br> parses as an open element awaiting a matching </br>, and the
+  // document eventually fails with a syntax/EOF error rather than laying out
+  // as intended (this is the same class of failure expat had).
+  //
+  // This watches raw start-tag bytes independently of yxml's own token
+  // stream: name, then body up to the terminating unquoted '>'. If the name
+  // is a known HTML void element and the tag isn't already self-closed, a
+  // synthetic '/' is fed to yxml immediately before the real '>', turning
+  // "<br>" into "<br/>" from yxml's point of view. End tags, comments, CDATA,
+  // PIs and DOCTYPE are left completely alone (identified by the byte right
+  // after '<' and never tracked here), so this can't disturb them.
+  //
+  // Caveat: a document that pairs a void element with a real end tag
+  // (<br>...</br>, valid but essentially never emitted by real tools) will
+  // have the opening tag self-closed here, turning the later </br> into a
+  // mismatched close — a parse error, not silent corruption. Given how rare
+  // that pairing is against how common bare <br>/<hr> is, this trade favours
+  // the common case.
+  // ---------------------------------------------------------------------------
+  auto tagScanByte = [&](uint8_t c) -> bool {
+    using TagScan = SaxParserImpl::TagScan;
+    if (impl->tagScan == TagScan::kNone) {
+      if (c == '<') impl->tagScan = TagScan::kPendingKind;
+      return true;
+    }
+    if (impl->tagScan == TagScan::kPendingKind) {
+      if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+        impl->tagNameLen = 1;
+        impl->tagNameBuf[0] = static_cast<char>(c);
+        impl->tagScan = TagScan::kName;
+      } else {
+        impl->tagScan = TagScan::kNone;  // end tag / PI / comment / doctype: not our concern
+      }
+      return true;
+    }
+    if (impl->tagScan == TagScan::kName) {
+      const bool isNameChar = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
+                              c == '_' || c == ':';
+      if (isNameChar) {
+        if (impl->tagNameLen < kElemNameLen - 1) impl->tagNameBuf[impl->tagNameLen++] = static_cast<char>(c);
+        return true;
+      }
+      impl->tagNameBuf[impl->tagNameLen] = '\0';
+      impl->tagIsVoid = isHtmlVoidElement(impl->tagNameBuf);
+      impl->tagQuote = 0;
+      impl->tagPrevSlash = false;
+      impl->tagScan = TagScan::kBody;
+      // fall through: this byte (whitespace, '/' or '>') is itself body content
+    }
+    // TagScan::kBody
+    if (impl->tagQuote) {
+      if (c == impl->tagQuote) impl->tagQuote = 0;
+      impl->tagPrevSlash = false;
+      return true;
+    }
+    if (c == '"' || c == '\'') {
+      impl->tagQuote = static_cast<char>(c);
+      impl->tagPrevSlash = false;
+      return true;
+    }
+    if (c == '>') {
+      impl->tagScan = TagScan::kNone;
+      if (impl->tagIsVoid && !impl->tagPrevSlash) {
+        impl->truncFlags |= SaxParser::kVoidTagRepaired;
+        return feedByte('/');  // synthesize self-close before the caller feeds the real '>'
+      }
+      return true;
+    }
+    impl->tagPrevSlash = (c == '/');
+    return true;
+  };
+
   for (size_t i = 0; i < len; ++i) {
     if (stopped_) break;
 
     const uint8_t c = buf[i];
+
+    if (!tagScanByte(c)) return false;
+    if (stopped_) break;
 
     // ---------------------------------------------------------------------------
     // HTML entity pre-processor
