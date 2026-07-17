@@ -24,6 +24,7 @@
 #include "HalStorage.h"  // FsFile (stdio-backed shim)
 #include "JpegToBmpConverter.h"
 #include "Print.h"
+#include "ProgressiveJpegDc.h"
 
 #ifndef FIXTURE_DIR
 #define FIXTURE_DIR "."
@@ -146,6 +147,21 @@ int32_t le32(const std::vector<uint8_t>& b, size_t off) {
                               (static_cast<uint32_t>(b[off + 3]) << 24));
 }
 
+struct ProgressiveRows {
+  uint16_t width = 0;
+  uint16_t height = 0;
+  std::vector<uint8_t> pixels;
+
+  static bool accept(void* user, uint16_t y, const uint8_t* row, uint16_t rowWidth) {
+    auto& capture = *static_cast<ProgressiveRows*>(user);
+    if (y != capture.height || (capture.width != 0 && capture.width != rowWidth)) return false;
+    capture.width = rowWidth;
+    capture.height++;
+    capture.pixels.insert(capture.pixels.end(), row, row + rowWidth);
+    return true;
+  }
+};
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -195,6 +211,41 @@ TEST(JpegDecoder, GrayscaleOutputIsClamped) {
   EXPECT_LE(meanDiff, 3.0);
 }
 
+TEST(ProgressiveJpegDc, DecodesFirstScanIntoResizedRows) {
+  FsFile file;
+  ASSERT_TRUE(file.openForRead(fixture("progressive_420.jpg")));
+
+  ProgressiveRows capture;
+  ProgressiveJpegDc::DecodeOptions options;
+  options.outputWidth = 48;
+  options.outputHeight = 32;
+  const auto result = ProgressiveJpegDc::decode(file, options, ProgressiveRows::accept, &capture);
+  file.close();
+
+  ASSERT_EQ(result, ProgressiveJpegDc::Result::Ok) << ProgressiveJpegDc::resultName(result);
+  ASSERT_EQ(capture.width, 48);
+  ASSERT_EQ(capture.height, 32);
+  ASSERT_EQ(capture.pixels.size(), 48u * 32u);
+  EXPECT_LT(capture.pixels[8 * 48 + 40], 80);    // black upper-right region
+  EXPECT_GT(capture.pixels[24 * 48 + 40], 175);  // white lower-right region
+  EXPECT_LT(capture.pixels[16 * 48 + 4], capture.pixels[16 * 48 + 20]);
+}
+
+TEST(ProgressiveJpegDc, RejectsBaselineWithoutEmittingRows) {
+  FsFile file;
+  ASSERT_TRUE(file.openForRead(fixture("contrast_420.jpg")));
+
+  ProgressiveRows capture;
+  ProgressiveJpegDc::DecodeOptions options;
+  options.outputWidth = 48;
+  options.outputHeight = 32;
+  const auto result = ProgressiveJpegDc::decode(file, options, ProgressiveRows::accept, &capture);
+  file.close();
+
+  EXPECT_EQ(result, ProgressiveJpegDc::Result::Unsupported);
+  EXPECT_TRUE(capture.pixels.empty());
+}
+
 // ---------------------------------------------------------------------------
 // Bug 1 end-to-end: the thumbnail converter on an odd-width baseline JPEG that
 // forces a 1/2 DCT pre-scale. Before the floor fix this wrote 0 rows and failed.
@@ -226,6 +277,20 @@ TEST(JpegToBmpConverter, EvenDimensionThumbnailDecodesAllRows) {
   // 96x64 -> target 40x26 forces 1/2 DCT (effSrc 48x32) then fine-scales down.
   const bool ok = JpegToBmpConverter::jpegFileToBmpStreamWithSize(f, out, 40, 26);
   f.close();
+
+  ASSERT_TRUE(ok);
+  ASSERT_GE(out.buf.size(), 70u);
+  EXPECT_EQ(le32(out.buf, 18), 40);
+  EXPECT_EQ(le32(out.buf, 22), -26);
+}
+
+TEST(JpegToBmpConverter, ProgressiveThumbnailDecodesAllRows) {
+  FsFile file;
+  ASSERT_TRUE(file.openForRead(fixture("progressive_420.jpg")));
+
+  MemoryPrint out;
+  const bool ok = JpegToBmpConverter::jpegFileToBmpStreamWithSize(file, out, 40, 26);
+  file.close();
 
   ASSERT_TRUE(ok);
   ASSERT_GE(out.buf.size(), 70u);

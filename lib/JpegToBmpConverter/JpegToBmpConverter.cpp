@@ -4,8 +4,11 @@
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
+#include <ProgressiveJpegDc.h>
 #include <tjpgd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -325,43 +328,6 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
   ctx->currentOutY++;
 }
 
-// Scans JPEG markers for SOF2 (progressive DCT) — TJpgDec only handles baseline/sequential.
-static bool isProgressiveJpeg(FsFile& file) {
-  file.seek(0);
-  uint8_t buf[2];
-  if (file.read(buf, 2) != 2 || buf[0] != 0xFF || buf[1] != 0xD8) {
-    file.seek(0);
-    return false;
-  }
-  while (file.available() >= 2) {
-    uint8_t b;
-    if (file.read(&b, 1) != 1 || b != 0xFF) break;
-    // skip fill bytes (JPEG allows 0xFF padding before a marker byte)
-    do {
-      if (file.read(&b, 1) != 1) {
-        file.seek(0);
-        return false;
-      }
-    } while (b == 0xFF);
-    const uint8_t marker = b;
-    if (marker == 0xC2) {
-      LOG_DBG("JPG", "Detected progressive JPEG (SOF2)");
-      file.seek(0);
-      return true;
-    }
-    if (marker == 0xC0 || marker == 0xC1 || marker == 0xC3) {
-      file.seek(0);
-      return false;
-    }
-    if (marker == 0xD9) break;
-    if (file.read(buf, 2) != 2) break;
-    const int segLen = (static_cast<int>(buf[0]) << 8) | buf[1];
-    if (segLen < 2 || !file.seek(file.position() + segLen - 2)) break;
-  }
-  file.seek(0);
-  return false;
-}
-
 // TJpgDec output callback — receives one MCU-width × MCU-height block at a time,
 // in left-to-right, top-to-bottom order (baseline JPEG). JRECT is inclusive and the
 // grayscale bitmap is packed tightly at the block width. Accumulates columns into
@@ -448,6 +414,108 @@ int tjpgBmpOutput(JDEC* jd, void* bitmap, JRECT* rect) {
   return ctx->error ? 0 : 1;
 }
 
+static bool progressiveBmpShouldAbort(void*) {
+  if (!CooperativeAbort::shouldAbortLongTask()) return false;
+  CooperativeAbort::markAborted();
+  return true;
+}
+
+static bool progressiveBmpOutput(void* user, uint16_t y, const uint8_t* grayscale, uint16_t width) {
+  auto* ctx = static_cast<BmpConvertCtx*>(user);
+  if (!ctx || ctx->error || width != ctx->outWidth || y >= ctx->outHeight) return false;
+  writeOutputRow(ctx, grayscale, y);
+  return !ctx->error;
+}
+
+static bool decodeProgressiveJpeg(FsFile& jpegFile, Print& bmpOut, int targetWidth, int targetHeight, bool oneBit,
+                                  bool crop, const ProgressiveJpegDc::ImageInfo& image) {
+  constexpr int MAX_IMAGE_WIDTH = 2048;
+  constexpr int MAX_IMAGE_HEIGHT = 3072;
+  if (image.width == 0 || image.height == 0 || image.width > MAX_IMAGE_WIDTH || image.height > MAX_IMAGE_HEIGHT) {
+    return false;
+  }
+
+  int outWidth = image.width;
+  int outHeight = image.height;
+  if (targetWidth > 0 && targetHeight > 0) {
+    const float scaleX = static_cast<float>(targetWidth) / image.width;
+    const float scaleY = static_cast<float>(targetHeight) / image.height;
+    const float scale = crop ? std::max(scaleX, scaleY) : std::min(scaleX, scaleY);
+    outWidth = std::max(1, static_cast<int>(image.width * scale));
+    outHeight = std::max(1, static_cast<int>(image.height * scale));
+  }
+
+  int outCropX = 0;
+  int outCropY = 0;
+  int finalWidth = outWidth;
+  int finalHeight = outHeight;
+  if (crop && targetWidth > 0 && targetHeight > 0) {
+    if (outWidth > targetWidth) {
+      outCropX = (outWidth - targetWidth) / 2;
+      finalWidth = targetWidth;
+    }
+    if (outHeight > targetHeight) {
+      outCropY = (outHeight - targetHeight) / 2;
+      finalHeight = targetHeight;
+    }
+  }
+
+  int bytesPerRow;
+  if (USE_8BIT_OUTPUT && !oneBit) {
+    writeBmpHeader8bit(bmpOut, finalWidth, finalHeight);
+    bytesPerRow = (finalWidth + 3) / 4 * 4;
+  } else if (oneBit) {
+    writeBmpHeader1bit(bmpOut, finalWidth, finalHeight);
+    bytesPerRow = (finalWidth + 31) / 32 * 4;
+  } else {
+    writeBmpHeader2bit(bmpOut, finalWidth, finalHeight);
+    bytesPerRow = (finalWidth * 2 + 31) / 32 * 4;
+  }
+
+  BmpConvertCtx ctx = {};
+  ctx.bmpOut = &bmpOut;
+  ctx.srcWidth = outWidth;
+  ctx.srcHeight = outHeight;
+  ctx.outWidth = outWidth;
+  ctx.outHeight = outHeight;
+  ctx.oneBit = oneBit;
+  ctx.bytesPerRow = bytesPerRow;
+  ctx.outCropX = outCropX;
+  ctx.outCropY = outCropY;
+  ctx.finalW = finalWidth;
+  ctx.finalH = finalHeight;
+  auto bmpRow = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
+  if (!bmpRow) return false;
+  ctx.bmpRow = bmpRow.get();
+
+  std::unique_ptr<Atkinson1BitDitherer> oneBitDitherer;
+  std::unique_ptr<AtkinsonDitherer> atkinsonDitherer;
+  std::unique_ptr<FloydSteinbergDitherer> fsDitherer;
+  if (oneBit) {
+    oneBitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
+    ctx.atkinson1BitDitherer = oneBitDitherer.get();
+  } else if (!USE_8BIT_OUTPUT && USE_ATKINSON) {
+    atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
+    ctx.atkinsonDitherer = atkinsonDitherer.get();
+  } else if (!USE_8BIT_OUTPUT && USE_FLOYD_STEINBERG) {
+    fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
+    ctx.fsDitherer = fsDitherer.get();
+  }
+
+  ProgressiveJpegDc::DecodeOptions options;
+  options.outputWidth = outWidth;
+  options.outputHeight = outHeight;
+  options.shouldAbort = progressiveBmpShouldAbort;
+  const auto result = ProgressiveJpegDc::decode(jpegFile, options, progressiveBmpOutput, &ctx);
+
+  if (result != ProgressiveJpegDc::Result::Ok) {
+    LOG_ERR("JPG", "Progressive JPEG preview failed: %s", ProgressiveJpegDc::resultName(result));
+    return false;
+  }
+  LOG_DBG("JPG", "Progressive JPEG preview decoded: %ux%u -> %dx%d", image.width, image.height, outWidth, outHeight);
+  return true;
+}
+
 }  // namespace
 
 // Internal implementation with configurable target size and bit depth
@@ -455,16 +523,13 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
                                                      bool oneBit, bool crop) {
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
-    return false;
+  ProgressiveJpegDc::ImageInfo image;
+  if (ProgressiveJpegDc::probe(jpegFile, image) == ProgressiveJpegDc::Result::Ok) {
+    return decodeProgressiveJpeg(jpegFile, bmpOut, targetWidth, targetHeight, oneBit, crop, image);
   }
 
-  // TJpgDec decodes baseline only. Progressive thumbnails have no low-RAM path on
-  // this device (JPEGDEC's was only a 1/8 DC-only approximation); skip generation so
-  // the caller falls back to its placeholder.
-  if (isProgressiveJpeg(jpegFile)) {
-    LOG_INF("JPG", "Progressive JPEG — skipping thumbnail generation");
+  if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
+    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
     return false;
   }
 
