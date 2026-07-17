@@ -3,6 +3,9 @@
 // Implements FsFile on top of stdio so tests can read actual .epub files
 // and write real cache files under /tmp.
 
+#include <fcntl.h>
+
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -10,7 +13,11 @@
 #include <string>
 #include <vector>
 
+// Device HalStorage.h transitively provides the Arduino core (millis, ESP);
+// mirror that so TUs which only include HalStorage.h still compile.
+#include "Arduino.h"
 #include "Print.h"
+#include "WString.h"
 
 class HalFile : public Print {
  public:
@@ -62,6 +69,11 @@ class HalFile : public Print {
     if (!fp_) return -1;
     return static_cast<int>(fread(buf, 1, n, fp_));
   }
+  // Single-byte read, SdFat-style: returns the byte or -1 (used by Bitmap.cpp).
+  int read() {
+    if (!fp_) return -1;
+    return fgetc(fp_);
+  }
 
   bool seek(size_t pos) { return fp_ && fseek(fp_, static_cast<long>(pos), SEEK_SET) == 0; }
   bool seekSet(size_t pos) { return seek(pos); }
@@ -86,6 +98,11 @@ class HalFile : public Print {
   uint64_t fileSize64() { return fileSize(); }
 
   size_t write(const uint8_t* data, size_t size) {
+    if (!fp_) return 0;
+    return fwrite(data, 1, size, fp_);
+  }
+  // Device SdFat accepts void*; Page.cpp writes char arrays through this.
+  size_t write(const void* data, size_t size) {
     if (!fp_) return 0;
     return fwrite(data, 1, size, fp_);
   }
@@ -120,7 +137,32 @@ class HalStorage {
     return recursive ? std::filesystem::create_directories(path, ec) : std::filesystem::create_directory(path, ec);
   }
   bool remove(const char* path) { return std::filesystem::remove(path); }
-  std::vector<std::string> listFiles(const char* = "/", int = 200) { return {}; }
+  bool removeDir(const char* path) {
+    std::error_code ec;
+    std::filesystem::remove_all(path, ec);
+    return !ec;
+  }
+  using oflag_t = int;
+  HalFile open(const char* path, oflag_t = O_RDONLY) {
+    HalFile f;
+    f.openForRead(path);
+    return f;
+  }
+  // Sorted for determinism: std::filesystem iteration order is unspecified and
+  // the pipeline harness requires byte-identical behavior across runs.
+  std::vector<String> listFiles(const char* path = "/", int maxFiles = 200) {
+    std::vector<std::string> names;
+    std::error_code ec;
+    for (const auto& e : std::filesystem::directory_iterator(path, ec)) {
+      if (e.is_regular_file()) names.push_back(e.path().filename().string());
+    }
+    std::sort(names.begin(), names.end());
+    if (names.size() > static_cast<size_t>(maxFiles)) names.resize(maxFiles);
+    std::vector<String> out;
+    out.reserve(names.size());
+    for (auto& n : names) out.push_back(String(std::move(n)));
+    return out;
+  }
   static HalStorage& getInstance() {
     static HalStorage i;
     return i;
