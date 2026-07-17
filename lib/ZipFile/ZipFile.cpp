@@ -272,6 +272,65 @@ bool ZipFile::loadZipDetails() {
   return false;
 }
 
+bool ZipFile::contentFingerprint(uint64_t* out) {
+  if (!out) return false;
+  if (!loadZipDetails()) return false;
+  const ScopedOpenClose zip{*this};
+  if (!zip) return false;
+
+  // Incremental FNV-1a 64 mixing helpers (same constants as HashUtils).
+  uint64_t hash = 14695981039346656037ull;
+  const auto mixBytes = [&hash](const void* data, const size_t len) {
+    const auto* p = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < len; i++) {
+      hash ^= p[i];
+      hash *= 1099511628211ull;
+    }
+  };
+  const auto mixPod = [&mixBytes](const auto v) { mixBytes(&v, sizeof(v)); };
+
+  file.seek(zipDetails.centralDirOffset);
+  char nameBuf[256];
+  uint32_t entries = 0;
+  uint32_t sig;
+  while (file.available()) {
+    if (file.read(&sig, 4) != 4 || sig != 0x02014b50) break;
+    file.seekCur(6);  // versionMadeBy, versionNeeded, flags
+    uint16_t method;
+    file.read(&method, 2);
+    file.seekCur(4);  // DOS mod time + date: excluded so a content-identical re-zip matches
+    uint32_t crc32, compSz, uncompSz, localOff;
+    file.read(&crc32, 4);
+    file.read(&compSz, 4);
+    file.read(&uncompSz, 4);
+    uint16_t nameLen, extraLen, commentLen;
+    file.read(&nameLen, 2);
+    file.read(&extraLen, 2);
+    file.read(&commentLen, 2);
+    file.seekCur(8);  // disk#, internal attrs, external attrs
+    file.read(&localOff, 4);
+
+    // Name in bounded chunks: entry names may exceed the stack buffer.
+    size_t nameRemaining = nameLen;
+    while (nameRemaining > 0) {
+      const size_t take = nameRemaining < sizeof(nameBuf) ? nameRemaining : sizeof(nameBuf);
+      if (file.read(nameBuf, take) != static_cast<int>(take)) return false;
+      mixBytes(nameBuf, take);
+      nameRemaining -= take;
+    }
+    mixPod(crc32);
+    mixPod(uncompSz);
+    mixPod(method);
+    mixPod(localOff);
+    entries++;
+
+    file.seekCur(extraLen + commentLen);
+  }
+  mixPod(entries);
+  *out = hash;
+  return entries > 0;
+}
+
 bool ZipFile::open() {
   if (!Storage.openFileForRead("ZIP", filePath, file)) {
     return false;

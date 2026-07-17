@@ -84,6 +84,7 @@ set(PIPELINE_INCLUDES
 
 add_executable(EpubPipelineTest
   EpubPipelineTest.cpp
+  FingerprintTest.cpp
   ${PIPELINE_SOURCES}
 )
 target_include_directories(EpubPipelineTest PRIVATE ${PIPELINE_INCLUDES})

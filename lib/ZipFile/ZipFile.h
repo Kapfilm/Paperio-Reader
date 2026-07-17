@@ -146,6 +146,16 @@ class ZipFile {
     std::unique_ptr<Impl> impl_;
   };
 
+  // Content fingerprint of the archive: FNV-1a 64 over every central-directory
+  // entry's name bytes, CRC-32, uncompressed size, compression method and
+  // local-header offset, plus the entry count. One sequential walk of the
+  // central directory, O(1) heap (256-byte stack buffer). Deliberately EXCLUDES
+  // the per-entry DOS mod time/date so a byte-identical re-zip (same content,
+  // new timestamps) keeps the same fingerprint. Any content or structural
+  // change flips the CRC/size/offset mix. Used to detect a book replaced
+  // in place at the same path (the cache key is path-derived).
+  bool contentFingerprint(uint64_t* out);
+
   // Stream every filename in the central directory to a callback without building
   // the in-memory stat cache. Uses a fixed 256-byte stack buffer — O(1) heap.
   // Safe for large EPUBs (3000+ entries) where loadAllFileStatSlims() would OOM.

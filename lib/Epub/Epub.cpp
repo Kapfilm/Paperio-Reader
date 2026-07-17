@@ -367,11 +367,53 @@ bool Epub::parsePageMapFile() const {
   return true;
 }
 
+bool Epub::computeZipFingerprint(uint64_t* out) const {
+  if (!zipFingerprintComputed_) {
+    ZipFile zip(filepath);
+    zipFingerprintValid_ = zip.contentFingerprint(&zipFingerprint_);
+    zipFingerprintComputed_ = true;
+  }
+  if (!zipFingerprintValid_) return false;
+  *out = zipFingerprint_;
+  return true;
+}
+
+namespace {
+constexpr uint32_t FINGERPRINT_MAGIC = 0x31504658;  // "XFP1"
+constexpr const char* FINGERPRINT_FILE = "/fingerprint.bin";
+}  // namespace
+
+bool Epub::readStoredFingerprint(uint64_t* out) const {
+  FsFile f;
+  if (!Storage.openFileForRead("EBP", cachePath + FINGERPRINT_FILE, f)) return false;
+  uint32_t magic = 0;
+  uint64_t fp = 0;
+  const bool ok = f.read(&magic, sizeof(magic)) == sizeof(magic) && magic == FINGERPRINT_MAGIC &&
+                  f.read(&fp, sizeof(fp)) == sizeof(fp);
+  f.close();
+  if (ok) *out = fp;
+  return ok;
+}
+
+void Epub::writeStoredFingerprint(const uint64_t fp) const {
+  FsFile f;
+  if (!Storage.openFileForWrite("EBP", cachePath + FINGERPRINT_FILE, f)) {
+    LOG_ERR("EBP", "Could not write fingerprint sidecar");
+    return;
+  }
+  f.write(reinterpret_cast<const uint8_t*>(&FINGERPRINT_MAGIC), sizeof(FINGERPRINT_MAGIC));
+  f.write(reinterpret_cast<const uint8_t*>(&fp), sizeof(fp));
+  f.close();
+}
+
 bool Epub::needsFirstOpenIndexing() const {
   // Spine/TOC cache missing -> load() rebuilds it (content.opf + TOC/NCX + book.bin).
   if (!BookMetadataCache::cacheExists(cachePath)) return true;
   // Compiled CSS rules cache missing -> load() runs the (slow) CSS compile.
   if (!CssParser(cachePath).hasCache()) return true;
+  // Book content changed at the same path -> load() wipes the cache and rebuilds.
+  uint64_t zipFp = 0, storedFp = 0;
+  if (computeZipFingerprint(&zipFp) && readStoredFingerprint(&storedFp) && storedFp != zipFp) return true;
   return false;
 }
 
@@ -538,6 +580,25 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   // Always create CssParser - needed for inline style parsing even without CSS files
   cssParser.reset(new CssParser(cachePath));
 
+  // Detect a book replaced in place: the cache key is derived from the file path
+  // only, so identical path + different content would silently serve a stale
+  // cache. fingerprint.bin pins the ZIP content fingerprint the cache was built
+  // from; a mismatch invalidates the entire cache dir (sections, CSS, thumbs —
+  // all derived from the old bytes).
+  uint64_t zipFp = 0;
+  const bool haveFp = computeZipFingerprint(&zipFp);
+  if (haveFp && BookMetadataCache::cacheExists(cachePath)) {
+    uint64_t storedFp = 0;
+    if (!readStoredFingerprint(&storedFp)) {
+      // Pre-fingerprint cache (created before this firmware): adopt the current
+      // content instead of forcing every existing book through a full rebuild.
+      writeStoredFingerprint(zipFp);
+    } else if (storedFp != zipFp) {
+      LOG_INF("EBP", "Book content changed at same path, rebuilding cache");
+      clearCache(false);
+    }
+  }
+
   // Try to load existing cache first
   if (bookMetadataCache->load()) {
     if (!skipLoadingCss) {
@@ -678,6 +739,9 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     parseCssFiles();
     Storage.removeDir((cachePath + "/sections").c_str());
   }
+
+  // Pin the content this cache was built from (see the staleness check above).
+  if (haveFp) writeStoredFingerprint(zipFp);
 
   LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
   return true;
