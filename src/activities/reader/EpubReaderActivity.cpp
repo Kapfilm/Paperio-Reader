@@ -1634,8 +1634,20 @@ void EpubReaderActivity::applyBookReaderOverrides(
 
   RenderLock lock(*this);
   if (section) {
-    navTarget = NavigationTarget::makePage(section->currentPage);
-    navTarget.cachedPageCount = section->pageCount;
+    const int currentPage = section->currentPage;
+    if (!section->hasActiveBuild()) {
+      if (const auto paragraphIndex = section->getParagraphIndexForPage(currentPage)) {
+        navTarget = NavigationTarget::makeParagraph(*paragraphIndex, currentPage);
+      } else {
+        navTarget = NavigationTarget::makePage(currentPage);
+      }
+      navTarget.cachedPageCount = section->pageCount;
+    } else {
+      // pageCount is only the number of pages produced so far. Treating it as a
+      // completed layout count would proportionally jump forward after relayout.
+      navTarget = NavigationTarget::makePage(currentPage);
+      LOG_DBG("ERS", "Preserving page %d without rescale during active section build", currentPage);
+    }
     navTarget.cachedSpineIdx = currentSpineIndex;
   }
   section.reset();
@@ -2593,6 +2605,12 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   resetBackgroundBuild();
   const unsigned long sectionStart = millis();
 
+  // Preview text is baked into laid-out pages. Prepare its book-level source before
+  // probing the preview-enabled section variant so a cache hit can never bypass gather.
+  if (getEffectiveInlineFootnotePreviews()) {
+    ensureFootnotePreviewCache();
+  }
+
   // A resumed partial Background-B build has no on-disk LUT yet, so skip loadSectionFile (it
   // would clobber the live write handle); it always needs building. Otherwise probe the cache.
   const bool cacheHit =
@@ -2613,13 +2631,6 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
 
   if (needBuild) {
     lastRenderStats.cacheRebuilt = true;
-
-    // A preview-enabled build resolves note text against the book-level footnotes.bin;
-    // gather it now (one-time, foreground, "Gathering footnotes" popup) so this build —
-    // and every later B/C build — finds it. Skipped in one exists() check thereafter.
-    if (getEffectiveInlineFootnotePreviews()) {
-      ensureFootnotePreviewCache();
-    }
 
     // Background-C: build the current section incrementally on the loop task so input stays
     // responsive and pages appear as they are written. Used for the clean cases — a cache miss

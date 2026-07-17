@@ -2123,7 +2123,15 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
     preview += self->pendingInlineFootnotePreview;
     preview += ")";
     self->pendingInlineFootnotePreview.clear();
+
+    const bool surroundingItalic = self->effectiveItalic;
+    self->effectiveItalic = true;
     characterData(self, preview.c_str(), static_cast<int>(preview.size()));
+    if (self->partWordBufferIndex > 0 && !self->flushPartWordBuffer()) {
+      self->effectiveItalic = surroundingItalic;
+      return;
+    }
+    self->effectiveItalic = surroundingItalic;
   }
 
   // Clear block style when leaving header or block elements

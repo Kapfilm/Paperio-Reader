@@ -104,6 +104,10 @@ constexpr size_t PARSE_CHUNK_BYTES = 1024;
 // PARSE_CHUNK_BYTES before phase (b). The grow is best-effort: on failure the 1 KB buffer is kept.
 constexpr size_t EXTRACT_CHUNK_BYTES = 8192;
 
+// Bump when preview expansion semantics change. This is hashed only for preview-enabled
+// variants, leaving the much more common preview-off section caches untouched.
+constexpr uint8_t INLINE_FOOTNOTE_PREVIEW_LAYOUT_VERSION = 2;
+
 uint32_t fnv1a(const uint8_t* data, size_t length) {
   uint32_t hash = FNV_OFFSET_BASIS;
   for (size_t i = 0; i < length; ++i) {
@@ -136,6 +140,9 @@ uint32_t Section::calculatePropertyHash(int fontId, float lineCompression, bool 
   append(&embeddedStyle, sizeof(embeddedStyle));
   append(&bionicReadingEnabled, sizeof(bionicReadingEnabled));
   append(&inlineFootnotePreviews, sizeof(inlineFootnotePreviews));
+  if (inlineFootnotePreviews) {
+    append(&INLINE_FOOTNOTE_PREVIEW_LAYOUT_VERSION, sizeof(INLINE_FOOTNOTE_PREVIEW_LAYOUT_VERSION));
+  }
   append(&imageRendering, sizeof(imageRendering));
 
   return fnv1a(buffer, offset);
