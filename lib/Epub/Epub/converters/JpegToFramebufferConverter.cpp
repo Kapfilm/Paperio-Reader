@@ -1017,7 +1017,8 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   // A TJpgDec MCU is at most 16 scaled-source rows tall, which our fine scale maps
   // to this many output rows — the tallest span either the disk cache band or the
   // dither row band (below) ever needs to hold in one piece.
-  const int maxBlockDstRows = (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
+  const int maxBlockDstRows =
+      mode == JpegMode::Progressive ? 1 : (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
 
   // Start streaming the pixel cache to disk.
   // (See PixelCache for why streaming replaced a full-image buffer; ported from

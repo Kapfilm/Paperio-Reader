@@ -47,10 +47,17 @@ class BufferedInput {
   }
 
   bool discard(uint32_t size) {
-    while (size-- > 0) {
-      if (readByte() < 0) return false;
-    }
-    return true;
+    const size_t buffered = available_ - position_;
+    const size_t consume = std::min<size_t>(size, buffered);
+    position_ += consume;
+    size -= consume;
+    if (size == 0) return true;
+
+    position_ = 0;
+    available_ = 0;
+    if (file_.seek(file_.position() + size)) return true;
+    ioError_ = true;
+    return false;
   }
 
   bool ioError() const { return ioError_; }

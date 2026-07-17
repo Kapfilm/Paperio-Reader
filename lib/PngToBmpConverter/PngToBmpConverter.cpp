@@ -4,6 +4,7 @@
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <PngStreamDecoder.h>
 
 #include <cstdio>
@@ -227,52 +228,53 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
     bytesPerRow = (finalW * 2 + 31) / 32 * 4;
   }
 
-  // Allocate BMP row buffer
-  auto* rowBuffer = static_cast<uint8_t*>(malloc(bytesPerRow));
-  if (!rowBuffer) {
+  auto rowBufferOwner = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
+  if (!rowBufferOwner) {
     LOG_ERR("PNG", "Failed to allocate row buffer");
     return false;
   }
+  uint8_t* rowBuffer = rowBufferOwner.get();
 
-  // Create ditherers (same as JpegToBmpConverter)
-  AtkinsonDitherer* atkinsonDitherer = nullptr;
-  FloydSteinbergDitherer* fsDitherer = nullptr;
-  Atkinson1BitDitherer* atkinson1BitDitherer = nullptr;
+  std::unique_ptr<AtkinsonDitherer> atkinsonOwner;
+  std::unique_ptr<FloydSteinbergDitherer> fsOwner;
+  std::unique_ptr<Atkinson1BitDitherer> atkinson1BitOwner;
 
   if (oneBit) {
-    atkinson1BitDitherer = new Atkinson1BitDitherer(outWidth);
+    atkinson1BitOwner = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(outWidth);
+      atkinsonOwner = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
     } else if (USE_FLOYD_STEINBERG) {
-      fsDitherer = new FloydSteinbergDitherer(outWidth);
+      fsOwner = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
     }
   }
+  AtkinsonDitherer* atkinsonDitherer = atkinsonOwner.get();
+  FloydSteinbergDitherer* fsDitherer = fsOwner.get();
+  Atkinson1BitDitherer* atkinson1BitDitherer = atkinson1BitOwner.get();
 
-  // Scaling accumulators
-  uint32_t* rowAccum = nullptr;
-  uint16_t* rowCount = nullptr;
+  std::unique_ptr<uint32_t[]> rowAccumOwner;
+  std::unique_ptr<uint16_t[]> rowCountOwner;
   int currentOutY = 0;
   uint32_t nextOutY_srcStart = 0;
 
   if (needsScaling) {
-    rowAccum = new uint32_t[outWidth]();
-    rowCount = new uint16_t[outWidth]();
+    rowAccumOwner = makeUniqueNoThrow<uint32_t[]>(outWidth);
+    rowCountOwner = makeUniqueNoThrow<uint16_t[]>(outWidth);
+    if (!rowAccumOwner || !rowCountOwner) {
+      LOG_ERR("PNG", "Failed to allocate scaling buffers");
+      return false;
+    }
     nextOutY_srcStart = scaleY_fp;
   }
+  uint32_t* rowAccum = rowAccumOwner.get();
+  uint16_t* rowCount = rowCountOwner.get();
 
-  // Grayscale row buffer — one source scanline at a time from the decoder.
-  auto* grayRow = static_cast<uint8_t*>(malloc(width));
-  if (!grayRow) {
+  auto grayRowOwner = makeUniqueNoThrow<uint8_t[]>(width);
+  if (!grayRowOwner) {
     LOG_ERR("PNG", "Failed to allocate grayscale row buffer");
-    delete[] rowAccum;
-    delete[] rowCount;
-    delete atkinsonDitherer;
-    delete fsDitherer;
-    delete atkinson1BitDitherer;
-    free(rowBuffer);
     return false;
   }
+  uint8_t* grayRow = grayRowOwner.get();
 
   bool success = true;
 
@@ -415,15 +417,6 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
       }
     }
   }
-
-  // Clean up
-  free(grayRow);
-  delete[] rowAccum;
-  delete[] rowCount;
-  delete atkinsonDitherer;
-  delete fsDitherer;
-  delete atkinson1BitDitherer;
-  free(rowBuffer);
 
   if (success) {
     LOG_DBG("PNG", "Successfully converted PNG to BMP");

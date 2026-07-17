@@ -230,7 +230,9 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   const unsigned long decodeStart = millis();
 
   for (int srcY = 0; srcY < srcHeight; srcY++) {
-    if (!decoder->nextRow(grayLine.get())) {
+    const int dstY = (int)(srcY * scale);
+    const bool collapsedRow = dstY == lastDstY;
+    if (!(collapsedRow ? decoder->skipRow() : decoder->nextRow(grayLine.get()))) {
       LOG_ERR("PNG", "Decode failed at row %d", srcY);
       ok = false;
       break;
@@ -238,8 +240,7 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     // Feed the WDT periodically: a large image can take seconds to inflate.
     if ((srcY & 31) == 0) esp_task_wdt_reset();
 
-    const int dstY = (int)(srcY * scale);
-    if (dstY == lastDstY) continue;  // multiple source rows collapse to one dest row
+    if (collapsedRow) continue;
     if (dstY >= dstHeight) break;
     lastDstY = dstY;
 

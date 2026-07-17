@@ -1,6 +1,7 @@
 add_executable(GifDecoderTest
   GifDecoderTest.cpp
   Stubs.cpp
+  ${REPO_ROOT}/lib/CooperativeAbort/CooperativeAbort.cpp
   ${REPO_ROOT}/lib/Epub/Epub/converters/GifToFramebufferConverter.cpp
   ${REPO_ROOT}/lib/Epub/Epub/converters/ImageToFramebufferDecoder.cpp
   ${REPO_ROOT}/lib/FsHelpers/FsHelpers.cpp
@@ -15,6 +16,7 @@ target_include_directories(GifDecoderTest PRIVATE
   # Arduino shims: HardwareSerial.h, WString.h, Print.h, Arduino.h.
   ${REPO_ROOT}/test/shims
   ${REPO_ROOT}/lib/Logging
+  ${REPO_ROOT}/lib/CooperativeAbort
   ${REPO_ROOT}/lib/FsHelpers
   ${REPO_ROOT}/lib/Epub/Epub/converters
   ${REPO_ROOT}/lib

@@ -1,5 +1,6 @@
 #include "GifToFramebufferConverter.h"
 
+#include <CooperativeAbort.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -11,6 +12,7 @@
 
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
+#include "PixelCache.h"
 
 namespace {
 
@@ -253,7 +255,7 @@ static int gifDecodeLzw(FsFile& f, GifState& st, uint8_t* indexedRow, RowSink on
     for (int i = stackTop - 1; i >= 0 && srcRow < st.frameHeight; i--) {
       indexedRow[pixelX++] = st.lzwStack[i];
       if (pixelX >= st.frameWidth) {
-        onRow(actualY, indexedRow, st.frameWidth);
+        if (!onRow(actualY, indexedRow, st.frameWidth)) return -1;
         pixelX = 0;
         srcRow++;
         if (st.interlaced) {
@@ -372,35 +374,74 @@ bool GifToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   const int cfgX = config.x + (int)(st->frameLeft * scale);
   const int cfgY = config.y + (int)(st->frameTop * scale);
   int lastDstY = -1;
+  bool aborted = false;
+
+  DirectPixelWriter pw;
+  pw.init(renderer);
+
+  PixelCache cache;
+  bool caching = !config.cachePath.empty() && !st->interlaced;
+  if (caching && !cache.begin(config.cachePath, dstW, dstH, cfgX, cfgY, 1)) {
+    LOG_ERR("GIF", "Failed to start cache stream, continuing without caching");
+    caching = false;
+  }
 
   int srcRow = gifDecodeLzw(f, *st, indexedRow, [&](int actualY, const uint8_t* idxRow, int w) {
+    if (CooperativeAbort::shouldAbortLongTask()) {
+      CooperativeAbort::markAborted();
+      aborted = true;
+      return false;
+    }
     esp_task_wdt_reset();
     indexedToGray(idxRow, grayRow, w, *st);
     int dstY = (int)(actualY * scale);
-    if (dstY == lastDstY || dstY >= dstH) return;
+    if (dstY == lastDstY || dstY >= dstH) return true;
     lastDstY = dstY;
     int outY = cfgY + dstY;
-    if (outY < 0 || outY >= screenH) return;
-    DirectPixelWriter pw;
-    pw.init(renderer);
+    if (outY < 0 || outY >= screenH) return true;
     pw.beginRow(outY);
+
+    DirectCacheWriter cw;
+    bool rowCaching = caching;
+    if (rowCaching) {
+      if (!cache.advanceTo(dstY)) {
+        caching = false;
+        rowCaching = false;
+      } else {
+        cw.init(cache.buffer, cache.bytesPerRow, cache.originX, cfgY + cache.bandStart, cache.width, cache.bandRows);
+        cw.beginRow(outY);
+      }
+    }
     int srcX = 0, err = 0;
     for (int dstX = 0; dstX < dstW; dstX++) {
       int outX = cfgX + dstX;
-      if (outX >= 0 && outX < screenW) pw.writePixel(outX, applyBayerDither4Level(grayRow[srcX], outX, outY));
+      if (outX >= 0 && outX < screenW) {
+        const uint8_t value = applyBayerDither4Level(grayRow[srcX], outX, outY);
+        pw.writePixel(outX, value);
+        if (rowCaching) cw.writePixel(outX, value);
+      }
       err += srcW;
       while (err >= dstW) {
         err -= dstW;
         srcX++;
       }
     }
+    return true;
   });
+
+  if (caching) {
+    if (srcRow > 0 && !aborted) {
+      cache.finalize();
+    } else {
+      cache.abort();
+    }
+  }
 
   free(indexedRow);
   free(grayRow);
   cleanup();
   LOG_DBG("GIF", "GIF decoding complete (%d rows)", srcRow);
-  return srcRow > 0;
+  return srcRow > 0 && !aborted;
 }
 
 bool GifToFramebufferConverter::decodeFirstFrameToGrayscale(const std::string& path, std::vector<uint8_t>& outPixels,
@@ -445,6 +486,7 @@ bool GifToFramebufferConverter::decodeFirstFrameToGrayscale(const std::string& p
     if (actualY >= 0 && actualY < h) {
       memcpy(&outPixels[actualY * w], grayRow, w);
     }
+    return true;
   });
 
   free(indexedRow);
