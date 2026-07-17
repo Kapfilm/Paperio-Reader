@@ -97,10 +97,16 @@ void EpubReaderFootnotesActivity::render(RenderLock&&) {
       renderer.fillRect(contentRect.x, y, contentRect.width, lineHeight, true);
     }
 
-    // Show footnote number and abbreviated href
+    // Show footnote marker, plus the note text when the book-level preview cache
+    // resolved it (see FootnotePreviews) — truncated to the row.
     std::string label = footnotes[i].number;
     if (label.empty()) {
       label = tr(STR_LINK);
+    }
+    if (i < static_cast<int>(previews.size()) && !previews[i].empty()) {
+      label += ": ";
+      label += previews[i];
+      label = renderer.truncatedText(UI_10_FONT_ID, label.c_str(), contentRect.width - 2 * marginLeft);
     }
     renderer.drawText(UI_10_FONT_ID, contentRect.x + marginLeft, y + 4, label.c_str(), !isSelected);
   }

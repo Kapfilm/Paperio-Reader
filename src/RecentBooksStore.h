@@ -29,6 +29,8 @@ struct RecentBook {
   int8_t hyphenationOverride = -1;
   // -1 = use global default, otherwise explicit per-book override (0 = off, 1 = on).
   int8_t guideDotsOverride = -1;
+  // -1 = use global default, otherwise explicit per-book override (0 = off, 1 = on).
+  int8_t inlineFootnotePreviewsOverride = -1;
 
   bool operator==(const RecentBook& other) const { return path == other.path; }
 };
@@ -100,7 +102,8 @@ class RecentBooksStore {
   bool setReaderOverrides(const std::string& path, int8_t embeddedStyleOverride, int8_t imageRenderingOverride,
                           int8_t fontFamilyOverride, const std::string& sdFontFamilyOverride, int8_t fontSizeOverride,
                           int8_t bionicReadingOverride, int8_t paragraphAlignmentOverride,
-                          int8_t textAntiAliasingOverride, int8_t hyphenationOverride, int8_t guideDotsOverride);
+                          int8_t textAntiAliasingOverride, int8_t hyphenationOverride, int8_t guideDotsOverride,
+                          int8_t inlineFootnotePreviewsOverride);
 };
 
 // Helper macro to access recent books store

@@ -91,6 +91,19 @@ constexpr int NUM_SKIP_TAGS = sizeof(SKIP_TAGS) / sizeof(SKIP_TAGS[0]);
 
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
 
+bool hasAttributeToken(const char* value, const char* token) {
+  if (!value || !token) return false;
+  const size_t tokenLen = strlen(token);
+  const char* cursor = value;
+  while (*cursor != '\0') {
+    while (*cursor != '\0' && isWhitespace(*cursor)) ++cursor;
+    const char* start = cursor;
+    while (*cursor != '\0' && !isWhitespace(*cursor)) ++cursor;
+    if (static_cast<size_t>(cursor - start) == tokenLen && strncmp(start, token, tokenLen) == 0) return true;
+  }
+  return false;
+}
+
 // Returns true if the trailing UTF-8 codepoint in [buf, buf+len) is a dash that allows
 // a line break opportunity after it. Inline-tag boundaries like "gone—<i>Umbriel</i>"
 // would otherwise glue the dash to the following word via nextWordContinues, making the
@@ -140,6 +153,32 @@ const char* getAttribute(const char** atts, const char* attrName) {
     if (strcmp(atts[i], attrName) == 0) return atts[i + 1];
   }
   return nullptr;
+}
+
+std::string ChapterHtmlSlimParser::abbreviateInlineFootnote(const char* text) const {
+  if (!text || *text == '\0') return {};
+  const int maxAdvance = static_cast<int>(viewportWidth) * 2;
+  const int spaceAdvance = renderer.getSpaceWidth(fontId);
+  int usedAdvance = 0;
+  std::string result;
+  const char* cursor = text;
+  while (*cursor != '\0') {
+    while (*cursor == ' ') ++cursor;
+    if (*cursor == '\0') break;
+    const char* wordStart = cursor;
+    while (*cursor != '\0' && *cursor != ' ') ++cursor;
+    const std::string previewWord(wordStart, static_cast<size_t>(cursor - wordStart));
+    const int wordAdvance = renderer.getTextWidth(fontId, previewWord.c_str());
+    const int separatorAdvance = result.empty() ? 0 : spaceAdvance;
+    if (!result.empty() && usedAdvance + separatorAdvance + wordAdvance > maxAdvance) {
+      result += "...";
+      break;
+    }
+    if (!result.empty()) result += ' ';
+    result += previewWord;
+    usedAdvance += separatorAdvance + wordAdvance;
+  }
+  return result;
 }
 
 bool isInternalEpubLink(const char* href) {
@@ -1987,6 +2026,19 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
           self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
       self->pendingFootnotes.push_back({wordIndex, entry});
     }
+    if (self->inlineFootnotePreviews && self->currentFootnote.href[0] != '\0') {
+      // Membership in the book-level preview cache is the gate: the gatherer only
+      // stored targets of footnote-shaped links, so any resolving href — same-file or
+      // cross-file ("../Text/notes.xhtml#n3", Calibre filepos anchors) — is a real note.
+      std::string preview;
+      if (self->inlineFootnotePreviews->find(self->currentFootnote.href, preview)) {
+        self->pendingInlineFootnotePreview = self->abbreviateInlineFootnote(preview.c_str());
+        if (!self->pendingInlineFootnotePreview.empty()) {
+          LOG_DBG("EHP", "Expanded inline footnote: href=%s previewBytes=%u", self->currentFootnote.href,
+                  static_cast<uint32_t>(self->pendingInlineFootnotePreview.size()));
+        }
+      }
+    }
     self->insideFootnoteLink = false;
   }
 
@@ -2064,6 +2116,22 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
   if (!self->inlineStyleStack.empty() && self->inlineStyleStack.back().depth == self->depth) {
     self->inlineStyleStack.pop_back();
     self->updateEffectiveInlineStyle();
+  }
+
+  if (!self->pendingInlineFootnotePreview.empty()) {
+    std::string preview = " (";
+    preview += self->pendingInlineFootnotePreview;
+    preview += ")";
+    self->pendingInlineFootnotePreview.clear();
+
+    const bool surroundingItalic = self->effectiveItalic;
+    self->effectiveItalic = true;
+    characterData(self, preview.c_str(), static_cast<int>(preview.size()));
+    if (self->partWordBufferIndex > 0 && !self->flushPartWordBuffer()) {
+      self->effectiveItalic = surroundingItalic;
+      return;
+    }
+    self->effectiveItalic = surroundingItalic;
   }
 
   // Clear block style when leaving header or block elements

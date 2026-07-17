@@ -8,9 +8,12 @@
 
 class EpubReaderFootnotesActivity final : public Activity {
  public:
+  // previews: optional note text per footnote (parallel to footnotes, resolved from the
+  // book-level footnotes.bin when it exists); empty strings render as the plain marker.
   explicit EpubReaderFootnotesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                       const std::vector<FootnoteEntry>& footnotes)
-      : Activity("EpubReaderFootnotes", renderer, mappedInput), footnotes(footnotes) {}
+                                       const std::vector<FootnoteEntry>& footnotes,
+                                       std::vector<std::string> previews = {})
+      : Activity("EpubReaderFootnotes", renderer, mappedInput), footnotes(footnotes), previews(std::move(previews)) {}
 
   void onEnter() override;
   void onExit() override;
@@ -20,6 +23,7 @@ class EpubReaderFootnotesActivity final : public Activity {
  private:
   void advanceSelection(int delta);
   const std::vector<FootnoteEntry>& footnotes;
+  const std::vector<std::string> previews;
   int selectedIndex = 0;
   int scrollOffset = 0;
 };

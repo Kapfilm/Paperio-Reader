@@ -80,7 +80,7 @@ class Section {
   static uint32_t calculatePropertyHash(int fontId, float lineCompression, bool extraParagraphSpacing,
                                         uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
                                         bool hyphenationEnabled, bool embeddedStyle, bool bionicReadingEnabled,
-                                        uint8_t imageRendering);
+                                        bool inlineFootnotePreviews, uint8_t imageRendering);
 
   // Computes the active file path for this section based on rendering properties
   std::string getSectionFilePath(uint32_t propertyHash) const;
@@ -110,6 +110,7 @@ class Section {
     bool hyphenationEnabled = false;
     bool embeddedStyle = false;
     bool bionicReadingEnabled = false;
+    bool inlineFootnotePreviews = false;
     uint8_t imageRendering = 0;
     // Sibling-size ladder derived from the body font (see FontSizeLadder). Not part of the
     // property hash: it is a deterministic function of fontId, which is already hashed.
@@ -130,12 +131,13 @@ class Section {
   ~Section();
   bool loadSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                        uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
-                       bool bionicReadingEnabled, uint8_t imageRendering);
+                       bool bionicReadingEnabled, bool inlineFootnotePreviews, uint8_t imageRendering);
   bool clearCache();
   bool createSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                          uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
-                         bool bionicReadingEnabled, uint8_t imageRendering, const std::function<void(int)>& progressFn,
-                         bool skipEviction, const FontSizeLadder& fontSizeLadder);
+                         bool bionicReadingEnabled, bool inlineFootnotePreviews, uint8_t imageRendering,
+                         const std::function<void(int)>& progressFn, bool skipEviction,
+                         const FontSizeLadder& fontSizeLadder);
 
   // Incremental section-cache build. Advances the build by at most ~budgetMs of work
   // (budgetMs == 0 means no budget: run to a terminal state in one call) and returns More

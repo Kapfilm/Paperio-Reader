@@ -104,7 +104,7 @@ void SettingsSubmenuActivity::toggleCurrentItem() {
     auto selector = createSelectorActivity(setting, renderer, mappedInput);
     if (selector) {
       startActivityForResult(std::move(selector), [this](const ActivityResult&) {
-        SETTINGS.saveToFile();
+        if (persistSettingsOnChange) SETTINGS.saveToFile();
         needsHalfRefresh = true;
         requestUpdate();
       });
@@ -115,7 +115,9 @@ void SettingsSubmenuActivity::toggleCurrentItem() {
   MenuListActivity::toggleCurrentItem();
 }
 
-void SettingsSubmenuActivity::onSettingToggled(int /*index*/) { SETTINGS.saveToFile(); }
+void SettingsSubmenuActivity::onSettingToggled(int /*index*/) {
+  if (persistSettingsOnChange) SETTINGS.saveToFile();
+}
 
 void SettingsSubmenuActivity::render(RenderLock&&) {
   renderer.clearScreen();

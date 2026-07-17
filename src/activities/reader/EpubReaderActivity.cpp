@@ -17,6 +17,7 @@
 
 #include "EpubReaderActivity.h"
 
+#include <Epub/FootnotePreviews.h>
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
 #include <FontCacheManager.h>
@@ -388,6 +389,11 @@ void EpubReaderActivity::onEnter() {
   bookTextAntiAliasingOverride = currentBook.textAntiAliasingOverride;
   bookHyphenationOverride = currentBook.hyphenationOverride;
   bookGuideDotsOverride = currentBook.guideDotsOverride;
+  bookInlineFootnotePreviewsOverride = currentBook.inlineFootnotePreviewsOverride;
+  // Prime the footnote-cache flag with one existence probe so Background-B is not
+  // needlessly gated on an already-gathered book (the gather itself runs lazily at
+  // the first preview-enabled foreground build).
+  footnotePreviewCacheReady_ = FootnotePreviews::cacheExists(epub->getCachePath());
   logReaderMemSnapshot("onEnter_after_recent_books");
 
   // Start a reading-stats session. We use the cheap filename-based hash here:
@@ -733,6 +739,7 @@ Section::BuildParams EpubReaderActivity::makeSectionBuildParams() const {
   p.hyphenationEnabled = getEffectiveHyphenation();
   p.embeddedStyle = lastRenderStats.embeddedStyle;
   p.bionicReadingEnabled = getEffectiveBionicReading();
+  p.inlineFootnotePreviews = getEffectiveInlineFootnotePreviews();
   p.imageRendering = lastRenderStats.imageRendering;
   p.fontSizeLadder = buildReaderFontSizeLadder(p.fontId);
   return p;
@@ -749,6 +756,12 @@ void EpubReaderActivity::resetBackgroundBuild() {
 
 void EpubReaderActivity::stepBackgroundSectionBuild() {
   if (!epub || !section || readerPhase_ != ReaderPhase::READING) {
+    return;
+  }
+  // Never bake a preview-enabled section variant before footnotes.bin exists: the pages
+  // would be cached preview-less under the previews-on hash and stay that way. The gather
+  // is foreground-only (first preview-enabled build); B just waits for it.
+  if (getEffectiveInlineFootnotePreviews() && !footnotePreviewCacheReady_) {
     return;
   }
   // Background A keeps priority: it determines perceived page-turn speed, and its total
@@ -844,7 +857,7 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
       const Section::BuildParams p = makeSectionBuildParams();
       const bool cached = backgroundSection_->loadSectionFile(
           p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment, p.viewportWidth, p.viewportHeight,
-          p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled, p.imageRendering);
+          p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled, p.inlineFootnotePreviews, p.imageRendering);
       if (cached && !backgroundSection_->isEmbeddedStyleFallback()) {
         backgroundWindowPagesBuilt_ += backgroundSection_->pageCount;  // already-built runway counts toward the budget
         backgroundSection_.reset();
@@ -1188,7 +1201,18 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::FOOTNOTES: {
-      startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
+      // Opportunistic: when the book-level footnote cache exists (gathered for inline
+      // previews), show each entry's note text in the list. Purely passive — no cache,
+      // plain marker list as before; opening the list never triggers a gather.
+      std::vector<std::string> footnotePreviews(currentPageFootnotes.size());
+      FootnotePreviews::Lookup previewLookup;
+      if (previewLookup.open(epub->getCachePath(), epub.get(), currentSpineIndex)) {
+        for (size_t i = 0; i < currentPageFootnotes.size(); ++i) {
+          previewLookup.find(currentPageFootnotes[i].href, footnotePreviews[i]);
+        }
+      }
+      startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes,
+                                                                           std::move(footnotePreviews)),
                              [this](const ActivityResult& result) {
                                if (!result.isCancelled) {
                                  const auto& footnoteResult = std::get<FootnoteResult>(result.data);
@@ -1500,6 +1524,10 @@ void EpubReaderActivity::stopAutomaticPageTurn() {
     navTarget.cachedPageCount = section->pageCount;
     navTarget.cachedSpineIdx = currentSpineIndex;
   }
+  pendingPreRender = false;
+  usePreRenderedBuffer = false;
+  preRenderedPage.ready = false;
+  pendingGrayscale_ = {};
   section.reset();
 }
 
@@ -1535,16 +1563,14 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
   applyBookReaderOverrides(embeddedStyleOverride, imageRenderingOverride, fontFamilyOverride, sdFontFamilyOverride,
                            fontSizeOverride, static_cast<int8_t>(bionicReadingOverride ? 1 : 0),
                            paragraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
-                           bookGuideDotsOverride);
+                           bookGuideDotsOverride, bookInlineFootnotePreviewsOverride);
 }
 
-void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOverride,
-                                                  const int8_t imageRenderingOverride, const int8_t fontFamilyOverride,
-                                                  const std::string& sdFontFamilyOverride,
-                                                  const int8_t fontSizeOverride, const int8_t bionicReadingOverride,
-                                                  const int8_t paragraphAlignmentOverride,
-                                                  const int8_t textAntiAliasingOverride,
-                                                  const int8_t hyphenationOverride, const int8_t guideDotsOverride) {
+void EpubReaderActivity::applyBookReaderOverrides(
+    const int8_t embeddedStyleOverride, const int8_t imageRenderingOverride, const int8_t fontFamilyOverride,
+    const std::string& sdFontFamilyOverride, const int8_t fontSizeOverride, const int8_t bionicReadingOverride,
+    const int8_t paragraphAlignmentOverride, const int8_t textAntiAliasingOverride, const int8_t hyphenationOverride,
+    const int8_t guideDotsOverride, const int8_t inlineFootnotePreviewsOverride) {
   if (!epub) {
     return;
   }
@@ -1567,7 +1593,8 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
       bookSdFontFamilyOverride == normalizedSdFontFamilyOverride && bookFontSizeOverride == fontSizeOverride &&
       bookBionicReadingOverride == bionicReadingOverride &&
       bookParagraphAlignmentOverride == paragraphAlignmentOverride &&
-      bookTextAntiAliasingOverride == textAntiAliasingOverride && bookHyphenationOverride == hyphenationOverride;
+      bookTextAntiAliasingOverride == textAntiAliasingOverride && bookHyphenationOverride == hyphenationOverride &&
+      bookInlineFootnotePreviewsOverride == inlineFootnotePreviewsOverride;
 
   if (layoutOverridesUnchanged && bookGuideDotsOverride == guideDotsOverride) {
     return;
@@ -1583,10 +1610,11 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
   bookTextAntiAliasingOverride = textAntiAliasingOverride;
   bookHyphenationOverride = hyphenationOverride;
   bookGuideDotsOverride = guideDotsOverride;
-  RECENT_BOOKS.setReaderOverrides(epub->getPath(), bookEmbeddedStyleOverride, bookImageRenderingOverride,
-                                  bookFontFamilyOverride, bookSdFontFamilyOverride, bookFontSizeOverride,
-                                  bookBionicReadingOverride, bookParagraphAlignmentOverride,
-                                  bookTextAntiAliasingOverride, bookHyphenationOverride, bookGuideDotsOverride);
+  bookInlineFootnotePreviewsOverride = inlineFootnotePreviewsOverride;
+  RECENT_BOOKS.setReaderOverrides(
+      epub->getPath(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
+      bookSdFontFamilyOverride, bookFontSizeOverride, bookBionicReadingOverride, bookParagraphAlignmentOverride,
+      bookTextAntiAliasingOverride, bookHyphenationOverride, bookGuideDotsOverride, bookInlineFootnotePreviewsOverride);
 
   if (layoutOverridesUnchanged) {
     // Only guide dots changed: persisted above, and the repaint on resume picks
@@ -1606,8 +1634,20 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
 
   RenderLock lock(*this);
   if (section) {
-    navTarget = NavigationTarget::makePage(section->currentPage);
-    navTarget.cachedPageCount = section->pageCount;
+    const int currentPage = section->currentPage;
+    if (!section->hasActiveBuild()) {
+      if (const auto paragraphIndex = section->getParagraphIndexForPage(currentPage)) {
+        navTarget = NavigationTarget::makeParagraph(*paragraphIndex, currentPage);
+      } else {
+        navTarget = NavigationTarget::makePage(currentPage);
+      }
+      navTarget.cachedPageCount = section->pageCount;
+    } else {
+      // pageCount is only the number of pages produced so far. Treating it as a
+      // completed layout count would proportionally jump forward after relayout.
+      navTarget = NavigationTarget::makePage(currentPage);
+      LOG_DBG("ERS", "Preserving page %d without rescale during active section build", currentPage);
+    }
     navTarget.cachedSpineIdx = currentSpineIndex;
   }
   section.reset();
@@ -1653,6 +1693,13 @@ bool EpubReaderActivity::getEffectiveGuideDots() const {
     return bookGuideDotsOverride != 0;
   }
   return SETTINGS.guideDots != 0;
+}
+
+bool EpubReaderActivity::getEffectiveInlineFootnotePreviews() const {
+  if (bookInlineFootnotePreviewsOverride >= 0) {
+    return bookInlineFootnotePreviewsOverride != 0;
+  }
+  return SETTINGS.inlineFootnotePreviews != 0;
 }
 
 uint8_t EpubReaderActivity::getEffectiveParagraphAlignment() const {
@@ -2095,6 +2142,28 @@ bool EpubReaderActivity::reallocSecondaryEvictingCaches() {
   return false;
 }
 
+bool EpubReaderActivity::ensureFootnotePreviewCache() {
+  if (!epub || !getEffectiveInlineFootnotePreviews()) {
+    return true;
+  }
+  if (footnotePreviewCacheReady_) {
+    return true;
+  }
+  if (FootnotePreviews::cacheExists(epub->getCachePath())) {
+    footnotePreviewCacheReady_ = true;
+    return true;
+  }
+  // One-time whole-book scan (foreground by design — no background variant to keep the
+  // build paths simple). An empty result still writes a valid cache, so this runs once
+  // per book, not once per open.
+  GUI.drawPopup(renderer, tr(STR_GATHERING_FOOTNOTES));
+  footnotePreviewCacheReady_ = FootnotePreviews::gather(*epub);
+  if (!footnotePreviewCacheReady_) {
+    LOG_ERR("ERS", "Footnote preview gather failed; building without previews");
+  }
+  return footnotePreviewCacheReady_;
+}
+
 void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
   // While Background-C is building with the buffer released for headroom, leave it released —
   // reallocating now would reclaim the ~48–52 KB the build is using. The buffer is restored here
@@ -2418,12 +2487,12 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
   // just build to completion. A resumed partial build continues via the same stepSectionBuild
   // state inside createSectionFile.
   const auto runCreate = [&]() {
-    return section->createSectionFile(buildParams.fontId, buildParams.lineCompression,
-                                      buildParams.extraParagraphSpacing, buildParams.paragraphAlignment,
-                                      buildParams.viewportWidth, buildParams.viewportHeight,
-                                      buildParams.hyphenationEnabled, buildParams.embeddedStyle,
-                                      buildParams.bionicReadingEnabled, buildParams.imageRendering, nullptr,
-                                      /*skipEviction=*/false, buildParams.fontSizeLadder);
+    return section->createSectionFile(
+        buildParams.fontId, buildParams.lineCompression, buildParams.extraParagraphSpacing,
+        buildParams.paragraphAlignment, buildParams.viewportWidth, buildParams.viewportHeight,
+        buildParams.hyphenationEnabled, buildParams.embeddedStyle, buildParams.bionicReadingEnabled,
+        buildParams.inlineFootnotePreviews, buildParams.imageRendering, nullptr,
+        /*skipEviction=*/false, buildParams.fontSizeLadder);
   };
 
   const uint32_t createStart = millis();
@@ -2536,15 +2605,29 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   resetBackgroundBuild();
   const unsigned long sectionStart = millis();
 
+  // Preview text is baked into laid-out pages. Prepare its book-level source before
+  // probing the preview-enabled section variant so a cache hit can never bypass gather.
+  if (getEffectiveInlineFootnotePreviews()) {
+    ensureFootnotePreviewCache();
+  }
+
   // A resumed partial Background-B build has no on-disk LUT yet, so skip loadSectionFile (it
   // would clobber the live write handle); it always needs building. Otherwise probe the cache.
-  const bool cacheHit = !resumeBackgroundBuild &&
-                        section->loadSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
-                                                 SETTINGS.extraParagraphSpacing, getEffectiveParagraphAlignment(),
-                                                 viewportWidth, viewportHeight, getEffectiveHyphenation(),
-                                                 embeddedStyle, getEffectiveBionicReading(), imageRendering);
+  const bool cacheHit =
+      !resumeBackgroundBuild &&
+      section->loadSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
+                               SETTINGS.extraParagraphSpacing, getEffectiveParagraphAlignment(), viewportWidth,
+                               viewportHeight, getEffectiveHyphenation(), embeddedStyle, getEffectiveBionicReading(),
+                               getEffectiveInlineFootnotePreviews(), imageRendering);
   const bool cssFallbackRebuild = cacheHit && section->isEmbeddedStyleFallback();
   const bool needBuild = resumeBackgroundBuild || !cacheHit || cssFallbackRebuild;
+
+  // One grep-able line per section entry tying the cache decision to the effective
+  // preview inputs — discriminates "stale variant loaded" from "effective value not
+  // what the UI shows" from "parser gate leak" in field logs.
+  LOG_INF("ERS", "Section probe spine=%d: cacheHit=%d previews=%d (override=%d global=%u)", currentSpineIndex,
+          cacheHit ? 1 : 0, getEffectiveInlineFootnotePreviews() ? 1 : 0,
+          static_cast<int>(bookInlineFootnotePreviewsOverride), static_cast<unsigned>(SETTINGS.inlineFootnotePreviews));
 
   if (needBuild) {
     lastRenderStats.cacheRebuilt = true;
@@ -2685,7 +2768,7 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
           section->loadSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
                                    SETTINGS.extraParagraphSpacing, getEffectiveParagraphAlignment(), viewportWidth,
                                    viewportHeight, getEffectiveHyphenation(), embeddedStyle,
-                                   getEffectiveBionicReading(), imageRendering);
+                                   getEffectiveBionicReading(), getEffectiveInlineFootnotePreviews(), imageRendering);
         } else {
           LOG_ERR("ERS", "Failed to build section; showing empty chapter");
           // Do NOT reset section: leave it alive with pageCount=0 so getRenderPass()
@@ -3657,9 +3740,32 @@ void EpubReaderActivity::restoreSavedPosition() {
 }
 
 bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, GfxRenderer& renderer) {
+  // Resolve per-book overrides FIRST: every layout input below must be the EFFECTIVE value
+  // (global setting resolved against the book override), mirroring the reader's
+  // getEffective*() helpers. Passing raw SETTINGS values here diverges the section property
+  // hash from the reader's whenever an override is set, and this path then silently rebuilds
+  // a duplicate section variant during sleep preparation.
+  const RecentBook currentBook = RECENT_BOOKS.getBookByPath(filePath);
+  const bool effectiveEmbeddedStyle =
+      currentBook.embeddedStyleOverride >= 0 ? currentBook.embeddedStyleOverride != 0 : SETTINGS.embeddedStyle != 0;
+  const bool effectiveHyphenation =
+      currentBook.hyphenationOverride >= 0 ? currentBook.hyphenationOverride != 0 : SETTINGS.hyphenationEnabled != 0;
+  const bool effectiveBionicReading =
+      currentBook.bionicReadingOverride >= 0 ? currentBook.bionicReadingOverride != 0 : SETTINGS.bionicReading != 0;
+  const bool effectiveInlineFootnotePreviews = currentBook.inlineFootnotePreviewsOverride >= 0
+                                                   ? currentBook.inlineFootnotePreviewsOverride != 0
+                                                   : SETTINGS.inlineFootnotePreviews != 0;
+  const uint8_t effectiveParagraphAlignment = currentBook.paragraphAlignmentOverride >= 0
+                                                  ? static_cast<uint8_t>(currentBook.paragraphAlignmentOverride)
+                                                  : SETTINGS.paragraphAlignment;
+  const uint8_t effectiveImageRendering = currentBook.imageRenderingOverride >= 0
+                                              ? static_cast<uint8_t>(currentBook.imageRenderingOverride)
+                                              : SETTINGS.imageRendering;
+
   auto epub = std::make_shared<Epub>(filePath, "/.crosspoint");
-  // Load CSS when embeddedStyle is enabled, as createSectionFile may need it to rebuild the cache.
-  if (!epub->load(true, SETTINGS.embeddedStyle == 0)) {
+  // Load CSS when embeddedStyle is effectively enabled, as createSectionFile may need it to
+  // rebuild the cache.
+  if (!epub->load(true, !effectiveEmbeddedStyle)) {
     LOG_DBG("SLP", "EPUB: failed to load %s", filePath.c_str());
     return false;
   }
@@ -3695,7 +3801,6 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
 
   // Load or rebuild the section cache. Rebuilding is needed when the cache is missing or stale
   // (e.g. after a firmware update). A no-op popup callback avoids any UI during sleep preparation.
-  const RecentBook currentBook = RECENT_BOOKS.getBookByPath(filePath);
   const bool hasLocalSdOverride = !currentBook.sdFontFamilyOverride.empty();
   const uint8_t effectiveFontFamily =
       currentBook.fontFamilyOverride >= 0 ? static_cast<uint8_t>(currentBook.fontFamilyOverride) : SETTINGS.fontFamily;
@@ -3746,14 +3851,14 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
   const float effectiveLineCompression = getEffectiveLineCompression(effectiveFontId);
   auto section = std::make_unique<Section>(epub, spineIndex, renderer);
   if (!section->loadSectionFile(effectiveFontId, effectiveLineCompression, SETTINGS.extraParagraphSpacing,
-                                SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-                                SETTINGS.embeddedStyle, static_cast<bool>(SETTINGS.bionicReading),
-                                SETTINGS.imageRendering)) {
+                                effectiveParagraphAlignment, viewportWidth, viewportHeight, effectiveHyphenation,
+                                effectiveEmbeddedStyle, effectiveBionicReading, effectiveInlineFootnotePreviews,
+                                effectiveImageRendering)) {
     LOG_DBG("SLP", "EPUB: section cache not found for spine %d, rebuilding", spineIndex);
     if (!section->createSectionFile(effectiveFontId, effectiveLineCompression, SETTINGS.extraParagraphSpacing,
-                                    SETTINGS.paragraphAlignment, viewportWidth, viewportHeight,
-                                    SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                    static_cast<bool>(SETTINGS.bionicReading), SETTINGS.imageRendering, nullptr,
+                                    effectiveParagraphAlignment, viewportWidth, viewportHeight, effectiveHyphenation,
+                                    effectiveEmbeddedStyle, effectiveBionicReading, effectiveInlineFootnotePreviews,
+                                    effectiveImageRendering, nullptr,
                                     /*skipEviction=*/false, buildReaderFontSizeLadder(effectiveFontId))) {
       LOG_ERR("SLP", "EPUB: failed to rebuild section cache for spine %d", spineIndex);
       return false;
@@ -3781,18 +3886,20 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
 
 void EpubReaderActivity::openQuickOverrides() {
   ReaderUtils::enforceExitFullRefresh(renderer);
-  startActivityForResult(
-      std::make_unique<QuickOverridesActivity>(
-          renderer, mappedInput, bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
-          bookSdFontFamilyOverride, bookFontSizeOverride, bookBionicReadingOverride, bookGuideDotsOverride,
-          bookParagraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride),
-      [this](const ActivityResult& result) {
-        const auto& menu = std::get<MenuResult>(result.data);
-        applyBookReaderOverrides(menu.embeddedStyleOverride, menu.imageRenderingOverride, menu.fontFamilyOverride,
-                                 menu.sdFontFamilyOverride, menu.fontSizeOverride,
-                                 static_cast<int8_t>(menu.bionicReadingOverride), menu.paragraphAlignmentOverride,
-                                 menu.textAntiAliasingOverride, menu.hyphenationOverride, menu.guideDotsOverride);
-      });
+  startActivityForResult(std::make_unique<QuickOverridesActivity>(
+                             renderer, mappedInput, bookEmbeddedStyleOverride, bookImageRenderingOverride,
+                             bookFontFamilyOverride, bookSdFontFamilyOverride, bookFontSizeOverride,
+                             bookBionicReadingOverride, bookGuideDotsOverride, bookParagraphAlignmentOverride,
+                             bookTextAntiAliasingOverride, bookHyphenationOverride, bookInlineFootnotePreviewsOverride),
+                         [this](const ActivityResult& result) {
+                           const auto& menu = std::get<MenuResult>(result.data);
+                           applyBookReaderOverrides(
+                               menu.embeddedStyleOverride, menu.imageRenderingOverride, menu.fontFamilyOverride,
+                               menu.sdFontFamilyOverride, menu.fontSizeOverride,
+                               static_cast<int8_t>(menu.bionicReadingOverride), menu.paragraphAlignmentOverride,
+                               menu.textAntiAliasingOverride, menu.hyphenationOverride, menu.guideDotsOverride,
+                               menu.inlineFootnotePreviewsOverride);
+                         });
 }
 
 void EpubReaderActivity::openReaderMenu() {
@@ -3827,7 +3934,7 @@ void EpubReaderActivity::openReaderMenu() {
           !currentPageFootnotes.empty(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
           bookSdFontFamilyOverride, bookFontSizeOverride, SETTINGS.textDarkness, getEffectiveBionicReading(),
           bookGuideDotsOverride, bookParagraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
-          !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages),
+          bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);
@@ -3836,7 +3943,8 @@ void EpubReaderActivity::openReaderMenu() {
         applyBookReaderOverrides(menu.embeddedStyleOverride, menu.imageRenderingOverride, menu.fontFamilyOverride,
                                  menu.sdFontFamilyOverride, menu.fontSizeOverride,
                                  static_cast<bool>(menu.bionicReadingOverride), menu.paragraphAlignmentOverride,
-                                 menu.textAntiAliasingOverride, menu.hyphenationOverride, menu.guideDotsOverride);
+                                 menu.textAntiAliasingOverride, menu.hyphenationOverride, menu.guideDotsOverride,
+                                 menu.inlineFootnotePreviewsOverride);
         if (!result.isCancelled) {
           onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
         }
