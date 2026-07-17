@@ -243,10 +243,6 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
                                          "extraParagraphSpacing", StrId::STR_CAT_READER)
                          .withSubmenu(StrId::STR_MENU_READER_SPACING));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_CREATE_FALLBACK_FOR_INVALID_TOC,
-                                         &CrossPointSettings::syntheticTocFallback, "syntheticTocFallback",
-                                         StrId::STR_CAT_READER)
-                         .withSubcategory(StrId::STR_MENU_READER_TWEAKS));
 
   // --- Controls ---
   // --- Button Actions (short / double / long press per logical button) ---
