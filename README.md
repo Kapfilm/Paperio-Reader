@@ -91,7 +91,7 @@ Legend: ✅ supported · ⚠️ partial / basic · ❌ not supported.
 | Jump to printed page | ✅ | ❌ |
 | Jump to percent | ✅ | ✅ |
 | Quick per-book overrides while reading (font, images, hyphenation, bionic…) | ✅ | ❌ |
-| Footnotes | ✅ richer navigation | ✅ |
+| Footnotes | ✅ richer navigation, inline expansion | ✅ |
 | TOC / chapter selection | ✅ | ✅ |
 | Browser breadcrumb footer + continuous page-jump | ❌ dropped | ✅ |
 
@@ -101,13 +101,13 @@ Legend: ✅ supported · ⚠️ partial / basic · ❌ not supported.
 | --- | :---: | :---: |
 | Clock on X4 | ✅ software clock (X3 **and** X4) | ❌ X3 only (DS3231 hardware RTC) |
 | Weather panel (Open-Meteo, forecast, 48h graph) | ✅ from Home menu | ❌ |
-| Timezone auto-detect (IP geolocation + DST) | ✅ | ⚠️ manual offset picker |
+| Timezone auto-detect (IP geolocation + DST) | ✅ | ⚠️ l offset picker |
 | Time sync (NTP) | ✅ | ✅ (X3) |
 | Sleep screens: transparent overlay over reader page | ✅ | ❌ |
 | Sleep screens: PNG with alpha | ✅ | ❌ BMP only |
 | Sleep screens: info overlay (title/chapter/page/percent) | ✅ | ❌ |
 | Sleep screens: sequential image pick | ✅ | ⚠️ random only |
-| KOReader sync | ✅ auto bidirectional, on-device settings, differential refresh | ⚠️ manual compare only |
+| KOReader sync | ✅ auto bidirectional, on-device settings, differential refresh | ⚠️ proper sync + automatic resolution, no on-device registration |
 | Per-button custom actions (23 actions × short/double/long) | ✅ + overview screen | ❌ physical remap + a few toggles |
 | Captive-portal login (client detect + QR to authorize) | ✅ | ❌ AP-side only |
 | System information screen | ✅ | ❌ |
