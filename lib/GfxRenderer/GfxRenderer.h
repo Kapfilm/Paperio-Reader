@@ -447,8 +447,8 @@ class GfxRenderer {
   size_t getBufferSize() const;
 
   // Release both display frame buffers back to the heap (~96-104KB total).
-  // Nulls the local frameBuffer pointer too so any accidental render attempt
-  // fails visibly rather than corrupting freed memory.
+  // Nulls the local frameBuffer pointer too; displayBuffer() rejects flushes
+  // (LOG_ERR + no-op) while it is null instead of streaming freed memory.
   // Only valid after the final displayBuffer(); the device must reboot before
   // any display operation is attempted again.
   void releaseFrameBuffers() {

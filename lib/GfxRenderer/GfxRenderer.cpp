@@ -2485,6 +2485,15 @@ void GfxRenderer::triggerDisplayAsync(const HalDisplay::RefreshMode mode, const 
 }
 
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
+  // The web server session releases both framebuffers (releaseFrameBuffers());
+  // a flush would stream the null buffer over SPI and fault (field crash: a
+  // global force-refresh button pressed during a transfer). The second check
+  // covers releaseFrameBuffersWithScratch, where the renderer points at a
+  // scratch buffer but the display's own buffers are gone.
+  if (frameBuffer == nullptr || display.getFrameBuffer() == nullptr) {
+    LOG_ERR("GFX", "displayBuffer with released framebuffer ignored");
+    return;
+  }
   const auto effectiveMode = consumeRefreshOverride(refreshMode);
 
   if (start_ms_valid) {

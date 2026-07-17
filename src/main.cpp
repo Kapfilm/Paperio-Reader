@@ -873,13 +873,18 @@ void loop() {
       String cmd = line.substring(4);
       cmd.trim();
       if (cmd == "SCREENSHOT") {
-        const uint16_t width = display.getDisplayWidth();
-        const uint16_t height = display.getDisplayHeight();
-        const uint32_t bufferSize = display.getBufferSize();
-        logSerial.printf("SCREENSHOT_START:%d:%d:%d\n", width, height, bufferSize);
         uint8_t* buf = display.getFrameBuffer();
-        logSerial.write(buf, bufferSize);
-        logSerial.printf("SCREENSHOT_END\n");
+        if (buf) {
+          const uint16_t width = display.getDisplayWidth();
+          const uint16_t height = display.getDisplayHeight();
+          const uint32_t bufferSize = display.getBufferSize();
+          logSerial.printf("SCREENSHOT_START:%d:%d:%d\n", width, height, bufferSize);
+          logSerial.write(buf, bufferSize);
+          logSerial.printf("SCREENSHOT_END\n");
+        } else {
+          // Framebuffers are released during the web server session — nothing to send.
+          logSerial.printf("SCREENSHOT_ERROR:framebuffer released\n");
+        }
       }
     }
   }
