@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "BitmapHelpers.h"
 #include "HalStorage.h"  // FsFile (stdio-backed shim)
 #include "JpegToBmpConverter.h"
 #include "Print.h"
@@ -147,6 +148,10 @@ int32_t le32(const std::vector<uint8_t>& b, size_t off) {
                               (static_cast<uint32_t>(b[off + 3]) << 24));
 }
 
+uint16_t le16(const std::vector<uint8_t>& bytes, size_t offset) {
+  return static_cast<uint16_t>(bytes[offset] | (bytes[offset + 1] << 8));
+}
+
 struct ProgressiveRows {
   uint16_t width = 0;
   uint16_t height = 0;
@@ -163,6 +168,31 @@ struct ProgressiveRows {
 };
 
 }  // namespace
+
+TEST(BitmapHelpers, WritesGrayscaleBmpHeaders) {
+  for (const uint8_t bitsPerPixel : {1, 2, 8}) {
+    MemoryPrint output;
+    const int rowBytes = writeGrayscaleBmpHeader(output, 13, 7, bitsPerPixel);
+    const uint32_t colorCount = 1U << bitsPerPixel;
+    const uint32_t pixelOffset = 54 + colorCount * 4;
+
+    ASSERT_EQ(rowBytes, (13 * bitsPerPixel + 31) / 32 * 4);
+    ASSERT_EQ(output.buf.size(), pixelOffset);
+    EXPECT_EQ(output.buf[0], 'B');
+    EXPECT_EQ(output.buf[1], 'M');
+    EXPECT_EQ(le32(output.buf, 10), pixelOffset);
+    EXPECT_EQ(le32(output.buf, 18), 13);
+    EXPECT_EQ(le32(output.buf, 22), -7);
+    EXPECT_EQ(le16(output.buf, 28), bitsPerPixel);
+    EXPECT_EQ(le32(output.buf, 46), colorCount);
+    EXPECT_EQ(output.buf[54], 0);
+    EXPECT_EQ(output.buf[pixelOffset - 4], 255);
+    if (bitsPerPixel == 2) {
+      EXPECT_EQ(output.buf[58], 85);
+      EXPECT_EQ(output.buf[62], 170);
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Bug 1: TJpgDec descales by floor(dim/2^scale). The converter relies on this

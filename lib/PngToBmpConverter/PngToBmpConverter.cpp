@@ -23,121 +23,6 @@ constexpr bool USE_FLOYD_STEINBERG = false;
 constexpr bool USE_PRESCALE = true;
 // ============================================================================
 
-// BMP writing helpers (same as JpegToBmpConverter)
-inline void write16(Print& out, const uint16_t value) {
-  out.write(value & 0xFF);
-  out.write((value >> 8) & 0xFF);
-}
-
-inline void write32(Print& out, const uint32_t value) {
-  out.write(value & 0xFF);
-  out.write((value >> 8) & 0xFF);
-  out.write((value >> 16) & 0xFF);
-  out.write((value >> 24) & 0xFF);
-}
-
-inline void write32Signed(Print& out, const int32_t value) {
-  out.write(value & 0xFF);
-  out.write((value >> 8) & 0xFF);
-  out.write((value >> 16) & 0xFF);
-  out.write((value >> 24) & 0xFF);
-}
-
-namespace {
-
-void writeBmpHeader8bit(Print& bmpOut, const int width, const int height) {
-  const int bytesPerRow = (width + 3) / 4 * 4;
-  const int imageSize = bytesPerRow * height;
-  const uint32_t paletteSize = 256 * 4;
-  const uint32_t fileSize = 14 + 40 + paletteSize + imageSize;
-
-  bmpOut.write('B');
-  bmpOut.write('M');
-  write32(bmpOut, fileSize);
-  write32(bmpOut, 0);
-  write32(bmpOut, 14 + 40 + paletteSize);
-
-  write32(bmpOut, 40);
-  write32Signed(bmpOut, width);
-  write32Signed(bmpOut, -height);
-  write16(bmpOut, 1);
-  write16(bmpOut, 8);
-  write32(bmpOut, 0);
-  write32(bmpOut, imageSize);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 256);
-  write32(bmpOut, 256);
-
-  for (int i = 0; i < 256; i++) {
-    bmpOut.write(static_cast<uint8_t>(i));
-    bmpOut.write(static_cast<uint8_t>(i));
-    bmpOut.write(static_cast<uint8_t>(i));
-    bmpOut.write(static_cast<uint8_t>(0));
-  }
-}
-
-void writeBmpHeader1bit(Print& bmpOut, const int width, const int height) {
-  const int bytesPerRow = (width + 31) / 32 * 4;
-  const int imageSize = bytesPerRow * height;
-  const uint32_t fileSize = 62 + imageSize;
-
-  bmpOut.write('B');
-  bmpOut.write('M');
-  write32(bmpOut, fileSize);
-  write32(bmpOut, 0);
-  write32(bmpOut, 62);
-
-  write32(bmpOut, 40);
-  write32Signed(bmpOut, width);
-  write32Signed(bmpOut, -height);
-  write16(bmpOut, 1);
-  write16(bmpOut, 1);
-  write32(bmpOut, 0);
-  write32(bmpOut, imageSize);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 2);
-  write32(bmpOut, 2);
-
-  uint8_t palette[8] = {0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00};
-  for (const uint8_t i : palette) {
-    bmpOut.write(i);
-  }
-}
-
-void writeBmpHeader2bit(Print& bmpOut, const int width, const int height) {
-  const int bytesPerRow = (width * 2 + 31) / 32 * 4;
-  const int imageSize = bytesPerRow * height;
-  const uint32_t fileSize = 70 + imageSize;
-
-  bmpOut.write('B');
-  bmpOut.write('M');
-  write32(bmpOut, fileSize);
-  write32(bmpOut, 0);
-  write32(bmpOut, 70);
-
-  write32(bmpOut, 40);
-  write32Signed(bmpOut, width);
-  write32Signed(bmpOut, -height);
-  write16(bmpOut, 1);
-  write16(bmpOut, 2);
-  write32(bmpOut, 0);
-  write32(bmpOut, imageSize);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 4);
-  write32(bmpOut, 4);
-
-  uint8_t palette[16] = {0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x00,
-                         0xAA, 0xAA, 0xAA, 0x00, 0xFF, 0xFF, 0xFF, 0x00};
-  for (const uint8_t i : palette) {
-    bmpOut.write(i);
-  }
-}
-
-}  // namespace
-
 bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight,
                                                    bool oneBit, bool crop, bool enforceSizeCap) {
   LOG_DBG("PNG", "Converting PNG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
@@ -218,14 +103,11 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
   // Write BMP header with the emitted (cropped) dimensions
   int bytesPerRow;
   if (USE_8BIT_OUTPUT && !oneBit) {
-    writeBmpHeader8bit(bmpOut, finalW, finalH);
-    bytesPerRow = (finalW + 3) / 4 * 4;
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalW, finalH, 8);
   } else if (oneBit) {
-    writeBmpHeader1bit(bmpOut, finalW, finalH);
-    bytesPerRow = (finalW + 31) / 32 * 4;
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalW, finalH, 1);
   } else {
-    writeBmpHeader2bit(bmpOut, finalW, finalH);
-    bytesPerRow = (finalW * 2 + 31) / 32 * 4;
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalW, finalH, 2);
   }
 
   auto rowBufferOwner = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
@@ -482,8 +364,7 @@ bool PngDecodeSession::begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, 
   }
 
   // 1-bit BMP header
-  bytesPerRow_ = (finalW_ + 31) / 32 * 4;
-  writeBmpHeader1bit(bmpFile, finalW_, finalH_);
+  bytesPerRow_ = writeGrayscaleBmpHeader(bmpFile, finalW_, finalH_, 1);
 
   // Allocate buffers
   grayRow_ = static_cast<uint8_t*>(malloc(width_));

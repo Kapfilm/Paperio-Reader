@@ -5,6 +5,7 @@
 #include <new>
 
 struct BmpHeader;
+class Print;
 
 // Helper functions
 uint8_t quantize(int gray, int x, int y);
@@ -16,6 +17,10 @@ enum class BmpRowOrder { BottomUp, TopDown };
 
 // Populates a 1-bit BMP header in the provided memory.
 void createBmpHeader(BmpHeader* bmpHeader, int width, int height, BmpRowOrder rowOrder);
+
+// Writes a top-down grayscale BMP header and palette. Returns the padded row
+// size, or 0 when bitsPerPixel is not 1, 2, or 8.
+int writeGrayscaleBmpHeader(Print& output, int width, int height, uint8_t bitsPerPixel);
 
 // 1-bit Atkinson dithering - better quality than noise dithering for thumbnails
 // Error distribution pattern (same as 2-bit but quantizes to 2 levels):

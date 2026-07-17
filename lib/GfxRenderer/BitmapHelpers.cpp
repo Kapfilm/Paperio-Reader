@@ -1,5 +1,7 @@
 #include "BitmapHelpers.h"
 
+#include <Print.h>
+
 #include <cstdint>
 #include <cstring>  // Added for memset
 
@@ -11,6 +13,58 @@ constexpr int BRIGHTNESS_BOOST = 10;         // Brightness offset (0-50)
 constexpr bool GAMMA_CORRECTION = false;     // Gamma curve (brightens midtones)
 constexpr float CONTRAST_FACTOR = 1.15f;     // Contrast multiplier (1.0 = no change, >1 = more contrast)
 constexpr bool USE_NOISE_DITHERING = false;  // Hash-based noise dithering
+
+namespace {
+
+void write16(Print& output, uint16_t value) {
+  output.write(value & 0xFF);
+  output.write((value >> 8) & 0xFF);
+}
+
+void write32(Print& output, uint32_t value) {
+  output.write(value & 0xFF);
+  output.write((value >> 8) & 0xFF);
+  output.write((value >> 16) & 0xFF);
+  output.write((value >> 24) & 0xFF);
+}
+
+}  // namespace
+
+int writeGrayscaleBmpHeader(Print& output, int width, int height, uint8_t bitsPerPixel) {
+  if (width <= 0 || height <= 0 || (bitsPerPixel != 1 && bitsPerPixel != 2 && bitsPerPixel != 8)) return 0;
+
+  const uint32_t colorCount = 1U << bitsPerPixel;
+  const uint32_t paletteSize = colorCount * 4;
+  const int bytesPerRow = (width * bitsPerPixel + 31) / 32 * 4;
+  const uint32_t imageSize = static_cast<uint32_t>(bytesPerRow) * height;
+  const uint32_t pixelOffset = 14 + 40 + paletteSize;
+
+  output.write('B');
+  output.write('M');
+  write32(output, pixelOffset + imageSize);
+  write32(output, 0);
+  write32(output, pixelOffset);
+  write32(output, 40);
+  write32(output, static_cast<uint32_t>(width));
+  write32(output, static_cast<uint32_t>(-height));
+  write16(output, 1);
+  write16(output, bitsPerPixel);
+  write32(output, 0);
+  write32(output, imageSize);
+  write32(output, 2835);
+  write32(output, 2835);
+  write32(output, colorCount);
+  write32(output, colorCount);
+
+  for (uint32_t index = 0; index < colorCount; ++index) {
+    const uint8_t gray = static_cast<uint8_t>(index * 255 / (colorCount - 1));
+    output.write(gray);
+    output.write(gray);
+    output.write(gray);
+    output.write(static_cast<uint8_t>(0));
+  }
+  return bytesPerRow;
+}
 
 // Integer approximation of gamma correction (brightens midtones)
 // Uses a simple curve: out = 255 * sqrt(in/255) ≈ sqrt(in * 255)
