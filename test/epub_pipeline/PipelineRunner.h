@@ -7,6 +7,7 @@
 // refactor must keep the dump unchanged (golden equivalence). See
 // docs/compiled-book-pipeline-plan.md Phase 0.
 #include <cstdint>
+#include <functional>
 #include <ostream>
 #include <string>
 
@@ -28,10 +29,15 @@ struct Profile {
   uint8_t imageRendering = 0;
 };
 
+// Called after each spine item's build+dump with its wall-clock cost.
+// pages/elapsedUs cover the section build AND the page-by-page dump read-back.
+using SpineStatFn = std::function<void(int spineIndex, uint16_t pages, int64_t elapsedUs)>;
+
 // Compile `epubPath` into `cacheDir` under `profile` and stream the canonical
 // dump to `out`. Returns false on any pipeline failure (already-logged).
 // `cacheDir` should be empty/fresh for a cold run; a second call over the same
 // cacheDir exercises the warm (cache-hit) path and must dump identically.
-bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const Profile& profile, std::ostream& out);
+bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const Profile& profile, std::ostream& out,
+                const SpineStatFn& spineStat = {});
 
 }  // namespace pipeline_harness

@@ -100,8 +100,10 @@ target_link_libraries(EpubPipelineTest PRIVATE
 )
 gtest_discover_tests(EpubPipelineTest PROPERTIES TIMEOUT 300)
 
+# HeapTrack overrides malloc/free process-wide — CLI tool only, never the gtest.
 add_executable(epub_pipeline_dump
   DumpMain.cpp
+  HeapTrack.cpp
   ${PIPELINE_SOURCES}
 )
 target_include_directories(epub_pipeline_dump PRIVATE ${PIPELINE_INCLUDES})

@@ -2,6 +2,7 @@
 
 #include <GfxRenderer.h>
 
+#include <chrono>
 #include <iomanip>
 #include <memory>
 
@@ -64,7 +65,8 @@ void dumpPage(std::ostream& out, const Page& page, const uint16_t pageIndex, con
 
 }  // namespace
 
-bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const Profile& profile, std::ostream& out) {
+bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const Profile& profile, std::ostream& out,
+                const SpineStatFn& spineStat) {
   GfxRenderer renderer;
 
   auto epub = std::make_shared<Epub>(epubPath, cacheDir);
@@ -79,6 +81,7 @@ bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const 
       << " toc=" << epub->getTocItemsCount() << " reliableToc=" << (epub->hasReliableToc() ? 1 : 0) << "\n";
 
   for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
+    const auto spineStart = std::chrono::steady_clock::now();
     Section section(epub, i, renderer);
     if (!section.createSectionFile(profile.fontId, profile.lineCompression, profile.extraParagraphSpacing,
                                    profile.paragraphAlignment, profile.viewportWidth, profile.viewportHeight,
@@ -106,6 +109,11 @@ bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const 
         return false;
       }
       dumpPage(out, *page, p, cacheDir);
+    }
+    if (spineStat) {
+      const auto us =
+          std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - spineStart);
+      spineStat(i, section.pageCount, us.count());
     }
   }
   return true;
