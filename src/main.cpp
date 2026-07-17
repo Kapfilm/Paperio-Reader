@@ -158,6 +158,13 @@ constexpr uint32_t SILENT_REBOOT_TARGET_SERIAL_TRANSFER = 2;
 // Boot into the clock settings screen after a timezone-detection WiFi session
 // (WiFi teardown fragments the heap; need a clean reboot before re-entering the UI).
 constexpr uint32_t SILENT_REBOOT_TARGET_CLOCK_SETTINGS = 3;
+// Sleep was requested while the display framebuffers were released (web server
+// session frees both for WiFi heap). SleepActivity cannot render without a
+// framebuffer, so reboot to reestablish it and finish the sleep transition right
+// after setup(). Two targets so fromTimeout survives the reboot (it gates
+// "Quick Resume on Timeout").
+constexpr uint32_t SILENT_REBOOT_TARGET_SLEEP = 4;
+constexpr uint32_t SILENT_REBOOT_TARGET_SLEEP_TIMEOUT = 5;
 constexpr uint32_t HEAP_RECOVERY_RESTART_LATCH_MAGIC = 0x48EA9C01;
 
 // How the device is coming back to life, resolved once at boot. Both resume
@@ -223,6 +230,19 @@ bool trySilentRestartToReaderForHeapRecovery() {
   delay(50);
   ESP.restart();
   return true;
+}
+
+// Restart as part of an in-progress sleep transition: setup() reestablishes the
+// framebuffers, then routes straight back into enterDeepSleep(). No
+// deepSleepInProgress guard — this restart IS the sleep path, not a competing
+// heap-defrag reboot.
+static void silentRestartToSleep(bool fromTimeout) {
+  globalReadingSessionTracker().end();
+  silentRebootTarget = fromTimeout ? SILENT_REBOOT_TARGET_SLEEP_TIMEOUT : SILENT_REBOOT_TARGET_SLEEP;
+  silentRebootMagic = SILENT_REBOOT_MAGIC;
+  LOG_INF("MAIN", "Silent restart (target=sleep, framebuffers released, fromTimeout=%d)", fromTimeout ? 1 : 0);
+  delay(50);
+  ESP.restart();
 }
 
 void armSerialTransferReboot() {
@@ -308,6 +328,14 @@ static void logStartupMemory(const char* stage) {
 void enterDeepSleep(bool fromTimeout = false) {
   LOG_DBG("MAIN", "enterDeepSleep called at millis=%lu, powerBtn isPressed=%d, rawPin=%d", millis(),
           gpio.isPressed(HalGPIO::BTN_POWER), digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
+  // The web server activity releases BOTH framebuffers for WiFi heap
+  // (releaseFrameBuffers() nulls the renderer's pointer). SleepActivity would
+  // render the sleep screen into nullptr and crash, so reboot instead: setup()
+  // reallocates the buffers and routes straight back here to finish the sleep.
+  if (renderer.getFrameBuffer() == nullptr) {
+    silentRestartToSleep(fromTimeout);
+    return;  // not reached — silentRestartToSleep() restarts the chip
+  }
   // Stop the background sampler before tearing down the display/power rails so no
   // ADC read races with that teardown. From here sleep prep reads the power pin
   // directly (HalGPIO::startDeepSleep / waitForStablePowerRelease).
@@ -515,7 +543,7 @@ void setup() {
   // Bound the target range too — RTC_NOINIT memory is uninitialized on cold boot.
   const bool isSilentReboot = (silentRebootMagic == SILENT_REBOOT_MAGIC);
   const uint32_t silentRebootTargetSnapshot =
-      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_CLOCK_SETTINGS) ? silentRebootTarget : 0;
+      (isSilentReboot && silentRebootTarget <= SILENT_REBOOT_TARGET_SLEEP_TIMEOUT) ? silentRebootTarget : 0;
   silentRebootMagic = 0;
   silentRebootTarget = 0;
   if (!isSilentReboot) {
@@ -732,6 +760,15 @@ void setup() {
     // Skip normal home/reader routing: jump straight into the SD firmware picker.
     activityManager.replaceActivity(
         std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInputManager, /*recoveryMode=*/true));
+  } else if (resume == BootResume::Silent && (silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SLEEP ||
+                                              silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SLEEP_TIMEOUT)) {
+    // Sleep was requested while the framebuffers were released (web server
+    // session). They exist again now — finish the interrupted sleep transition.
+    // The forced HALF_REFRESH from the Silent branch above cleanly repaints the
+    // panel (still showing the old session's pixels) with the sleep screen.
+    LOG_INF("MAIN", "Resuming sleep transition after framebuffer-recovery reboot");
+    enterDeepSleep(/*fromTimeout=*/silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SLEEP_TIMEOUT);
+    return;  // not reached — enterDeepSleep() never returns
   } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SERIAL_TRANSFER) {
     // Reset fired while the USB transfer screen was open (host opened the port):
     // land straight back in it so the host's retried command is served.
