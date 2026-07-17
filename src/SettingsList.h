@@ -208,23 +208,8 @@ inline std::vector<SettingInfo> buildSettingsList() {
   // Formatting settings
   settings.push_back(SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
                                          StrId::STR_CAT_READER));
-
-  // Generic reader settings
-  settings.push_back(SettingInfo::Toggle(StrId::STR_CREATE_FALLBACK_FOR_INVALID_TOC,
-                                         &CrossPointSettings::syntheticTocFallback, "syntheticTocFallback",
-                                         StrId::STR_CAT_READER)
-                         .withSubcategory(StrId::STR_MENU_READER_TWEAKS));
   settings.push_back(SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled,
                                          "hyphenationEnabled", StrId::STR_CAT_READER));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_BIONIC_READING, &CrossPointSettings::bionicReading, "bionicReading",
-                                         StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_READING_AIDS));
-  settings.push_back(
-      SettingInfo::Toggle(StrId::STR_GUIDE_DOTS, &CrossPointSettings::guideDots, "guideDots", StrId::STR_CAT_READER)
-          .withSubmenu(StrId::STR_READING_AIDS));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_INLINE_FOOTNOTE_PREVIEWS,
-                                         &CrossPointSettings::inlineFootnotePreviews, "inlineFootnotePreviews",
-                                         StrId::STR_CAT_READER));
   settings.push_back(
       SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                         {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
@@ -243,6 +228,21 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
                                          "extraParagraphSpacing", StrId::STR_CAT_READER)
                          .withSubmenu(StrId::STR_MENU_READER_SPACING));
+
+  // Generic reader settings
+  settings.push_back(SettingInfo::Toggle(StrId::STR_CREATE_FALLBACK_FOR_INVALID_TOC,
+                                         &CrossPointSettings::syntheticTocFallback, "syntheticTocFallback",
+                                         StrId::STR_CAT_READER)
+                         .withSubcategory(StrId::STR_MENU_READER_TWEAKS));
+  settings.push_back(SettingInfo::Toggle(StrId::STR_BIONIC_READING, &CrossPointSettings::bionicReading, "bionicReading",
+                                         StrId::STR_CAT_READER)
+                         .withSubmenu(StrId::STR_READING_AIDS));
+  settings.push_back(
+      SettingInfo::Toggle(StrId::STR_GUIDE_DOTS, &CrossPointSettings::guideDots, "guideDots", StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_READING_AIDS));
+  settings.push_back(SettingInfo::Toggle(StrId::STR_INLINE_FOOTNOTE_PREVIEWS,
+                                         &CrossPointSettings::inlineFootnotePreviews, "inlineFootnotePreviews",
+                                         StrId::STR_CAT_READER));
 
   // --- Controls ---
   // --- Button Actions (short / double / long press per logical button) ---
