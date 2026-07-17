@@ -469,6 +469,41 @@ TEST(CssParserCache, ListStyleAndPageBreaksSurviveDiskCache) {
   std::filesystem::remove(cssPath);
 }
 
+// Regression for the failure class: a compile that hits MAX_RULES
+// mid-stream must not persist a cache. A truncated-but-valid-looking cache would make
+// hasCache() return true forever, permanently hiding every selector past the cap on every
+// future open of the book — the same symptom (styles silently vanish partway through the
+// book) crosspoint saw from a heap-size cutoff; ours is triggered by selector count instead.
+TEST(CssParserCache, RuleCapExceededDoesNotPersistTruncatedCache) {
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+
+  // One more unique selector than MAX_RULES (1500) so the compile pipeline hits the cap
+  // mid-stream, matching an Amazon-style per-chapter EPUB with more unique classes than fit.
+  std::string css;
+  css.reserve(64 * 1024);
+  for (size_t i = 0; i < 1600; ++i) {
+    css += ".rule" + std::to_string(i) + " { font-weight: bold }\n";
+  }
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  ASSERT_TRUE(parser.beginCacheCompile());
+  {
+    FsFile cssFile;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), cssFile));
+    // The CSS itself is well-formed, so the low-level parse doesn't fail; it's the compile
+    // pipeline (which tracks the MAX_RULES cap) that must reject this once the cap is hit.
+    parser.appendCompiledFromStream(cssFile);
+  }
+  EXPECT_FALSE(parser.endCacheCompile());
+  EXPECT_FALSE(parser.hasCache());
+
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
 // Font-size absolute units and keywords resolve to body-relative multipliers:
 // pt normalises against 12 pt, px against 16 px, keywords use fixed steps.
 TEST(CssParserUnits, FontSizeKeywordsAndAbsoluteUnits) {

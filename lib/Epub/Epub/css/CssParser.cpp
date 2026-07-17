@@ -689,7 +689,21 @@ void CssParser::processRuleBlockWithStyle(const std::string& selectorGroup, cons
     // Skip if this would exceed the rule limit
     const size_t ruleCount = compileModeActive_ ? compileSelectorOffsets_.size() : rulesBySelector_.size();
     if (ruleCount >= MAX_RULES) {
-      LOG_DBG("CSS", "Reached max rules limit, stopping selector processing");
+      // In compile mode, falling through to a persisted cache here would look complete
+      // (hasCache() true) while silently and permanently dropping every selector past the
+      // cap — the same failure signature as the old crosspoint-reader's heap-triggered
+      // truncation, just triggered by selector count instead of heap size. Fail the compile
+      // instead: endCacheCompile() then discards the temp file and writes no cache, so the
+      // book re-parses (and hits this same cap) on the next open rather than losing styles
+      // forever.
+      if (compileModeActive_) {
+        if (!compileModeFailed_) {
+          LOG_ERR("CSS", "Reached max rules limit (%zu) mid-compile, aborting CSS cache for this book", MAX_RULES);
+        }
+        compileModeFailed_ = true;
+      } else {
+        LOG_DBG("CSS", "Reached max rules limit, stopping selector processing");
+      }
       return;
     }
 

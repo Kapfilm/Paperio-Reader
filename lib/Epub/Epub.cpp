@@ -495,11 +495,16 @@ void Epub::parseCssFiles() const {
       Storage.remove(tmpCssPath.c_str());
       continue;
     }
-    if (!cssParser->appendCompiledFromStream(tempCssFile)) {
-      LOG_ERR("EBP", "Failed to compile CSS file: %s", cssPath.c_str());
-    }
+    const bool compiledOk = cssParser->appendCompiledFromStream(tempCssFile);
     tempCssFile.close();
     Storage.remove(tmpCssPath.c_str());
+    if (!compiledOk) {
+      // Once the compile pipeline fails (I/O error or MAX_RULES hit) it stays failed for the
+      // rest of this session — endCacheCompile() will discard everything below — so parsing
+      // further stylesheets is pure wasted SD I/O.
+      LOG_ERR("EBP", "Failed to compile CSS file: %s, aborting CSS compile", cssPath.c_str());
+      break;
+    }
   }
 
   // A stylesheet skipped for low heap must NOT produce a persisted cache: an incomplete (or
