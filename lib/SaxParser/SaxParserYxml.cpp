@@ -114,6 +114,9 @@ struct SaxParserImpl {
   bool tagIsVoid = false;
   char tagQuote = 0;          // 0, '\'' or '"' — attribute value quote currently open
   bool tagPrevSlash = false;  // last unquoted body byte was '/' (already self-closing)
+  // Opt-in (see SaxParser::init): repair is for HTML-flavored documents only.
+  // Strict-XML documents (EPUB3 OPF) pair <meta>...</meta> and must not be touched.
+  bool voidRepairEnabled = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -192,7 +195,8 @@ void SaxParser::reset() {
 
 SaxParser::~SaxParser() { reset(); }
 
-bool SaxParser::init(void* userData, SaxStartCb startCb, SaxEndCb endCb, SaxCharCb charCb, SaxDefaultCb defaultCb) {
+bool SaxParser::init(void* userData, SaxStartCb startCb, SaxEndCb endCb, SaxCharCb charCb, SaxDefaultCb defaultCb,
+                     bool htmlVoidTagRepair) {
   reset();
   stopped_ = false;
   errorLine_ = 0;
@@ -212,6 +216,7 @@ bool SaxParser::init(void* userData, SaxStartCb startCb, SaxEndCb endCb, SaxChar
   impl->charCb = charCb;
   impl->defaultCb = defaultCb;
   impl->userData = userData;
+  impl->voidRepairEnabled = htmlVoidTagRepair;
 
   yxml_init(&impl->x, impl->yxmlStack, kStackSize);
   impl_ = impl;
@@ -333,6 +338,7 @@ bool SaxParser::feed(const uint8_t* buf, size_t len) {
   // ---------------------------------------------------------------------------
   auto tagScanByte = [&](uint8_t c) -> bool {
     using TagScan = SaxParserImpl::TagScan;
+    if (!impl->voidRepairEnabled) return true;  // strict XML: never rewrite the byte stream
     if (impl->tagScan == TagScan::kNone) {
       if (c == '<') impl->tagScan = TagScan::kPendingKind;
       return true;

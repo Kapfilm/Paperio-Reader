@@ -306,7 +306,7 @@ TEST(SaxParser, UnclosedBrIsAutoClosed) {
 
   Collector c;
   SaxParser p;
-  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, nullptr, /*htmlVoidTagRepair=*/true));
 
   const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
   ASSERT_TRUE(p.feed(bytes, strlen(xml)));
@@ -330,7 +330,7 @@ TEST(SaxParser, UnclosedHrWithAttributeIsAutoClosed) {
 
   Collector c;
   SaxParser p;
-  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, nullptr, /*htmlVoidTagRepair=*/true));
 
   const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
   ASSERT_TRUE(p.feed(bytes, strlen(xml)));
@@ -351,7 +351,7 @@ TEST(SaxParser, UnclosedVoidTagIsCaseInsensitive) {
 
   Collector c;
   SaxParser p;
-  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, nullptr, /*htmlVoidTagRepair=*/true));
 
   const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
   ASSERT_TRUE(p.feed(bytes, strlen(xml)));
@@ -365,7 +365,7 @@ TEST(SaxParser, AlreadySelfClosedVoidTagDoesNotSetRepairFlag) {
 
   Collector c;
   SaxParser p;
-  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, nullptr, /*htmlVoidTagRepair=*/true));
 
   const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
   ASSERT_TRUE(p.feed(bytes, strlen(xml)));
@@ -381,7 +381,7 @@ TEST(SaxParser, VoidTagRepairIgnoresGreaterThanInAttributeValue) {
 
   Collector c;
   SaxParser p;
-  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, nullptr, /*htmlVoidTagRepair=*/true));
 
   const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
   ASSERT_TRUE(p.feed(bytes, strlen(xml)));
@@ -401,7 +401,7 @@ TEST(SaxParser, UnclosedNonVoidElementStillFails) {
 
   Collector c;
   SaxParser p;
-  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, nullptr, /*htmlVoidTagRepair=*/true));
 
   const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
   p.feed(bytes, strlen(xml));
@@ -416,7 +416,7 @@ TEST(SaxParser, UnclosedVoidTagSplitAcrossChunks) {
 
   Collector c;
   SaxParser p;
-  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar, nullptr, /*htmlVoidTagRepair=*/true));
 
   const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
   ASSERT_TRUE(p.feed(bytes, split));
@@ -429,4 +429,33 @@ TEST(SaxParser, UnclosedVoidTagSplitAcrossChunks) {
   }
   EXPECT_TRUE(sawBrEnd);
   EXPECT_TRUE(p.truncationFlags() & SaxParser::kVoidTagRepaired);
+}
+
+TEST(SaxParser, PairedMetaParsesWhenRepairDisabled) {
+  // EPUB3 OPF metadata pairs <meta> with a real end tag:
+  //   <meta refines="#t" property="title-type">main</meta>
+  // With repair enabled that opening tag would be self-closed, turning the
+  // real </meta> into a mismatched close and killing the whole OPF parse
+  // (book fails to open). Strict-XML parsers therefore init with repair off
+  // (the default) — this must parse cleanly.
+  const char* xml = "<package><metadata><meta refines=\"#t\" property=\"title-type\">main</meta></metadata></package>";
+
+  Collector c;
+  SaxParser p;
+  ASSERT_TRUE(p.init(&c, Collector::onStart, Collector::onEnd, Collector::onChar));
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(xml);
+  ASSERT_TRUE(p.feed(bytes, strlen(xml)));
+  ASSERT_TRUE(p.finalize());
+
+  bool sawMetaStart = false, sawMetaEnd = false, sawText = false;
+  for (const auto& e : c.events) {
+    if (e.type == Event::Type::Start && e.name == "meta") sawMetaStart = true;
+    if (e.type == Event::Type::End && e.name == "meta") sawMetaEnd = true;
+    if (e.type == Event::Type::Char && e.text == "main") sawText = true;
+  }
+  EXPECT_TRUE(sawMetaStart);
+  EXPECT_TRUE(sawMetaEnd);
+  EXPECT_TRUE(sawText);
+  EXPECT_FALSE(p.truncationFlags() & SaxParser::kVoidTagRepaired);
 }

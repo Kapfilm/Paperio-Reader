@@ -9,7 +9,9 @@
 #include "PageListSink.h"
 
 bool TocNavParser::setup() {
-  if (!saxParser_.init(this, startElement, endElement, characterData)) {
+  // The EPUB3 nav doc is XHTML: enable bare-void-tag repair (its <head> may
+  // carry HTML-style unclosed <meta>/<link> from sloppy converters).
+  if (!saxParser_.init(this, startElement, endElement, characterData, nullptr, /*htmlVoidTagRepair=*/true)) {
     LOG_DBG("NAV", "Couldn't allocate memory for parser");
     return false;
   }

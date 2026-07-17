@@ -24,8 +24,16 @@ class SaxParser {
 
   // Initialise the parser and register callbacks. Returns false if the underlying
   // engine fails to allocate (same as XML_ParserCreate returning nullptr).
+  //
+  // htmlVoidTagRepair: enable ONLY for HTML-flavored documents (chapter XHTML,
+  // nav docs). It auto-closes bare HTML void tags (<br>, <hr>, <meta>, ...) so
+  // strict-XML yxml accepts them — but that same repair breaks documents that
+  // legitimately PAIR those names with a real end tag: EPUB3 OPF metadata uses
+  // <meta property="...">value</meta>, which the repair turns into a mismatched
+  // close (a hard parse error, book fails to open). Strict-XML parsers
+  // (OPF/NCX/container/page-map/OPDS) must leave this off.
   bool init(void* userData, SaxStartCb startCb, SaxEndCb endCb, SaxCharCb charCb = nullptr,
-            SaxDefaultCb defaultCb = nullptr);
+            SaxDefaultCb defaultCb = nullptr, bool htmlVoidTagRepair = false);
 
   // Feed a chunk of bytes. Returns false on parse error; errorLine()/errorString()
   // are valid after a false return.

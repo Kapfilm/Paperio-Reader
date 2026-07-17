@@ -182,7 +182,8 @@ class LinkScanner {
  public:
   LinkScanner(const Epub& epub, const int spineIndex, std::vector<Target>& targets)
       : epub_(epub), spineIndex_(spineIndex), targets_(targets) {}
-  bool setup() { return parser_.init(this, startElement, endElement, characterData); }
+  // Scans chapter XHTML (HTML-flavored): enable bare-void-tag repair.
+  bool setup() { return parser_.init(this, startElement, endElement, characterData, nullptr, true); }
   bool feed(const uint8_t* data, const size_t size) { return parser_.feed(data, size); }
   void finalize() { parser_.finalize(); }
 };
@@ -286,7 +287,8 @@ class NoteCapturer {
  public:
   NoteCapturer(const std::vector<Target>& targets, const std::vector<size_t>& wanted, EmitFn emit)
       : targets_(targets), wanted_(wanted), emit_(std::move(emit)) {}
-  bool setup() { return parser_.init(this, startElement, endElement, characterData); }
+  // Scans chapter XHTML (HTML-flavored): enable bare-void-tag repair.
+  bool setup() { return parser_.init(this, startElement, endElement, characterData, nullptr, true); }
   bool feed(const uint8_t* data, const size_t size) { return parser_.feed(data, size); }
   void finalize() {
     parser_.finalize();
