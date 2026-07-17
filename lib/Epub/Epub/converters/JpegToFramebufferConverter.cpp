@@ -1,11 +1,13 @@
 #include "JpegToFramebufferConverter.h"
 
 #include <BitmapHelpers.h>
+#include <CooperativeAbort.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <ProgressiveJpegDc.h>
 #include <ZipFile.h>
 #include <esp_task_wdt.h>
 #include <tjpgd.h>
@@ -253,6 +255,7 @@ constexpr size_t TJPG_WORK_POOL_SIZE = 12 * 1024;
 // Minimum free heap to attempt a decode: the work pool plus headroom for the
 // streaming cache band and the ditherer rows allocated further below.
 constexpr size_t MIN_FREE_HEAP_FOR_JPEG = TJPG_WORK_POOL_SIZE + 16 * 1024;
+constexpr size_t MIN_FREE_HEAP_FOR_PROGRESSIVE_JPEG = 16 * 1024;
 
 // Optional memory-behavior knobs for embedded targets.
 #ifndef JPEG_ENABLE_FIRST_RENDER_NO_CACHE
@@ -709,6 +712,18 @@ int tjpgOutput(JDEC* jd, void* bitmap, JRECT* rect) {
   return emitGrayBlock(*ctx, static_cast<const uint8_t*>(bitmap), rect->left, rect->top, validW, blockH, validW);
 }
 
+bool progressiveOutput(void* user, uint16_t y, const uint8_t* grayscale, uint16_t width) {
+  auto* ctx = static_cast<JpegContext*>(user);
+  if (!ctx || width != ctx->dstWidth || y >= ctx->dstHeight) return false;
+  return emitGrayBlock(*ctx, grayscale, 0, y, width, 1, width) != 0;
+}
+
+bool progressiveShouldAbort(void*) {
+  if (!CooperativeAbort::shouldAbortLongTask()) return false;
+  CooperativeAbort::markAborted();
+  return true;
+}
+
 // Draw a simple bordered placeholder where an undecodable (non-baseline) JPEG would
 // have gone, so the layout shows a framed gap rather than a silent blank.
 void drawUnsupportedPlaceholder(GfxRenderer& renderer, const RenderConfig& config) {
@@ -848,12 +863,6 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   LOG_DBG("JPG", "Decoding JPEG: %s", imagePath.c_str());
   jpgCheckHeap("jpg_decode_entry");
 
-  size_t freeHeap = ESP.getFreeHeap();
-  if (freeHeap < MIN_FREE_HEAP_FOR_JPEG) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_JPEG);
-    return false;
-  }
-
   // Validate JPEG markers before handing off to the decoder. A truncated file left
   // by a prior crashed extraction session will have valid SOF headers but no EOI,
   // which can fault the decoder on the garbage entropy data. Delete and bail so
@@ -889,19 +898,25 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   ctx.screenHeight = renderer.getScreenHeight();
   ctx.effectiveDitherMode = config.ditherMode;
 
-  // Engine selection: TJpgDec decodes baseline (SOF0) only. Progressive and other
-  // modes have no low-RAM full-quality decode path on this device (the only option
-  // would be a 1/8 DC-only approximation), so render a placeholder instead.
+  // TJpgDec handles baseline JPEGs; the progressive fallback reconstructs a
+  // low-memory preview from the initial DC scan.
   JpegMode mode = JpegMode::Baseline;
   if (!getModeFromHeader(imagePath, mode)) {
     LOG_ERR("JPG", "Could not determine JPEG mode (no SOF marker): %s", imagePath.c_str());
     return false;
   }
-  if (mode != JpegMode::Baseline) {
-    LOG_INF("JPG", "Unsupported JPEG mode (%s) — drawing placeholder: %s",
-            mode == JpegMode::Progressive ? "progressive" : "other", imagePath.c_str());
+  if (mode == JpegMode::Other) {
+    LOG_INF("JPG", "Unsupported JPEG mode — drawing placeholder: %s", imagePath.c_str());
     drawUnsupportedPlaceholder(renderer, config);
     return true;
+  }
+
+  const size_t requiredHeap =
+      mode == JpegMode::Progressive ? MIN_FREE_HEAP_FOR_PROGRESSIVE_JPEG : MIN_FREE_HEAP_FOR_JPEG;
+  const size_t freeHeap = ESP.getFreeHeap();
+  if (freeHeap < requiredHeap) {
+    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, requiredHeap);
+    return false;
   }
 
   FsFile file;
@@ -910,28 +925,38 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
     return false;
   }
 
-  TJpgSession session;
-  session.file = &file;
-  session.ctx = &ctx;
-
-  // new[] is max-aligned, satisfying TJpgDec's word-alignment requirement; freed on scope exit.
-  std::unique_ptr<uint8_t[]> pool(new (std::nothrow) uint8_t[TJPG_WORK_POOL_SIZE]);
-  if (!pool) {
-    LOG_ERR("JPG", "Failed to allocate TJpgDec work pool (%u bytes)", static_cast<unsigned>(TJPG_WORK_POOL_SIZE));
-    file.close();
-    return false;
+  TJpgSession session{&file, &ctx};
+  std::unique_ptr<uint8_t[]> pool;
+  JDEC jdec{};
+  JRESULT jr = JDR_OK;
+  int srcWidth = 0;
+  int srcHeight = 0;
+  if (mode == JpegMode::Progressive) {
+    ProgressiveJpegDc::ImageInfo info;
+    const auto probeResult = ProgressiveJpegDc::probe(file, info);
+    if (probeResult != ProgressiveJpegDc::Result::Ok) {
+      LOG_ERR("JPG", "Progressive JPEG probe failed: %s", ProgressiveJpegDc::resultName(probeResult));
+      file.close();
+      return false;
+    }
+    srcWidth = info.width;
+    srcHeight = info.height;
+  } else {
+    pool = makeUniqueNoThrow<uint8_t[]>(TJPG_WORK_POOL_SIZE);
+    if (!pool) {
+      LOG_ERR("JPG", "Failed to allocate TJpgDec work pool (%u bytes)", static_cast<unsigned>(TJPG_WORK_POOL_SIZE));
+      file.close();
+      return false;
+    }
+    jr = jd_prepare(&jdec, tjpgInput, pool.get(), TJPG_WORK_POOL_SIZE, &session);
+    if (jr != JDR_OK) {
+      LOG_ERR("JPG", "TJpgDec prepare failed (jr=%d): %s", jr, imagePath.c_str());
+      file.close();
+      return false;
+    }
+    srcWidth = jdec.width;
+    srcHeight = jdec.height;
   }
-
-  JDEC jdec;
-  JRESULT jr = jd_prepare(&jdec, tjpgInput, pool.get(), TJPG_WORK_POOL_SIZE, &session);
-  if (jr != JDR_OK) {
-    LOG_ERR("JPG", "TJpgDec prepare failed (jr=%d): %s", jr, imagePath.c_str());
-    file.close();
-    return false;
-  }
-
-  int srcWidth = jdec.width;
-  int srcHeight = jdec.height;
   if (srcWidth <= 0 || srcHeight <= 0) {
     LOG_ERR("JPG", "Invalid JPEG dimensions: %dx%d", srcWidth, srcHeight);
     file.close();
@@ -958,15 +983,15 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
 
   // Coarse DCT downscale via TJpgDec's built-in 1/1..1/8 scaling; the fine resampler
   // in emitGrayBlock covers the residual ratio.
-  uint8_t tjpgScale;
-  int jpegScaleDenom = chooseJpegScale(targetScale, tjpgScale);
+  uint8_t tjpgScale = 0;
+  const int jpegScaleDenom = mode == JpegMode::Progressive ? 1 : chooseJpegScale(targetScale, tjpgScale);
 
   // TJpgDec descales by floor(dim / 2^scale): each MCU side (8 or 16 px) is a multiple of
   // the scale denominator, so its per-MCU shifts sum to exactly the floor. Match that here
   // (not ceil) so scaledSrc* equals the decoder's true output extent — the fine-scale
   // factors and the right/bottom edge snapping below are derived from these.
-  ctx.scaledSrcWidth = srcWidth / jpegScaleDenom;
-  ctx.scaledSrcHeight = srcHeight / jpegScaleDenom;
+  ctx.scaledSrcWidth = mode == JpegMode::Progressive ? destWidth : srcWidth / jpegScaleDenom;
+  ctx.scaledSrcHeight = mode == JpegMode::Progressive ? destHeight : srcHeight / jpegScaleDenom;
 
   // Validate memory footprint against the post-scaling decode size, not raw dimensions.
   // A 1447x2200 image decoded at 1/4 scale is only ~362x550 — well within limits.
@@ -992,7 +1017,8 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
   // A TJpgDec MCU is at most 16 scaled-source rows tall, which our fine scale maps
   // to this many output rows — the tallest span either the disk cache band or the
   // dither row band (below) ever needs to hold in one piece.
-  const int maxBlockDstRows = (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
+  const int maxBlockDstRows =
+      mode == JpegMode::Progressive ? 1 : (int)(((int64_t)16 * ctx.fineScaleFPY) >> FP_SHIFT) + 2;
 
   // Start streaming the pixel cache to disk.
   // (See PixelCache for why streaming replaced a full-image buffer; ported from
@@ -1100,14 +1126,30 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
 
   jpgCheckHeap("jpg_before_decode");
   unsigned long decodeStart = millis();
-  jr = jd_decomp(&jdec, tjpgOutput, tjpgScale);
+  ProgressiveJpegDc::Result progressiveResult = ProgressiveJpegDc::Result::Ok;
+  if (mode == JpegMode::Progressive) {
+    ProgressiveJpegDc::DecodeOptions options;
+    options.outputWidth = destWidth;
+    options.outputHeight = destHeight;
+    options.shouldAbort = progressiveShouldAbort;
+    progressiveResult = ProgressiveJpegDc::decode(file, options, progressiveOutput, &ctx);
+  } else {
+    jr = jd_decomp(&jdec, tjpgOutput, tjpgScale);
+  }
   unsigned long decodeTime = millis() - decodeStart;
   // Check before abort() so a corrupt reading is attributed to the decode itself
   // rather than to the SD-buffer free inside cache cleanup. Runs on both paths.
   jpgCheckHeap("jpg_after_decode");
   file.close();
 
-  if (jr != JDR_OK) {
+  if (mode == JpegMode::Progressive && progressiveResult != ProgressiveJpegDc::Result::Ok) {
+    LOG_ERR("JPG", "Progressive JPEG decode failed (%s): %s", ProgressiveJpegDc::resultName(progressiveResult),
+            imagePath.c_str());
+    if (ctx.caching) ctx.cache.abort();
+    drawUnsupportedPlaceholder(renderer, config);
+    return true;
+  }
+  if (mode == JpegMode::Baseline && jr != JDR_OK) {
     LOG_ERR("JPG", "TJpgDec decode failed (jr=%d): %s", jr, imagePath.c_str());
     if (ctx.caching) ctx.cache.abort();
     return false;

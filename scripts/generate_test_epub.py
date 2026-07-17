@@ -84,7 +84,14 @@ def draw_text_wrapped(draw, x, y, text, font, max_width, fill=0):
     return len(lines) * line_height
 
 
-def create_grayscale_test_image(filename, is_png=True):
+def save_test_image(img, filename, is_png, progressive=False):
+    if is_png:
+        img.save(filename, "PNG")
+    else:
+        img.save(filename, "JPEG", quality=95, progressive=progressive)
+
+
+def create_grayscale_test_image(filename, is_png=True, progressive=False):
     """
     Create image with 4 grayscale squares to verify 4-level rendering.
     """
@@ -138,13 +145,10 @@ def create_grayscale_test_image(filename, is_png=True):
     draw_text_centered(draw, y + 38, "muddy/indistinct grays", font_small, fill=64)
 
     # Save
-    if is_png:
-        img.save(filename, "PNG")
-    else:
-        img.save(filename, "JPEG", quality=95)
+    save_test_image(img, filename, is_png, progressive)
 
 
-def create_centering_test_image(filename, is_png=True):
+def create_centering_test_image(filename, is_png=True, progressive=False):
     """
     Create image with border markers to verify centering.
     """
@@ -197,13 +201,10 @@ def create_centering_test_image(filename, is_png=True):
     )
     draw_text_centered(draw, y + 20, "FAIL: Off-center or cropped", font_small, fill=64)
 
-    if is_png:
-        img.save(filename, "PNG")
-    else:
-        img.save(filename, "JPEG", quality=95)
+    save_test_image(img, filename, is_png, progressive)
 
 
-def create_scaling_test_image(filename, is_png=True):
+def create_scaling_test_image(filename, is_png=True, progressive=False):
     """
     Create large image to verify scaling works.
     """
@@ -291,13 +292,10 @@ def create_scaling_test_image(filename, is_png=True):
         draw, y + 30, "FAIL: Cropped, distorted, or unreadable", font_small, fill=64
     )
 
-    if is_png:
-        img.save(filename, "PNG")
-    else:
-        img.save(filename, "JPEG", quality=95)
+    save_test_image(img, filename, is_png, progressive)
 
 
-def create_wide_scaling_test_image(filename, is_png=True):
+def create_wide_scaling_test_image(filename, is_png=True, progressive=False):
     """
     Create wide image (1807x736) to test scaling with specific dimensions
     that can trigger cache dimension mismatches due to floating-point rounding.
@@ -374,13 +372,10 @@ def create_wide_scaling_test_image(filename, is_png=True):
         draw, y + 30, "FAIL: Cache mismatch, multiple decodes", font_small, fill=64
     )
 
-    if is_png:
-        img.save(filename, "PNG")
-    else:
-        img.save(filename, "JPEG", quality=95)
+    save_test_image(img, filename, is_png, progressive)
 
 
-def create_cache_test_image(filename, page_num, is_png=True):
+def create_cache_test_image(filename, page_num, is_png=True, progressive=False):
     """
     Create image for cache performance testing.
     """
@@ -411,13 +406,10 @@ def create_cache_test_image(filename, page_num, is_png=True):
         draw, y + 20, "FAIL: Same slow decode each time", font_small, fill=64
     )
 
-    if is_png:
-        img.save(filename, "PNG")
-    else:
-        img.save(filename, "JPEG", quality=95)
+    save_test_image(img, filename, is_png, progressive)
 
 
-def create_gradient_test_image(filename, is_png=True):
+def create_gradient_test_image(filename, is_png=True, progressive=False):
     """
     Create horizontal gradient to test grayscale banding.
     """
@@ -487,13 +479,10 @@ def create_gradient_test_image(filename, is_png=True):
         draw, y + 20, "FAIL: Binary/noisy dithering", font_small, fill=64
     )
 
-    if is_png:
-        img.save(filename, "PNG")
-    else:
-        img.save(filename, "JPEG", quality=95)
+    save_test_image(img, filename, is_png, progressive)
 
 
-def create_format_test_image(filename, format_name, is_png=True):
+def create_format_test_image(filename, format_name, is_png=True, progressive=False):
     """
     Create simple image to verify format support.
     """
@@ -523,10 +512,7 @@ def create_format_test_image(filename, format_name, is_png=True):
         draw, y, f"PASS: {format_name} image visible", font_small, fill=0
     )
 
-    if is_png:
-        img.save(filename, "PNG")
-    else:
-        img.save(filename, "JPEG", quality=95)
+    save_test_image(img, filename, is_png, progressive)
 
 
 def create_epub(epub_path, title, chapters):
@@ -646,11 +632,19 @@ def main():
         images = {}
 
         # JPEG tests
-        create_grayscale_test_image(tmpdir / "grayscale_test.jpg", is_png=False)
+        create_grayscale_test_image(
+            tmpdir / "grayscale_test.jpg", is_png=False, progressive=True
+        )
         create_centering_test_image(tmpdir / "centering_test.jpg", is_png=False)
-        create_scaling_test_image(tmpdir / "scaling_test.jpg", is_png=False)
-        create_wide_scaling_test_image(tmpdir / "wide_scaling_test.jpg", is_png=False)
-        create_gradient_test_image(tmpdir / "gradient_test.jpg", is_png=False)
+        create_scaling_test_image(
+            tmpdir / "scaling_test.jpg", is_png=False, progressive=True
+        )
+        create_wide_scaling_test_image(
+            tmpdir / "wide_scaling_test.jpg", is_png=False, progressive=True
+        )
+        create_gradient_test_image(
+            tmpdir / "gradient_test.jpg", is_png=False, progressive=True
+        )
         create_format_test_image(tmpdir / "jpeg_format.jpg", "JPEG", is_png=False)
         create_cache_test_image(tmpdir / "cache_test_1.jpg", 1, is_png=False)
         create_cache_test_image(tmpdir / "cache_test_2.jpg", 2, is_png=False)
@@ -677,6 +671,7 @@ def main():
                     "JPEG Image Tests",
                     """
 <p>This EPUB tests JPEG image rendering.</p>
+<p>It contains both baseline and progressive JPEGs.</p>
 <p>Navigate through chapters to verify each test case.</p>
 <p><strong>Test Plan:</strong></p>
 <ul>
@@ -695,6 +690,7 @@ def main():
                     "JPEG Format Test",
                     """
 <p>Basic JPEG decoding test.</p>
+<p>This image uses baseline JPEG encoding.</p>
 <img src="images/jpeg_format.jpg" alt="JPEG format test"/>
 <p>If the image above is visible, JPEG decoding works.</p>
 """,
@@ -707,6 +703,7 @@ def main():
                     "Grayscale Test",
                     """
 <p>Verify 4 distinct gray levels are visible.</p>
+<p>This image uses progressive JPEG encoding.</p>
 <img src="images/grayscale_test.jpg" alt="Grayscale test"/>
 """,
                 ),
@@ -718,6 +715,7 @@ def main():
                     "Gradient Test",
                     """
 <p>Verify gradient quantizes to 4 bands.</p>
+<p>This image uses progressive JPEG encoding.</p>
 <img src="images/gradient_test.jpg" alt="Gradient test"/>
 """,
                 ),
@@ -741,6 +739,7 @@ def main():
                     """
 <p>This image is 1200x1500 pixels - larger than the screen.</p>
 <p>It should be scaled down to fit.</p>
+<p>This image uses progressive JPEG encoding.</p>
 <img src="images/scaling_test.jpg" alt="Scaling test"/>
 """,
                 ),
@@ -753,6 +752,7 @@ def main():
                     """
 <p>This image is 1807x736 pixels - a wide landscape format.</p>
 <p>Tests scaling with dimensions that can cause cache mismatches.</p>
+<p>This image uses progressive JPEG encoding.</p>
 <img src="images/wide_scaling_test.jpg" alt="Wide scaling test"/>
 """,
                 ),
@@ -951,7 +951,7 @@ def main():
                     "Mixed Image Format Tests",
                     """
 <p>This EPUB contains both JPEG and PNG images.</p>
-<p>Tests format detection and mixed rendering.</p>
+<p>Tests baseline JPEG, progressive JPEG, PNG, and mixed rendering.</p>
 """,
                 ),
                 [],
@@ -962,6 +962,7 @@ def main():
                     "JPEG in Mixed EPUB",
                     """
 <p>This is a JPEG image:</p>
+<p>This image uses baseline JPEG encoding.</p>
 <img src="images/jpeg_format.jpg" alt="JPEG"/>
 """,
                 ),
@@ -983,7 +984,7 @@ def main():
                 make_chapter(
                     "Both Formats on One Page",
                     """
-<p>JPEG image:</p>
+<p>Progressive JPEG image:</p>
 <img src="images/grayscale_test.jpg" alt="JPEG grayscale"/>
 <p>PNG image:</p>
 <img src="images/grayscale_test.png" alt="PNG grayscale"/>

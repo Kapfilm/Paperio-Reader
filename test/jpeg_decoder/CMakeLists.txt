@@ -1,6 +1,7 @@
 add_executable(JpegDecoderTest
   JpegDecoderTest.cpp
   Stubs.cpp
+  ${REPO_ROOT}/lib/ProgressiveJpegDc/ProgressiveJpegDc.cpp
   ${REPO_ROOT}/lib/JpegToBmpConverter/JpegToBmpConverter.cpp
   ${REPO_ROOT}/lib/GfxRenderer/BitmapHelpers.cpp
   ${REPO_ROOT}/lib/CooperativeAbort/CooperativeAbort.cpp
@@ -17,7 +18,9 @@ target_include_directories(JpegDecoderTest PRIVATE
   ${REPO_ROOT}/lib/Logging
   ${REPO_ROOT}/lib/GfxRenderer
   ${REPO_ROOT}/lib/JpegToBmpConverter
+  ${REPO_ROOT}/lib/ProgressiveJpegDc
   ${REPO_ROOT}/lib/CooperativeAbort
+  ${REPO_ROOT}/lib/Memory
   ${REPO_ROOT}/lib/TJpgDec/src
   ${REPO_ROOT}/lib
 )

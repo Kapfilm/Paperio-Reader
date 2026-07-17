@@ -75,6 +75,10 @@ class PngStreamDecoder {
   // Returns false when all rows have been produced or on a decode error.
   bool nextRow(uint8_t* grayOut, uint8_t* alphaOut = nullptr);
 
+  // Inflate and reverse-filter the next row without converting it to grayscale.
+  // This preserves PNG filter history for rows discarded by a downscaler.
+  bool skipRow();
+
   // Release buffers. Idempotent; also called by the destructor.
   void end();
 
@@ -84,6 +88,7 @@ class PngStreamDecoder {
   static int idatReadCallback(uzlib_uncomp* uncomp);
   bool findNextIdatChunk();
   bool decodeFilteredRow();  // inflate + reverse-filter into currentRow_
+  void finishRow();
 
   InflateReader reader_;  // MUST be first member (see idatReadCallback)
   FsFile* file_ = nullptr;

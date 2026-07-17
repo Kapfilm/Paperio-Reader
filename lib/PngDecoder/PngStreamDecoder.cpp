@@ -315,6 +315,19 @@ bool PngStreamDecoder::decodeFilteredRow() {
   return true;
 }
 
+void PngStreamDecoder::finishRow() {
+  uint8_t* tmp = previousRow_;
+  previousRow_ = currentRow_;
+  currentRow_ = tmp;
+  rowsProduced_++;
+}
+
+bool PngStreamDecoder::skipRow() {
+  if (!started_ || rowsProduced_ >= height_ || !decodeFilteredRow()) return false;
+  finishRow();
+  return true;
+}
+
 bool PngStreamDecoder::nextRow(uint8_t* grayOut, uint8_t* alphaOut) {
   if (!started_ || rowsProduced_ >= height_) return false;
   if (!decodeFilteredRow()) {
@@ -456,10 +469,6 @@ bool PngStreamDecoder::nextRow(uint8_t* grayOut, uint8_t* alphaOut) {
       break;
   }
 
-  // Current row becomes the previous row for the next scanline's filter.
-  uint8_t* tmp = previousRow_;
-  previousRow_ = currentRow_;
-  currentRow_ = tmp;
-  rowsProduced_++;
+  finishRow();
   return true;
 }

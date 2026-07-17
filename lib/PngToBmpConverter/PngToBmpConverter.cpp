@@ -4,6 +4,7 @@
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <PngStreamDecoder.h>
 
 #include <cstdio>
@@ -21,121 +22,6 @@ constexpr bool USE_ATKINSON = true;
 constexpr bool USE_FLOYD_STEINBERG = false;
 constexpr bool USE_PRESCALE = true;
 // ============================================================================
-
-// BMP writing helpers (same as JpegToBmpConverter)
-inline void write16(Print& out, const uint16_t value) {
-  out.write(value & 0xFF);
-  out.write((value >> 8) & 0xFF);
-}
-
-inline void write32(Print& out, const uint32_t value) {
-  out.write(value & 0xFF);
-  out.write((value >> 8) & 0xFF);
-  out.write((value >> 16) & 0xFF);
-  out.write((value >> 24) & 0xFF);
-}
-
-inline void write32Signed(Print& out, const int32_t value) {
-  out.write(value & 0xFF);
-  out.write((value >> 8) & 0xFF);
-  out.write((value >> 16) & 0xFF);
-  out.write((value >> 24) & 0xFF);
-}
-
-namespace {
-
-void writeBmpHeader8bit(Print& bmpOut, const int width, const int height) {
-  const int bytesPerRow = (width + 3) / 4 * 4;
-  const int imageSize = bytesPerRow * height;
-  const uint32_t paletteSize = 256 * 4;
-  const uint32_t fileSize = 14 + 40 + paletteSize + imageSize;
-
-  bmpOut.write('B');
-  bmpOut.write('M');
-  write32(bmpOut, fileSize);
-  write32(bmpOut, 0);
-  write32(bmpOut, 14 + 40 + paletteSize);
-
-  write32(bmpOut, 40);
-  write32Signed(bmpOut, width);
-  write32Signed(bmpOut, -height);
-  write16(bmpOut, 1);
-  write16(bmpOut, 8);
-  write32(bmpOut, 0);
-  write32(bmpOut, imageSize);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 256);
-  write32(bmpOut, 256);
-
-  for (int i = 0; i < 256; i++) {
-    bmpOut.write(static_cast<uint8_t>(i));
-    bmpOut.write(static_cast<uint8_t>(i));
-    bmpOut.write(static_cast<uint8_t>(i));
-    bmpOut.write(static_cast<uint8_t>(0));
-  }
-}
-
-void writeBmpHeader1bit(Print& bmpOut, const int width, const int height) {
-  const int bytesPerRow = (width + 31) / 32 * 4;
-  const int imageSize = bytesPerRow * height;
-  const uint32_t fileSize = 62 + imageSize;
-
-  bmpOut.write('B');
-  bmpOut.write('M');
-  write32(bmpOut, fileSize);
-  write32(bmpOut, 0);
-  write32(bmpOut, 62);
-
-  write32(bmpOut, 40);
-  write32Signed(bmpOut, width);
-  write32Signed(bmpOut, -height);
-  write16(bmpOut, 1);
-  write16(bmpOut, 1);
-  write32(bmpOut, 0);
-  write32(bmpOut, imageSize);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 2);
-  write32(bmpOut, 2);
-
-  uint8_t palette[8] = {0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x00};
-  for (const uint8_t i : palette) {
-    bmpOut.write(i);
-  }
-}
-
-void writeBmpHeader2bit(Print& bmpOut, const int width, const int height) {
-  const int bytesPerRow = (width * 2 + 31) / 32 * 4;
-  const int imageSize = bytesPerRow * height;
-  const uint32_t fileSize = 70 + imageSize;
-
-  bmpOut.write('B');
-  bmpOut.write('M');
-  write32(bmpOut, fileSize);
-  write32(bmpOut, 0);
-  write32(bmpOut, 70);
-
-  write32(bmpOut, 40);
-  write32Signed(bmpOut, width);
-  write32Signed(bmpOut, -height);
-  write16(bmpOut, 1);
-  write16(bmpOut, 2);
-  write32(bmpOut, 0);
-  write32(bmpOut, imageSize);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 2835);
-  write32(bmpOut, 4);
-  write32(bmpOut, 4);
-
-  uint8_t palette[16] = {0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x00,
-                         0xAA, 0xAA, 0xAA, 0x00, 0xFF, 0xFF, 0xFF, 0x00};
-  for (const uint8_t i : palette) {
-    bmpOut.write(i);
-  }
-}
-
-}  // namespace
 
 bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOut, int targetWidth, int targetHeight,
                                                    bool oneBit, bool crop, bool enforceSizeCap) {
@@ -217,62 +103,60 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
   // Write BMP header with the emitted (cropped) dimensions
   int bytesPerRow;
   if (USE_8BIT_OUTPUT && !oneBit) {
-    writeBmpHeader8bit(bmpOut, finalW, finalH);
-    bytesPerRow = (finalW + 3) / 4 * 4;
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalW, finalH, 8);
   } else if (oneBit) {
-    writeBmpHeader1bit(bmpOut, finalW, finalH);
-    bytesPerRow = (finalW + 31) / 32 * 4;
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalW, finalH, 1);
   } else {
-    writeBmpHeader2bit(bmpOut, finalW, finalH);
-    bytesPerRow = (finalW * 2 + 31) / 32 * 4;
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalW, finalH, 2);
   }
 
-  // Allocate BMP row buffer
-  auto* rowBuffer = static_cast<uint8_t*>(malloc(bytesPerRow));
-  if (!rowBuffer) {
+  auto rowBufferOwner = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
+  if (!rowBufferOwner) {
     LOG_ERR("PNG", "Failed to allocate row buffer");
     return false;
   }
+  uint8_t* rowBuffer = rowBufferOwner.get();
 
-  // Create ditherers (same as JpegToBmpConverter)
-  AtkinsonDitherer* atkinsonDitherer = nullptr;
-  FloydSteinbergDitherer* fsDitherer = nullptr;
-  Atkinson1BitDitherer* atkinson1BitDitherer = nullptr;
+  std::unique_ptr<AtkinsonDitherer> atkinsonOwner;
+  std::unique_ptr<FloydSteinbergDitherer> fsOwner;
+  std::unique_ptr<Atkinson1BitDitherer> atkinson1BitOwner;
 
   if (oneBit) {
-    atkinson1BitDitherer = new Atkinson1BitDitherer(outWidth);
+    atkinson1BitOwner = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(outWidth);
+      atkinsonOwner = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
     } else if (USE_FLOYD_STEINBERG) {
-      fsDitherer = new FloydSteinbergDitherer(outWidth);
+      fsOwner = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
     }
   }
+  AtkinsonDitherer* atkinsonDitherer = atkinsonOwner.get();
+  FloydSteinbergDitherer* fsDitherer = fsOwner.get();
+  Atkinson1BitDitherer* atkinson1BitDitherer = atkinson1BitOwner.get();
 
-  // Scaling accumulators
-  uint32_t* rowAccum = nullptr;
-  uint16_t* rowCount = nullptr;
+  std::unique_ptr<uint32_t[]> rowAccumOwner;
+  std::unique_ptr<uint16_t[]> rowCountOwner;
   int currentOutY = 0;
   uint32_t nextOutY_srcStart = 0;
 
   if (needsScaling) {
-    rowAccum = new uint32_t[outWidth]();
-    rowCount = new uint16_t[outWidth]();
+    rowAccumOwner = makeUniqueNoThrow<uint32_t[]>(outWidth);
+    rowCountOwner = makeUniqueNoThrow<uint16_t[]>(outWidth);
+    if (!rowAccumOwner || !rowCountOwner) {
+      LOG_ERR("PNG", "Failed to allocate scaling buffers");
+      return false;
+    }
     nextOutY_srcStart = scaleY_fp;
   }
+  uint32_t* rowAccum = rowAccumOwner.get();
+  uint16_t* rowCount = rowCountOwner.get();
 
-  // Grayscale row buffer — one source scanline at a time from the decoder.
-  auto* grayRow = static_cast<uint8_t*>(malloc(width));
-  if (!grayRow) {
+  auto grayRowOwner = makeUniqueNoThrow<uint8_t[]>(width);
+  if (!grayRowOwner) {
     LOG_ERR("PNG", "Failed to allocate grayscale row buffer");
-    delete[] rowAccum;
-    delete[] rowCount;
-    delete atkinsonDitherer;
-    delete fsDitherer;
-    delete atkinson1BitDitherer;
-    free(rowBuffer);
     return false;
   }
+  uint8_t* grayRow = grayRowOwner.get();
 
   bool success = true;
 
@@ -416,15 +300,6 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(FsFile& pngFile, Print& bmpOu
     }
   }
 
-  // Clean up
-  free(grayRow);
-  delete[] rowAccum;
-  delete[] rowCount;
-  delete atkinsonDitherer;
-  delete fsDitherer;
-  delete atkinson1BitDitherer;
-  free(rowBuffer);
-
   if (success) {
     LOG_DBG("PNG", "Successfully converted PNG to BMP");
   }
@@ -489,8 +364,7 @@ bool PngDecodeSession::begin(FsFile& pngFile, FsFile& bmpFile, int targetWidth, 
   }
 
   // 1-bit BMP header
-  bytesPerRow_ = (finalW_ + 31) / 32 * 4;
-  writeBmpHeader1bit(bmpFile, finalW_, finalH_);
+  bytesPerRow_ = writeGrayscaleBmpHeader(bmpFile, finalW_, finalH_, 1);
 
   // Allocate buffers
   grayRow_ = static_cast<uint8_t*>(malloc(width_));

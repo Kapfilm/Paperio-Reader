@@ -15,6 +15,8 @@ Fixtures:
                      grayscale BYTECLIP fix (without it the overshoot wraps mod 256).
   contrast_420.gray.pgm  Reference grayscale decode of contrast_420.jpg (Pillow),
                      used as the golden image for the clamp test.
+    progressive_420.jpg Progressive 4:2:0 JPEG with broad tonal regions. Its
+                                         first DC scan is sufficient for a recognizable preview.
 """
 import os
 from PIL import Image, ImageDraw
@@ -49,6 +51,18 @@ save_baseline_420(im, os.path.join(HERE, "contrast_420.jpg"))
 # golden grayscale decode (reference decoder)
 ref = Image.open(os.path.join(HERE, "contrast_420.jpg")).convert("L")
 ref.save(os.path.join(HERE, "contrast_420.gray.pgm"))
+
+# --- progressive_420.jpg : low-frequency regions survive the DC-only preview ---
+W, H = 96, 64
+im = Image.new("RGB", (W, H), (255, 255, 255))
+d = ImageDraw.Draw(im)
+for x in range(W // 2):
+    g = int(255 * x / (W // 2 - 1))
+    d.line([(x, 0), (x, H - 1)], fill=(g, g, g))
+d.rectangle([W // 2, 0, W - 1, H // 2 - 1], fill=(0, 0, 0))
+d.rectangle([W // 2, H // 2, W - 1, H - 1], fill=(255, 255, 255))
+im.save(os.path.join(HERE, "progressive_420.jpg"), "JPEG", quality=92,
+        subsampling=2, progressive=True, optimize=False)
 
 print("Fixtures written to", HERE)
 for f in sorted(os.listdir(HERE)):

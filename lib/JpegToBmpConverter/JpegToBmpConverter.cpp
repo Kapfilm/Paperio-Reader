@@ -4,8 +4,11 @@
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
+#include <ProgressiveJpegDc.h>
 #include <tjpgd.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -24,141 +27,6 @@ constexpr bool USE_NOISE_DITHERING = false;  // Hash-based noise dithering (good
 // Pre-resize to target display size (CRITICAL: avoids dithering artifacts from post-downsampling)
 constexpr bool USE_PRESCALE = true;  // true: scale image to target size before dithering
 // ============================================================================
-
-inline void write16(Print& out, const uint16_t value) {
-  out.write(value & 0xFF);
-  out.write((value >> 8) & 0xFF);
-}
-
-inline void write32(Print& out, const uint32_t value) {
-  out.write(value & 0xFF);
-  out.write((value >> 8) & 0xFF);
-  out.write((value >> 16) & 0xFF);
-  out.write((value >> 24) & 0xFF);
-}
-
-inline void write32Signed(Print& out, const int32_t value) {
-  out.write(value & 0xFF);
-  out.write((value >> 8) & 0xFF);
-  out.write((value >> 16) & 0xFF);
-  out.write((value >> 24) & 0xFF);
-}
-
-// Helper function: Write BMP header with 8-bit grayscale (256 levels)
-void writeBmpHeader8bit(Print& bmpOut, const int width, const int height) {
-  // Calculate row padding (each row must be multiple of 4 bytes)
-  const int bytesPerRow = (width + 3) / 4 * 4;  // 8 bits per pixel, padded
-  const int imageSize = bytesPerRow * height;
-  const uint32_t paletteSize = 256 * 4;  // 256 colors * 4 bytes (BGRA)
-  const uint32_t fileSize = 14 + 40 + paletteSize + imageSize;
-
-  // BMP File Header (14 bytes)
-  bmpOut.write('B');
-  bmpOut.write('M');
-  write32(bmpOut, fileSize);
-  write32(bmpOut, 0);                      // Reserved
-  write32(bmpOut, 14 + 40 + paletteSize);  // Offset to pixel data
-
-  // DIB Header (BITMAPINFOHEADER - 40 bytes)
-  write32(bmpOut, 40);
-  write32Signed(bmpOut, width);
-  write32Signed(bmpOut, -height);  // Negative height = top-down bitmap
-  write16(bmpOut, 1);              // Color planes
-  write16(bmpOut, 8);              // Bits per pixel (8 bits)
-  write32(bmpOut, 0);              // BI_RGB (no compression)
-  write32(bmpOut, imageSize);
-  write32(bmpOut, 2835);  // xPixelsPerMeter (72 DPI)
-  write32(bmpOut, 2835);  // yPixelsPerMeter (72 DPI)
-  write32(bmpOut, 256);   // colorsUsed
-  write32(bmpOut, 256);   // colorsImportant
-
-  // Color Palette (256 grayscale entries x 4 bytes = 1024 bytes)
-  for (int i = 0; i < 256; i++) {
-    bmpOut.write(static_cast<uint8_t>(i));  // Blue
-    bmpOut.write(static_cast<uint8_t>(i));  // Green
-    bmpOut.write(static_cast<uint8_t>(i));  // Red
-    bmpOut.write(static_cast<uint8_t>(0));  // Reserved
-  }
-}
-
-// Helper function: Write BMP header with 1-bit color depth (black and white)
-static void writeBmpHeader1bit(Print& bmpOut, const int width, const int height) {
-  // Calculate row padding (each row must be multiple of 4 bytes)
-  const int bytesPerRow = (width + 31) / 32 * 4;  // 1 bit per pixel, round up to 4-byte boundary
-  const int imageSize = bytesPerRow * height;
-  const uint32_t fileSize = 62 + imageSize;  // 14 (file header) + 40 (DIB header) + 8 (palette) + image
-
-  // BMP File Header (14 bytes)
-  bmpOut.write('B');
-  bmpOut.write('M');
-  write32(bmpOut, fileSize);  // File size
-  write32(bmpOut, 0);         // Reserved
-  write32(bmpOut, 62);        // Offset to pixel data (14 + 40 + 8)
-
-  // DIB Header (BITMAPINFOHEADER - 40 bytes)
-  write32(bmpOut, 40);
-  write32Signed(bmpOut, width);
-  write32Signed(bmpOut, -height);  // Negative height = top-down bitmap
-  write16(bmpOut, 1);              // Color planes
-  write16(bmpOut, 1);              // Bits per pixel (1 bit)
-  write32(bmpOut, 0);              // BI_RGB (no compression)
-  write32(bmpOut, imageSize);
-  write32(bmpOut, 2835);  // xPixelsPerMeter (72 DPI)
-  write32(bmpOut, 2835);  // yPixelsPerMeter (72 DPI)
-  write32(bmpOut, 2);     // colorsUsed
-  write32(bmpOut, 2);     // colorsImportant
-
-  // Color Palette (2 colors x 4 bytes = 8 bytes)
-  // Format: Blue, Green, Red, Reserved (BGRA)
-  // Note: In 1-bit BMP, palette index 0 = black, 1 = white
-  uint8_t palette[8] = {
-      0x00, 0x00, 0x00, 0x00,  // Color 0: Black
-      0xFF, 0xFF, 0xFF, 0x00   // Color 1: White
-  };
-  for (const uint8_t i : palette) {
-    bmpOut.write(i);
-  }
-}
-
-// Helper function: Write BMP header with 2-bit color depth
-static void writeBmpHeader2bit(Print& bmpOut, const int width, const int height) {
-  // Calculate row padding (each row must be multiple of 4 bytes)
-  const int bytesPerRow = (width * 2 + 31) / 32 * 4;  // 2 bits per pixel, round up
-  const int imageSize = bytesPerRow * height;
-  const uint32_t fileSize = 70 + imageSize;  // 14 (file header) + 40 (DIB header) + 16 (palette) + image
-
-  // BMP File Header (14 bytes)
-  bmpOut.write('B');
-  bmpOut.write('M');
-  write32(bmpOut, fileSize);  // File size
-  write32(bmpOut, 0);         // Reserved
-  write32(bmpOut, 70);        // Offset to pixel data
-
-  // DIB Header (BITMAPINFOHEADER - 40 bytes)
-  write32(bmpOut, 40);
-  write32Signed(bmpOut, width);
-  write32Signed(bmpOut, -height);  // Negative height = top-down bitmap
-  write16(bmpOut, 1);              // Color planes
-  write16(bmpOut, 2);              // Bits per pixel (2 bits)
-  write32(bmpOut, 0);              // BI_RGB (no compression)
-  write32(bmpOut, imageSize);
-  write32(bmpOut, 2835);  // xPixelsPerMeter (72 DPI)
-  write32(bmpOut, 2835);  // yPixelsPerMeter (72 DPI)
-  write32(bmpOut, 4);     // colorsUsed
-  write32(bmpOut, 4);     // colorsImportant
-
-  // Color Palette (4 colors x 4 bytes = 16 bytes)
-  // Format: Blue, Green, Red, Reserved (BGRA)
-  uint8_t palette[16] = {
-      0x00, 0x00, 0x00, 0x00,  // Color 0: Black
-      0x55, 0x55, 0x55, 0x00,  // Color 1: Dark gray (85)
-      0xAA, 0xAA, 0xAA, 0x00,  // Color 2: Light gray (170)
-      0xFF, 0xFF, 0xFF, 0x00   // Color 3: White
-  };
-  for (const uint8_t i : palette) {
-    bmpOut.write(i);
-  }
-}
 
 namespace {
 
@@ -325,43 +193,6 @@ static void flushScaledRow(BmpConvertCtx* ctx) {
   ctx->currentOutY++;
 }
 
-// Scans JPEG markers for SOF2 (progressive DCT) — TJpgDec only handles baseline/sequential.
-static bool isProgressiveJpeg(FsFile& file) {
-  file.seek(0);
-  uint8_t buf[2];
-  if (file.read(buf, 2) != 2 || buf[0] != 0xFF || buf[1] != 0xD8) {
-    file.seek(0);
-    return false;
-  }
-  while (file.available() >= 2) {
-    uint8_t b;
-    if (file.read(&b, 1) != 1 || b != 0xFF) break;
-    // skip fill bytes (JPEG allows 0xFF padding before a marker byte)
-    do {
-      if (file.read(&b, 1) != 1) {
-        file.seek(0);
-        return false;
-      }
-    } while (b == 0xFF);
-    const uint8_t marker = b;
-    if (marker == 0xC2) {
-      LOG_DBG("JPG", "Detected progressive JPEG (SOF2)");
-      file.seek(0);
-      return true;
-    }
-    if (marker == 0xC0 || marker == 0xC1 || marker == 0xC3) {
-      file.seek(0);
-      return false;
-    }
-    if (marker == 0xD9) break;
-    if (file.read(buf, 2) != 2) break;
-    const int segLen = (static_cast<int>(buf[0]) << 8) | buf[1];
-    if (segLen < 2 || !file.seek(file.position() + segLen - 2)) break;
-  }
-  file.seek(0);
-  return false;
-}
-
 // TJpgDec output callback — receives one MCU-width × MCU-height block at a time,
 // in left-to-right, top-to-bottom order (baseline JPEG). JRECT is inclusive and the
 // grayscale bitmap is packed tightly at the block width. Accumulates columns into
@@ -448,6 +279,105 @@ int tjpgBmpOutput(JDEC* jd, void* bitmap, JRECT* rect) {
   return ctx->error ? 0 : 1;
 }
 
+static bool progressiveBmpShouldAbort(void*) {
+  if (!CooperativeAbort::shouldAbortLongTask()) return false;
+  CooperativeAbort::markAborted();
+  return true;
+}
+
+static bool progressiveBmpOutput(void* user, uint16_t y, const uint8_t* grayscale, uint16_t width) {
+  auto* ctx = static_cast<BmpConvertCtx*>(user);
+  if (!ctx || ctx->error || width != ctx->outWidth || y >= ctx->outHeight) return false;
+  writeOutputRow(ctx, grayscale, y);
+  return !ctx->error;
+}
+
+static bool decodeProgressiveJpeg(FsFile& jpegFile, Print& bmpOut, int targetWidth, int targetHeight, bool oneBit,
+                                  bool crop, const ProgressiveJpegDc::ImageInfo& image) {
+  constexpr int MAX_IMAGE_WIDTH = 2048;
+  constexpr int MAX_IMAGE_HEIGHT = 3072;
+  if (image.width == 0 || image.height == 0 || image.width > MAX_IMAGE_WIDTH || image.height > MAX_IMAGE_HEIGHT) {
+    return false;
+  }
+
+  int outWidth = image.width;
+  int outHeight = image.height;
+  if (targetWidth > 0 && targetHeight > 0) {
+    const float scaleX = static_cast<float>(targetWidth) / image.width;
+    const float scaleY = static_cast<float>(targetHeight) / image.height;
+    const float scale = crop ? std::max(scaleX, scaleY) : std::min(scaleX, scaleY);
+    outWidth = std::max(1, static_cast<int>(image.width * scale));
+    outHeight = std::max(1, static_cast<int>(image.height * scale));
+  }
+
+  int outCropX = 0;
+  int outCropY = 0;
+  int finalWidth = outWidth;
+  int finalHeight = outHeight;
+  if (crop && targetWidth > 0 && targetHeight > 0) {
+    if (outWidth > targetWidth) {
+      outCropX = (outWidth - targetWidth) / 2;
+      finalWidth = targetWidth;
+    }
+    if (outHeight > targetHeight) {
+      outCropY = (outHeight - targetHeight) / 2;
+      finalHeight = targetHeight;
+    }
+  }
+
+  int bytesPerRow;
+  if (USE_8BIT_OUTPUT && !oneBit) {
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalWidth, finalHeight, 8);
+  } else if (oneBit) {
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalWidth, finalHeight, 1);
+  } else {
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalWidth, finalHeight, 2);
+  }
+
+  BmpConvertCtx ctx = {};
+  ctx.bmpOut = &bmpOut;
+  ctx.srcWidth = outWidth;
+  ctx.srcHeight = outHeight;
+  ctx.outWidth = outWidth;
+  ctx.outHeight = outHeight;
+  ctx.oneBit = oneBit;
+  ctx.bytesPerRow = bytesPerRow;
+  ctx.outCropX = outCropX;
+  ctx.outCropY = outCropY;
+  ctx.finalW = finalWidth;
+  ctx.finalH = finalHeight;
+  auto bmpRow = makeUniqueNoThrow<uint8_t[]>(bytesPerRow);
+  if (!bmpRow) return false;
+  ctx.bmpRow = bmpRow.get();
+
+  std::unique_ptr<Atkinson1BitDitherer> oneBitDitherer;
+  std::unique_ptr<AtkinsonDitherer> atkinsonDitherer;
+  std::unique_ptr<FloydSteinbergDitherer> fsDitherer;
+  if (oneBit) {
+    oneBitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
+    ctx.atkinson1BitDitherer = oneBitDitherer.get();
+  } else if (!USE_8BIT_OUTPUT && USE_ATKINSON) {
+    atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
+    ctx.atkinsonDitherer = atkinsonDitherer.get();
+  } else if (!USE_8BIT_OUTPUT && USE_FLOYD_STEINBERG) {
+    fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
+    ctx.fsDitherer = fsDitherer.get();
+  }
+
+  ProgressiveJpegDc::DecodeOptions options;
+  options.outputWidth = outWidth;
+  options.outputHeight = outHeight;
+  options.shouldAbort = progressiveBmpShouldAbort;
+  const auto result = ProgressiveJpegDc::decode(jpegFile, options, progressiveBmpOutput, &ctx);
+
+  if (result != ProgressiveJpegDc::Result::Ok) {
+    LOG_ERR("JPG", "Progressive JPEG preview failed: %s", ProgressiveJpegDc::resultName(result));
+    return false;
+  }
+  LOG_DBG("JPG", "Progressive JPEG preview decoded: %ux%u -> %dx%d", image.width, image.height, outWidth, outHeight);
+  return true;
+}
+
 }  // namespace
 
 // Internal implementation with configurable target size and bit depth
@@ -455,16 +385,13 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
                                                      bool oneBit, bool crop) {
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
-    return false;
+  ProgressiveJpegDc::ImageInfo image;
+  if (ProgressiveJpegDc::probe(jpegFile, image) == ProgressiveJpegDc::Result::Ok) {
+    return decodeProgressiveJpeg(jpegFile, bmpOut, targetWidth, targetHeight, oneBit, crop, image);
   }
 
-  // TJpgDec decodes baseline only. Progressive thumbnails have no low-RAM path on
-  // this device (JPEGDEC's was only a 1/8 DC-only approximation); skip generation so
-  // the caller falls back to its placeholder.
-  if (isProgressiveJpeg(jpegFile)) {
-    LOG_INF("JPG", "Progressive JPEG — skipping thumbnail generation");
+  if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
+    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
     return false;
   }
 
@@ -592,14 +519,11 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(FsFile& jpegFile, Print& bm
   // Write BMP header with the emitted (cropped) dimensions
   int bytesPerRow;
   if (USE_8BIT_OUTPUT && !oneBit) {
-    writeBmpHeader8bit(bmpOut, finalW, finalH);
-    bytesPerRow = (finalW + 3) / 4 * 4;
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalW, finalH, 8);
   } else if (oneBit) {
-    writeBmpHeader1bit(bmpOut, finalW, finalH);
-    bytesPerRow = (finalW + 31) / 32 * 4;
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalW, finalH, 1);
   } else {
-    writeBmpHeader2bit(bmpOut, finalW, finalH);
-    bytesPerRow = (finalW * 2 + 31) / 32 * 4;
+    bytesPerRow = writeGrayscaleBmpHeader(bmpOut, finalW, finalH, 2);
   }
 
   BmpConvertCtx ctx = {};

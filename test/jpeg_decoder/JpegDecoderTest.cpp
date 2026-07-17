@@ -21,9 +21,11 @@
 #include <string>
 #include <vector>
 
+#include "BitmapHelpers.h"
 #include "HalStorage.h"  // FsFile (stdio-backed shim)
 #include "JpegToBmpConverter.h"
 #include "Print.h"
+#include "ProgressiveJpegDc.h"
 
 #ifndef FIXTURE_DIR
 #define FIXTURE_DIR "."
@@ -146,7 +148,51 @@ int32_t le32(const std::vector<uint8_t>& b, size_t off) {
                               (static_cast<uint32_t>(b[off + 3]) << 24));
 }
 
+uint16_t le16(const std::vector<uint8_t>& bytes, size_t offset) {
+  return static_cast<uint16_t>(bytes[offset] | (bytes[offset + 1] << 8));
+}
+
+struct ProgressiveRows {
+  uint16_t width = 0;
+  uint16_t height = 0;
+  std::vector<uint8_t> pixels;
+
+  static bool accept(void* user, uint16_t y, const uint8_t* row, uint16_t rowWidth) {
+    auto& capture = *static_cast<ProgressiveRows*>(user);
+    if (y != capture.height || (capture.width != 0 && capture.width != rowWidth)) return false;
+    capture.width = rowWidth;
+    capture.height++;
+    capture.pixels.insert(capture.pixels.end(), row, row + rowWidth);
+    return true;
+  }
+};
+
 }  // namespace
+
+TEST(BitmapHelpers, WritesGrayscaleBmpHeaders) {
+  for (const uint8_t bitsPerPixel : {1, 2, 8}) {
+    MemoryPrint output;
+    const int rowBytes = writeGrayscaleBmpHeader(output, 13, 7, bitsPerPixel);
+    const uint32_t colorCount = 1U << bitsPerPixel;
+    const uint32_t pixelOffset = 54 + colorCount * 4;
+
+    ASSERT_EQ(rowBytes, (13 * bitsPerPixel + 31) / 32 * 4);
+    ASSERT_EQ(output.buf.size(), pixelOffset);
+    EXPECT_EQ(output.buf[0], 'B');
+    EXPECT_EQ(output.buf[1], 'M');
+    EXPECT_EQ(le32(output.buf, 10), pixelOffset);
+    EXPECT_EQ(le32(output.buf, 18), 13);
+    EXPECT_EQ(le32(output.buf, 22), -7);
+    EXPECT_EQ(le16(output.buf, 28), bitsPerPixel);
+    EXPECT_EQ(le32(output.buf, 46), colorCount);
+    EXPECT_EQ(output.buf[54], 0);
+    EXPECT_EQ(output.buf[pixelOffset - 4], 255);
+    if (bitsPerPixel == 2) {
+      EXPECT_EQ(output.buf[58], 85);
+      EXPECT_EQ(output.buf[62], 170);
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Bug 1: TJpgDec descales by floor(dim/2^scale). The converter relies on this
@@ -195,6 +241,41 @@ TEST(JpegDecoder, GrayscaleOutputIsClamped) {
   EXPECT_LE(meanDiff, 3.0);
 }
 
+TEST(ProgressiveJpegDc, DecodesFirstScanIntoResizedRows) {
+  FsFile file;
+  ASSERT_TRUE(file.openForRead(fixture("progressive_420.jpg")));
+
+  ProgressiveRows capture;
+  ProgressiveJpegDc::DecodeOptions options;
+  options.outputWidth = 48;
+  options.outputHeight = 32;
+  const auto result = ProgressiveJpegDc::decode(file, options, ProgressiveRows::accept, &capture);
+  file.close();
+
+  ASSERT_EQ(result, ProgressiveJpegDc::Result::Ok) << ProgressiveJpegDc::resultName(result);
+  ASSERT_EQ(capture.width, 48);
+  ASSERT_EQ(capture.height, 32);
+  ASSERT_EQ(capture.pixels.size(), 48u * 32u);
+  EXPECT_LT(capture.pixels[8 * 48 + 40], 80);    // black upper-right region
+  EXPECT_GT(capture.pixels[24 * 48 + 40], 175);  // white lower-right region
+  EXPECT_LT(capture.pixels[16 * 48 + 4], capture.pixels[16 * 48 + 20]);
+}
+
+TEST(ProgressiveJpegDc, RejectsBaselineWithoutEmittingRows) {
+  FsFile file;
+  ASSERT_TRUE(file.openForRead(fixture("contrast_420.jpg")));
+
+  ProgressiveRows capture;
+  ProgressiveJpegDc::DecodeOptions options;
+  options.outputWidth = 48;
+  options.outputHeight = 32;
+  const auto result = ProgressiveJpegDc::decode(file, options, ProgressiveRows::accept, &capture);
+  file.close();
+
+  EXPECT_EQ(result, ProgressiveJpegDc::Result::Unsupported);
+  EXPECT_TRUE(capture.pixels.empty());
+}
+
 // ---------------------------------------------------------------------------
 // Bug 1 end-to-end: the thumbnail converter on an odd-width baseline JPEG that
 // forces a 1/2 DCT pre-scale. Before the floor fix this wrote 0 rows and failed.
@@ -226,6 +307,20 @@ TEST(JpegToBmpConverter, EvenDimensionThumbnailDecodesAllRows) {
   // 96x64 -> target 40x26 forces 1/2 DCT (effSrc 48x32) then fine-scales down.
   const bool ok = JpegToBmpConverter::jpegFileToBmpStreamWithSize(f, out, 40, 26);
   f.close();
+
+  ASSERT_TRUE(ok);
+  ASSERT_GE(out.buf.size(), 70u);
+  EXPECT_EQ(le32(out.buf, 18), 40);
+  EXPECT_EQ(le32(out.buf, 22), -26);
+}
+
+TEST(JpegToBmpConverter, ProgressiveThumbnailDecodesAllRows) {
+  FsFile file;
+  ASSERT_TRUE(file.openForRead(fixture("progressive_420.jpg")));
+
+  MemoryPrint out;
+  const bool ok = JpegToBmpConverter::jpegFileToBmpStreamWithSize(file, out, 40, 26);
+  file.close();
 
   ASSERT_TRUE(ok);
   ASSERT_GE(out.buf.size(), 70u);

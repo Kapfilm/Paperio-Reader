@@ -123,7 +123,9 @@ struct PixelCache {
     const uint16_t magic = PXC_MAGIC;
     uint16_t w16 = (uint16_t)w;
     uint16_t h16 = (uint16_t)h;
-    if (file.write(&magic, 2) != 2 || file.write(&w16, 2) != 2 || file.write(&h16, 2) != 2) {
+    if (file.write(reinterpret_cast<const uint8_t*>(&magic), 2) != 2 ||
+        file.write(reinterpret_cast<const uint8_t*>(&w16), 2) != 2 ||
+        file.write(reinterpret_cast<const uint8_t*>(&h16), 2) != 2) {
       LOG_ERR("IMG", "Failed to write cache header: %s", cachePath.c_str());
       abort();
       return false;

@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include <cstring>
+#include <new>
 
 // 4x4 Bayer matrix for ordered dithering
 inline const uint8_t bayer4x4[4][4] = {
@@ -30,21 +31,22 @@ inline uint8_t applyBayerDither4Level(uint8_t gray, int x, int y) {
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
 class DiffusedBayerDitherer {
  public:
-  explicit DiffusedBayerDitherer(int width) : width(width), errorCurRow(nullptr), errorNextRow(nullptr) {
-    errorCurRow = new int16_t[width + 2]();
-    errorNextRow = new int16_t[width + 2]();
+  explicit DiffusedBayerDitherer(int width) : width(width) {
+    const size_t stride = static_cast<size_t>(width + 2);
+    errorRows = new (std::nothrow) int16_t[stride * 2]();
+    if (errorRows) {
+      errorCurRow = errorRows;
+      errorNextRow = errorRows + stride;
+    }
   }
 
-  ~DiffusedBayerDitherer() {
-    delete[] errorCurRow;
-    delete[] errorNextRow;
-  }
+  ~DiffusedBayerDitherer() { delete[] errorRows; }
 
   DiffusedBayerDitherer(const DiffusedBayerDitherer&) = delete;
   DiffusedBayerDitherer& operator=(const DiffusedBayerDitherer&) = delete;
 
   uint8_t processPixel(int gray, int x, int screenX, int screenY) {
-    int adjusted = gray + errorCurRow[x + 1];
+    int adjusted = gray + (errorRows ? errorCurRow[x + 1] : 0);
     if (adjusted < 0) adjusted = 0;
     if (adjusted > 255) adjusted = 255;
 
@@ -53,6 +55,7 @@ class DiffusedBayerDitherer {
     if (thresholdAdjusted > 255) thresholdAdjusted = 255;
 
     uint8_t quantized = quantizeGray4Level((uint8_t)thresholdAdjusted);
+    if (!errorRows) return quantized;
     int quantizedValue = quantized * 85;
     int error = adjusted - quantizedValue;
 
@@ -65,6 +68,7 @@ class DiffusedBayerDitherer {
   }
 
   void nextRow() {
+    if (!errorRows) return;
     int16_t* tmp = errorCurRow;
     errorCurRow = errorNextRow;
     errorNextRow = tmp;
@@ -72,13 +76,15 @@ class DiffusedBayerDitherer {
   }
 
   void reset() {
+    if (!errorRows) return;
     memset(errorCurRow, 0, (width + 2) * sizeof(int16_t));
     memset(errorNextRow, 0, (width + 2) * sizeof(int16_t));
   }
 
  private:
   int width;
-  int16_t* errorCurRow;
-  int16_t* errorNextRow;
+  int16_t* errorRows{nullptr};
+  int16_t* errorCurRow{nullptr};
+  int16_t* errorNextRow{nullptr};
 };
 #endif
