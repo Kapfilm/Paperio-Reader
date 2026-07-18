@@ -96,6 +96,13 @@ class HalDisplay {
   // Returns true when the secondary (previous-frame) buffer is allocated.
   bool hasSecondaryBuffer() const;
 
+  // Borrow/return variant of release/realloc: the display drops to the same
+  // single-buffer mode, but the block stays owned by the display and is lent to
+  // the caller as scratch — it never enters the heap, so nothing can allocate
+  // inside it and returnSecondaryBuffer() cannot fail. See FreeInkDisplay.
+  uint8_t* borrowSecondaryBuffer(size_t* size);
+  bool returnSecondaryBuffer();
+
   // Allow fast differential refresh to continue (X4) after the secondary buffer
   // is released, diffing against the controller's retained RED-RAM baseline
   // instead of downgrading to half/full. See EInkDisplay::setSingleBufferFastDiff

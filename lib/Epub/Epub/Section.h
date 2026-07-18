@@ -12,6 +12,7 @@ class Page;
 class GfxRenderer;
 class ChapterHtmlSlimParser;
 class CssParser;
+class BuildArena;
 
 class Section {
   std::shared_ptr<Epub> epub;
@@ -52,6 +53,8 @@ class Section {
   // In-flight incremental build, owned across stepSectionBuild() calls. Null when no build
   // is live. Heap-owned so the visitor's &lut capture stays stable across ticks.
   std::unique_ptr<BuildState> buildState_;
+  // See setExternalBuildScratch. Not owned; must outlive any active build.
+  BuildArena* externalScratch_ = nullptr;
   // Outcome of one phase method. Mostly maps to BuildStep: More means the phase yielded
   // mid-way after spending its time budget; RetryNoCss asks the entry function to tear the
   // state down and restart from setup with embeddedStyle=false.
@@ -153,6 +156,13 @@ class Section {
                              const std::function<void(int)>& progressFn = {}, bool skipEviction = false);
   // True while an incremental build is in flight (stepSectionBuild returned More).
   bool hasActiveBuild() const { return static_cast<bool>(buildState_); }
+  // Optional external scratch region for the build's arena (arena builds only;
+  // ignored otherwise): typically the borrowed secondary framebuffer, so build
+  // scratch never touches — or fragments — the heap. The region must stay valid
+  // until the build completes or is aborted; it is reset (not freed) per build.
+  // Call before the first stepSectionBuild/createSectionFile of a build; a null
+  // pointer reverts to the internal heap-backed arena.
+  void setExternalBuildScratch(BuildArena* scratch) { externalScratch_ = scratch; }
   // Percent of the spine XHTML consumed by the in-flight build (0–100; 100 once the
   // stream is exhausted and only Finalize remains). 0 when no build is live. Feeds the
   // DEBUG_BACKGROUND_WORK overlay.

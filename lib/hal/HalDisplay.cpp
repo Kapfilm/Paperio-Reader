@@ -155,6 +155,19 @@ bool HalDisplay::reallocSecondaryBuffer() {
 
 bool HalDisplay::hasSecondaryBuffer() const { return einkDisplay.hasSecondaryBuffer(); }
 
+uint8_t* HalDisplay::borrowSecondaryBuffer(size_t* size) {
+  uint8_t* buf = einkDisplay.borrowSecondaryBuffer(size);
+  LOG_INF("FBUF", "borrowSecondary -> %d (size=%lu hasSecondary=%d)", buf ? 1 : 0,
+          static_cast<unsigned long>(buf && size ? *size : 0), einkDisplay.hasSecondaryBuffer() ? 1 : 0);
+  return buf;
+}
+
+bool HalDisplay::returnSecondaryBuffer() {
+  const bool ok = einkDisplay.returnSecondaryBuffer();
+  LOG_INF("FBUF", "returnSecondary -> %d (hasSecondary=%d)", ok ? 1 : 0, einkDisplay.hasSecondaryBuffer() ? 1 : 0);
+  return ok;
+}
+
 void HalDisplay::setSingleBufferFastDiff(bool enabled) {
   LOG_INF("FBUF", "singleBufferFastDiff=%d (hasSecondary=%d redSynced=%d)", enabled ? 1 : 0,
           einkDisplay.hasSecondaryBuffer() ? 1 : 0, einkDisplay.isRedRamSynced() ? 1 : 0);
