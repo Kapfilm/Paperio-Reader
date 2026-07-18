@@ -1,6 +1,7 @@
 #include "ZipFile.h"
 
 #include <BufferedFileIO.h>
+#include <BuildArena.h>
 #include <HalStorage.h>
 #include <InflateReader.h>
 #include <Logging.h>
@@ -723,6 +724,10 @@ size_t ZipFile::readBytesFromStat(const FileStatSlim& fileStat, uint8_t* outBuf,
 struct ZipFile::EntryReader::Impl {
   ZipFile& zf;
   size_t chunkSize;
+  // Optional arena backing (see EntryReader ctor doc): readBuf + inflate ring
+  // are carved from it under one mark taken at open(), released in reset().
+  BuildArena* arena = nullptr;
+  size_t arenaMark = 0;
 
   uint16_t method = 0;  // ZIP_METHOD_STORED or ZIP_METHOD_DEFLATED
   FsFile file;
@@ -738,17 +743,18 @@ struct ZipFile::EntryReader::Impl {
   ZipInflateCtx ctx = {};
   uint8_t* readBuf = nullptr;
 
-  explicit Impl(ZipFile& zf_, size_t chunkSize_) : zf(zf_), chunkSize(chunkSize_) {}
+  explicit Impl(ZipFile& zf_, size_t chunkSize_, BuildArena* arena_) : zf(zf_), chunkSize(chunkSize_), arena(arena_) {}
   ~Impl() { reset(); }
   Impl(const Impl&) = delete;
   Impl& operator=(const Impl&) = delete;
 
   void reset() {
     if (readBuf) {
-      ctx.reader.deinit();
-      free(readBuf);
+      ctx.reader.deinit();  // external ring: deinit only clears state, no free
+      if (!arena) free(readBuf);
       readBuf = nullptr;
     }
+    if (arena) arena->release(arenaMark);
     ctx.file = nullptr;
     ctx.fileRemaining = 0;
     ctx.readBuf = nullptr;
@@ -763,7 +769,8 @@ struct ZipFile::EntryReader::Impl {
   }
 };
 
-ZipFile::EntryReader::EntryReader(ZipFile& zf, const size_t chunkSize) : impl_(std::make_unique<Impl>(zf, chunkSize)) {}
+ZipFile::EntryReader::EntryReader(ZipFile& zf, const size_t chunkSize, BuildArena* arena)
+    : impl_(std::make_unique<Impl>(zf, chunkSize, arena)) {}
 
 ZipFile::EntryReader::~EntryReader() = default;
 ZipFile::EntryReader::EntryReader(EntryReader&&) noexcept = default;
@@ -798,7 +805,9 @@ bool ZipFile::EntryReader::open(const char* filename) {
   }
 
   if (fileStat.method == ZIP_METHOD_DEFLATED) {
-    impl_->readBuf = static_cast<uint8_t*>(malloc(impl_->chunkSize));
+    if (impl_->arena) impl_->arenaMark = impl_->arena->mark();
+    impl_->readBuf = impl_->arena ? static_cast<uint8_t*>(impl_->arena->alloc(impl_->chunkSize))
+                                  : static_cast<uint8_t*>(malloc(impl_->chunkSize));
     if (!impl_->readBuf) {
       LOG_ERR("ZIP", "EntryReader::open: OOM allocating read buffer");
       impl_->file.close();
@@ -810,10 +819,19 @@ bool ZipFile::EntryReader::open(const char* filename) {
     impl_->ctx.readBufSize = impl_->chunkSize;
     // Ring sized to the entry (≤32 KB): small chapters cost a small ring, which is what
     // makes holding the reader across background-build slices affordable.
-    if (!impl_->ctx.reader.init(true, fileStat.uncompressedSize)) {
+    bool ringOk;
+    if (impl_->arena) {
+      const size_t ringSize = InflateReader::ringSizeFor(fileStat.uncompressedSize);
+      auto* ring = static_cast<uint8_t*>(impl_->arena->alloc(ringSize));
+      ringOk = ring && impl_->ctx.reader.initWithExternalRing(ring, ringSize);
+    } else {
+      ringOk = impl_->ctx.reader.init(true, fileStat.uncompressedSize);
+    }
+    if (!ringOk) {
       LOG_ERR("ZIP", "EntryReader::open: OOM initialising inflate ring buffer");
-      free(impl_->readBuf);
+      if (!impl_->arena) free(impl_->readBuf);
       impl_->readBuf = nullptr;
+      if (impl_->arena) impl_->arena->release(impl_->arenaMark);
       impl_->file.close();
       return false;
     }

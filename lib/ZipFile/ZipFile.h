@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+class BuildArena;
+
 class ZipFile {
  public:
   struct FileStatSlim {
@@ -113,7 +115,12 @@ class ZipFile {
   // Non-copyable; movable.
   class EntryReader {
    public:
-    explicit EntryReader(ZipFile& zf, size_t chunkSize = 1024);
+    // arena (optional): carve the read buffer AND the inflate ring from the
+    // given BuildArena instead of malloc. The reader takes an arena mark at
+    // open() and releases it on close()/reset(), so callers must not interleave
+    // their own arena allocations with an open reader's lifetime (LIFO scoping).
+    // Budget per open: chunkSize + InflateReader::ringSizeFor(entrySize) + alignment.
+    explicit EntryReader(ZipFile& zf, size_t chunkSize = 1024, BuildArena* arena = nullptr);
     ~EntryReader();
     EntryReader(EntryReader&&) noexcept;
     EntryReader& operator=(EntryReader&&) noexcept;
