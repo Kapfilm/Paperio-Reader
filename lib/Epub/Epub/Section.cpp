@@ -13,10 +13,11 @@
 // Phase-2 migration flag (docs/compiled-book-pipeline-plan.md): 1 routes the
 // build's scratch buffers through a preallocated BuildArena, 0 keeps the
 // legacy per-site new/realloc path. Host golden tests build BOTH modes and
-// must dump byte-identically; firmware default stays legacy until the arena
-// path is device-validated.
+// must dump byte-identically. Default is arena since the 2026-07-18 device
+// validation (X3: highWater=9216/10240, failedAlloc=0, build time neutral);
+// the legacy path remains selectable for A/B until its sites are deleted.
 #ifndef EPUB_BUILD_ARENA
-#define EPUB_BUILD_ARENA 0
+#define EPUB_BUILD_ARENA 1
 #endif
 #if EPUB_BUILD_ARENA
 #include <BuildArena.h>
