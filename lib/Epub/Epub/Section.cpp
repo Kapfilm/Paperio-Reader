@@ -765,6 +765,7 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
       // PARSE_CHUNK_BYTES scratch — net-neutral vs the old one-shot path.
       st.zip.reset(new (std::nothrow) ZipFile(epub->getPath()));
       if (st.zip) {
+        epub->primeZip(*st.zip);  // reuse the book's cached EOCD details (skip the rescan)
         st.reader.reset(new (std::nothrow) ZipFile::EntryReader(*st.zip, PARSE_CHUNK_BYTES));
       }
       if (!st.reader) {
@@ -1085,6 +1086,13 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   LOG_INF("SCT",
           "createSectionFile spine=%d done: total=%ums (stream=%u setup=%u parse=%u finalize=%u) pages=%u bytes=%u",
           spineIndex, totalMs, streamMs, st.setupMs, st.parseMs, finalizeMs, pageCount, fileSize);
+#if EPUB_BUILD_ARENA
+  // Device A/B telemetry: proves which mode a build ran in and how much of the
+  // arena budget it actually used (plan Phase 2 exit data).
+  LOG_INF("SCT", "createSectionFile spine=%d arena: cap=%u highWater=%u failedAlloc=%u", spineIndex,
+          static_cast<uint32_t>(st.parseArena.capacity()), static_cast<uint32_t>(st.parseArena.highWater()),
+          static_cast<uint32_t>(st.parseArena.failedAllocSize()));
+#endif
   return BuildPhaseResult::Done;
 }
 

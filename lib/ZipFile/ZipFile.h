@@ -146,6 +146,16 @@ class ZipFile {
     std::unique_ptr<Impl> impl_;
   };
 
+  // EOCD scan-cache plumbing: every ZipFile instance normally re-runs the
+  // (backward-scanning, ~4 KB-read) EOCD search on first use. Callers that
+  // construct many short-lived instances over the same archive (Epub does, per
+  // item read) can harvest details() after a successful operation and seed the
+  // next instance, eliminating the repeated scans (~15 per book-open observed).
+  const ZipDetails& details() const { return zipDetails; }
+  void seedDetails(const ZipDetails& d) {
+    if (d.isSet && !zipDetails.isSet) zipDetails = d;
+  }
+
   // Content fingerprint of the archive: FNV-1a 64 over every central-directory
   // entry's name bytes, CRC-32, uncompressed size, compression method and
   // local-header offset, plus the entry count. One sequential walk of the
