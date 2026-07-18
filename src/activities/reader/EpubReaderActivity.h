@@ -8,6 +8,7 @@
 #define ENABLE_BENCHMARKS 0
 #endif
 
+#include <BuildArena.h>
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
@@ -153,6 +154,15 @@ class EpubReaderActivity final : public Activity {
   };
 
   std::shared_ptr<Epub> epub;
+  // Build scratch backed by the borrowed secondary framebuffer (see the Background-C
+  // release site). Handed to section->setExternalBuildScratch() so build allocations
+  // land inside the lent block instead of the heap — nothing can allocate in the region,
+  // so the return can never fail on a fragmented hole. Declared BEFORE `section`: the
+  // section (whose in-flight build releases into this arena) must destroy first.
+  std::unique_ptr<BuildArena> buildScratch_;
+  // True while the secondary framebuffer is lent to buildScratch_ (borrowed, not freed).
+  // Gates the returnSecondaryBuffer() path in recoverSecondaryBufferIfNeeded()/onExit.
+  bool secondaryBorrowed_ = false;
   std::unique_ptr<Section> section = nullptr;
   int currentSpineIndex = 0;
   NavigationTarget navTarget;
