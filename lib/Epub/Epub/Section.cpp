@@ -21,6 +21,7 @@
 #endif
 #if EPUB_BUILD_ARENA
 #include <BuildArena.h>
+#include <InflateReader.h>
 #endif
 
 #include <algorithm>
@@ -467,6 +468,17 @@ struct Section::BuildState {
   // (reader holds a reference to it). chunkBuf (PARSE_CHUNK_BYTES) is the feed buffer —
   // heap because it must survive across slices. The inflate ring inside the reader is
   // sized to the entry (≤32 KB).
+#if EPUB_BUILD_ARENA
+  // Entry-sized arena hosting the EntryReader's readBuf + inflate ring during
+  // phase (a) only. Created at reader-open time — the ring is entry-sized, so a
+  // fixed prealloc would demand a ~44 KB contiguous block that resident builds
+  // (contig ~29 KB while reading) cannot provide. Declared BEFORE zip/reader:
+  // members destroy in reverse order, and the reader's teardown releases into
+  // this arena, so it must outlive both.
+  std::unique_ptr<BuildArena> zipArena;
+  // Peak use of the (destroyed-by-log-time) zipArena, for the done-telemetry.
+  uint32_t zipArenaHighWater = 0;
+#endif
   std::unique_ptr<ZipFile> zip;
   std::unique_ptr<ZipFile::EntryReader> reader;
   // Raw view of the feed buffer; backed by parseArena (arena mode) or chunkOwner
@@ -476,6 +488,11 @@ struct Section::BuildState {
   BuildArena parseArena{SCT_PARSE_ARENA_BYTES};
   // Cursor snapshot taken before the extraction-scope grow; released to shrink.
   size_t chunkMark = 0;
+  void dropZipArena() {
+    if (!zipArena) return;
+    zipArenaHighWater = static_cast<uint32_t>(zipArena->highWater());
+    zipArena.reset();
+  }
 #else
   std::unique_ptr<uint8_t[]> chunkOwner;
 #endif
@@ -767,7 +784,23 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
       st.zip.reset(new (std::nothrow) ZipFile(epub->getPath()));
       if (st.zip) {
         epub->primeZip(*st.zip);  // reuse the book's cached EOCD details (skip the rescan)
+#if EPUB_BUILD_ARENA
+        // One entry-sized block for the reader's readBuf + inflate ring, alive
+        // only through phase (a) — same total bytes as the legacy separate
+        // allocations, but a single arena scope the reader releases on close.
+        const size_t zipArenaBytes =
+            PARSE_CHUNK_BYTES + InflateReader::ringSizeFor(st.inflatedSize) + 2 * alignof(std::max_align_t);
+        st.zipArena = makeUniqueNoThrow<BuildArena>(zipArenaBytes);
+        if (st.zipArena && st.zipArena->valid()) {
+          st.reader.reset(new (std::nothrow) ZipFile::EntryReader(*st.zip, PARSE_CHUNK_BYTES, st.zipArena.get()));
+        } else {
+          LOG_ERR("SCT", "Failed to allocate ZIP arena (%u bytes, free=%lu)", static_cast<uint32_t>(zipArenaBytes),
+                  esp_get_free_heap_size());
+          st.zipArena.reset();
+        }
+#else
         st.reader.reset(new (std::nothrow) ZipFile::EntryReader(*st.zip, PARSE_CHUNK_BYTES));
+#endif
       }
       if (!st.reader) {
         LOG_ERR("SCT", "Failed to allocate entry reader (%u bytes scratch, free=%lu)",
@@ -821,6 +854,9 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
     }
     st.reader.reset();
     st.zip.reset();
+#if EPUB_BUILD_ARENA
+    st.dropZipArena();
+#endif
     st.tempFile.flush();
     st.tempFile.close();
     st.extractDone = true;
@@ -902,6 +938,9 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
   // extraction) and the temp file before the visitor finalizes.
   st.reader.reset();
   st.zip.reset();
+#if EPUB_BUILD_ARENA
+  st.dropZipArena();
+#endif
   st.dropChunk();
   if (st.tempFile) {
     st.tempFile.close();
@@ -1089,10 +1128,11 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
           spineIndex, totalMs, streamMs, st.setupMs, st.parseMs, finalizeMs, pageCount, fileSize);
 #if EPUB_BUILD_ARENA
   // Device A/B telemetry: proves which mode a build ran in and how much of the
-  // arena budget it actually used (plan Phase 2 exit data).
-  LOG_INF("SCT", "createSectionFile spine=%d arena: cap=%u highWater=%u failedAlloc=%u", spineIndex,
+  // arena budgets it actually used (plan Phase 2 exit data). zipHW is the
+  // entry-sized phase-(a) arena's peak (0 = reused-HTML path, no ZIP state).
+  LOG_INF("SCT", "createSectionFile spine=%d arena: cap=%u highWater=%u failedAlloc=%u zipHW=%u", spineIndex,
           static_cast<uint32_t>(st.parseArena.capacity()), static_cast<uint32_t>(st.parseArena.highWater()),
-          static_cast<uint32_t>(st.parseArena.failedAllocSize()));
+          static_cast<uint32_t>(st.parseArena.failedAllocSize()), st.zipArenaHighWater);
 #endif
   return BuildPhaseResult::Done;
 }
