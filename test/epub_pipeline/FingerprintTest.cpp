@@ -24,7 +24,10 @@ struct FingerprintFixture : testing::Test {
   std::string cacheDir;
 
   void SetUp() override {
-    work = fs::temp_directory_path() / "epub_fingerprint_test";
+    // Per-test dir: ctest -j runs these cases as parallel processes, so a
+    // shared path would make them clobber each other's caches.
+    work = fs::temp_directory_path() /
+           (std::string("epub_fingerprint_") + testing::UnitTest::GetInstance()->current_test_info()->name());
     fs::remove_all(work);
     fs::create_directories(work);
     bookPath = work / "book.epub";
