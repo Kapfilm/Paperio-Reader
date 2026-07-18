@@ -80,8 +80,15 @@ Replace the path-hash-only cache key (`Epub.h:56-59`) with a fingerprint of the
 ZIP central directory (offset+size+CRC roll over entry records — the EOCD scan
 already runs at open, cf. commit `4ff23fbb`).
 
-Steps: compute fingerprint at open; store in `book.bin` header; mismatch ⇒ treat
-whole cache dir as stale (delete + rebuild). Keep per-artifact versions for now.
+Steps: compute fingerprint at open; store it in a `fingerprint.bin` sidecar in
+the cache dir (deviation from the original book.bin-header idea: identical
+semantics, much smaller diff — no header-offset arithmetic or version bump, and
+pre-fingerprint caches are adopted on first sight instead of mass-invalidated
+on firmware upgrade); mismatch ⇒ treat whole cache dir as stale (delete +
+rebuild). Keep per-artifact versions for now. The central-directory walk MUST
+be buffered (BufferedFileReader): unbuffered it is ~12 FsFile calls/entry at
+~1.5 ms each on device — seconds for a 1000-entry book, vs a handful of 4 KB
+sequential reads buffered.
 
 - Functionality: goldens unchanged (no layout change). New unit tests:
   (a) same path, different content ⇒ stale detected; (b) mtime-only touch ⇒

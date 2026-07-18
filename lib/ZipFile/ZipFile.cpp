@@ -1,5 +1,6 @@
 #include "ZipFile.h"
 
+#include <BufferedFileIO.h>
 #include <HalStorage.h>
 #include <InflateReader.h>
 #include <Logging.h>
@@ -289,32 +290,34 @@ bool ZipFile::contentFingerprint(uint64_t* out) {
   };
   const auto mixPod = [&mixBytes](const auto v) { mixBytes(&v, sizeof(v)); };
 
+  // Buffered walk: the per-entry field reads below would otherwise be ~12
+  // separate FsFile calls per entry (~1.5 ms each on device — seconds for a
+  // 1000+-entry book). Through the 4 KB window they collapse into a few
+  // sequential SD reads; the per-entry skips stay inside the window for free.
   file.seek(zipDetails.centralDirOffset);
+  serialization::BufferedFileReader reader(file);
   char nameBuf[256];
   uint32_t entries = 0;
   uint32_t sig;
-  while (file.available()) {
-    if (file.read(&sig, 4) != 4 || sig != 0x02014b50) break;
-    file.seekCur(6);  // versionMadeBy, versionNeeded, flags
-    uint16_t method;
-    file.read(&method, 2);
-    file.seekCur(4);  // DOS mod time + date: excluded so a content-identical re-zip matches
+  while (reader.readPod(sig) && sig == 0x02014b50) {
+    reader.seek(reader.position() + 6);  // versionMadeBy, versionNeeded, flags
+    uint16_t method, nameLen, extraLen, commentLen;
     uint32_t crc32, compSz, uncompSz, localOff;
-    file.read(&crc32, 4);
-    file.read(&compSz, 4);
-    file.read(&uncompSz, 4);
-    uint16_t nameLen, extraLen, commentLen;
-    file.read(&nameLen, 2);
-    file.read(&extraLen, 2);
-    file.read(&commentLen, 2);
-    file.seekCur(8);  // disk#, internal attrs, external attrs
-    file.read(&localOff, 4);
+    if (!reader.readPod(method)) return false;
+    // DOS mod time + date: excluded so a content-identical re-zip matches
+    reader.seek(reader.position() + 4);
+    if (!reader.readPod(crc32) || !reader.readPod(compSz) || !reader.readPod(uncompSz) || !reader.readPod(nameLen) ||
+        !reader.readPod(extraLen) || !reader.readPod(commentLen)) {
+      return false;
+    }
+    reader.seek(reader.position() + 8);  // disk#, internal attrs, external attrs
+    if (!reader.readPod(localOff)) return false;
 
     // Name in bounded chunks: entry names may exceed the stack buffer.
     size_t nameRemaining = nameLen;
     while (nameRemaining > 0) {
       const size_t take = nameRemaining < sizeof(nameBuf) ? nameRemaining : sizeof(nameBuf);
-      if (file.read(nameBuf, take) != static_cast<int>(take)) return false;
+      if (!reader.read(nameBuf, take)) return false;
       mixBytes(nameBuf, take);
       nameRemaining -= take;
     }
@@ -324,7 +327,7 @@ bool ZipFile::contentFingerprint(uint64_t* out) {
     mixPod(localOff);
     entries++;
 
-    file.seekCur(extraLen + commentLen);
+    reader.seek(reader.position() + extraLen + commentLen);
   }
   mixPod(entries);
   *out = hash;
