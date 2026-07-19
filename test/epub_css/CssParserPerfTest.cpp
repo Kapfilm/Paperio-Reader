@@ -540,6 +540,57 @@ TEST(CssParserArena, IndexOnlyFallbackMatchesHeapResolution) {
   std::filesystem::remove(cssPath);
 }
 
+// The resident path must actually HIT for element, class, and combined selectors — not just
+// agree with the heap path (which both-miss on unmatched probes would trivially satisfy). Asserts
+// each probe returns the styled (non-default) value AND equals the heap resolution.
+TEST(CssParserArena, ResidentHitsElementClassAndCombinedSelectors) {
+  const std::string css =
+      "p { margin-top: 5px; }\n"
+      ".note { text-align: center; }\n"
+      "div.warn { font-weight: bold; }\n";
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile f;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), f));
+    ASSERT_TRUE(parser.loadFromStream(f));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  BuildArena arena(64 * 1024);
+  ASSERT_TRUE(arena.valid());
+  parser.clear();
+  parser.setIndexArena(&arena);
+  parser.setLeanResolve(true);
+  ASSERT_TRUE(parser.loadFromCache());
+
+  // Element selector "p" must hit.
+  const CssStyle p = parser.resolveStyle("p", "");
+  EXPECT_TRUE(p.hasMarginTop()) << "resident MISS on element selector 'p'";
+  // Class selector ".note" must hit.
+  const CssStyle note = parser.resolveStyle("span", "note");
+  EXPECT_TRUE(note.hasTextAlign()) << "resident MISS on class selector '.note'";
+  EXPECT_EQ(note.textAlign, CssTextAlign::Center);
+  // Combined "div.warn" must hit.
+  const CssStyle warn = parser.resolveStyle("div", "warn");
+  EXPECT_TRUE(warn.hasFontWeight()) << "resident MISS on combined selector 'div.warn'";
+  EXPECT_EQ(warn.fontWeight, CssFontWeight::Bold);
+  // A genuine non-match must still miss.
+  const CssStyle none = parser.resolveStyle("h1", "absent");
+  EXPECT_FALSE(none.hasMarginTop());
+  EXPECT_FALSE(none.hasTextAlign());
+
+  const auto stats = parser.getResolveStats();
+  EXPECT_GT(stats.diskHits, 0u) << "resident produced zero hits for matching selectors";
+  parser.clear();
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
 // The sparse codec must round-trip EVERY style field, not just the margins/font-size the other
 // fixtures exercise. Resolve a rule that sets a diverse spread of properties through the resident
 // (compress-on-load, decompress-on-lookup) path and require it byte-identical to the heap path.
