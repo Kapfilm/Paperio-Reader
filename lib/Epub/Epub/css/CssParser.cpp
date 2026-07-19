@@ -7,8 +7,13 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstring>
 #include <new>
 #include <string_view>
+
+// Sparse resident-style codec (defined below, used by lookupRule before its definition).
+static size_t compressStyle(const CssStyle& s, uint8_t* out);
+static void decompressStyle(const uint8_t* in, CssStyle& out);
 
 namespace {
 
@@ -1405,8 +1410,8 @@ bool CssParser::lookupRule(const std::string& selector, CssStyle& outStyle, cons
       const ResidentEntry* end = arenaResident_ + cachedRuleCount_;
       auto it = std::lower_bound(begin, end, h, [](const ResidentEntry& e, uint32_t key) { return e.hash < key; });
       if (it != end && it->hash == h) {
-        outStyle = arenaStylePool_[it->styleIdx];  // deduplicated distinct style
-        resolveStats_.diskHits++;                  // resolved from the (in-RAM) ruleset
+        decompressStyle(arenaStylePool_ + it->styleOff + 1, outStyle);  // +1 skips the length prefix
+        resolveStats_.diskHits++;                                       // resolved from the (in-RAM) ruleset
         return true;
       }
       return false;  // cheap re-scan next time; no negative cache needed in RAM
@@ -1551,40 +1556,160 @@ bool CssParser::ensureCacheIndexLoaded() const {
   return true;
 }
 
-// Whether two decoded styles are byte-for-byte equivalent, so identical rules share one pool
-// entry. Compares every rendering-relevant value plus the explicit-set flags (a plain memcmp
-// would trip over CssStyle's struct padding).
-static bool cssStyleEquals(const CssStyle& a, const CssStyle& b) {
-  const auto len = [](const CssLength& x, const CssLength& y) { return x.value == y.value && x.unit == y.unit; };
-  const CssPropertyFlags& da = a.defined;
-  const CssPropertyFlags& db = b.defined;
-  return a.textAlign == b.textAlign && a.fontStyle == b.fontStyle && a.fontWeight == b.fontWeight &&
-         a.textDecoration == b.textDecoration && a.display == b.display && a.verticalAlign == b.verticalAlign &&
-         a.listStyleNone == b.listStyleNone && a.pageBreakBefore == b.pageBreakBefore &&
-         a.pageBreakAfter == b.pageBreakAfter && a.cssFloat == b.cssFloat && a.smallCaps == b.smallCaps &&
-         a.lineHeightMultiplier == b.lineHeightMultiplier && a.fontSizeMultiplier == b.fontSizeMultiplier &&
-         len(a.textIndent, b.textIndent) && len(a.marginTop, b.marginTop) && len(a.marginBottom, b.marginBottom) &&
-         len(a.marginLeft, b.marginLeft) && len(a.marginRight, b.marginRight) && len(a.paddingTop, b.paddingTop) &&
-         len(a.paddingBottom, b.paddingBottom) && len(a.paddingLeft, b.paddingLeft) &&
-         len(a.paddingRight, b.paddingRight) && len(a.imageHeight, b.imageHeight) && len(a.imageWidth, b.imageWidth) &&
-         da.textAlign == db.textAlign && da.fontStyle == db.fontStyle && da.fontWeight == db.fontWeight &&
-         da.textDecoration == db.textDecoration && da.textIndent == db.textIndent && da.marginTop == db.marginTop &&
-         da.marginBottom == db.marginBottom && da.marginLeft == db.marginLeft && da.marginRight == db.marginRight &&
-         da.paddingTop == db.paddingTop && da.paddingBottom == db.paddingBottom && da.paddingLeft == db.paddingLeft &&
-         da.paddingRight == db.paddingRight && da.imageHeight == db.imageHeight && da.imageWidth == db.imageWidth &&
-         da.display == db.display && da.verticalAlign == db.verticalAlign && da.listStyleNone == db.listStyleNone &&
-         da.pageBreakBefore == db.pageBreakBefore && da.pageBreakAfter == db.pageBreakAfter &&
-         da.lineHeight == db.lineHeight && da.fontSizeMultiplier == db.fontSizeMultiplier &&
-         da.cssFloat == db.cssFloat && da.smallCaps == db.smallCaps;
+// --- Sparse CssStyle compression for the resident pool ---
+// A style is serialized to a canonical, SPARSE record: only the fields the 'defined' mask
+// flags are written (a real rule sets a handful of 24 properties). Because the encoding is
+// canonical, two equivalent styles produce identical bytes, so dedup is a memcmp — and lookup
+// decompresses back to a full CssStyle. Values are copied with memcpy so the byte-packed
+// (unaligned) records are safe to read on the C3.
+
+// Worst case: 4 (mask) + 2 (packed enums) + 11 lengths * 5 + 2 multipliers * 4 = 69 bytes.
+constexpr size_t kMaxCompressedStyle = 4 + 2 + 11 * 5 + 2 * 4;
+
+// Canonical 24-bit "which properties are set" mask. Bit order is the pool's dedup key and must
+// stay stable within a build (the pool is rebuilt each load, so it never persists to disk).
+static uint32_t packDefinedMask(const CssPropertyFlags& d) {
+  return (d.textAlign << 0) | (d.fontStyle << 1) | (d.fontWeight << 2) | (d.textDecoration << 3) | (d.textIndent << 4) |
+         (d.marginTop << 5) | (d.marginBottom << 6) | (d.marginLeft << 7) | (d.marginRight << 8) | (d.paddingTop << 9) |
+         (d.paddingBottom << 10) | (d.paddingLeft << 11) | (d.paddingRight << 12) | (d.imageHeight << 13) |
+         (d.imageWidth << 14) | (d.display << 15) | (d.verticalAlign << 16) | (d.listStyleNone << 17) |
+         (d.pageBreakBefore << 18) | (d.pageBreakAfter << 19) | (d.lineHeight << 20) | (d.fontSizeMultiplier << 21) |
+         (d.cssFloat << 22) | (d.smallCaps << 23);
 }
 
-// Stream the whole ruleset into the arena as a sorted {hash, styleIdx} index plus a pool of
-// DISTINCT CssStyles so resolveStyle runs entirely in RAM (FreeInkBook's model, adapted, with
-// dedup). One sequential pass over the fixed-size payload block; identical styles (Calibre's
-// hundreds of same-content, different-name classes) collapse to one pool entry, so a repetitive
-// sheet that a flat {hash, CssStyle} array couldn't hold still fits. Returns false without
-// disturbing arena state when even the deduplicated form won't fit; the caller then tries the
-// smaller offset index.
+// Serialize `s` into `out` (>= kMaxCompressedStyle bytes); returns the record length.
+static size_t compressStyle(const CssStyle& s, uint8_t* out) {
+  uint8_t* p = out;
+  const uint32_t mask = packDefinedMask(s.defined);
+  std::memcpy(p, &mask, 4);
+  p += 4;
+  uint16_t enums = 0;
+  const CssPropertyFlags& d = s.defined;
+  if (d.textAlign) enums |= static_cast<uint16_t>((static_cast<unsigned>(s.textAlign) & 7u) << 0);
+  if (d.fontStyle) enums |= static_cast<uint16_t>((static_cast<unsigned>(s.fontStyle) & 1u) << 3);
+  if (d.fontWeight) enums |= static_cast<uint16_t>((static_cast<unsigned>(s.fontWeight) & 1u) << 4);
+  if (d.textDecoration) enums |= static_cast<uint16_t>((static_cast<unsigned>(s.textDecoration) & 3u) << 5);
+  if (d.display) enums |= static_cast<uint16_t>((static_cast<unsigned>(s.display) & 1u) << 7);
+  if (d.verticalAlign) enums |= static_cast<uint16_t>((static_cast<unsigned>(s.verticalAlign) & 3u) << 8);
+  if (d.listStyleNone) enums |= static_cast<uint16_t>((s.listStyleNone ? 1u : 0u) << 10);
+  if (d.pageBreakBefore) enums |= static_cast<uint16_t>((s.pageBreakBefore ? 1u : 0u) << 11);
+  if (d.pageBreakAfter) enums |= static_cast<uint16_t>((s.pageBreakAfter ? 1u : 0u) << 12);
+  if (d.cssFloat) enums |= static_cast<uint16_t>((static_cast<unsigned>(s.cssFloat) & 3u) << 13);
+  if (d.smallCaps) enums |= static_cast<uint16_t>((s.smallCaps ? 1u : 0u) << 15);
+  std::memcpy(p, &enums, 2);
+  p += 2;
+  const auto putLen = [&](bool def, const CssLength& l) {
+    if (def) {
+      std::memcpy(p, &l.value, 4);
+      p += 4;
+      *p++ = static_cast<uint8_t>(l.unit);
+    }
+  };
+  putLen(d.textIndent, s.textIndent);
+  putLen(d.marginTop, s.marginTop);
+  putLen(d.marginBottom, s.marginBottom);
+  putLen(d.marginLeft, s.marginLeft);
+  putLen(d.marginRight, s.marginRight);
+  putLen(d.paddingTop, s.paddingTop);
+  putLen(d.paddingBottom, s.paddingBottom);
+  putLen(d.paddingLeft, s.paddingLeft);
+  putLen(d.paddingRight, s.paddingRight);
+  putLen(d.imageHeight, s.imageHeight);
+  putLen(d.imageWidth, s.imageWidth);
+  if (d.lineHeight) {
+    std::memcpy(p, &s.lineHeightMultiplier, 4);
+    p += 4;
+  }
+  if (d.fontSizeMultiplier) {
+    std::memcpy(p, &s.fontSizeMultiplier, 4);
+    p += 4;
+  }
+  return static_cast<size_t>(p - out);
+}
+
+// Inverse of compressStyle: rebuild a full CssStyle from a compressed record.
+static void decompressStyle(const uint8_t* in, CssStyle& out) {
+  out.reset();
+  const uint8_t* p = in;
+  uint32_t mask = 0;
+  std::memcpy(&mask, p, 4);
+  p += 4;
+  uint16_t enums = 0;
+  std::memcpy(&enums, p, 2);
+  p += 2;
+  const auto bit = [&](int b) { return (mask >> b) & 1u; };
+  CssPropertyFlags& d = out.defined;
+  d.textAlign = bit(0);
+  d.fontStyle = bit(1);
+  d.fontWeight = bit(2);
+  d.textDecoration = bit(3);
+  d.textIndent = bit(4);
+  d.marginTop = bit(5);
+  d.marginBottom = bit(6);
+  d.marginLeft = bit(7);
+  d.marginRight = bit(8);
+  d.paddingTop = bit(9);
+  d.paddingBottom = bit(10);
+  d.paddingLeft = bit(11);
+  d.paddingRight = bit(12);
+  d.imageHeight = bit(13);
+  d.imageWidth = bit(14);
+  d.display = bit(15);
+  d.verticalAlign = bit(16);
+  d.listStyleNone = bit(17);
+  d.pageBreakBefore = bit(18);
+  d.pageBreakAfter = bit(19);
+  d.lineHeight = bit(20);
+  d.fontSizeMultiplier = bit(21);
+  d.cssFloat = bit(22);
+  d.smallCaps = bit(23);
+  if (d.textAlign) out.textAlign = static_cast<CssTextAlign>(enums & 7u);
+  if (d.fontStyle) out.fontStyle = static_cast<CssFontStyle>((enums >> 3) & 1u);
+  if (d.fontWeight) out.fontWeight = static_cast<CssFontWeight>((enums >> 4) & 1u);
+  if (d.textDecoration) out.textDecoration = static_cast<CssTextDecoration>((enums >> 5) & 3u);
+  if (d.display) out.display = static_cast<CssDisplay>((enums >> 7) & 1u);
+  if (d.verticalAlign) out.verticalAlign = static_cast<CssVerticalAlign>((enums >> 8) & 3u);
+  if (d.listStyleNone) out.listStyleNone = ((enums >> 10) & 1u) != 0;
+  if (d.pageBreakBefore) out.pageBreakBefore = ((enums >> 11) & 1u) != 0;
+  if (d.pageBreakAfter) out.pageBreakAfter = ((enums >> 12) & 1u) != 0;
+  if (d.cssFloat) out.cssFloat = static_cast<CssFloat>((enums >> 13) & 3u);
+  if (d.smallCaps) out.smallCaps = ((enums >> 15) & 1u) != 0;
+  const auto getLen = [&](bool def, CssLength& l) {
+    if (def) {
+      std::memcpy(&l.value, p, 4);
+      p += 4;
+      l.unit = static_cast<CssUnit>(*p++);
+    }
+  };
+  getLen(d.textIndent, out.textIndent);
+  getLen(d.marginTop, out.marginTop);
+  getLen(d.marginBottom, out.marginBottom);
+  getLen(d.marginLeft, out.marginLeft);
+  getLen(d.marginRight, out.marginRight);
+  getLen(d.paddingTop, out.paddingTop);
+  getLen(d.paddingBottom, out.paddingBottom);
+  getLen(d.paddingLeft, out.paddingLeft);
+  getLen(d.paddingRight, out.paddingRight);
+  getLen(d.imageHeight, out.imageHeight);
+  getLen(d.imageWidth, out.imageWidth);
+  if (d.lineHeight) {
+    std::memcpy(&out.lineHeightMultiplier, p, 4);
+    p += 4;
+  }
+  if (d.fontSizeMultiplier) {
+    std::memcpy(&out.fontSizeMultiplier, p, 4);
+    p += 4;
+  }
+}
+
+// Stream the whole ruleset into the arena as a sorted {hash, styleOff} index plus a pool of
+// DISTINCT, sparse-COMPRESSED styles so resolveStyle runs entirely in RAM (FreeInkBook's model,
+// adapted, with dedup + compression). One sequential pass over the payload block; each style is
+// compressed (compressStyle) and, being canonical, deduplicated by a memcmp against the existing
+// length-prefixed pool records. Identical styles (Calibre) collapse to one record, and each is
+// far smaller than a flat CssStyle, so a large/repetitive sheet that a flat array couldn't hold
+// still fits. Returns false without disturbing arena state when even this won't fit; the caller
+// then tries the smaller offset index.
 bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const uint32_t totalCandidates,
                                   const uint32_t unsupportedSkips) const {
   // Reserve from a mark so a failed attempt (won't fit, or a stream error) leaves the arena
@@ -1599,9 +1724,11 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
     return false;  // even the index won't fit — caller falls back to the offset index
   }
 
-  // Distinct-style pool: each new style is bump-allocated right after the index, so the pool is
-  // contiguous (only these allocations happen during the loop) and poolBase[idx] addresses it.
-  CssStyle* poolBase = nullptr;
+  // Compressed distinct-style pool: contiguous [u8 len][len bytes] records bump-allocated right
+  // after the index (only these allocations happen during the loop, so the pool stays contiguous
+  // and self-delimiting for the dedup scan). styleOff addresses each record's length prefix.
+  uint8_t* poolBase = nullptr;
+  size_t poolBytes = 0;
   uint16_t poolCount = 0;
 
   if (ruleCount > 0) {
@@ -1612,6 +1739,7 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
       return false;
     }
     char selectorBuf[MAX_SELECTOR_LENGTH];
+    uint8_t rec[kMaxCompressedStyle];
     for (uint16_t i = 0; i < ruleCount; ++i) {
       uint16_t selectorLen = 0;
       if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen) || selectorLen > MAX_SELECTOR_LENGTH ||
@@ -1624,42 +1752,52 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
         indexArena_->release(mark);
         return false;
       }
-      // Intern: reuse an already-seen identical style, else add a new pool entry.
-      uint16_t styleIdx = poolCount;
-      for (uint16_t j = 0; j < poolCount; ++j) {
-        if (cssStyleEquals(poolBase[j], style)) {
-          styleIdx = j;
+      const size_t recLen = compressStyle(style, rec);
+
+      // Intern: reuse an identical record if we've already stored one (memcmp over the canonical
+      // compressed bytes), else append a new [len][bytes] record to the pool.
+      uint32_t off = 0;
+      bool found = false;
+      for (size_t scan = 0; scan < poolBytes;) {
+        const size_t existingLen = poolBase[scan];
+        if (existingLen == recLen && std::memcmp(poolBase + scan + 1, rec, recLen) == 0) {
+          off = static_cast<uint32_t>(scan);
+          found = true;
           break;
         }
+        scan += 1 + existingLen;
       }
-      if (styleIdx == poolCount) {
-        auto* slot = static_cast<CssStyle*>(indexArena_->alloc(sizeof(CssStyle), alignof(CssStyle)));
+      if (!found) {
+        auto* slot = static_cast<uint8_t*>(indexArena_->alloc(1 + recLen, 1));
         if (slot == nullptr) {  // pool grew past the arena even after dedup — fall back to index
           indexArena_->release(mark);
           return false;
         }
-        if (poolBase == nullptr) poolBase = slot;  // first distinct style anchors the pool
-        new (slot) CssStyle(style);
+        if (poolBase == nullptr) poolBase = slot;  // first record anchors the pool
+        off = static_cast<uint32_t>(slot - poolBase);
+        slot[0] = static_cast<uint8_t>(recLen);
+        std::memcpy(slot + 1, rec, recLen);
+        poolBytes = static_cast<size_t>(off) + 1 + recLen;
         ++poolCount;
       }
-      index[i] = ResidentEntry{selectorHash(std::string_view(selectorBuf, selectorLen)), styleIdx};
+      index[i] = ResidentEntry{selectorHash(std::string_view(selectorBuf, selectorLen)), off};
     }
     // Sort by hash so lookupRule can binary-search, matching the on-disk index ordering.
     std::sort(index, index + ruleCount, [](const ResidentEntry& a, const ResidentEntry& b) { return a.hash < b.hash; });
     arenaResident_ = index;
     arenaStylePool_ = poolBase;
     arenaStyleCount_ = poolCount;
-    arenaPoolBytes_ = static_cast<uint32_t>(poolCount) * sizeof(CssStyle);
+    arenaPoolBytes_ = static_cast<uint32_t>(poolBytes);
   }
 
   cachedRuleCount_ = ruleCount;
   totalSelectorCandidates_ = totalCandidates;
   unsupportedSelectorSkips_ = unsupportedSkips;
   cacheIndexLoaded_ = true;
-  LOG_DBG("CSS", "Loaded CSS ruleset RESIDENT in arena: %u selectors -> %u distinct styles (%u bytes, no disk lookups)",
+  LOG_DBG("CSS", "Loaded CSS RESIDENT in arena: %u selectors -> %u distinct styles, %u index + %u pool bytes",
           static_cast<unsigned>(ruleCount), static_cast<unsigned>(poolCount),
-          static_cast<unsigned>(static_cast<size_t>(ruleCount) * sizeof(ResidentEntry) +
-                                static_cast<size_t>(poolCount) * sizeof(CssStyle)));
+          static_cast<unsigned>(static_cast<size_t>(ruleCount) * sizeof(ResidentEntry)),
+          static_cast<unsigned>(poolBytes));
   return true;
 }
 

@@ -540,6 +540,58 @@ TEST(CssParserArena, IndexOnlyFallbackMatchesHeapResolution) {
   std::filesystem::remove(cssPath);
 }
 
+// The sparse codec must round-trip EVERY style field, not just the margins/font-size the other
+// fixtures exercise. Resolve a rule that sets a diverse spread of properties through the resident
+// (compress-on-load, decompress-on-lookup) path and require it byte-identical to the heap path.
+TEST(CssParserArena, ResidentPreservesAllStyleFields) {
+  const std::string css =
+      ".a { text-align: center; font-weight: bold; font-style: italic; text-decoration: underline; "
+      "margin: 2em; padding-left: 5px; padding-right: 3px; text-indent: 1.5em; line-height: 1.6; "
+      "font-size: 120%; vertical-align: super; float: left; font-variant: small-caps; "
+      "list-style: none; page-break-before: always; page-break-after: always; }\n"
+      ".b { margin-top: 3px; text-align: right; }\n"
+      ".c { display: none; }\n";
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile f;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), f));
+    ASSERT_TRUE(parser.loadFromStream(f));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  const std::vector<std::pair<std::string, std::string>> probes = {
+      {"p", "a"}, {"p", "b"}, {"div", "c"}, {"span", "a"}, {"p", "none"}};
+  auto resolveAll = [&](CssParser& p) {
+    std::vector<CssStyle> out;
+    for (const auto& pr : probes) out.push_back(p.resolveStyle(pr.first, pr.second));
+    return out;
+  };
+
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> heapStyles = resolveAll(parser);
+
+  BuildArena arena(64 * 1024);
+  ASSERT_TRUE(arena.valid());
+  parser.clear();
+  parser.setIndexArena(&arena);
+  parser.setLeanResolve(true);
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> residentStyles = resolveAll(parser);
+  for (size_t i = 0; i < probes.size(); ++i) {
+    EXPECT_TRUE(stylesEqual(heapStyles[i], residentStyles[i]))
+        << "field round-trip mismatch for " << probes[i].first << "." << probes[i].second;
+  }
+  parser.clear();
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
 // Baseline measurement of the resident CSS footprint (index + distinct-style pool) across
 // representative stylesheets, so the dedup/compression win is measured, not estimated. Prints
 // CSS_FOOTPRINT lines the CI log captures; re-run after compression lands to see the delta.

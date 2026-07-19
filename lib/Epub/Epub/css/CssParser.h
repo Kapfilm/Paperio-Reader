@@ -232,24 +232,26 @@ class CssParser {
   // ensureCacheIndexLoaded() puts the ruleset in arena memory (not the heap vector) using
   // one of two layouts, decided by what fits — mirroring FreeInkBook's resident ruleset
   // (libs/book/FreeInkBook/src/css/Css.cpp) as far as witchhunt's ~108 B CssStyle allows:
-  //   - RESIDENT (preferred): a sorted {hash, styleIdx} index at arenaResident_ plus a pool
-  //     of DISTINCT CssStyles at arenaStylePool_. Identical styles are deduplicated (Calibre
-  //     emits hundreds of differently-named classes with byte-identical declarations), so a
-  //     repetitive stylesheet that would overflow a flat {hash, CssStyle} array still fits and
-  //     resolves in RAM with zero disk reads.
-  //   - INDEX-only (fallback when even the pooled resident won't fit): the sorted 8 B/rule
+  //   - RESIDENT (preferred): a sorted {hash, styleOff} index at arenaResident_ plus a pool of
+  //     DISTINCT styles at arenaStylePool_, each SPARSE-COMPRESSED (only the fields the CSS
+  //     'defined' mask flags — a real rule sets 1-4 of 24 properties, vs ~108 B for the full
+  //     struct). Identical styles are deduplicated (Calibre emits hundreds of differently-named
+  //     classes with byte-identical declarations). Compression + dedup together let a large or
+  //     repetitive stylesheet that a flat {hash, CssStyle} array couldn't hold resolve in RAM
+  //     with zero disk reads; styles decompress on lookup (build-time, ~microseconds).
+  //   - INDEX-only (fallback when even the compressed pool won't fit): the sorted 8 B/rule
   //     SelectorEntry index at arenaIndex_; payloads are read from disk on demand.
   // All are non-owning views into arena memory (the arena resets per build); the parser
   // drops them on clear()/clearCaches() and reloads on the next resolve.
   struct ResidentEntry {
     uint32_t hash;      // FNV-1a of the normalized selector (same as SelectorEntry::hash)
-    uint16_t styleIdx;  // index into arenaStylePool_ (the deduplicated distinct style)
-  };
+    uint32_t styleOff;  // byte offset of this rule's compressed style within arenaStylePool_
+  };  // {u32,u32} = 8 B with no padding (vs a padded {u32,u16})
   BuildArena* indexArena_ = nullptr;
   mutable ResidentEntry* arenaResident_ = nullptr;  // sorted by hash, cachedRuleCount_ entries
-  mutable CssStyle* arenaStylePool_ = nullptr;      // arenaStyleCount_ distinct styles
-  mutable uint16_t arenaStyleCount_ = 0;
-  mutable uint32_t arenaPoolBytes_ = 0;  // bytes the distinct-style pool occupies (for footprint telemetry)
+  mutable uint8_t* arenaStylePool_ = nullptr;       // distinct styles, sparse-compressed, length-prefixed
+  mutable uint16_t arenaStyleCount_ = 0;            // distinct style records in the pool
+  mutable uint32_t arenaPoolBytes_ = 0;             // bytes used by the compressed pool
   mutable SelectorEntry* arenaIndex_ = nullptr;
   bool leanResolve_ = false;
 
