@@ -84,7 +84,8 @@ class HalFile : public Print {
     pos_ += n;
     return n;
   }
-  size_t write(uint8_t b) override { return write(&b, 1); }
+  size_t write(const uint8_t* buf, size_t n) override { return write(static_cast<const void*>(buf), n); }
+  size_t write(uint8_t b) override { return write(static_cast<const void*>(&b), 1); }
   bool rename(const char*) { return false; }
   bool getModifyDateTime(uint16_t*, uint16_t*) { return false; }
   bool isDirectory() const { return false; }

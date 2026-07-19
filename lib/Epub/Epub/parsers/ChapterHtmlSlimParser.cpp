@@ -1458,7 +1458,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
             self->listStack.back().counter += 1;
           }
           if (!self->listStack.back().suppressMarker) {
-            char marker[12];
+            char marker[16];
             if (self->listStack.back().isOrdered) {
               snprintf(marker, sizeof(marker), "%d.", self->listStack.back().counter);
             } else {
@@ -2017,11 +2017,7 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
   // Closing a footnote link — create entry from collected text and href
   if (self->insideFootnoteLink && self->depth == self->footnoteLinkDepth) {
     if (self->currentFootnote.number[0] != '\0' && self->currentFootnote.href[0] != '\0') {
-      FootnoteEntry entry;
-      strncpy(entry.number, self->currentFootnote.number, sizeof(entry.number) - 1);
-      entry.number[sizeof(entry.number) - 1] = '\0';
-      strncpy(entry.href, self->currentFootnote.href, sizeof(entry.href) - 1);
-      entry.href[sizeof(entry.href) - 1] = '\0';
+      FootnoteEntry entry = self->currentFootnote;
       int wordIndex =
           self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
       self->pendingFootnotes.push_back({wordIndex, entry});

@@ -263,12 +263,15 @@ bool TextBlock::serialize(FsFile& file) const {
 }
 
 std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
-  uint16_t wc;
-  uint8_t hasSizes;
-  uint16_t textBytes;
-  serialization::readPod(file, wc);
-  serialization::readPod(file, hasSizes);
-  serialization::readPod(file, textBytes);
+  uint16_t wc = 0;
+  uint8_t hasSizes = 0;
+  uint16_t textBytes = 0;
+  if (file.read(reinterpret_cast<uint8_t*>(&wc), sizeof(wc)) != static_cast<int>(sizeof(wc)) ||
+      file.read(&hasSizes, sizeof(hasSizes)) != static_cast<int>(sizeof(hasSizes)) ||
+      file.read(reinterpret_cast<uint8_t*>(&textBytes), sizeof(textBytes)) != static_cast<int>(sizeof(textBytes))) {
+    LOG_ERR("TXB", "Deserialization failed: incomplete arena header");
+    return nullptr;
+  }
 
   // Sanity checks: cap the arena allocation and reject impossible geometry
   // (every word carries at least its NUL terminator).

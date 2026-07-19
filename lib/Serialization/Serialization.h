@@ -5,32 +5,32 @@
 
 namespace serialization {
 template <typename T>
-static void writePod(std::ostream& os, const T& value) {
+[[maybe_unused]] static void writePod(std::ostream& os, const T& value) {
   os.write(reinterpret_cast<const char*>(&value), sizeof(T));
 }
 
 template <typename T>
-static void writePod(FsFile& file, const T& value) {
+[[maybe_unused]] static void writePod(FsFile& file, const T& value) {
   file.write(reinterpret_cast<const uint8_t*>(&value), sizeof(T));
 }
 
 template <typename T>
-static void readPod(std::istream& is, T& value) {
+[[maybe_unused]] static void readPod(std::istream& is, T& value) {
   is.read(reinterpret_cast<char*>(&value), sizeof(T));
 }
 
 template <typename T>
-static void readPod(FsFile& file, T& value) {
+[[maybe_unused]] static void readPod(FsFile& file, T& value) {
   file.read(reinterpret_cast<uint8_t*>(&value), sizeof(T));
 }
 
-static void writeString(std::ostream& os, const std::string& s) {
+[[maybe_unused]] static void writeString(std::ostream& os, const std::string& s) {
   const uint32_t len = s.size();
   writePod(os, len);
   os.write(s.data(), len);
 }
 
-static void writeString(FsFile& file, const std::string& s) {
+[[maybe_unused]] static void writeString(FsFile& file, const std::string& s) {
   const uint32_t len = s.size();
   writePod(file, len);
   file.write(reinterpret_cast<const uint8_t*>(s.data()), len);
@@ -38,9 +38,10 @@ static void writeString(FsFile& file, const std::string& s) {
 
 constexpr uint32_t MAX_STRING_LENGTH = 4096;
 
-static bool readString(std::istream& is, std::string& s) {
-  uint32_t len;
+[[maybe_unused]] static bool readString(std::istream& is, std::string& s) {
+  uint32_t len = 0;
   readPod(is, len);
+  if (!is) return false;
   if (len > MAX_STRING_LENGTH) {
     is.seekg(len, std::ios::cur);  // skip payload to keep stream aligned
     return false;
@@ -50,9 +51,9 @@ static bool readString(std::istream& is, std::string& s) {
   return true;
 }
 
-static bool readString(FsFile& file, std::string& s) {
-  uint32_t len;
-  readPod(file, len);
+[[maybe_unused]] static bool readString(FsFile& file, std::string& s) {
+  uint32_t len = 0;
+  if (file.read(reinterpret_cast<uint8_t*>(&len), sizeof(len)) != sizeof(len)) return false;
   if (len > MAX_STRING_LENGTH) {
     if (!file.seekCur(static_cast<int64_t>(len))) {  // skip payload to keep file position aligned
       return false;
