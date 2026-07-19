@@ -17,9 +17,7 @@ class HalDisplay {
 // Singleton used as `display.getDisplay...()` in the converter.
 inline HalDisplay display;
 
-// The converter gates decoding on ESP.getFreeHeap(); on device this global comes
-// from Arduino. Provide a generous host stub so the gate always passes.
-struct EspClass {
-  uint32_t getFreeHeap() const { return 256u * 1024u; }
-};
-inline EspClass ESP;
+// ESP (heap-gate accessor) comes from the shims' Arduino.h, which the shared
+// zip_entry_reader/HalStorage.h now includes — defining it here again would be
+// a redefinition.
+#include <Arduino.h>

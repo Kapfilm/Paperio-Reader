@@ -1,5 +1,7 @@
 #include "ZipFile.h"
 
+#include <BufferedFileIO.h>
+#include <BuildArena.h>
 #include <HalStorage.h>
 #include <InflateReader.h>
 #include <Logging.h>
@@ -270,6 +272,67 @@ bool ZipFile::loadZipDetails() {
 
   LOG_ERR("ZIP", "EOCD signature not found in zip file (scanned last %zu bytes)", totalScannable);
   return false;
+}
+
+bool ZipFile::contentFingerprint(uint64_t* out) {
+  if (!out) return false;
+  if (!loadZipDetails()) return false;
+  const ScopedOpenClose zip{*this};
+  if (!zip) return false;
+
+  // Incremental FNV-1a 64 mixing helpers (same constants as HashUtils).
+  uint64_t hash = 14695981039346656037ull;
+  const auto mixBytes = [&hash](const void* data, const size_t len) {
+    const auto* p = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < len; i++) {
+      hash ^= p[i];
+      hash *= 1099511628211ull;
+    }
+  };
+  const auto mixPod = [&mixBytes](const auto v) { mixBytes(&v, sizeof(v)); };
+
+  // Buffered walk: the per-entry field reads below would otherwise be ~12
+  // separate FsFile calls per entry (~1.5 ms each on device — seconds for a
+  // 1000+-entry book). Through the 4 KB window they collapse into a few
+  // sequential SD reads; the per-entry skips stay inside the window for free.
+  file.seek(zipDetails.centralDirOffset);
+  serialization::BufferedFileReader reader(file);
+  char nameBuf[256];
+  uint32_t entries = 0;
+  uint32_t sig;
+  while (reader.readPod(sig) && sig == 0x02014b50) {
+    reader.seek(reader.position() + 6);  // versionMadeBy, versionNeeded, flags
+    uint16_t method, nameLen, extraLen, commentLen;
+    uint32_t crc32, compSz, uncompSz, localOff;
+    if (!reader.readPod(method)) return false;
+    // DOS mod time + date: excluded so a content-identical re-zip matches
+    reader.seek(reader.position() + 4);
+    if (!reader.readPod(crc32) || !reader.readPod(compSz) || !reader.readPod(uncompSz) || !reader.readPod(nameLen) ||
+        !reader.readPod(extraLen) || !reader.readPod(commentLen)) {
+      return false;
+    }
+    reader.seek(reader.position() + 8);  // disk#, internal attrs, external attrs
+    if (!reader.readPod(localOff)) return false;
+
+    // Name in bounded chunks: entry names may exceed the stack buffer.
+    size_t nameRemaining = nameLen;
+    while (nameRemaining > 0) {
+      const size_t take = nameRemaining < sizeof(nameBuf) ? nameRemaining : sizeof(nameBuf);
+      if (!reader.read(nameBuf, take)) return false;
+      mixBytes(nameBuf, take);
+      nameRemaining -= take;
+    }
+    mixPod(crc32);
+    mixPod(uncompSz);
+    mixPod(method);
+    mixPod(localOff);
+    entries++;
+
+    reader.seek(reader.position() + extraLen + commentLen);
+  }
+  mixPod(entries);
+  *out = hash;
+  return entries > 0;
 }
 
 bool ZipFile::open() {
@@ -661,6 +724,10 @@ size_t ZipFile::readBytesFromStat(const FileStatSlim& fileStat, uint8_t* outBuf,
 struct ZipFile::EntryReader::Impl {
   ZipFile& zf;
   size_t chunkSize;
+  // Optional arena backing (see EntryReader ctor doc): readBuf + inflate ring
+  // are carved from it under one mark taken at open(), released in reset().
+  BuildArena* arena = nullptr;
+  size_t arenaMark = 0;
 
   uint16_t method = 0;  // ZIP_METHOD_STORED or ZIP_METHOD_DEFLATED
   FsFile file;
@@ -676,17 +743,18 @@ struct ZipFile::EntryReader::Impl {
   ZipInflateCtx ctx = {};
   uint8_t* readBuf = nullptr;
 
-  explicit Impl(ZipFile& zf_, size_t chunkSize_) : zf(zf_), chunkSize(chunkSize_) {}
+  explicit Impl(ZipFile& zf_, size_t chunkSize_, BuildArena* arena_) : zf(zf_), chunkSize(chunkSize_), arena(arena_) {}
   ~Impl() { reset(); }
   Impl(const Impl&) = delete;
   Impl& operator=(const Impl&) = delete;
 
   void reset() {
     if (readBuf) {
-      ctx.reader.deinit();
-      free(readBuf);
+      ctx.reader.deinit();  // external ring: deinit only clears state, no free
+      if (!arena) free(readBuf);
       readBuf = nullptr;
     }
+    if (arena) arena->release(arenaMark);
     ctx.file = nullptr;
     ctx.fileRemaining = 0;
     ctx.readBuf = nullptr;
@@ -701,7 +769,8 @@ struct ZipFile::EntryReader::Impl {
   }
 };
 
-ZipFile::EntryReader::EntryReader(ZipFile& zf, const size_t chunkSize) : impl_(std::make_unique<Impl>(zf, chunkSize)) {}
+ZipFile::EntryReader::EntryReader(ZipFile& zf, const size_t chunkSize, BuildArena* arena)
+    : impl_(std::make_unique<Impl>(zf, chunkSize, arena)) {}
 
 ZipFile::EntryReader::~EntryReader() = default;
 ZipFile::EntryReader::EntryReader(EntryReader&&) noexcept = default;
@@ -736,7 +805,9 @@ bool ZipFile::EntryReader::open(const char* filename) {
   }
 
   if (fileStat.method == ZIP_METHOD_DEFLATED) {
-    impl_->readBuf = static_cast<uint8_t*>(malloc(impl_->chunkSize));
+    if (impl_->arena) impl_->arenaMark = impl_->arena->mark();
+    impl_->readBuf = impl_->arena ? static_cast<uint8_t*>(impl_->arena->alloc(impl_->chunkSize))
+                                  : static_cast<uint8_t*>(malloc(impl_->chunkSize));
     if (!impl_->readBuf) {
       LOG_ERR("ZIP", "EntryReader::open: OOM allocating read buffer");
       impl_->file.close();
@@ -748,10 +819,19 @@ bool ZipFile::EntryReader::open(const char* filename) {
     impl_->ctx.readBufSize = impl_->chunkSize;
     // Ring sized to the entry (≤32 KB): small chapters cost a small ring, which is what
     // makes holding the reader across background-build slices affordable.
-    if (!impl_->ctx.reader.init(true, fileStat.uncompressedSize)) {
+    bool ringOk;
+    if (impl_->arena) {
+      const size_t ringSize = InflateReader::ringSizeFor(fileStat.uncompressedSize);
+      auto* ring = static_cast<uint8_t*>(impl_->arena->alloc(ringSize));
+      ringOk = ring && impl_->ctx.reader.initWithExternalRing(ring, ringSize);
+    } else {
+      ringOk = impl_->ctx.reader.init(true, fileStat.uncompressedSize);
+    }
+    if (!ringOk) {
       LOG_ERR("ZIP", "EntryReader::open: OOM initialising inflate ring buffer");
-      free(impl_->readBuf);
+      if (!impl_->arena) free(impl_->readBuf);
       impl_->readBuf = nullptr;
+      if (impl_->arena) impl_->arena->release(impl_->arenaMark);
       impl_->file.close();
       return false;
     }

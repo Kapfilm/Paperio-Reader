@@ -52,6 +52,36 @@ class Epub {
   void parseCssFiles() const;
   void discoverCssFilesFromZip();
 
+  // Session cache for the source ZIP's content fingerprint (one central-directory
+  // walk per Epub instance; needsFirstOpenIndexing and load both consult it).
+  mutable uint64_t zipFingerprint_ = 0;
+  mutable bool zipFingerprintComputed_ = false;
+  mutable bool zipFingerprintValid_ = false;
+  // Session cache of the archive's EOCD details (raw fields, keeping ZipFile
+  // forward-declared), harvested from the first successful ZipFile operation
+  // and seeded into every later instance so the per-instance EOCD scan runs
+  // once per book instead of once per item read.
+  mutable uint32_t zipCentralDirOffset_ = 0;
+  mutable uint16_t zipTotalEntries_ = 0;
+  mutable bool zipDetailsCached_ = false;
+
+ public:
+  // Seed a fresh ZipFile over this book with the cached EOCD details (no-op
+  // until the first adopt). Public so Section's EntryReader benefits too.
+  void primeZip(ZipFile& zip) const;
+  // Harvest the details after a successful operation on `zip`.
+  void adoptZipDetails(const ZipFile& zip) const;
+
+ private:
+  // Compute (once) the ZIP content fingerprint. False when the archive is
+  // unreadable — callers then skip fingerprint-based invalidation entirely.
+  bool computeZipFingerprint(uint64_t* out) const;
+  // fingerprint.bin sidecar in the cache dir: the fingerprint the cache was
+  // built from. The cache key is path-derived (see the constructor), so this is
+  // what detects a different book dropped onto the same path.
+  bool readStoredFingerprint(uint64_t* out) const;
+  void writeStoredFingerprint(uint64_t fp) const;
+
  public:
   explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
     // create a cache key based on the filepath

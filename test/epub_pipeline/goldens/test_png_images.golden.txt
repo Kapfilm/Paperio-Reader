@@ -1,0 +1,388 @@
+BOOK title=PNG Image Tests lang=en spine=10 toc=10 reliableToc=1
+SPINE 0 href=OEBPS/chapter1.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=9 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=115 s=1 z=100 t=PNG
+   W x=167 s=1 z=100 t=Image
+   W x=267 s=1 z=100 t=Tests
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=18 s=0 z=100 t=This
+   W x=57 s=0 z=100 t=EPUB
+   W x=100 s=0 z=100 t=tests
+   W x=153 s=0 z=100 t=PNG
+   W x=182 s=0 z=100 t=image
+   W x=236 s=0 z=100 t=rendering.
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=Navigate
+   W x=107 s=0 z=100 t=through
+   W x=193 s=0 z=100 t=chapters
+   W x=276 s=0 z=100 t=to
+   W x=308 s=0 z=100 t=verify
+   W x=371 s=0 z=100 t=each
+   W x=421 s=0 z=100 t=test
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=case.
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=18 s=1 z=100 t=Test
+   W x=62 s=1 z=100 t=Plan:
+  LINE y=134 x=27 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=•
+   W x=31 s=0 z=100 t=PNG
+   W x=60 s=0 z=100 t=decoding
+   W x=138 s=0 z=100 t=(no
+   W x=178 s=0 z=100 t=crash)
+  LINE y=158 x=27 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=•
+   W x=31 s=0 z=100 t=Grayscale
+   W x=118 s=0 z=100 t=rendering
+   W x=205 s=0 z=100 t=(4
+   W x=231 s=0 z=100 t=levels)
+  LINE y=182 x=27 align=0 mult=1.000 hfid=0 words=3
+   W x=18 s=0 z=100 t=•
+   W x=31 s=0 z=100 t=Image
+   W x=88 s=0 z=100 t=centering
+  LINE y=206 x=27 align=0 mult=1.000 hfid=0 words=4
+   W x=18 s=0 z=100 t=•
+   W x=31 s=0 z=100 t=Large
+   W x=89 s=0 z=100 t=image
+   W x=143 s=0 z=100 t=scaling
+SPINE 1 href=OEBPS/chapter2.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=5 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=117 s=1 z=100 t=PNG
+   W x=169 s=1 z=100 t=Format
+   W x=281 s=1 z=100 t=Test
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=18 s=0 z=100 t=Basic
+   W x=67 s=0 z=100 t=PNG
+   W x=96 s=0 z=100 t=decoding
+   W x=174 s=0 z=100 t=test.
+  IMG y=62 x=55 w=350 h=250 src=<cache>/epub_<hash>/img_1_8d25017e_0.png
+  LINE y=312 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=18 s=0 z=100 t=If
+   W x=51 s=0 z=100 t=the
+   W x=96 s=0 z=100 t=image
+   W x=158 s=0 z=100 t=above
+   W x=223 s=0 z=100 t=is
+   W x=252 s=0 z=100 t=visible
+   W x=323 s=0 z=100 t=and
+   W x=368 s=0 z=100 t=no
+   W x=405 s=0 z=100 t=crash
+  LINE y=336 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=0 s=0 z=100 t=occurred,
+   W x=84 s=0 z=100 t=PNG
+   W x=113 s=0 z=100 t=decoding
+   W x=191 s=0 z=100 t=works.
+SPINE 2 href=OEBPS/chapter3.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=3 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=2
+   W x=122 s=1 z=100 t=Grayscale
+   W x=276 s=1 z=100 t=Test
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=Verify
+   W x=73 s=0 z=100 t=4
+   W x=88 s=0 z=100 t=distinct
+   W x=161 s=0 z=100 t=gray
+   W x=206 s=0 z=100 t=levels
+   W x=269 s=0 z=100 t=are
+   W x=304 s=0 z=100 t=visible.
+  IMG y=62 x=30 w=400 h=600 src=<cache>/epub_<hash>/img_2_8d25017e_0.png
+SPINE 3 href=OEBPS/chapter4.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=3 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=2
+   W x=131 s=1 z=100 t=Gradient
+   W x=267 s=1 z=100 t=Test
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=18 s=0 z=100 t=Verify
+   W x=73 s=0 z=100 t=gradient
+   W x=154 s=0 z=100 t=quantizes
+   W x=244 s=0 z=100 t=to
+   W x=272 s=0 z=100 t=4
+   W x=287 s=0 z=100 t=bands.
+  IMG y=62 x=30 w=400 h=500 src=<cache>/epub_<hash>/img_3_8d25017e_0.png
+SPINE 4 href=OEBPS/chapter5.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=3 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=2
+   W x=119 s=1 z=100 t=Centering
+   W x=279 s=1 z=100 t=Test
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=Verify
+   W x=73 s=0 z=100 t=image
+   W x=127 s=0 z=100 t=is
+   W x=148 s=0 z=100 t=centered
+   W x=225 s=0 z=100 t=horizontally.
+  IMG y=62 x=55 w=350 h=400 src=<cache>/epub_<hash>/img_4_8d25017e_0.png
+SPINE 5 href=OEBPS/chapter6.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=5 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=2
+   W x=134 s=1 z=100 t=Scaling
+   W x=264 s=1 z=100 t=Test
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=18 s=0 z=100 t=This
+   W x=60 s=0 z=100 t=image
+   W x=117 s=0 z=100 t=is
+   W x=141 s=0 z=100 t=1200x1500
+   W x=234 s=0 z=100 t=pixels
+   W x=289 s=0 z=100 t=-
+   W x=307 s=0 z=100 t=larger
+   W x=373 s=0 z=100 t=than
+   W x=427 s=0 z=100 t=the
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=screen.
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=It
+   W x=43 s=0 z=100 t=should
+   W x=110 s=0 z=100 t=be
+   W x=131 s=0 z=100 t=scaled
+   W x=191 s=0 z=100 t=down
+   W x=234 s=0 z=100 t=to
+   W x=262 s=0 z=100 t=fit.
+  IMG y=110 x=0 w=460 h=575 src=<cache>/epub_<hash>/img_5_8d25017e_0.png
+SPINE 6 href=OEBPS/chapter7.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=6 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=100 s=1 z=100 t=Wide
+   W x=168 s=1 z=100 t=Scaling
+   W x=298 s=1 z=100 t=Test
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=18 s=0 z=100 t=This
+   W x=62 s=0 z=100 t=image
+   W x=121 s=0 z=100 t=is
+   W x=147 s=0 z=100 t=1807x736
+   W x=232 s=0 z=100 t=pixels
+   W x=289 s=0 z=100 t=-
+   W x=309 s=0 z=100 t=a
+   W x=332 s=0 z=100 t=wide
+   W x=372 s=0 z=100 t=landscape
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=format.
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=Tests
+   W x=75 s=0 z=100 t=scaling
+   W x=154 s=0 z=100 t=with
+   W x=202 s=0 z=100 t=dimensions
+   W x=307 s=0 z=100 t=that
+   W x=365 s=0 z=100 t=can
+   W x=409 s=0 z=100 t=cause
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=cache
+   W x=53 s=0 z=100 t=mismatches.
+  IMG y=134 x=0 w=459 h=187 src=<cache>/epub_<hash>/img_6_8d25017e_0.png
+SPINE 7 href=OEBPS/chapter8.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=4 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=5
+   W x=84 s=1 z=100 t=Cache
+   W x=182 s=1 z=100 t=Test
+   W x=253 s=1 z=100 t=-
+   W x=279 s=1 z=100 t=Page
+   W x=361 s=1 z=100 t=A
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=First
+   W x=63 s=0 z=100 t=cache
+   W x=116 s=0 z=100 t=test
+   W x=160 s=0 z=100 t=page.
+   W x=214 s=0 z=100 t=Note
+   W x=258 s=0 z=100 t=the
+   W x=295 s=0 z=100 t=load
+   W x=342 s=0 z=100 t=time.
+  IMG y=62 x=30 w=400 h=300 src=<cache>/epub_<hash>/img_7_8d25017e_0.png
+  LINE y=362 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=Navigate
+   W x=103 s=0 z=100 t=to
+   W x=131 s=0 z=100 t=next
+   W x=174 s=0 z=100 t=page,
+   W x=226 s=0 z=100 t=then
+   W x=274 s=0 z=100 t=come
+   W x=318 s=0 z=100 t=back.
+SPINE 8 href=OEBPS/chapter9.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=5 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=5
+   W x=83 s=1 z=100 t=Cache
+   W x=181 s=1 z=100 t=Test
+   W x=252 s=1 z=100 t=-
+   W x=278 s=1 z=100 t=Page
+   W x=360 s=1 z=100 t=B
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=18 s=0 z=100 t=Second
+   W x=83 s=0 z=100 t=cache
+   W x=136 s=0 z=100 t=test
+   W x=180 s=0 z=100 t=page.
+  IMG y=62 x=30 w=400 h=300 src=<cache>/epub_<hash>/img_8_8d25017e_0.png
+  LINE y=362 x=0 align=0 mult=1.000 hfid=0 words=10
+   W x=18 s=0 z=100 t=Navigate
+   W x=105 s=0 z=100 t=back
+   W x=146 s=0 z=100 t=to
+   W x=176 s=0 z=100 t=Page
+   W x=225 s=0 z=100 t=A
+   W x=241 s=0 z=100 t=-
+   W x=258 s=0 z=100 t=it
+   W x=282 s=0 z=100 t=should
+   W x=351 s=0 z=100 t=load
+   W x=400 s=0 z=100 t=faster
+  LINE y=386 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=from
+   W x=46 s=0 z=100 t=cache.
+SPINE 9 href=OEBPS/chapter10.xhtml pages=2 truncated=0 cssFallback=0
+ PAGE 0 elements=15 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=4
+   W x=25 s=1 z=100 t=Image
+   W x=125 s=1 z=100 t=Centering
+   W x=285 s=1 z=100 t=Bleed
+   W x=373 s=1 z=100 t=Test
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=Tests
+   W x=71 s=0 z=100 t=that
+   W x=125 s=0 z=100 t=image
+   W x=183 s=0 z=100 t=centering
+   W x=275 s=0 z=100 t=does
+   W x=323 s=0 z=100 t=not
+   W x=366 s=0 z=100 t=bleed
+   W x=417 s=0 z=100 t=into
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=0 s=0 z=100 t=following
+   W x=92 s=0 z=100 t=text
+   W x=134 s=0 z=100 t=blocks
+   W x=191 s=0 z=100 t=(issue
+   W x=252 s=0 z=100 t=#1026).
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=Set
+   W x=57 s=0 z=100 t=Paragraph
+   W x=155 s=0 z=100 t=Alignment
+   W x=248 s=0 z=100 t=to
+   W x=278 s=0 z=100 t=Justify
+   W x=350 s=0 z=100 t=and
+   W x=389 s=0 z=100 t=Embedded
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=0 s=0 z=100 t=Style
+   W x=54 s=0 z=100 t=to
+   W x=82 s=0 z=100 t=OFF
+   W x=108 s=0 z=100 t=before
+   W x=168 s=0 z=100 t=testing.
+  LINE y=134 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=All
+   W x=63 s=0 z=100 t=paragraphs
+   W x=178 s=0 z=100 t=below
+   W x=239 s=0 z=100 t=the
+   W x=289 s=0 z=100 t=images
+   W x=365 s=0 z=100 t=should
+   W x=445 s=0 z=100 t=be
+  LINE y=158 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=justified,
+   W x=90 s=0 z=100 t=not
+   W x=129 s=0 z=100 t=centered.
+  IMG y=182 x=55 w=350 h=400 src=<cache>/epub_<hash>/img_9_8d25017e_0.png
+  LINE y=582 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=18 s=0 z=100 t=FIRST
+   W x=80 s=0 z=100 t=PARAGRAPH
+   W x=177 s=0 z=100 t=after
+   W x=244 s=0 z=100 t=image.
+   W x=320 s=0 z=100 t=This
+   W x=371 s=0 z=100 t=paragraph
+  LINE y=606 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=follows
+   W x=84 s=0 z=100 t=an
+   W x=124 s=0 z=100 t=empty
+   W x=184 s=0 z=100 t=heading
+   W x=270 s=0 z=100 t=and
+   W x=318 s=0 z=100 t=an
+   W x=358 s=0 z=100 t=image-only
+  LINE y=630 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=paragraph.
+   W x=105 s=0 z=100 t=With
+   W x=150 s=0 z=100 t=the
+   W x=189 s=0 z=100 t=bug
+   W x=225 s=0 z=100 t=present,
+   W x=303 s=0 z=100 t=this
+   W x=348 s=0 z=100 t=text
+   W x=392 s=0 z=100 t=appears
+  LINE y=654 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=centered
+   W x=85 s=0 z=100 t=instead
+   W x=164 s=0 z=100 t=of
+   W x=200 s=0 z=100 t=justified
+   W x=290 s=0 z=100 t=because
+   W x=367 s=0 z=100 t=the
+   W x=412 s=0 z=100 t=empty
+  LINE y=678 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=0 s=0 z=100 t=heading's
+   W x=114 s=0 z=100 t=default
+   W x=209 s=0 z=100 t=Center
+   W x=292 s=0 z=100 t=alignment
+   W x=407 s=0 z=100 t=bleeds
+  LINE y=702 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=through
+   W x=89 s=0 z=100 t=the
+   W x=133 s=0 z=100 t=chain
+   W x=194 s=0 z=100 t=of
+   W x=229 s=0 z=100 t=empty
+   W x=285 s=0 z=100 t=text
+   W x=334 s=0 z=100 t=blocks.
+   W x=408 s=0 z=100 t=Lorem
+  LINE y=726 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=ipsum
+   W x=54 s=0 z=100 t=dolor
+   W x=115 s=0 z=100 t=sit
+   W x=152 s=0 z=100 t=amet,
+   W x=213 s=0 z=100 t=consectetur
+   W x=328 s=0 z=100 t=adipiscing
+   W x=422 s=0 z=100 t=elit
+ PAGE 1 elements=8 footnotes=0
+  LINE y=0 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=0 s=0 z=100 t=sed
+   W x=32 s=0 z=100 t=do
+   W x=58 s=0 z=100 t=eiusmod
+   W x=129 s=0 z=100 t=tempor.
+  LINE y=24 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=SECOND
+   W x=86 s=0 z=100 t=PARAGRAPH
+   W x=173 s=0 z=100 t=in
+   W x=198 s=0 z=100 t=the
+   W x=237 s=0 z=100 t=same
+   W x=285 s=0 z=100 t=div.
+   W x=329 s=0 z=100 t=This
+   W x=370 s=0 z=100 t=paragraph
+  LINE y=48 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=should
+   W x=80 s=0 z=100 t=always
+   W x=155 s=0 z=100 t=be
+   W x=189 s=0 z=100 t=justified
+   W x=284 s=0 z=100 t=because
+   W x=366 s=0 z=100 t=the
+   W x=416 s=0 z=100 t=first
+  LINE y=72 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=paragraph's
+   W x=121 s=0 z=100 t=text
+   W x=172 s=0 z=100 t=block
+   W x=229 s=0 z=100 t=was
+   W x=271 s=0 z=100 t=flushed.
+   W x=364 s=0 z=100 t=Duis
+   W x=416 s=0 z=100 t=aute
+  LINE y=96 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=irure
+   W x=56 s=0 z=100 t=dolor
+   W x=119 s=0 z=100 t=in
+   W x=150 s=0 z=100 t=reprehenderit
+   W x=277 s=0 z=100 t=in
+   W x=308 s=0 z=100 t=voluptate
+   W x=413 s=0 z=100 t=velit
+  LINE y=120 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=esse
+   W x=52 s=0 z=100 t=cillum
+   W x=120 s=0 z=100 t=dolore
+   W x=194 s=0 z=100 t=eu
+   W x=230 s=0 z=100 t=fugiat
+   W x=306 s=0 z=100 t=nulla
+   W x=374 s=0 z=100 t=pariatur.
+  LINE y=144 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=0 s=0 z=100 t=Excepteur
+   W x=95 s=0 z=100 t=sint
+   W x=147 s=0 z=100 t=occaecat
+   W x=239 s=0 z=100 t=cupidatat
+   W x=337 s=0 z=100 t=non
+   W x=387 s=0 z=100 t=proident
+  LINE y=168 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=0 s=0 z=100 t=sunt
+   W x=47 s=0 z=100 t=in
+   W x=70 s=0 z=100 t=culpa
+   W x=121 s=0 z=100 t=qui
+   W x=151 s=0 z=100 t=officia.

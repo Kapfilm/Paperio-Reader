@@ -1,0 +1,1023 @@
+BOOK title=CSS Display None Tests lang=en spine=12 toc=12 reliableToc=1
+SPINE 0 href=OEBPS/chapter1.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=8 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=4
+   W x=25 s=1 z=100 t=CSS
+   W x=94 s=1 z=100 t=display:none
+   W x=298 s=1 z=100 t=Test
+   W x=369 s=1 z=100 t=EPUB
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=This
+   W x=73 s=0 z=100 t=EPUB
+   W x=132 s=0 z=100 t=tests
+   W x=201 s=0 z=100 t=that
+   W x=267 s=0 z=100 t=elements
+   W x=365 s=0 z=100 t=with
+   W x=421 s=0 z=100 t=CSS
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=0 s=0 z=100 t=display:none
+   W x=142 s=0 z=100 t=are
+   W x=204 s=0 z=100 t=correctly
+   W x=315 s=0 z=100 t=hidden
+   W x=402 s=0 z=100 t=during
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=0 s=0 z=100 t=rendering.
+   W x=110 s=0 z=100 t=Each
+   W x=172 s=0 z=100 t=chapter
+   W x=255 s=0 z=100 t=exercises
+   W x=347 s=0 z=100 t=a
+   W x=378 s=0 z=100 t=different
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=scenario.
+  LINE y=134 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=For
+   W x=59 s=0 z=100 t=each
+   W x=114 s=0 z=100 t=chapter,
+   W x=201 s=0 z=100 t=the
+   W x=247 s=0 z=100 t=PASS/FAIL
+   W x=349 s=0 z=100 t=criteria
+   W x=430 s=0 z=100 t=are
+  LINE y=158 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=listed.
+   W x=73 s=0 z=100 t=Hidden
+   W x=135 s=0 z=100 t=content
+   W x=217 s=0 z=100 t=is
+   W x=244 s=0 z=100 t=marked
+   W x=311 s=0 z=100 t=with
+   W x=357 s=0 z=100 t=[HIDDEN]
+   W x=441 s=0 z=100 t=in
+  LINE y=182 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=the
+   W x=37 s=0 z=100 t=source
+   W x=99 s=0 z=100 t=and
+   W x=136 s=0 z=100 t=should
+   W x=203 s=0 z=100 t=NOT
+   W x=230 s=0 z=100 t=appear
+   W x=289 s=0 z=100 t=on
+   W x=318 s=0 z=100 t=screen.
+SPINE 1 href=OEBPS/chapter2.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=12 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=72 s=1 z=100 t=Test:
+   W x=157 s=1 z=100 t=Class
+   W x=253 s=1 z=100 t=Selector
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=18 s=0 z=100 t=The
+   W x=62 s=0 z=100 t=paragraph
+   W x=166 s=0 z=100 t=below
+   W x=225 s=0 z=100 t=has
+   W x=275 s=0 z=100 t=class="hidden"
+   W x=427 s=0 z=100 t=and
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=0 s=0 z=100 t=should
+   W x=67 s=0 z=100 t=NOT
+   W x=94 s=0 z=100 t=be
+   W x=115 s=0 z=100 t=visible.
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=10
+   W x=18 s=0 z=100 t=If
+   W x=45 s=0 z=100 t=you
+   W x=84 s=0 z=100 t=can
+   W x=122 s=0 z=100 t=only
+   W x=170 s=0 z=100 t=see
+   W x=205 s=0 z=100 t=this
+   W x=250 s=0 z=100 t=paragraph
+   W x=345 s=0 z=100 t=and
+   W x=384 s=0 z=100 t=the
+   W x=423 s=0 z=100 t=one
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=above
+   W x=57 s=0 z=100 t=the
+   W x=94 s=0 z=100 t=hidden
+   W x=154 s=0 z=100 t=marker,
+   W x=223 s=0 z=100 t=the
+   W x=260 s=0 z=100 t=test
+   W x=304 s=0 z=100 t=PASSES.
+  LINE y=134 x=0 align=2 mult=1.400 hfid=0 words=3
+   W x=69 s=1 z=100 t=Multiple
+   W x=181 s=1 z=100 t=hidden
+   W x=273 s=1 z=100 t=elements
+  LINE y=168 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=paragraph
+   W x=170 s=0 z=100 t=before
+   W x=230 s=0 z=100 t=hidden
+   W x=290 s=0 z=100 t=block.
+  LINE y=192 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=paragraph
+   W x=170 s=0 z=100 t=after
+   W x=225 s=0 z=100 t=hidden
+   W x=285 s=0 z=100 t=block.
+  LINE y=216 x=0 align=2 mult=1.400 hfid=0 words=3
+   W x=95 s=1 z=100 t=Hidden
+   W x=181 s=1 z=100 t=span
+   W x=248 s=1 z=100 t=(inline)
+  LINE y=250 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=18 s=0 z=100 t=This
+   W x=57 s=0 z=100 t=sentence
+   W x=138 s=0 z=100 t=has
+   W x=177 s=0 z=100 t=a
+   W x=195 s=0 z=100 t=hidden
+   W x=255 s=0 z=100 t=span
+   W x=299 s=0 z=100 t=in
+   W x=322 s=0 z=100 t=the
+   W x=359 s=0 z=100 t=middle.
+  LINE y=274 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=63 s=1 z=100 t=Second
+   W x=162 s=1 z=100 t=hidden
+   W x=254 s=1 z=100 t=class
+   W x=333 s=1 z=100 t=name
+  LINE y=308 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=paragraph
+   W x=170 s=0 z=100 t=after
+   W x=225 s=0 z=100 t=invisible
+   W x=305 s=0 z=100 t=one.
+SPINE 2 href=OEBPS/chapter3.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=9 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=54 s=1 z=100 t=Test:
+   W x=139 s=1 z=100 t=Element
+   W x=272 s=1 z=100 t=Selector
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=The
+   W x=61 s=0 z=100 t=aside
+   W x=121 s=0 z=100 t=element
+   W x=204 s=0 z=100 t=below
+   W x=262 s=0 z=100 t=should
+   W x=339 s=0 z=100 t=be
+   W x=370 s=0 z=100 t=completely
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=hidden
+   W x=73 s=0 z=100 t=because
+   W x=155 s=0 z=100 t=the
+   W x=205 s=0 z=100 t=stylesheet
+   W x=318 s=0 z=100 t=sets
+   W x=374 s=0 z=100 t=aside
+   W x=437 s=0 z=100 t=to
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=display:none.
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=18 s=0 z=100 t=If
+   W x=43 s=0 z=100 t=no
+   W x=72 s=0 z=100 t=aside
+   W x=122 s=0 z=100 t=content
+   W x=198 s=0 z=100 t=is
+   W x=219 s=0 z=100 t=visible,
+   W x=290 s=0 z=100 t=this
+   W x=333 s=0 z=100 t=test
+   W x=377 s=0 z=100 t=PASSES.
+  LINE y=134 x=0 align=2 mult=1.400 hfid=0 words=2
+   W x=132 s=1 z=100 t=Multiple
+   W x=244 s=1 z=100 t=asides
+  LINE y=168 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=18 s=0 z=100 t=Text
+   W x=56 s=0 z=100 t=before
+   W x=116 s=0 z=100 t=first
+   W x=165 s=0 z=100 t=aside.
+  LINE y=192 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=18 s=0 z=100 t=Text
+   W x=56 s=0 z=100 t=between
+   W x=122 s=0 z=100 t=asides.
+  LINE y=216 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=18 s=0 z=100 t=Text
+   W x=56 s=0 z=100 t=after
+   W x=111 s=0 z=100 t=last
+   W x=157 s=0 z=100 t=aside.
+SPINE 3 href=OEBPS/chapter4.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=15 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=5 s=1 z=100 t=Test:
+   W x=90 s=1 z=100 t=Combined
+   W x=228 s=1 z=100 t=Element.Class
+  LINE y=38 x=0 align=2 mult=1.600 hfid=0 words=1
+   W x=163 s=1 z=100 t=Selector
+  LINE y=76 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=18 s=0 z=100 t=Only
+   W x=63 s=0 z=100 t=div
+   W x=98 s=0 z=100 t=elements
+   W x=183 s=0 z=100 t=with
+   W x=226 s=0 z=100 t=class="removeme"
+   W x=395 s=0 z=100 t=should
+  LINE y=100 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=be
+   W x=28 s=0 z=100 t=hidden.
+   W x=105 s=0 z=100 t=A
+   W x=126 s=0 z=100 t=span
+   W x=177 s=0 z=100 t=with
+   W x=224 s=0 z=100 t=class="removeme"
+   W x=397 s=0 z=100 t=should
+  LINE y=124 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=still
+   W x=53 s=0 z=100 t=be
+   W x=78 s=0 z=100 t=visible
+   W x=145 s=0 z=100 t=(no
+   W x=189 s=0 z=100 t=rule
+   W x=236 s=0 z=100 t=for
+   W x=276 s=0 z=100 t=span.removeme),
+   W x=433 s=0 z=100 t=but
+  LINE y=148 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=0 s=0 z=100 t=a
+   W x=18 s=0 z=100 t=div
+   W x=50 s=0 z=100 t=without
+   W x=123 s=0 z=100 t=the
+   W x=160 s=0 z=100 t=class
+   W x=212 s=0 z=100 t=should
+   W x=279 s=0 z=100 t=also
+   W x=327 s=0 z=100 t=be
+   W x=348 s=0 z=100 t=visible.
+  LINE y=172 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=18 s=0 z=100 t=This
+   W x=57 s=0 z=100 t=plain
+   W x=107 s=0 z=100 t=div
+   W x=139 s=0 z=100 t=should
+   W x=206 s=0 z=100 t=be
+   W x=227 s=0 z=100 t=visible.
+  LINE y=196 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=18 s=0 z=100 t=A
+   W x=44 s=0 z=100 t=visible
+   W x=119 s=0 z=100 t=span.removeme
+   W x=264 s=0 z=100 t=should
+   W x=343 s=0 z=100 t=still
+   W x=404 s=0 z=100 t=appear
+  LINE y=220 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=because
+   W x=69 s=0 z=100 t=the
+   W x=106 s=0 z=100 t=CSS
+   W x=146 s=0 z=100 t=rule
+   W x=189 s=0 z=100 t=only
+   W x=235 s=0 z=100 t=targets
+   W x=310 s=0 z=100 t=div.removeme.
+  LINE y=244 x=0 align=2 mult=1.400 hfid=0 words=2
+   W x=92 s=1 z=100 t=span.secret
+   W x=255 s=1 z=100 t=selector
+  LINE y=278 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=The
+   W x=56 s=0 z=100 t=word
+   W x=101 s=0 z=100 t=in
+   W x=129 s=0 z=100 t=this
+   W x=177 s=0 z=100 t=sentence
+   W x=263 s=0 z=100 t=uses
+   W x=312 s=0 z=100 t=span.secret
+   W x=423 s=0 z=100 t=and
+  LINE y=302 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=0 s=0 z=100 t=should
+   W x=67 s=0 z=100 t=be
+   W x=88 s=0 z=100 t=hidden,
+   W x=156 s=0 z=100 t=but
+   W x=189 s=0 z=100 t=a
+  LINE y=326 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=18 s=0 z=100 t=div
+   W x=67 s=0 z=100 t=with
+   W x=124 s=0 z=100 t=class="secret"
+   W x=280 s=0 z=100 t=would
+   W x=349 s=0 z=100 t=not
+   W x=405 s=0 z=100 t=match
+  LINE y=350 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=span.secret
+   W x=113 s=0 z=100 t=(though
+   W x=205 s=0 z=100 t=it
+   W x=234 s=0 z=100 t=matches
+   W x=309 s=0 z=100 t=.hidden
+   W x=386 s=0 z=100 t=if
+   W x=415 s=0 z=100 t=also
+  LINE y=374 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=classed).
+SPINE 4 href=OEBPS/chapter5.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=9 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=91 s=1 z=100 t=Test:
+   W x=176 s=1 z=100 t=Inline
+   W x=284 s=1 z=100 t=Style
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=Elements
+   W x=111 s=0 z=100 t=with
+   W x=159 s=0 z=100 t=style="display:none"
+   W x=362 s=0 z=100 t=directly
+   W x=441 s=0 z=100 t=in
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=the
+   W x=37 s=0 z=100 t=HTML
+   W x=75 s=0 z=100 t=attribute.
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=paragraph
+   W x=170 s=0 z=100 t=after
+   W x=225 s=0 z=100 t=inline-hidden
+   W x=346 s=0 z=100 t=one.
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=paragraph
+   W x=170 s=0 z=100 t=after
+   W x=225 s=0 z=100 t=inline-hidden
+   W x=346 s=0 z=100 t=div.
+  LINE y=134 x=0 align=2 mult=1.400 hfid=0 words=5
+   W x=6 s=1 z=100 t=Inline
+   W x=99 s=1 z=100 t=style
+   W x=177 s=1 z=100 t=with
+   W x=238 s=1 z=100 t=other
+   W x=324 s=1 z=100 t=properties
+  LINE y=168 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=paragraph
+   W x=170 s=0 z=100 t=below.
+  LINE y=192 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=119 s=1 z=100 t=Inline
+   W x=212 s=1 z=100 t=on
+   W x=255 s=1 z=100 t=a
+   W x=281 s=1 z=100 t=span
+  LINE y=226 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=Text
+   W x=56 s=0 z=100 t=before
+   W x=116 s=0 z=100 t=and
+   W x=153 s=0 z=100 t=text
+   W x=195 s=0 z=100 t=after.
+SPINE 5 href=OEBPS/chapter6.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=9 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=4
+   W x=22 s=1 z=100 t=Test:
+   W x=107 s=1 z=100 t=Nested
+   W x=210 s=1 z=100 t=Hidden
+   W x=310 s=1 z=100 t=Content
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=18 s=0 z=100 t=When
+   W x=67 s=0 z=100 t=a
+   W x=87 s=0 z=100 t=parent
+   W x=151 s=0 z=100 t=element
+   W x=226 s=0 z=100 t=is
+   W x=249 s=0 z=100 t=hidden,
+   W x=319 s=0 z=100 t=all
+   W x=357 s=0 z=100 t=its
+   W x=390 s=0 z=100 t=children
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=must
+   W x=60 s=0 z=100 t=also
+   W x=122 s=0 z=100 t=be
+   W x=157 s=0 z=100 t=hidden,
+   W x=239 s=0 z=100 t=even
+   W x=300 s=0 z=100 t=if
+   W x=336 s=0 z=100 t=the
+   W x=387 s=0 z=100 t=children
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=0 s=0 z=100 t=themselves
+   W x=104 s=0 z=100 t=have
+   W x=155 s=0 z=100 t=no
+   W x=184 s=0 z=100 t=display:none.
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=Only
+   W x=63 s=0 z=100 t=this
+   W x=109 s=0 z=100 t=paragraph
+   W x=205 s=0 z=100 t=should
+   W x=275 s=0 z=100 t=be
+   W x=299 s=0 z=100 t=visible
+   W x=365 s=0 z=100 t=after
+   W x=423 s=0 z=100 t=the
+  LINE y=134 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=hidden
+   W x=60 s=0 z=100 t=container.
+  LINE y=158 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=21 s=1 z=100 t=Hidden
+   W x=107 s=1 z=100 t=parent
+   W x=202 s=1 z=100 t=with
+   W x=263 s=1 z=100 t=visible-class
+  LINE y=192 x=0 align=2 mult=1.400 hfid=0 words=1
+   W x=197 s=1 z=100 t=child
+  LINE y=226 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=paragraph
+   W x=170 s=0 z=100 t=confirming
+   W x=268 s=0 z=100 t=parent-wins
+   W x=371 s=0 z=100 t=behavior.
+SPINE 6 href=OEBPS/chapter7.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=10 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=72 s=1 z=100 t=Test:
+   W x=157 s=1 z=100 t=Hidden
+   W x=257 s=1 z=100 t=Headings
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=Headings
+   W x=101 s=0 z=100 t=with
+   W x=144 s=0 z=100 t=display:none
+   W x=262 s=0 z=100 t=should
+   W x=332 s=0 z=100 t=not
+   W x=374 s=0 z=100 t=appear
+   W x=436 s=0 z=100 t=or
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=affect
+   W x=64 s=0 z=100 t=layout.
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=18 s=0 z=100 t=Paragraph
+   W x=114 s=0 z=100 t=after
+   W x=169 s=0 z=100 t=hidden
+   W x=229 s=0 z=100 t=H2.
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=18 s=0 z=100 t=Paragraph
+   W x=114 s=0 z=100 t=after
+   W x=169 s=0 z=100 t=hidden
+   W x=229 s=0 z=100 t=H3.
+  LINE y=134 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=69 s=1 z=100 t=Visible
+   W x=161 s=1 z=100 t=H2
+   W x=193 s=1 z=100 t=for
+   W x=247 s=1 z=100 t=comparison
+  LINE y=168 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=This
+   W x=75 s=0 z=100 t=heading-paragraph
+   W x=264 s=0 z=100 t=pair
+   W x=320 s=0 z=100 t=should
+   W x=405 s=0 z=100 t=render
+  LINE y=192 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=normally.
+  LINE y=216 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=Paragraph
+   W x=114 s=0 z=100 t=after
+   W x=169 s=0 z=100 t=hidden
+   W x=229 s=0 z=100 t=H1.
+   W x=259 s=0 z=100 t=No
+   W x=284 s=0 z=100 t=extra
+   W x=336 s=0 z=100 t=vertical
+   W x=415 s=0 z=100 t=space
+  LINE y=240 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=should
+   W x=67 s=0 z=100 t=appear
+   W x=126 s=0 z=100 t=above.
+SPINE 7 href=OEBPS/chapter8.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=21 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=80 s=1 z=100 t=Test:
+   W x=165 s=1 z=100 t=Style
+   W x=260 s=1 z=100 t=Priority
+  LINE y=38 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=22 s=1 z=100 t=Inline
+   W x=115 s=1 z=100 t=overrides
+   W x=249 s=1 z=100 t=stylesheet
+   W x=403 s=1 z=100 t=to
+  LINE y=72 x=0 align=2 mult=1.400 hfid=0 words=1
+   W x=202 s=1 z=100 t=hide
+  LINE y=106 x=0 align=0 mult=1.000 hfid=0 words=10
+   W x=18 s=0 z=100 t=The
+   W x=54 s=0 z=100 t=div
+   W x=89 s=0 z=100 t=below
+   W x=140 s=0 z=100 t=has
+   W x=182 s=0 z=100 t=no
+   W x=214 s=0 z=100 t=hidden
+   W x=277 s=0 z=100 t=class
+   W x=332 s=0 z=100 t=but
+   W x=368 s=0 z=100 t=an
+   W x=400 s=0 z=100 t=inline
+  LINE y=130 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=style
+   W x=51 s=0 z=100 t=hides
+   W x=101 s=0 z=100 t=it.
+  LINE y=154 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=after
+   W x=132 s=0 z=100 t=inline-hidden
+   W x=253 s=0 z=100 t=div.
+  LINE y=178 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=22 s=1 z=100 t=Inline
+   W x=115 s=1 z=100 t=overrides
+   W x=249 s=1 z=100 t=stylesheet
+   W x=403 s=1 z=100 t=to
+  LINE y=212 x=0 align=2 mult=1.400 hfid=0 words=1
+   W x=200 s=1 z=100 t=show
+  LINE y=246 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=The
+   W x=51 s=0 z=100 t=paragraph
+   W x=144 s=0 z=100 t=below
+   W x=192 s=0 z=100 t=has
+   W x=231 s=0 z=100 t=class="hidden"
+   W x=372 s=0 z=100 t=but
+   W x=405 s=0 z=100 t=inline
+  LINE y=270 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=0 s=0 z=100 t=style="display:block"
+   W x=198 s=0 z=100 t=overrides
+   W x=289 s=0 z=100 t=it
+   W x=315 s=0 z=100 t=back
+   W x=358 s=0 z=100 t=to
+   W x=390 s=0 z=100 t=visible.
+  LINE y=294 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=It
+   W x=25 s=0 z=100 t=SHOULD
+   W x=89 s=0 z=100 t=appear.
+  LINE y=318 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=VISIBLE:
+   W x=114 s=0 z=100 t=class="hidden"
+   W x=266 s=0 z=100 t=overridden
+   W x=374 s=0 z=100 t=by
+   W x=405 s=0 z=100 t=inline
+  LINE y=342 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=style="display:block".
+  LINE y=366 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=If
+   W x=44 s=0 z=100 t=the
+   W x=82 s=0 z=100 t=paragraph
+   W x=176 s=0 z=100 t=above
+   W x=234 s=0 z=100 t=is
+   W x=256 s=0 z=100 t=visible,
+   W x=328 s=0 z=100 t=inline
+   W x=387 s=0 z=100 t=override
+  LINE y=390 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=works
+   W x=49 s=0 z=100 t=correctly.
+  LINE y=414 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=14 s=1 z=100 t=element.class
+   W x=212 s=1 z=100 t=override
+   W x=332 s=1 z=100 t=of
+   W x=374 s=1 z=100 t=class
+  LINE y=448 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=The
+   W x=67 s=0 z=100 t=paragraph
+   W x=176 s=0 z=100 t=below
+   W x=240 s=0 z=100 t=has
+   W x=295 s=0 z=100 t=class="force-show
+  LINE y=472 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=0 s=0 z=100 t=hidden".
+   W x=88 s=0 z=100 t=The
+   W x=121 s=0 z=100 t=.hidden
+   W x=197 s=0 z=100 t=class
+   W x=255 s=0 z=100 t=sets
+   W x=304 s=0 z=100 t=display:none,
+   W x=433 s=0 z=100 t=but
+  LINE y=496 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=0 s=0 z=100 t=p.force-show
+   W x=116 s=0 z=100 t=sets
+   W x=159 s=0 z=100 t=display:block
+   W x=273 s=0 z=100 t=at
+   W x=301 s=0 z=100 t=higher
+   W x=365 s=0 z=100 t=priority.
+  LINE y=520 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=If
+   W x=45 s=0 z=100 t=the
+   W x=84 s=0 z=100 t=paragraph
+   W x=179 s=0 z=100 t=above
+   W x=238 s=0 z=100 t=is
+   W x=261 s=0 z=100 t=visible,
+   W x=334 s=0 z=100 t=element.class
+  LINE y=544 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=priority
+   W x=70 s=0 z=100 t=works.
+SPINE 8 href=OEBPS/chapter9.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=12 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=87 s=1 z=100 t=Test:
+   W x=172 s=1 z=100 t=Mixed
+   W x=248 s=1 z=100 t=Siblings
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=Alternating
+   W x=130 s=0 z=100 t=visible
+   W x=194 s=0 z=100 t=and
+   W x=232 s=0 z=100 t=hidden
+   W x=293 s=0 z=100 t=elements
+   W x=376 s=0 z=100 t=to
+   W x=405 s=0 z=100 t=verify
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=rendering
+   W x=87 s=0 z=100 t=continuity.
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=1
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=2
+  LINE y=134 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=3
+  LINE y=158 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=4
+  LINE y=182 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=5
+  LINE y=206 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=6
+  LINE y=230 x=0 align=2 mult=1.400 hfid=0 words=2
+   W x=129 s=1 z=100 t=Expected
+   W x=243 s=1 z=100 t=result
+  LINE y=264 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=You
+   W x=62 s=0 z=100 t=should
+   W x=133 s=0 z=100 t=see
+   W x=170 s=0 z=100 t="Visible
+   W x=245 s=0 z=100 t=1"
+   W x=273 s=0 z=100 t=through
+   W x=359 s=0 z=100 t="Visible
+   W x=434 s=0 z=100 t=6"
+  LINE y=288 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=with
+   W x=40 s=0 z=100 t=no
+   W x=69 s=0 z=100 t=gaps
+   W x=113 s=0 z=100 t=or
+   W x=139 s=0 z=100 t=[HIDDEN]
+   W x=217 s=0 z=100 t=markers
+   W x=287 s=0 z=100 t=between
+   W x=353 s=0 z=100 t=them.
+SPINE 9 href=OEBPS/chapter10.xhtml pages=2 truncated=0 cssFallback=0
+ PAGE 0 elements=26 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=3
+   W x=84 s=1 z=100 t=Test:
+   W x=169 s=1 z=100 t=Hidden
+   W x=269 s=1 z=100 t=Images
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=10
+   W x=18 s=0 z=100 t=Images
+   W x=89 s=0 z=100 t=can
+   W x=130 s=0 z=100 t=be
+   W x=156 s=0 z=100 t=hidden
+   W x=221 s=0 z=100 t=via
+   W x=262 s=0 z=100 t=CSS
+   W x=307 s=0 z=100 t=on
+   W x=341 s=0 z=100 t=the
+   W x=383 s=0 z=100 t=img
+   W x=421 s=0 z=100 t=tag
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=itself,
+   W x=77 s=0 z=100 t=or
+   W x=113 s=0 z=100 t=by
+   W x=143 s=0 z=100 t=hiding
+   W x=213 s=0 z=100 t=a
+   W x=241 s=0 z=100 t=parent
+   W x=313 s=0 z=100 t=container
+   W x=415 s=0 z=100 t=that
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=contains
+   W x=84 s=0 z=100 t=images.
+  LINE y=110 x=0 align=2 mult=1.400 hfid=0 words=3
+   W x=72 s=1 z=100 t=Visible
+   W x=164 s=1 z=100 t=image
+   W x=246 s=1 z=100 t=(control)
+  LINE y=144 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=18 s=0 z=100 t=This
+   W x=57 s=0 z=100 t=image
+   W x=111 s=0 z=100 t=should
+   W x=178 s=0 z=100 t=be
+   W x=199 s=0 z=100 t=visible:
+  IMG y=168 x=170 w=120 h=80 src=<cache>/epub_<hash>/img_9_8d25017e_0.png
+  LINE y=248 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=If
+   W x=51 s=0 z=100 t=you
+   W x=96 s=0 z=100 t=see
+   W x=137 s=0 z=100 t=the
+   W x=182 s=0 z=100 t=image
+   W x=244 s=0 z=100 t=above,
+   W x=317 s=0 z=100 t=image
+   W x=379 s=0 z=100 t=rendering
+  LINE y=272 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=works.
+  LINE y=296 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=9 s=1 z=100 t=Image
+   W x=95 s=1 z=100 t=hidden
+   W x=187 s=1 z=100 t=via
+   W x=241 s=1 z=100 t=class="hidden"
+  LINE y=330 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=The
+   W x=51 s=0 z=100 t=image
+   W x=105 s=0 z=100 t=below
+   W x=153 s=0 z=100 t=has
+   W x=192 s=0 z=100 t=class="hidden"
+   W x=333 s=0 z=100 t=and
+   W x=370 s=0 z=100 t=should
+   W x=437 s=0 z=100 t=NOT
+  LINE y=354 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=appear:
+  LINE y=378 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=No
+   W x=54 s=0 z=100 t=image
+   W x=119 s=0 z=100 t=should
+   W x=197 s=0 z=100 t=be
+   W x=229 s=0 z=100 t=visible
+   W x=303 s=0 z=100 t=between
+   W x=380 s=0 z=100 t=the
+   W x=428 s=0 z=100 t=two
+  LINE y=402 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=paragraphs
+   W x=102 s=0 z=100 t=above.
+  LINE y=426 x=0 align=2 mult=1.400 hfid=0 words=5
+   W x=34 s=1 z=100 t=Image
+   W x=120 s=1 z=100 t=hidden
+   W x=212 s=1 z=100 t=via
+   W x=266 s=1 z=100 t=inline
+   W x=355 s=1 z=100 t=style
+  LINE y=460 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=18 s=0 z=100 t=The
+   W x=59 s=0 z=100 t=image
+   W x=121 s=0 z=100 t=below
+   W x=177 s=0 z=100 t=has
+   W x=224 s=0 z=100 t=style="display:none"
+   W x=427 s=0 z=100 t=and
+  LINE y=484 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=should
+   W x=67 s=0 z=100 t=NOT
+   W x=94 s=0 z=100 t=appear:
+  LINE y=508 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=No
+   W x=54 s=0 z=100 t=image
+   W x=119 s=0 z=100 t=should
+   W x=197 s=0 z=100 t=be
+   W x=229 s=0 z=100 t=visible
+   W x=303 s=0 z=100 t=between
+   W x=380 s=0 z=100 t=the
+   W x=428 s=0 z=100 t=two
+  LINE y=532 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=paragraphs
+   W x=102 s=0 z=100 t=above.
+  LINE y=556 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=19 s=1 z=100 t=Image
+   W x=105 s=1 z=100 t=hidden
+   W x=197 s=1 z=100 t=via
+   W x=251 s=1 z=100 t=img.suppressed
+  LINE y=590 x=0 align=2 mult=1.400 hfid=0 words=1
+   W x=173 s=1 z=100 t=selector
+  LINE y=624 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=The
+   W x=55 s=0 z=100 t=image
+   W x=113 s=0 z=100 t=below
+   W x=165 s=0 z=100 t=has
+   W x=208 s=0 z=100 t=class="suppressed"
+   W x=383 s=0 z=100 t=and
+   W x=424 s=0 z=100 t=the
+  LINE y=648 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=0 s=0 z=100 t=CSS
+   W x=40 s=0 z=100 t=rule
+   W x=83 s=0 z=100 t=img.suppressed
+   W x=210 s=0 z=100 t=sets
+   W x=253 s=0 z=100 t=display:none:
+  LINE y=672 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=No
+   W x=54 s=0 z=100 t=image
+   W x=119 s=0 z=100 t=should
+   W x=197 s=0 z=100 t=be
+   W x=229 s=0 z=100 t=visible
+   W x=303 s=0 z=100 t=between
+   W x=380 s=0 z=100 t=the
+   W x=428 s=0 z=100 t=two
+  LINE y=696 x=0 align=0 mult=1.000 hfid=0 words=2
+   W x=0 s=0 z=100 t=paragraphs
+   W x=102 s=0 z=100 t=above.
+  LINE y=720 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=55 s=1 z=100 t=Image
+   W x=141 s=1 z=100 t=inside
+   W x=226 s=1 z=100 t=hidden
+   W x=318 s=1 z=100 t=parent
+ PAGE 1 elements=12 footnotes=0
+  LINE y=0 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=18 s=0 z=100 t=The
+   W x=55 s=0 z=100 t=div
+   W x=91 s=0 z=100 t=below
+   W x=143 s=0 z=100 t=is
+   W x=168 s=0 z=100 t=hidden;
+   W x=241 s=0 z=100 t=the
+   W x=282 s=0 z=100 t=image
+   W x=340 s=0 z=100 t=inside
+   W x=399 s=0 z=100 t=should
+  LINE y=24 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=also
+   W x=48 s=0 z=100 t=be
+   W x=69 s=0 z=100 t=hidden:
+  LINE y=48 x=0 align=0 mult=1.000 hfid=0 words=10
+   W x=18 s=0 z=100 t=No
+   W x=43 s=0 z=100 t=image
+   W x=97 s=0 z=100 t=or
+   W x=123 s=0 z=100 t=text
+   W x=165 s=0 z=100 t=from
+   W x=211 s=0 z=100 t=the
+   W x=248 s=0 z=100 t=hidden
+   W x=308 s=0 z=100 t=div
+   W x=340 s=0 z=100 t=should
+   W x=407 s=0 z=100 t=appear
+  LINE y=72 x=0 align=0 mult=1.000 hfid=0 words=1
+   W x=0 s=0 z=100 t=above.
+  LINE y=96 x=0 align=2 mult=1.400 hfid=0 words=3
+   W x=52 s=1 z=100 t=Image
+   W x=138 s=1 z=100 t=with
+   W x=199 s=1 z=100 t=class="hidden"
+  LINE y=130 x=0 align=2 mult=1.400 hfid=0 words=4
+   W x=61 s=1 z=100 t=overridden
+   W x=210 s=1 z=100 t=by
+   W x=240 s=1 z=100 t=inline
+   W x=329 s=1 z=100 t=style
+  LINE y=164 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=The
+   W x=58 s=0 z=100 t=image
+   W x=119 s=0 z=100 t=below
+   W x=174 s=0 z=100 t=has
+   W x=220 s=0 z=100 t=class="hidden"
+   W x=368 s=0 z=100 t=but
+   W x=408 s=0 z=100 t=inline
+  LINE y=188 x=0 align=0 mult=1.000 hfid=0 words=6
+   W x=0 s=0 z=100 t=style="display:block"
+   W x=198 s=0 z=100 t=overrides
+   W x=289 s=0 z=100 t=it
+   W x=315 s=0 z=100 t=back
+   W x=358 s=0 z=100 t=to
+   W x=390 s=0 z=100 t=visible.
+  LINE y=212 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=It
+   W x=25 s=0 z=100 t=SHOULD
+   W x=89 s=0 z=100 t=appear:
+  IMG y=236 x=170 w=120 h=80 src=<cache>/epub_<hash>/img_9_8d25017e_1.png
+  LINE y=316 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=18 s=0 z=100 t=If
+   W x=45 s=0 z=100 t=the
+   W x=84 s=0 z=100 t=image
+   W x=140 s=0 z=100 t=above
+   W x=199 s=0 z=100 t=is
+   W x=222 s=0 z=100 t=visible,
+   W x=295 s=0 z=100 t=inline
+   W x=355 s=0 z=100 t=override
+   W x=435 s=0 z=100 t=on
+  LINE y=340 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=img
+   W x=33 s=0 z=100 t=works
+   W x=82 s=0 z=100 t=correctly.
+SPINE 10 href=OEBPS/chapter11.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=12 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=5
+   W x=30 s=1 z=100 t=Test:
+   W x=115 s=1 z=100 t=Mixed
+   W x=191 s=1 z=100 t=Images
+   W x=307 s=1 z=100 t=and
+   W x=371 s=1 z=100 t=Text
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=Alternating
+   W x=129 s=0 z=100 t=visible
+   W x=192 s=0 z=100 t=and
+   W x=229 s=0 z=100 t=hidden
+   W x=289 s=0 z=100 t=images
+   W x=352 s=0 z=100 t=and
+   W x=389 s=0 z=100 t=text.
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=text
+   W x=119 s=0 z=100 t=1
+  IMG y=86 x=170 w=120 h=80 src=<cache>/epub_<hash>/img_10_8d25017e_0.png
+  LINE y=166 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=text
+   W x=119 s=0 z=100 t=2
+  LINE y=190 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=text
+   W x=119 s=0 z=100 t=3
+  LINE y=214 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=text
+   W x=119 s=0 z=100 t=4
+  LINE y=238 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=18 s=0 z=100 t=Visible
+   W x=77 s=0 z=100 t=text
+   W x=119 s=0 z=100 t=5
+  LINE y=262 x=0 align=2 mult=1.400 hfid=0 words=2
+   W x=129 s=1 z=100 t=Expected
+   W x=243 s=1 z=100 t=result
+  LINE y=296 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=You
+   W x=60 s=0 z=100 t=should
+   W x=129 s=0 z=100 t=see
+   W x=164 s=0 z=100 t="Visible
+   W x=237 s=0 z=100 t=text
+   W x=281 s=0 z=100 t=1"
+   W x=307 s=0 z=100 t=through
+   W x=391 s=0 z=100 t="Visible
+  LINE y=320 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=text
+   W x=53 s=0 z=100 t=5",
+   W x=100 s=0 z=100 t=with
+   W x=151 s=0 z=100 t=only
+   W x=208 s=0 z=100 t=one
+   W x=257 s=0 z=100 t=image
+   W x=322 s=0 z=100 t=visible
+   W x=396 s=0 z=100 t=(after
+  LINE y=344 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t="Visible
+   W x=71 s=0 z=100 t=text
+   W x=113 s=0 z=100 t=1").
+SPINE 11 href=OEBPS/chapter12.xhtml pages=1 truncated=0 cssFallback=0
+ PAGE 0 elements=16 footnotes=0
+  LINE y=0 x=0 align=2 mult=1.600 hfid=0 words=2
+   W x=141 s=1 z=100 t=Chapter
+   W x=269 s=1 z=100 t=One
+  LINE y=38 x=0 align=0 mult=1.000 hfid=0 words=10
+   W x=18 s=0 z=100 t=It
+   W x=46 s=0 z=100 t=was
+   W x=82 s=0 z=100 t=a
+   W x=103 s=0 z=100 t=dark
+   W x=148 s=0 z=100 t=and
+   W x=188 s=0 z=100 t=stormy
+   W x=254 s=0 z=100 t=night.
+   W x=323 s=0 z=100 t=The
+   W x=359 s=0 z=100 t=wind
+   W x=399 s=0 z=100 t=howled
+  LINE y=62 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=through
+   W x=92 s=0 z=100 t=the
+   W x=139 s=0 z=100 t=empty
+   W x=198 s=0 z=100 t=streets
+   W x=278 s=0 z=100 t=of
+   W x=316 s=0 z=100 t=the
+   W x=363 s=0 z=100 t=old
+   W x=408 s=0 z=100 t=town,
+  LINE y=86 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=0 s=0 z=100 t=rattling
+   W x=83 s=0 z=100 t=shutters
+   W x=167 s=0 z=100 t=and
+   W x=204 s=0 z=100 t=scattering
+   W x=303 s=0 z=100 t=leaves.
+  LINE y=110 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=18 s=0 z=100 t=Maria
+   W x=70 s=0 z=100 t=pulled
+   W x=130 s=0 z=100 t=her
+   W x=167 s=0 z=100 t=coat
+   W x=216 s=0 z=100 t=tighter
+   W x=290 s=0 z=100 t=and
+   W x=329 s=0 z=100 t=hurried
+   W x=399 s=0 z=100 t=along
+  LINE y=134 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=the
+   W x=42 s=0 z=100 t=cobblestones.
+   W x=172 s=0 z=100 t=She
+   W x=216 s=0 z=100 t=had
+   W x=259 s=0 z=100 t=been
+   W x=305 s=0 z=100 t=walking
+   W x=379 s=0 z=100 t=for
+   W x=420 s=0 z=100 t=what
+  LINE y=158 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=0 s=0 z=100 t=felt
+   W x=46 s=0 z=100 t=like
+   W x=86 s=0 z=100 t=hours,
+   W x=154 s=0 z=100 t=though
+   W x=230 s=0 z=100 t=the
+   W x=269 s=0 z=100 t=clock
+   W x=320 s=0 z=100 t=tower
+   W x=373 s=0 z=100 t=had
+   W x=413 s=0 z=100 t=only
+  LINE y=182 x=0 align=0 mult=1.000 hfid=0 words=3
+   W x=0 s=0 z=100 t=just
+   W x=43 s=0 z=100 t=struck
+   W x=102 s=0 z=100 t=nine.
+  LINE y=206 x=0 align=0 mult=1.000 hfid=0 words=10
+   W x=18 s=0 z=100 t=The
+   W x=54 s=0 z=100 t=cafe
+   W x=101 s=0 z=100 t=at
+   W x=132 s=0 z=100 t=the
+   W x=172 s=0 z=100 t=corner
+   W x=236 s=0 z=100 t=of
+   W x=267 s=0 z=100 t=Elm
+   W x=307 s=0 z=100 t=Street
+   W x=374 s=0 z=100 t=was
+   W x=410 s=0 z=100 t=still
+  LINE y=230 x=0 align=0 mult=1.000 hfid=0 words=9
+   W x=0 s=0 z=100 t=open,
+   W x=59 s=0 z=100 t=its
+   W x=97 s=0 z=100 t=warm
+   W x=146 s=0 z=100 t=light
+   W x=207 s=0 z=100 t=spilling
+   W x=287 s=0 z=100 t=out
+   W x=333 s=0 z=100 t=onto
+   W x=391 s=0 z=100 t=the
+   W x=435 s=0 z=100 t=wet
+  LINE y=254 x=0 align=0 mult=1.000 hfid=0 words=5
+   W x=0 s=0 z=100 t=pavement
+   W x=85 s=0 z=100 t=like
+   W x=123 s=0 z=100 t=a
+   W x=141 s=0 z=100 t=golden
+   W x=207 s=0 z=100 t=promise.
+  LINE y=278 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t="Two
+   W x=72 s=0 z=100 t=coffees,"
+   W x=176 s=0 z=100 t=she
+   W x=224 s=0 z=100 t=told
+   W x=281 s=0 z=100 t=the
+   W x=330 s=0 z=100 t=barista,
+   W x=419 s=0 z=100 t=even
+  LINE y=302 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=though
+   W x=74 s=0 z=100 t=she
+   W x=110 s=0 z=100 t=was
+   W x=143 s=0 z=100 t=alone.
+   W x=212 s=0 z=100 t=Old
+   W x=243 s=0 z=100 t=habits
+   W x=304 s=0 z=100 t=die
+   W x=333 s=0 z=100 t=hard.
+  LINE y=326 x=0 align=0 mult=1.000 hfid=0 words=7
+   W x=18 s=0 z=100 t=The
+   W x=54 s=0 z=100 t=morning
+   W x=132 s=0 z=100 t=brought
+   W x=211 s=0 z=100 t=clarity,
+   W x=288 s=0 z=100 t=as
+   W x=318 s=0 z=100 t=mornings
+   W x=405 s=0 z=100 t=often
+  LINE y=350 x=0 align=0 mult=1.000 hfid=0 words=8
+   W x=0 s=0 z=100 t=do.
+   W x=46 s=0 z=100 t=The
+   W x=89 s=0 z=100 t=storm
+   W x=154 s=0 z=100 t=had
+   W x=202 s=0 z=100 t=passed,
+   W x=279 s=0 z=100 t=leaving
+   W x=365 s=0 z=100 t=the
+   W x=412 s=0 z=100 t=world
+  LINE y=374 x=0 align=0 mult=1.000 hfid=0 words=4
+   W x=0 s=0 z=100 t=scrubbed
+   W x=70 s=0 z=100 t=clean
+   W x=124 s=0 z=100 t=and
+   W x=161 s=0 z=100 t=glistening.

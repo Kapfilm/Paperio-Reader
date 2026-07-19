@@ -191,6 +191,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, OpfCac
 
     const unsigned long coverBatchStart = millis();
     ZipFile zip(filepath);
+    primeZip(zip);
     zip.streamCentralDirectoryNames([&](std::string_view path) {
       if (!bookMetadata.coverItemHref.empty()) return;  // already found
       if (!FsHelpers::hasJpgExtension(path) && !FsHelpers::hasPngExtension(path)) return;
@@ -367,11 +368,72 @@ bool Epub::parsePageMapFile() const {
   return true;
 }
 
+void Epub::primeZip(ZipFile& zip) const {
+  if (!zipDetailsCached_) return;
+  ZipFile::ZipDetails d;
+  d.centralDirOffset = zipCentralDirOffset_;
+  d.totalEntries = zipTotalEntries_;
+  d.isSet = true;
+  zip.seedDetails(d);
+}
+
+void Epub::adoptZipDetails(const ZipFile& zip) const {
+  const auto& d = zip.details();
+  if (!d.isSet || zipDetailsCached_) return;
+  zipCentralDirOffset_ = d.centralDirOffset;
+  zipTotalEntries_ = d.totalEntries;
+  zipDetailsCached_ = true;
+}
+
+bool Epub::computeZipFingerprint(uint64_t* out) const {
+  if (!zipFingerprintComputed_) {
+    ZipFile zip(filepath);
+    primeZip(zip);
+    zipFingerprintValid_ = zip.contentFingerprint(&zipFingerprint_);
+    zipFingerprintComputed_ = true;
+    adoptZipDetails(zip);
+  }
+  if (!zipFingerprintValid_) return false;
+  *out = zipFingerprint_;
+  return true;
+}
+
+namespace {
+constexpr uint32_t FINGERPRINT_MAGIC = 0x31504658;  // "XFP1"
+constexpr const char* FINGERPRINT_FILE = "/fingerprint.bin";
+}  // namespace
+
+bool Epub::readStoredFingerprint(uint64_t* out) const {
+  FsFile f;
+  if (!Storage.openFileForRead("EBP", cachePath + FINGERPRINT_FILE, f)) return false;
+  uint32_t magic = 0;
+  uint64_t fp = 0;
+  const bool ok = f.read(&magic, sizeof(magic)) == sizeof(magic) && magic == FINGERPRINT_MAGIC &&
+                  f.read(&fp, sizeof(fp)) == sizeof(fp);
+  f.close();
+  if (ok) *out = fp;
+  return ok;
+}
+
+void Epub::writeStoredFingerprint(const uint64_t fp) const {
+  FsFile f;
+  if (!Storage.openFileForWrite("EBP", cachePath + FINGERPRINT_FILE, f)) {
+    LOG_ERR("EBP", "Could not write fingerprint sidecar");
+    return;
+  }
+  f.write(reinterpret_cast<const uint8_t*>(&FINGERPRINT_MAGIC), sizeof(FINGERPRINT_MAGIC));
+  f.write(reinterpret_cast<const uint8_t*>(&fp), sizeof(fp));
+  f.close();
+}
+
 bool Epub::needsFirstOpenIndexing() const {
   // Spine/TOC cache missing -> load() rebuilds it (content.opf + TOC/NCX + book.bin).
   if (!BookMetadataCache::cacheExists(cachePath)) return true;
   // Compiled CSS rules cache missing -> load() runs the (slow) CSS compile.
   if (!CssParser(cachePath).hasCache()) return true;
+  // Book content changed at the same path -> load() wipes the cache and rebuilds.
+  uint64_t zipFp = 0, storedFp = 0;
+  if (computeZipFingerprint(&zipFp) && readStoredFingerprint(&storedFp) && storedFp != zipFp) return true;
   return false;
 }
 
@@ -400,6 +462,7 @@ void Epub::discoverCssFilesFromZip() {
   // instead of loadAllFileStatSlims(). The old path built a full unordered_map of every
   // ZIP entry — on EPUBs with 3000+ entries this consumed ~200 KB and crashed.
   ZipFile zf(filepath);
+  primeZip(zf);
 
   const size_t lastSlash = contentBasePath.find_last_of('/');
   const std::string opfDir = (lastSlash != std::string::npos) ? contentBasePath.substr(0, lastSlash + 1) : "";
@@ -537,6 +600,25 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   bookMetadataCache.reset(new BookMetadataCache(cachePath));
   // Always create CssParser - needed for inline style parsing even without CSS files
   cssParser.reset(new CssParser(cachePath));
+
+  // Detect a book replaced in place: the cache key is derived from the file path
+  // only, so identical path + different content would silently serve a stale
+  // cache. fingerprint.bin pins the ZIP content fingerprint the cache was built
+  // from; a mismatch invalidates the entire cache dir (sections, CSS, thumbs —
+  // all derived from the old bytes).
+  uint64_t zipFp = 0;
+  const bool haveFp = computeZipFingerprint(&zipFp);
+  if (haveFp && BookMetadataCache::cacheExists(cachePath)) {
+    uint64_t storedFp = 0;
+    if (!readStoredFingerprint(&storedFp)) {
+      // Pre-fingerprint cache (created before this firmware): adopt the current
+      // content instead of forcing every existing book through a full rebuild.
+      writeStoredFingerprint(zipFp);
+    } else if (storedFp != zipFp) {
+      LOG_INF("EBP", "Book content changed at same path, rebuilding cache");
+      clearCache(false);
+    }
+  }
 
   // Try to load existing cache first
   if (bookMetadataCache->load()) {
@@ -678,6 +760,9 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     parseCssFiles();
     Storage.removeDir((cachePath + "/sections").c_str());
   }
+
+  // Pin the content this cache was built from (see the staleness check above).
+  if (haveFp) writeStoredFingerprint(zipFp);
 
   LOG_DBG("EBP", "Loaded ePub: %s", filepath.c_str());
   return true;
@@ -1153,7 +1238,10 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
 
   const std::string path = FsHelpers::normalisePath(itemHref);
 
-  const auto content = ZipFile(filepath).readFileToMemory(path.c_str(), size, trailingNullByte);
+  ZipFile zip(filepath);
+  primeZip(zip);
+  const auto content = zip.readFileToMemory(path.c_str(), size, trailingNullByte);
+  adoptZipDetails(zip);
   if (!content) {
     LOG_DBG("EBP", "Failed to read item %s", path.c_str());
     return nullptr;
@@ -1169,13 +1257,21 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
   }
 
   const std::string path = FsHelpers::normalisePath(itemHref);
-  return ZipFile(filepath).readFileToStream(path.c_str(), out, chunkSize);
+  ZipFile zip(filepath);
+  primeZip(zip);
+  const bool ok = zip.readFileToStream(path.c_str(), out, chunkSize);
+  adoptZipDetails(zip);
+  return ok;
 }
 
 size_t Epub::readItemHeaderBytes(const std::string& itemHref, uint8_t* outBuf, const size_t maxBytes) const {
   if (itemHref.empty() || !outBuf || maxBytes == 0) return 0;
   const std::string path = FsHelpers::normalisePath(itemHref);
-  return ZipFile(filepath).readBytesFromEntry(path.c_str(), outBuf, maxBytes);
+  ZipFile zip(filepath);
+  primeZip(zip);
+  const size_t got = zip.readBytesFromEntry(path.c_str(), outBuf, maxBytes);
+  adoptZipDetails(zip);
+  return got;
 }
 
 bool Epub::extractItemToFile(const std::string& itemHref, const std::string& destPath) const {
@@ -1194,7 +1290,11 @@ bool Epub::extractItemToFile(const std::string& itemHref, const std::string& des
 
 bool Epub::getItemSize(const std::string& itemHref, size_t* size) const {
   const std::string path = FsHelpers::normalisePath(itemHref);
-  return ZipFile(filepath).getInflatedFileSize(path.c_str(), size);
+  ZipFile zip(filepath);
+  primeZip(zip);
+  const bool ok = zip.getInflatedFileSize(path.c_str(), size);
+  adoptZipDetails(zip);
+  return ok;
 }
 
 bool Epub::getSpineItemInflatedSize(const int spineIndex, size_t* size) const {

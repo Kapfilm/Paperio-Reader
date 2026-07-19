@@ -14,6 +14,7 @@ target_include_directories(EpubCssPerformanceTest PRIVATE
   ${REPO_ROOT}
   ${REPO_ROOT}/lib
   ${REPO_ROOT}/lib/Logging
+  ${REPO_ROOT}/lib/Serialization
   ${REPO_ROOT}/lib/Memory
   ${REPO_ROOT}/lib/InflateReader
   ${REPO_ROOT}/lib/uzlib/src

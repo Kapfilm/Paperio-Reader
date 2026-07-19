@@ -1,11 +1,13 @@
 #include "CssParser.h"
 
 #include <Arduino.h>
+#include <BuildArena.h>
 #include <Logging.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <new>
 #include <string_view>
 
 namespace {
@@ -54,6 +56,16 @@ constexpr size_t MAX_RULES = 1500;
 #endif
 
 constexpr size_t MIN_FREE_HEAP_FOR_CSS = CSS_MIN_FREE_HEAP_FOR_CSS;
+
+// Lean-mode floor (setLeanResolve): the index lives off-heap in the arena and the hot cache
+// is disabled, so resolveStyle allocates only a few small transient strings. The real fault
+// zone is ~13-15 KB free (see EpubReaderActivity RESIDENT_BUILD_ABORT_*), so 24 KB keeps a
+// comfortable margin while letting a borrowed build (~40 KB free) resolve without degrading.
+#ifndef CSS_LEAN_MIN_FREE_HEAP_FOR_CSS
+#define CSS_LEAN_MIN_FREE_HEAP_FOR_CSS (24 * 1024)
+#endif
+
+constexpr size_t LEAN_MIN_FREE_HEAP_FOR_CSS = CSS_LEAN_MIN_FREE_HEAP_FOR_CSS;
 
 // In-memory CSS rule cache sizing for disk-backed lookup mode.
 // Keeps memory bounded on large books while retaining hot selectors.
@@ -1033,9 +1045,7 @@ bool CssParser::endCacheCompile() {
   hotRuleCache_.clear();
   hotRuleLru_.clear();
   negativeRuleCache_.clear();
-  cacheRuleOffsets_.clear();
-  cacheIndexLoaded_ = false;
-  cachedRuleCount_ = 0;
+  dropIndex();
 
   return ensureCacheIndexLoaded();
 }
@@ -1057,6 +1067,14 @@ void CssParser::clearCaches(const bool evictEverything) {
   hotRuleCache_.clear();
   hotRuleLru_.clear();
   negativeRuleCache_.clear();
+  // Arena-backed ruleset (resident or index): the memory belongs to the build arena, which is
+  // reset per build, so never try to retain it across sections — drop the view and reload from
+  // disk on the next resolve (the arena is re-filled fresh). The 10 KB heap-retain heuristic
+  // below is meaningless here (nothing is on the heap).
+  if (indexArena_) {
+    dropIndex();
+    return;
+  }
   if (evictEverything) {
     // Defragmentation eviction: swap the unordered containers down so their bucket
     // arrays are freed too (clear() keeps them), and drop the retained disk index.
@@ -1088,18 +1106,20 @@ void CssParser::clear() {
     compileTempPath_.clear();
   }
   rulesBySelector_.clear();
-  cacheRuleOffsets_.clear();
+  dropIndex();
   hotRuleCache_.clear();
   hotRuleLru_.clear();
   negativeRuleCache_.clear();
-  cacheIndexLoaded_ = false;
-  cachedRuleCount_ = 0;
   resolveStats_ = {};
   compileModeActive_ = false;
   compileModeFailed_ = false;
   compileSelectorOffsets_.clear();
   totalSelectorCandidates_ = 0;
   unsupportedSelectorSkips_ = 0;
+  // Reset Phase-2 arena config: clear() ends a build, so the shared per-epub parser must not
+  // carry the lean flag or a now-dangling arena pointer into the next (possibly heap-backed) one.
+  indexArena_ = nullptr;
+  leanResolve_ = false;
 }
 
 void CssParser::resetResolveStats() const { resolveStats_ = {}; }
@@ -1297,6 +1317,13 @@ void CssParser::touchHotRule(const std::string& selector) const {
 }
 
 void CssParser::cacheHotRule(const std::string& selector, const CssStyle& style) const {
+  // Lean/arena builds skip the hot LRU entirely: its ~100 B/entry heap growth is exactly what
+  // the CSS floor guarded against, and arena builds resolve from the resident/index store
+  // instead (FreeInkBook keeps no such cache). This is a no-op call from the arena index-only
+  // path; it is never reached in RESIDENT mode.
+  if (leanResolve_) {
+    return;
+  }
   auto it = hotRuleCache_.find(selector);
   if (it != hotRuleCache_.end()) {
     it->second.first = style;
@@ -1358,18 +1385,63 @@ bool CssParser::lookupRule(const std::string& selector, CssStyle& outStyle, cons
     return false;
   }
 
+  const auto byHash = [](const SelectorEntry& e, uint32_t key) { return e.hash < key; };
+
+  // --- Arena mode (Phase 2) ---
+  // The ruleset lives in arena memory (a heap-free fill), so load it even under heap pressure.
+  if (indexArena_) {
+    if (!ensureCacheIndexLoaded()) {
+      return false;
+    }
+    const uint32_t h = selectorHash(selector);
+
+    // RESIDENT: the whole ruleset is in RAM — resolve by hash with no disk read and no caching
+    // (FreeInkBook's model). A hash collision between two distinct selectors is astronomically
+    // unlikely at these rule counts and costs at most one wrong style; upstream accepts that
+    // rather than paying a disk read to verify the selector string, and so do we. No low-heap
+    // guard applies — nothing here touches SD or grows the heap.
+    if (arenaResident_) {
+      const ResidentRule* begin = arenaResident_;
+      const ResidentRule* end = arenaResident_ + cachedRuleCount_;
+      auto it = std::lower_bound(begin, end, h, [](const ResidentRule& e, uint32_t key) { return e.hash < key; });
+      if (it != end && it->hash == h) {
+        outStyle = it->style;
+        resolveStats_.diskHits++;  // resolved from the (in-RAM) ruleset
+        return true;
+      }
+      return false;  // cheap re-scan next time; no negative cache needed in RAM
+    }
+
+    // Index-only fallback: payloads are on disk, so honor the low-heap bypass.
+    if (!allowDiskLookup) {
+      resolveStats_.lowHeapDiskBypasses++;
+      return false;
+    }
+    const SelectorEntry* begin = arenaIndex_;
+    const SelectorEntry* end = arenaIndex_ + cachedRuleCount_;
+    for (auto it = std::lower_bound(begin, end, h, byHash); it != end && it->hash == h; ++it) {
+      if (readRuleFromDiskAtOffset(it->offset, selector, outStyle)) {
+        resolveStats_.diskHits++;
+        return true;
+      }
+    }
+    if (negativeRuleCache_.size() >= NEGATIVE_CACHE_SIZE) {
+      negativeRuleCache_.clear();
+    }
+    negativeRuleCache_.insert(selector);
+    return false;
+  }
+
+  // --- Heap mode (disk index + hot cache) ---
   if (!allowDiskLookup) {
     resolveStats_.lowHeapDiskBypasses++;
     return false;
   }
-
   if (!ensureCacheIndexLoaded()) {
     return false;
   }
-
   const uint32_t h = selectorHash(selector);
-  auto it = std::lower_bound(cacheRuleOffsets_.begin(), cacheRuleOffsets_.end(), h,
-                             [](const SelectorEntry& e, uint32_t key) { return e.hash < key; });
+  auto it = std::lower_bound(cacheRuleOffsets_.begin(), cacheRuleOffsets_.end(), h, byHash);
   // Equal hashes are adjacent after the sort; probe each candidate until the
   // on-disk selector matches (collisions are expected to be rare).
   for (; it != cacheRuleOffsets_.end() && it->hash == h; ++it) {
@@ -1423,10 +1495,39 @@ bool CssParser::ensureCacheIndexLoaded() const {
   }
 
   // v10: index is immediately after the 11-byte header — read sequentially, no seek.
-  cacheRuleOffsets_.clear();
+  dropIndex();  // clears the heap vector and any arena view; resets cachedRuleCount_
   hotRuleCache_.clear();
   hotRuleLru_.clear();
   negativeRuleCache_.clear();
+
+  // Arena mode (Phase 2): prefer the resident {hash, CssStyle} ruleset (in-RAM resolve, no
+  // disk reads — see loadArenaResident); fall back to an arena-backed offset index when the
+  // resident array won't fit. loadArenaResident leaves the file open for that fallback read.
+  if (indexArena_) {
+    if (loadArenaResident(file, ruleCount, totalCandidates, unsupportedSkips)) {
+      file.close();
+      return true;
+    }
+    // Resident didn't fit — rewind to just past the 11-byte header and read the offset index
+    // into the arena instead. Payloads stay on disk (readRuleFromDiskAtOffset).
+    const size_t indexBytes = static_cast<size_t>(ruleCount) * sizeof(SelectorEntry);
+    if (ruleCount > 0) {
+      auto* idx = static_cast<SelectorEntry*>(indexArena_->alloc(indexBytes, alignof(SelectorEntry)));
+      if (!idx || !file.seek(11) ||
+          file.read(reinterpret_cast<uint8_t*>(idx), indexBytes) != static_cast<int>(indexBytes)) {
+        file.close();
+        return false;  // arena exhausted or short read — caller falls back to a released build
+      }
+      arenaIndex_ = idx;
+    }
+    file.close();
+    cachedRuleCount_ = ruleCount;
+    totalSelectorCandidates_ = totalCandidates;
+    unsupportedSelectorSkips_ = unsupportedSkips;
+    cacheIndexLoaded_ = true;
+    LOG_DBG("CSS", "Loaded CSS index (arena, disk payloads): %u selectors", static_cast<unsigned>(ruleCount));
+    return true;
+  }
 
   if (ruleCount > 0) {
     cacheRuleOffsets_.resize(ruleCount);
@@ -1450,6 +1551,72 @@ bool CssParser::ensureCacheIndexLoaded() const {
   return true;
 }
 
+// Stream the whole ruleset into the arena as a sorted {hash, CssStyle} array so resolveStyle
+// runs entirely in RAM (FreeInkBook's model, adapted). One sequential pass over the payload
+// block — the fixed CSS_FIXED_STYLE_BYTES layout means no per-record seeking — recomputing
+// each selector's hash (identical to the on-disk SelectorEntry::hash) and decoding its style.
+// Returns false without disturbing existing state when the arena can't hold the array; the
+// caller then tries the smaller offset index.
+bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const uint32_t totalCandidates,
+                                  const uint32_t unsupportedSkips) const {
+  // Reserve from a mark so a failed attempt (won't fit, or a stream error) leaves the arena
+  // cursor exactly where it was — the caller then reuses that space for the smaller offset
+  // index. The file stays open; the caller (ensureCacheIndexLoaded) owns closing it.
+  const size_t mark = indexArena_->mark();
+  const size_t residentBytes = static_cast<size_t>(ruleCount) * sizeof(ResidentRule);
+  ResidentRule* resident =
+      ruleCount > 0 ? static_cast<ResidentRule*>(indexArena_->alloc(residentBytes, alignof(ResidentRule))) : nullptr;
+  if (ruleCount > 0 && resident == nullptr) {
+    return false;  // won't fit — mark not advanced; caller falls back to the offset index
+  }
+
+  if (ruleCount > 0) {
+    // Skip the sorted offset index (11-byte header + ruleCount * 8) to reach the payload block,
+    // then stream it in one sequential pass (fixed-size payloads → no per-record seeking).
+    if (!file.seek(static_cast<uint32_t>(11 + static_cast<size_t>(ruleCount) * sizeof(SelectorEntry)))) {
+      indexArena_->release(mark);
+      return false;
+    }
+    char selectorBuf[MAX_SELECTOR_LENGTH];
+    for (uint16_t i = 0; i < ruleCount; ++i) {
+      uint16_t selectorLen = 0;
+      if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen) || selectorLen > MAX_SELECTOR_LENGTH ||
+          file.read(selectorBuf, selectorLen) != selectorLen) {
+        indexArena_->release(mark);
+        return false;
+      }
+      new (&resident[i]) ResidentRule{selectorHash(std::string_view(selectorBuf, selectorLen)), CssStyle{}};
+      if (!readCssStylePayload(file, resident[i].style)) {
+        indexArena_->release(mark);
+        return false;
+      }
+    }
+    // Sort by hash so lookupRule can binary-search, matching the on-disk index ordering.
+    std::sort(resident, resident + ruleCount,
+              [](const ResidentRule& a, const ResidentRule& b) { return a.hash < b.hash; });
+    arenaResident_ = resident;
+  }
+
+  cachedRuleCount_ = ruleCount;
+  totalSelectorCandidates_ = totalCandidates;
+  unsupportedSelectorSkips_ = unsupportedSkips;
+  cacheIndexLoaded_ = true;
+  LOG_DBG("CSS", "Loaded CSS ruleset RESIDENT in arena: %u selectors (%u bytes, no disk lookups)",
+          static_cast<unsigned>(ruleCount), static_cast<unsigned>(residentBytes));
+  return true;
+}
+
+// Forget the current ruleset view — heap vector or either arena layout — and reset the
+// loaded flag so ensureCacheIndexLoaded() reloads. Arena memory is owned by the arena
+// (reset per build), so we only drop the non-owning pointers here.
+void CssParser::dropIndex() const {
+  cacheRuleOffsets_.clear();
+  arenaResident_ = nullptr;
+  arenaIndex_ = nullptr;
+  cacheIndexLoaded_ = false;
+  cachedRuleCount_ = 0;
+}
+
 // Style resolution
 
 CssStyle CssParser::resolveStyle(const std::string& tagName, const std::string& classAttr,
@@ -1457,7 +1624,10 @@ CssStyle CssParser::resolveStyle(const std::string& tagName, const std::string& 
   static bool lowHeapWarningLogged = false;
   resolveStats_.resolveCalls++;
   const uint32_t freeHeap = ESP.getFreeHeap();
-  const bool lowHeapMode = freeHeap < MIN_FREE_HEAP_FOR_CSS;
+  // Lean/arena builds keep the resolver's footprint off the heap (index in arena, hot cache
+  // disabled), so they stay correct at the lower LEAN_MIN_FREE_HEAP_FOR_CSS floor. RESIDENT
+  // lookups ignore lowHeapMode entirely inside lookupRule — they touch no SD.
+  const bool lowHeapMode = freeHeap < (leanResolve_ ? LEAN_MIN_FREE_HEAP_FOR_CSS : MIN_FREE_HEAP_FOR_CSS);
   if (lowHeapMode) {
     if (!lowHeapWarningLogged) {
       lowHeapWarningLogged = true;
@@ -1627,9 +1797,12 @@ bool CssParser::loadFromCache() {
   hotRuleCache_.clear();
   hotRuleLru_.clear();
   negativeRuleCache_.clear();
-  // If clearCaches() retained the disk index, ensureCacheIndexLoaded() will
-  // short-circuit immediately — don't evict it here.
-  if (!cacheIndexLoaded_) {
+  // Arena mode: any view from a previous build points into an arena that has since been reset,
+  // so force a fresh load into the current arena. Heap mode: if clearCaches() retained the disk
+  // index, ensureCacheIndexLoaded() short-circuits — don't evict it here.
+  if (indexArena_) {
+    dropIndex();
+  } else if (!cacheIndexLoaded_) {
     cacheRuleOffsets_.clear();
     cachedRuleCount_ = 0;
   }

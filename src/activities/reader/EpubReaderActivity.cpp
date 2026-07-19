@@ -440,8 +440,18 @@ void EpubReaderActivity::onExit() {
   // epub it references goes away.
   resetBackgroundBuild();
   section.reset();  // also aborts an in-flight Background-C build of the current section
-  // Background-C may have released the secondary buffer for headroom; the build is now aborted,
-  // so restore the global "buffer resident" invariant before the next activity renders.
+  // Background-C may have BORROWED the secondary buffer for headroom (lent, not freed); the
+  // build is now aborted (section.reset above released into the arena), so hand the block back.
+  // The return cannot fail — the region never entered the heap.
+  if (secondaryBorrowed_) {
+    buildScratch_.reset();
+    renderer.returnSecondaryBuffer();
+    secondaryBorrowed_ = false;
+    secondaryBufferDegraded_ = false;
+    LOG_INF("ERS", "onExit: returned secondary buffer borrowed by Background-C");
+  }
+  // Background-C may instead have RELEASED the secondary buffer for headroom; the build is now
+  // aborted, so restore the global "buffer resident" invariant before the next activity renders.
   if (secondaryBufferDegraded_ && !renderer.hasSecondaryBuffer()) {
     if (reallocSecondaryEvictingCaches()) {
       LOG_INF("ERS", "onExit: restored secondary buffer released by Background-C");
@@ -1011,7 +1021,21 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     LOG_ERR("ERS", "Background-C spine=%d %s; falling back to released %s rebuild", currentSpineIndex, reason,
             retryIncremental ? "incremental" : "blocking");
     section->clearCache();
-    section.reset();
+    section.reset();  // aborts the in-flight build, releasing into the scratch arena
+    // If this build ran inside the BORROWED secondary buffer, hand it back before the released
+    // rebuild: borrow only gives phase-b reading-heap (~62 KB), so CSS-heavy books that need the
+    // full freed block (~90 KB) fall back here to the legacy release path, which needs the buffer
+    // back on the heap first. The return cannot fail (the region never entered the heap). Leave a
+    // clean flag state; compileSectionCache re-establishes release/degraded/fast-diff as needed.
+    if (secondaryBorrowed_) {
+      buildScratch_.reset();
+      renderer.returnSecondaryBuffer();
+      secondaryBorrowed_ = false;
+      secondaryBufferDegraded_ = false;
+      renderer.setSingleBufferFastDiff(false);
+      LOG_INF("ERS", "Background-C spine=%d: returned borrowed secondary buffer before released rebuild",
+              currentSpineIndex);
+    }
     if (retryIncremental) {
       forceReleasedBuildSpine_ = currentSpineIndex;
     } else {
@@ -2171,6 +2195,21 @@ void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
   if (section && section->hasActiveBuild()) {
     return;
   }
+  // Borrowed-buffer path: the build ran inside the LENT secondary framebuffer, so return it
+  // instead of reallocating. The region never entered the heap, so returnSecondaryBuffer()
+  // cannot fail — no realloc/eviction/forensics/heap-recovery needed here. Drop the section's
+  // reference to the scratch arena first, then free the (small, non-owning) arena object, then
+  // hand the block back to the display.
+  if (secondaryBorrowed_ && !renderer.hasSecondaryBuffer()) {
+    if (section) section->setExternalBuildScratch(nullptr);
+    buildScratch_.reset();
+    renderer.returnSecondaryBuffer();
+    secondaryBorrowed_ = false;
+    secondaryBufferDegraded_ = false;
+    renderer.setSingleBufferFastDiff(false);
+    LOG_INF("ERS", "Secondary display buffer returned (borrow); re-enabling normal refresh/AA paths");
+    return;
+  }
   // Opportunistic recovery: after an OOM during chapter indexing, or after a Background-C
   // released build, restore the secondary buffer when heap is healthy again.
   if (secondaryBufferDegraded_ && !renderer.hasSecondaryBuffer()) {
@@ -2697,11 +2736,25 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
         // recoverSecondaryBufferIfNeeded(), the one place this released state gets cleanly restored.
         const uint32_t freeBefore = esp_get_free_heap_size();
         if (!renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
-        renderer.releaseSecondaryBuffer();
+        // Prefer BORROWING the secondary buffer over freeing it: the lent block never enters
+        // the heap, so a survivor can't split it into a fragmented hole and the return cannot
+        // fail (the realloc-failure / heap-recovery-restart class of bugs is impossible). The
+        // build's arena bump-allocates inside the lent region instead of the heap. Fall back to
+        // the legacy release only when there is no secondary buffer to lend.
+        size_t borrowedSize = 0;
+        uint8_t* borrowed = renderer.borrowSecondaryBuffer(&borrowedSize);
+        if (borrowed) {
+          buildScratch_ = makeUniqueNoThrow<BuildArena>(borrowed, borrowedSize);
+          section->setExternalBuildScratch(buildScratch_ && buildScratch_->valid() ? buildScratch_.get() : nullptr);
+          secondaryBorrowed_ = true;
+        } else {
+          renderer.releaseSecondaryBuffer();
+        }
+        // Display semantics are identical to a released buffer (single-buffer mode either way).
         renderer.setSingleBufferFastDiff(true);
         secondaryBufferDegraded_ = true;
-        LOG_INF("ERS", "Background-C: building spine %d incrementally, secondary buffer RELEASED (free %lu->%lu)",
-                currentSpineIndex, freeBefore, esp_get_free_heap_size());
+        LOG_INF("ERS", "Background-C: building spine %d incrementally, secondary buffer %s (free %lu->%lu)",
+                currentSpineIndex, borrowed ? "BORROWED" : "RELEASED", freeBefore, esp_get_free_heap_size());
       } else {
         LOG_INF("ERS", "Background-C: building spine %d incrementally, buffer resident (free=%lu contig=%lu)",
                 currentSpineIndex, esp_get_free_heap_size(),
@@ -2742,6 +2795,18 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
       readerPhase_ = ReaderPhase::READING;
       if (step == Section::BuildStep::Failed) {
         LOG_ERR("ERS", "Background-C kickoff failed for spine %d; using blocking path", currentSpineIndex);
+        // The failed kickoff tore its build state down (releasing into the arena). If we borrowed
+        // the secondary buffer above, hand it back before the blocking path: compileSectionCache
+        // manages a resident buffer (releases it for real heap), so it must start with the block
+        // back on the display. The return cannot fail — the region never entered the heap.
+        if (secondaryBorrowed_) {
+          section->setExternalBuildScratch(nullptr);
+          buildScratch_.reset();
+          renderer.returnSecondaryBuffer();
+          secondaryBorrowed_ = false;
+          secondaryBufferDegraded_ = false;
+          renderer.setSingleBufferFastDiff(false);
+        }
         forceBlockingBuildSpine_ = currentSpineIndex;
         runBlocking = true;
       }

@@ -176,6 +176,11 @@ class GfxRenderer {
   bool releaseSecondaryBuffer() const { return display.releaseSecondaryBuffer(); }
   bool reallocSecondaryBuffer() const { return display.reallocSecondaryBuffer(); }
   bool hasSecondaryBuffer() const { return display.hasSecondaryBuffer(); }
+  // Borrow/return variant of release/realloc: the block never enters the heap,
+  // so nothing can allocate inside it and the return cannot fail. See
+  // FreeInkDisplay::borrowSecondaryBuffer.
+  uint8_t* borrowSecondaryBuffer(size_t* size) const { return display.borrowSecondaryBuffer(size); }
+  bool returnSecondaryBuffer() const { return display.returnSecondaryBuffer(); }
   // Keep fast differential alive (X4) after releaseSecondaryBuffer() by diffing
   // against the controller's retained baseline. See HalDisplay::setSingleBufferFastDiff.
   void setSingleBufferFastDiff(bool enabled) const { display.setSingleBufferFastDiff(enabled); }

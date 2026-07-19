@@ -53,7 +53,16 @@ class InflateReader {
   // Returns false only in streaming mode if the ring buffer allocation fails.
   bool init(bool streaming = false, size_t expectedOutputSize = 0);
 
-  // Release the ring buffer and reset internal state.
+  // Streaming init over a CALLER-OWNED ring buffer (e.g. carved from a build
+  // arena): no allocation here, no free in deinit(). ringSize should come from
+  // ringSizeFor() so the caller can budget before allocating.
+  bool initWithExternalRing(uint8_t* ring, size_t ringSize);
+
+  // Ring size init(true, expectedOutputSize) would allocate — lets an external
+  // allocator reserve exactly the right amount (min(32 KB, max(size, 512))).
+  static size_t ringSizeFor(size_t expectedOutputSize);
+
+  // Release the ring buffer (if owned) and reset internal state.
   void deinit();
 
   // Set the entire compressed input as a contiguous memory buffer.
@@ -86,4 +95,5 @@ class InflateReader {
  private:
   uzlib_uncomp decomp = {};
   uint8_t* ringBuffer = nullptr;
+  bool ownsRing_ = true;
 };

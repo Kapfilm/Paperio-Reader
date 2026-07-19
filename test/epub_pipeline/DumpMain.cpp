@@ -1,0 +1,71 @@
+// CLI companion to the EpubPipeline gtest: compile one EPUB through the real
+// pipeline and print the canonical layout dump plus benchmark lines (same
+// "BENCHMARK <label> time=<us>us" format as EpubParserBenchmark).
+//
+// Usage: epub_pipeline_dump <book.epub> [cacheDir] [--bench]
+// A missing cacheDir uses a fresh temp dir (cold build). Passing the same
+// cacheDir twice exercises the warm path. --bench adds per-spine timing,
+// whole-run peak heap, and the on-disk cache footprint to stderr.
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <iostream>
+
+#include "HeapTrack.h"
+#include "PipelineRunner.h"
+
+namespace fs = std::filesystem;
+
+static uintmax_t dirBytes(const std::string& dir) {
+  uintmax_t total = 0;
+  std::error_code ec;
+  for (const auto& e : fs::recursive_directory_iterator(dir, ec)) {
+    if (e.is_regular_file(ec)) total += e.file_size(ec);
+  }
+  return total;
+}
+
+int main(const int argc, char** argv) {
+  bool bench = false;
+  std::string epubPath, cacheDir;
+  for (int i = 1; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--bench") == 0) {
+      bench = true;
+    } else if (epubPath.empty()) {
+      epubPath = argv[i];
+    } else {
+      cacheDir = argv[i];
+    }
+  }
+  if (epubPath.empty()) {
+    std::fprintf(stderr, "usage: %s <book.epub> [cacheDir] [--bench]\n", argv[0]);
+    return 2;
+  }
+  if (cacheDir.empty()) {
+    const auto dir = fs::temp_directory_path() / "epub_pipeline_dump";
+    fs::remove_all(dir);
+    cacheDir = dir.string();
+  }
+  fs::create_directories(cacheDir);
+
+  pipeline_harness::SpineStatFn spineStat;
+  if (bench) {
+    spineStat = [](const int spine, const uint16_t pages, const int64_t us) {
+      std::fprintf(stderr, "BENCHMARK spine_%d pages=%u time=%lldus\n", spine, pages, static_cast<long long>(us));
+    };
+  }
+
+  if (bench) heapTrackBegin();
+  const auto start = std::chrono::steady_clock::now();
+  const bool ok = pipeline_harness::runAndDump(epubPath, cacheDir, pipeline_harness::Profile{}, std::cout, spineStat);
+  const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start);
+  std::fprintf(stderr, "BENCHMARK pipeline_%s time=%lldus", ok ? "ok" : "FAILED", static_cast<long long>(us.count()));
+  if (bench) {
+    const size_t peak = heapTrackEnd();
+    std::fprintf(stderr, " heap_peak=%zuB (%zuKB) cache_bytes=%ju", peak, peak / 1024,
+                 static_cast<uintmax_t>(dirBytes(cacheDir)));
+  }
+  std::fprintf(stderr, "\n");
+  return ok ? 0 : 1;
+}

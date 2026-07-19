@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "BuildArena.h"
 #include "ZipFile.h"
 
 // Path to moby-dick.epub injected by CMake via FIXTURE_EPUB define.
@@ -124,4 +125,39 @@ TEST_F(ZipEntryReaderTest, CloseResetsState) {
   EXPECT_FALSE(reader.isOpen());
   EXPECT_EQ(reader.bytesProduced(), 0u);
   EXPECT_EQ(reader.inflatedSize(), 0u);
+}
+
+// Arena-backed reader (readBuf + inflate ring carved from a BuildArena) must
+// produce byte-identical output, reclaim its whole scope on close, and never
+// touch malloc for the ring (plan Phase 2, EntryReader site).
+TEST_F(ZipEntryReaderTest, ArenaBackedOutputMatchesAndReclaims) {
+  VectorSink ref;
+  ASSERT_TRUE(zip_.readFileToStream(kTestEntry, ref, 1024));
+  ASSERT_GT(ref.data.size(), 0u);
+
+  BuildArena arena(40 * 1024);  // 1 KB readBuf + <=32 KB ring + alignment
+  ASSERT_TRUE(arena.valid());
+  const size_t before = arena.used();
+  {
+    ZipFile::EntryReader reader(zip_, 1024, &arena);
+    ASSERT_TRUE(reader.open(kTestEntry));
+    EXPECT_GT(arena.used(), before) << "ring/readBuf should come from the arena";
+
+    std::vector<uint8_t> got;
+    ASSERT_TRUE(drain(reader, got));
+    EXPECT_EQ(got, ref.data);
+  }
+  EXPECT_EQ(arena.used(), before) << "reader close must release its arena scope";
+  EXPECT_EQ(arena.failedAllocSize(), 0u);
+  EXPECT_LE(arena.highWater(), 34u * 1024u);
+}
+
+// Arena too small for the ring: open must fail cleanly and release the scope.
+TEST_F(ZipEntryReaderTest, ArenaTooSmallFailsCleanly) {
+  BuildArena arena(2 * 1024);  // fits readBuf, not the ring
+  ASSERT_TRUE(arena.valid());
+  ZipFile::EntryReader reader(zip_, 1024, &arena);
+  EXPECT_FALSE(reader.open(kTestEntry));
+  EXPECT_EQ(arena.used(), 0u);
+  EXPECT_GT(arena.failedAllocSize(), 0u);
 }

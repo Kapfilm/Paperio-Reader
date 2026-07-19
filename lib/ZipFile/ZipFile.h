@@ -7,6 +7,8 @@
 #include <string_view>
 #include <vector>
 
+class BuildArena;
+
 class ZipFile {
  public:
   struct FileStatSlim {
@@ -113,7 +115,12 @@ class ZipFile {
   // Non-copyable; movable.
   class EntryReader {
    public:
-    explicit EntryReader(ZipFile& zf, size_t chunkSize = 1024);
+    // arena (optional): carve the read buffer AND the inflate ring from the
+    // given BuildArena instead of malloc. The reader takes an arena mark at
+    // open() and releases it on close()/reset(), so callers must not interleave
+    // their own arena allocations with an open reader's lifetime (LIFO scoping).
+    // Budget per open: chunkSize + InflateReader::ringSizeFor(entrySize) + alignment.
+    explicit EntryReader(ZipFile& zf, size_t chunkSize = 1024, BuildArena* arena = nullptr);
     ~EntryReader();
     EntryReader(EntryReader&&) noexcept;
     EntryReader& operator=(EntryReader&&) noexcept;
@@ -145,6 +152,26 @@ class ZipFile {
     struct Impl;
     std::unique_ptr<Impl> impl_;
   };
+
+  // EOCD scan-cache plumbing: every ZipFile instance normally re-runs the
+  // (backward-scanning, ~4 KB-read) EOCD search on first use. Callers that
+  // construct many short-lived instances over the same archive (Epub does, per
+  // item read) can harvest details() after a successful operation and seed the
+  // next instance, eliminating the repeated scans (~15 per book-open observed).
+  const ZipDetails& details() const { return zipDetails; }
+  void seedDetails(const ZipDetails& d) {
+    if (d.isSet && !zipDetails.isSet) zipDetails = d;
+  }
+
+  // Content fingerprint of the archive: FNV-1a 64 over every central-directory
+  // entry's name bytes, CRC-32, uncompressed size, compression method and
+  // local-header offset, plus the entry count. One sequential walk of the
+  // central directory, O(1) heap (256-byte stack buffer). Deliberately EXCLUDES
+  // the per-entry DOS mod time/date so a byte-identical re-zip (same content,
+  // new timestamps) keeps the same fingerprint. Any content or structural
+  // change flips the CRC/size/offset mix. Used to detect a book replaced
+  // in place at the same path (the cache key is path-derived).
+  bool contentFingerprint(uint64_t* out);
 
   // Stream every filename in the central directory to a callback without building
   // the in-memory stat cache. Uses a fixed 256-byte stack buffer — O(1) heap.
