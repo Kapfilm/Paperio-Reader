@@ -5,6 +5,7 @@
 #include <chrono>
 #include <iomanip>
 #include <memory>
+#include <regex>
 
 #include "Epub.h"
 #include "Epub/FootnotePreviews.h"
@@ -15,10 +16,13 @@ namespace pipeline_harness {
 namespace {
 
 // Image paths live under the (run-specific) cache dir; strip that prefix so
-// dumps compare across runs and machines.
+// dumps compare across runs and machines. The per-book cache subdir is named
+// epub_<hash-of-absolute-path>, which differs by checkout location (e.g. a dev's
+// /home/... vs CI's /home/runner/work/...), so canonicalize that hash too —
+// otherwise image-bearing goldens are machine-specific and fail in CI.
 std::string normalizePath(const std::string& path, const std::string& cacheDir) {
-  if (path.rfind(cacheDir, 0) == 0) return "<cache>" + path.substr(cacheDir.size());
-  return path;
+  std::string p = (path.rfind(cacheDir, 0) == 0) ? "<cache>" + path.substr(cacheDir.size()) : path;
+  return std::regex_replace(p, std::regex("epub_[0-9]+"), "epub_<hash>");
 }
 
 void dumpTextLine(std::ostream& out, const PageLine& line) {
