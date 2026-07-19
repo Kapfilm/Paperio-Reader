@@ -11,8 +11,10 @@
 
 namespace {
 
+using compiled::Anchor;
 using compiled::Block;
 using compiled::BlockType;
+using compiled::Chapter;
 using compiled::CompiledContent;
 using compiled::SpineContent;
 using compiled::Word;
@@ -58,11 +60,12 @@ CssStyle makeStyle(CssTextAlign align, float marginTopEm, bool bold, float fontM
   return s;
 }
 
-Block textBlock(uint16_t styleId, uint8_t flags, const std::vector<std::string>& words) {
+Block textBlock(uint16_t styleId, uint8_t flags, uint32_t charOffset, const std::vector<std::string>& words) {
   Block b;
   b.type = BlockType::Text;
   b.styleId = styleId;
   b.flags = flags;
+  b.charOffset = charOffset;
   for (uint8_t i = 0; i < words.size(); ++i) {
     Word w;
     w.textOff = static_cast<uint32_t>(b.text.size());
@@ -104,6 +107,7 @@ void expectEqual(const CompiledContent& in, const CompiledContent& out) {
       EXPECT_EQ(static_cast<int>(a.type), static_cast<int>(b.type));
       EXPECT_EQ(a.styleId, b.styleId);
       EXPECT_EQ(a.flags, b.flags);
+      EXPECT_EQ(a.charOffset, b.charOffset);
       EXPECT_EQ(a.text, b.text);
       ASSERT_EQ(a.words.size(), b.words.size());
       for (size_t wi = 0; wi < a.words.size(); ++wi) {
@@ -118,6 +122,21 @@ void expectEqual(const CompiledContent& in, const CompiledContent& out) {
       EXPECT_EQ(a.floatSide, b.floatSide);
       EXPECT_EQ(a.alt, b.alt);
     }
+    ASSERT_EQ(in.spines[s].anchors.size(), out.spines[s].anchors.size()) << "anchors, spine " << s;
+    for (size_t ai = 0; ai < in.spines[s].anchors.size(); ++ai) {
+      const Anchor& a = in.spines[s].anchors[ai];
+      const Anchor& b = out.spines[s].anchors[ai];
+      EXPECT_EQ(a.id, b.id);
+      EXPECT_EQ(a.blockIndex, b.blockIndex);
+      EXPECT_EQ(a.charOffsetInBlock, b.charOffsetInBlock);
+    }
+  }
+  ASSERT_EQ(in.chapters.size(), out.chapters.size());
+  for (size_t ci = 0; ci < in.chapters.size(); ++ci) {
+    EXPECT_EQ(in.chapters[ci].spineIndex, out.chapters[ci].spineIndex);
+    EXPECT_EQ(in.chapters[ci].blockIndex, out.chapters[ci].blockIndex);
+    EXPECT_EQ(in.chapters[ci].level, out.chapters[ci].level);
+    EXPECT_EQ(in.chapters[ci].title, out.chapters[ci].title);
   }
 }
 
@@ -140,17 +159,40 @@ TEST(CompiledContent, RoundTripPreservesModel) {
 
   SpineContent s0;
   s0.firstCharOffset = 0;
-  s0.blocks.push_back(textBlock(1, compiled::kStartsChapter | compiled::kPageBreakBefore, {"Chapter", "One"}));
-  s0.blocks.push_back(textBlock(0, 0, {"Call", "me", "Ishmael."}));
+  s0.blocks.push_back(textBlock(1, compiled::kStartsChapter | compiled::kPageBreakBefore, 0, {"Chapter", "One"}));
+  s0.blocks.push_back(textBlock(0, 0, 10, {"Call", "me", "Ishmael."}));
   s0.blocks.push_back(imageBlock(2, "OEBPS/images/whale.jpg", 640, 480, 1, "a whale"));
+  s0.anchors.push_back({"chap01", 0, 0});
+  s0.anchors.push_back({"para_ishmael", 1, 5});
   in.spines.push_back(std::move(s0));
 
   SpineContent s1;
   s1.firstCharOffset = 4096;
-  s1.blocks.push_back(textBlock(2, compiled::kPageBreakAfter, {"The", "end."}));
+  s1.blocks.push_back(textBlock(2, compiled::kPageBreakAfter, 4096, {"The", "end."}));
   in.spines.push_back(std::move(s1));
 
+  in.chapters.push_back({0, 0, 1, "Chapter One"});
+  in.chapters.push_back({1, 0, 2, "The End"});
+
   expectEqual(in, roundTrip(in));
+}
+
+TEST(CompiledContent, InternStyleDedupsByValue) {
+  CompiledContent c;
+  const CssStyle justify = makeStyle(CssTextAlign::Justify, 1.0f, false, 1.0f);
+  const CssStyle justifyCopy = makeStyle(CssTextAlign::Justify, 1.0f, false, 1.0f);
+  const CssStyle center = makeStyle(CssTextAlign::Center, 1.0f, false, 1.0f);
+
+  const uint16_t id0 = compiled::internStyle(c, justify);
+  const uint16_t id1 = compiled::internStyle(c, justifyCopy);  // equal → same id, no new entry
+  const uint16_t id2 = compiled::internStyle(c, center);       // different → new id
+
+  EXPECT_EQ(id0, 0u);
+  EXPECT_EQ(id1, 0u);
+  EXPECT_EQ(id2, 1u);
+  EXPECT_EQ(c.stylePool.size(), 2u);
+  EXPECT_TRUE(compiled::styleEquals(c.stylePool[id0], justify));
+  EXPECT_FALSE(compiled::styleEquals(c.stylePool[id0], center));
 }
 
 TEST(CompiledContent, EmptyContentRoundTrips) {

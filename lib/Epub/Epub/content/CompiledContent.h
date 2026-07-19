@@ -55,6 +55,7 @@ struct Block {
   BlockType type = BlockType::Text;
   uint16_t styleId = 0;  // index into CompiledContent::stylePool
   uint8_t flags = 0;
+  uint32_t charOffset = 0;  // absolute char offset of this block's first char (reading progress)
 
   // Text block:
   std::vector<Word> words;
@@ -68,9 +69,27 @@ struct Block {
   std::string alt;
 };
 
+// Named position for anchor navigation (TOC targets, in-book links). Resolves to a
+// (block, char-offset) pair; Stage-2 maps that to a page. Id stored as a string
+// (not a hash) so a lookup can never resolve the wrong target.
+struct Anchor {
+  std::string id;           // element id / fragment
+  uint32_t blockIndex = 0;  // block within this spine
+  uint32_t charOffsetInBlock = 0;
+};
+
+// Book-level chapter/heading entry (drives the TOC and heading navigation).
+struct Chapter {
+  uint16_t spineIndex = 0;
+  uint32_t blockIndex = 0;
+  uint8_t level = 0;  // heading level 1..6; 0 = non-heading chapter boundary
+  std::string title;
+};
+
 // Per-spine content, in document order.
 struct SpineContent {
   std::vector<Block> blocks;
+  std::vector<Anchor> anchors;
   uint32_t firstCharOffset = 0;  // absolute char offset of the spine's first char (progress)
 };
 
@@ -78,7 +97,17 @@ struct SpineContent {
 struct CompiledContent {
   std::vector<CssStyle> stylePool;  // deduped block styles; blocks reference by index
   std::vector<SpineContent> spines;
+  std::vector<Chapter> chapters;
 };
+
+// Whether two block styles are identical for pooling purposes (all rendering-relevant
+// fields + the explicit-set flags). Two blocks that resolve to equal styles share a pool id.
+bool styleEquals(const CssStyle& a, const CssStyle& b);
+
+// Return the pool id for `style`, appending it to `content.stylePool` if not already
+// present (dedup by value). Linear scan — the distinct-style set per book is small
+// (tens), and blocks vastly outnumber styles.
+uint16_t internStyle(CompiledContent& content, const CssStyle& style);
 
 // Serialize/deserialize the WBC1 container. Return false on I/O error or a
 // version/magic mismatch (caller treats a mismatch like a stale cache: recompile).

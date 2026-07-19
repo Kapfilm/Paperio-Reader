@@ -176,6 +176,7 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
       writePod(out, static_cast<uint8_t>(b.type));
       writePod(out, b.styleId);
       writePod(out, b.flags);
+      writePod(out, b.charOffset);
       if (b.type == BlockType::Text) {
         writePod(out, static_cast<uint32_t>(b.words.size()));
         for (const Word& w : b.words) {
@@ -193,6 +194,20 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
         writeString(out, b.alt);
       }
     }
+    writePod(out, static_cast<uint32_t>(spine.anchors.size()));
+    for (const Anchor& a : spine.anchors) {
+      writeString(out, a.id);
+      writePod(out, a.blockIndex);
+      writePod(out, a.charOffsetInBlock);
+    }
+  }
+
+  writePod(out, static_cast<uint32_t>(content.chapters.size()));
+  for (const Chapter& c : content.chapters) {
+    writePod(out, c.spineIndex);
+    writePod(out, c.blockIndex);
+    writePod(out, c.level);
+    writeString(out, c.title);
   }
   return true;
 }
@@ -232,6 +247,7 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
       b.type = static_cast<BlockType>(type);
       readPod(in, b.styleId);
       readPod(in, b.flags);
+      readPod(in, b.charOffset);
       if (b.type == BlockType::Text) {
         uint32_t wordCount = 0;
         readPod(in, wordCount);
@@ -252,8 +268,54 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
         if (!readString(in, b.alt)) return false;
       }
     }
+    uint32_t anchorCount = 0;
+    readPod(in, anchorCount);
+    spine.anchors.resize(anchorCount);
+    for (uint32_t ai = 0; ai < anchorCount; ++ai) {
+      Anchor& a = spine.anchors[ai];
+      if (!readString(in, a.id)) return false;
+      readPod(in, a.blockIndex);
+      readPod(in, a.charOffsetInBlock);
+    }
+  }
+
+  uint32_t chapterCount = 0;
+  readPod(in, chapterCount);
+  content.chapters.resize(chapterCount);
+  for (uint32_t ci = 0; ci < chapterCount; ++ci) {
+    Chapter& c = content.chapters[ci];
+    readPod(in, c.spineIndex);
+    readPod(in, c.blockIndex);
+    readPod(in, c.level);
+    if (!readString(in, c.title)) return false;
   }
   return true;
+}
+
+bool styleEquals(const CssStyle& a, const CssStyle& b) {
+  const auto lenEq = [](const CssLength& x, const CssLength& y) { return x.value == y.value && x.unit == y.unit; };
+  const auto definedEq = [](const CssPropertyFlags& x, const CssPropertyFlags& y) {
+    return packDefined(x) == packDefined(y);
+  };
+  return a.textAlign == b.textAlign && a.fontStyle == b.fontStyle && a.fontWeight == b.fontWeight &&
+         a.textDecoration == b.textDecoration && a.display == b.display && a.verticalAlign == b.verticalAlign &&
+         a.listStyleNone == b.listStyleNone && a.pageBreakBefore == b.pageBreakBefore &&
+         a.pageBreakAfter == b.pageBreakAfter && a.cssFloat == b.cssFloat && a.smallCaps == b.smallCaps &&
+         a.lineHeightMultiplier == b.lineHeightMultiplier && a.fontSizeMultiplier == b.fontSizeMultiplier &&
+         lenEq(a.textIndent, b.textIndent) && lenEq(a.marginTop, b.marginTop) &&
+         lenEq(a.marginBottom, b.marginBottom) && lenEq(a.marginLeft, b.marginLeft) &&
+         lenEq(a.marginRight, b.marginRight) && lenEq(a.paddingTop, b.paddingTop) &&
+         lenEq(a.paddingBottom, b.paddingBottom) && lenEq(a.paddingLeft, b.paddingLeft) &&
+         lenEq(a.paddingRight, b.paddingRight) && lenEq(a.imageHeight, b.imageHeight) &&
+         lenEq(a.imageWidth, b.imageWidth) && definedEq(a.defined, b.defined);
+}
+
+uint16_t internStyle(CompiledContent& content, const CssStyle& style) {
+  for (size_t i = 0; i < content.stylePool.size(); ++i) {
+    if (styleEquals(content.stylePool[i], style)) return static_cast<uint16_t>(i);
+  }
+  content.stylePool.push_back(style);
+  return static_cast<uint16_t>(content.stylePool.size() - 1);
 }
 
 }  // namespace compiled

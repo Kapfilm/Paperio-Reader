@@ -70,9 +70,13 @@ Section table (spineCount entries), by spine index:
 Block records (per spine, in document order):  ← the payload
   each record ≤ 8 KB serialized (split at write time; see "Record cap")
 Anchor table (per spine):
-  entries: { idHash u32, blockIndex u32, charOffsetInBlock u32 }  sorted by idHash
+  count u32, then entries: { idStr, blockIndex u32, charOffsetInBlock u32 }
+  (id stored as a string, not a hash — anchors per spine are few and a hash
+   collision would silently resolve the wrong target)
 Chapter/heading table (book-level):
-  entries: { spineIndex u16, blockIndex u32, level u8, titleStr }
+  count u32, then entries: { spineIndex u16, blockIndex u32, level u8, titleStr }
+Char-offset (reading progress): folded into each block record as `charOffset u32`
+  (absolute char offset of the block's first char) rather than a separate table.
 String/aux tables: streamed through temp files during the pass, spliced at finish
   (never all held in RAM — mirrors endCacheCompile's temp+patch approach).
 ```
@@ -85,6 +89,7 @@ common:
   styleId     u16     index into the book-level dedup'd CssStyle pool (see below)
   flags       u8      bit0: startsChapter, bit1: pageBreakBefore, bit2: pageBreakAfter,
                       bits3-4: base direction (0 auto, 1 LTR, 2 RTL) — see "RTL / BiDi"
+  charOffset  u32     absolute char offset of this block's first char (reading progress)
 TEXT:
   wordCount   u16
   per word:   textOff u16 (into text[]), styleSpan u8 (bold/italic/underline/
