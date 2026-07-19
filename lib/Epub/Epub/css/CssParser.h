@@ -221,23 +221,29 @@ class CssParser {
   // ensureCacheIndexLoaded() puts the ruleset in arena memory (not the heap vector) using
   // one of two layouts, decided by what fits — mirroring FreeInkBook's resident ruleset
   // (libs/book/FreeInkBook/src/css/Css.cpp) as far as witchhunt's ~108 B CssStyle allows:
-  //   - RESIDENT (preferred): the whole ruleset as a sorted {hash, CssStyle} array at
-  //     arenaResident_. resolveStyle scans it in RAM — zero disk reads, like FreeInk.
-  //   - INDEX-only (fallback when the resident array won't fit): the sorted 8 B/rule
+  //   - RESIDENT (preferred): a sorted {hash, styleIdx} index at arenaResident_ plus a pool
+  //     of DISTINCT CssStyles at arenaStylePool_. Identical styles are deduplicated (Calibre
+  //     emits hundreds of differently-named classes with byte-identical declarations), so a
+  //     repetitive stylesheet that would overflow a flat {hash, CssStyle} array still fits and
+  //     resolves in RAM with zero disk reads.
+  //   - INDEX-only (fallback when even the pooled resident won't fit): the sorted 8 B/rule
   //     SelectorEntry index at arenaIndex_; payloads are read from disk on demand.
-  // Both are non-owning views into arena memory (the arena resets per build); the parser
+  // All are non-owning views into arena memory (the arena resets per build); the parser
   // drops them on clear()/clearCaches() and reloads on the next resolve.
-  struct ResidentRule {
-    uint32_t hash;   // FNV-1a of the normalized selector (same as SelectorEntry::hash)
-    CssStyle style;  // fully decoded — no disk round-trip at lookup
+  struct ResidentEntry {
+    uint32_t hash;      // FNV-1a of the normalized selector (same as SelectorEntry::hash)
+    uint16_t styleIdx;  // index into arenaStylePool_ (the deduplicated distinct style)
   };
   BuildArena* indexArena_ = nullptr;
-  mutable ResidentRule* arenaResident_ = nullptr;
+  mutable ResidentEntry* arenaResident_ = nullptr;  // sorted by hash, cachedRuleCount_ entries
+  mutable CssStyle* arenaStylePool_ = nullptr;      // arenaStyleCount_ distinct styles
+  mutable uint16_t arenaStyleCount_ = 0;
   mutable SelectorEntry* arenaIndex_ = nullptr;
   bool leanResolve_ = false;
 
-  // Stream the whole ruleset into the arena as a sorted {hash, CssStyle} array (RESIDENT
-  // mode). Returns false if the arena can't hold it (caller then tries INDEX-only).
+  // Stream the whole ruleset into the arena as a sorted {hash, styleIdx} index plus a pool of
+  // distinct CssStyles (RESIDENT mode; identical styles deduplicated). Returns false if the
+  // arena can't hold it (caller then tries INDEX-only).
   bool loadArenaResident(FsFile& file, uint16_t ruleCount, uint32_t totalCandidates, uint32_t unsupportedSkips) const;
   // Forget the current ruleset view (heap vector or either arena layout) so
   // ensureCacheIndexLoaded() reloads it.

@@ -1401,12 +1401,12 @@ bool CssParser::lookupRule(const std::string& selector, CssStyle& outStyle, cons
     // rather than paying a disk read to verify the selector string, and so do we. No low-heap
     // guard applies — nothing here touches SD or grows the heap.
     if (arenaResident_) {
-      const ResidentRule* begin = arenaResident_;
-      const ResidentRule* end = arenaResident_ + cachedRuleCount_;
-      auto it = std::lower_bound(begin, end, h, [](const ResidentRule& e, uint32_t key) { return e.hash < key; });
+      const ResidentEntry* begin = arenaResident_;
+      const ResidentEntry* end = arenaResident_ + cachedRuleCount_;
+      auto it = std::lower_bound(begin, end, h, [](const ResidentEntry& e, uint32_t key) { return e.hash < key; });
       if (it != end && it->hash == h) {
-        outStyle = it->style;
-        resolveStats_.diskHits++;  // resolved from the (in-RAM) ruleset
+        outStyle = arenaStylePool_[it->styleIdx];  // deduplicated distinct style
+        resolveStats_.diskHits++;                  // resolved from the (in-RAM) ruleset
         return true;
       }
       return false;  // cheap re-scan next time; no negative cache needed in RAM
@@ -1551,24 +1551,58 @@ bool CssParser::ensureCacheIndexLoaded() const {
   return true;
 }
 
-// Stream the whole ruleset into the arena as a sorted {hash, CssStyle} array so resolveStyle
-// runs entirely in RAM (FreeInkBook's model, adapted). One sequential pass over the payload
-// block — the fixed CSS_FIXED_STYLE_BYTES layout means no per-record seeking — recomputing
-// each selector's hash (identical to the on-disk SelectorEntry::hash) and decoding its style.
-// Returns false without disturbing existing state when the arena can't hold the array; the
-// caller then tries the smaller offset index.
+// Whether two decoded styles are byte-for-byte equivalent, so identical rules share one pool
+// entry. Compares every rendering-relevant value plus the explicit-set flags (a plain memcmp
+// would trip over CssStyle's struct padding).
+static bool cssStyleEquals(const CssStyle& a, const CssStyle& b) {
+  const auto len = [](const CssLength& x, const CssLength& y) { return x.value == y.value && x.unit == y.unit; };
+  const CssPropertyFlags& da = a.defined;
+  const CssPropertyFlags& db = b.defined;
+  return a.textAlign == b.textAlign && a.fontStyle == b.fontStyle && a.fontWeight == b.fontWeight &&
+         a.textDecoration == b.textDecoration && a.display == b.display && a.verticalAlign == b.verticalAlign &&
+         a.listStyleNone == b.listStyleNone && a.pageBreakBefore == b.pageBreakBefore &&
+         a.pageBreakAfter == b.pageBreakAfter && a.cssFloat == b.cssFloat && a.smallCaps == b.smallCaps &&
+         a.lineHeightMultiplier == b.lineHeightMultiplier && a.fontSizeMultiplier == b.fontSizeMultiplier &&
+         len(a.textIndent, b.textIndent) && len(a.marginTop, b.marginTop) && len(a.marginBottom, b.marginBottom) &&
+         len(a.marginLeft, b.marginLeft) && len(a.marginRight, b.marginRight) && len(a.paddingTop, b.paddingTop) &&
+         len(a.paddingBottom, b.paddingBottom) && len(a.paddingLeft, b.paddingLeft) &&
+         len(a.paddingRight, b.paddingRight) && len(a.imageHeight, b.imageHeight) && len(a.imageWidth, b.imageWidth) &&
+         da.textAlign == db.textAlign && da.fontStyle == db.fontStyle && da.fontWeight == db.fontWeight &&
+         da.textDecoration == db.textDecoration && da.textIndent == db.textIndent && da.marginTop == db.marginTop &&
+         da.marginBottom == db.marginBottom && da.marginLeft == db.marginLeft && da.marginRight == db.marginRight &&
+         da.paddingTop == db.paddingTop && da.paddingBottom == db.paddingBottom && da.paddingLeft == db.paddingLeft &&
+         da.paddingRight == db.paddingRight && da.imageHeight == db.imageHeight && da.imageWidth == db.imageWidth &&
+         da.display == db.display && da.verticalAlign == db.verticalAlign && da.listStyleNone == db.listStyleNone &&
+         da.pageBreakBefore == db.pageBreakBefore && da.pageBreakAfter == db.pageBreakAfter &&
+         da.lineHeight == db.lineHeight && da.fontSizeMultiplier == db.fontSizeMultiplier &&
+         da.cssFloat == db.cssFloat && da.smallCaps == db.smallCaps;
+}
+
+// Stream the whole ruleset into the arena as a sorted {hash, styleIdx} index plus a pool of
+// DISTINCT CssStyles so resolveStyle runs entirely in RAM (FreeInkBook's model, adapted, with
+// dedup). One sequential pass over the fixed-size payload block; identical styles (Calibre's
+// hundreds of same-content, different-name classes) collapse to one pool entry, so a repetitive
+// sheet that a flat {hash, CssStyle} array couldn't hold still fits. Returns false without
+// disturbing arena state when even the deduplicated form won't fit; the caller then tries the
+// smaller offset index.
 bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const uint32_t totalCandidates,
                                   const uint32_t unsupportedSkips) const {
   // Reserve from a mark so a failed attempt (won't fit, or a stream error) leaves the arena
   // cursor exactly where it was — the caller then reuses that space for the smaller offset
   // index. The file stays open; the caller (ensureCacheIndexLoaded) owns closing it.
   const size_t mark = indexArena_->mark();
-  const size_t residentBytes = static_cast<size_t>(ruleCount) * sizeof(ResidentRule);
-  ResidentRule* resident =
-      ruleCount > 0 ? static_cast<ResidentRule*>(indexArena_->alloc(residentBytes, alignof(ResidentRule))) : nullptr;
-  if (ruleCount > 0 && resident == nullptr) {
-    return false;  // won't fit — mark not advanced; caller falls back to the offset index
+  ResidentEntry* index = ruleCount > 0
+                             ? static_cast<ResidentEntry*>(indexArena_->alloc(
+                                   static_cast<size_t>(ruleCount) * sizeof(ResidentEntry), alignof(ResidentEntry)))
+                             : nullptr;
+  if (ruleCount > 0 && index == nullptr) {
+    return false;  // even the index won't fit — caller falls back to the offset index
   }
+
+  // Distinct-style pool: each new style is bump-allocated right after the index, so the pool is
+  // contiguous (only these allocations happen during the loop) and poolBase[idx] addresses it.
+  CssStyle* poolBase = nullptr;
+  uint16_t poolCount = 0;
 
   if (ruleCount > 0) {
     // Skip the sorted offset index (11-byte header + ruleCount * 8) to reach the payload block,
@@ -1585,24 +1619,46 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
         indexArena_->release(mark);
         return false;
       }
-      new (&resident[i]) ResidentRule{selectorHash(std::string_view(selectorBuf, selectorLen)), CssStyle{}};
-      if (!readCssStylePayload(file, resident[i].style)) {
+      CssStyle style;
+      if (!readCssStylePayload(file, style)) {
         indexArena_->release(mark);
         return false;
       }
+      // Intern: reuse an already-seen identical style, else add a new pool entry.
+      uint16_t styleIdx = poolCount;
+      for (uint16_t j = 0; j < poolCount; ++j) {
+        if (cssStyleEquals(poolBase[j], style)) {
+          styleIdx = j;
+          break;
+        }
+      }
+      if (styleIdx == poolCount) {
+        auto* slot = static_cast<CssStyle*>(indexArena_->alloc(sizeof(CssStyle), alignof(CssStyle)));
+        if (slot == nullptr) {  // pool grew past the arena even after dedup — fall back to index
+          indexArena_->release(mark);
+          return false;
+        }
+        if (poolBase == nullptr) poolBase = slot;  // first distinct style anchors the pool
+        new (slot) CssStyle(style);
+        ++poolCount;
+      }
+      index[i] = ResidentEntry{selectorHash(std::string_view(selectorBuf, selectorLen)), styleIdx};
     }
     // Sort by hash so lookupRule can binary-search, matching the on-disk index ordering.
-    std::sort(resident, resident + ruleCount,
-              [](const ResidentRule& a, const ResidentRule& b) { return a.hash < b.hash; });
-    arenaResident_ = resident;
+    std::sort(index, index + ruleCount, [](const ResidentEntry& a, const ResidentEntry& b) { return a.hash < b.hash; });
+    arenaResident_ = index;
+    arenaStylePool_ = poolBase;
+    arenaStyleCount_ = poolCount;
   }
 
   cachedRuleCount_ = ruleCount;
   totalSelectorCandidates_ = totalCandidates;
   unsupportedSelectorSkips_ = unsupportedSkips;
   cacheIndexLoaded_ = true;
-  LOG_DBG("CSS", "Loaded CSS ruleset RESIDENT in arena: %u selectors (%u bytes, no disk lookups)",
-          static_cast<unsigned>(ruleCount), static_cast<unsigned>(residentBytes));
+  LOG_DBG("CSS", "Loaded CSS ruleset RESIDENT in arena: %u selectors -> %u distinct styles (%u bytes, no disk lookups)",
+          static_cast<unsigned>(ruleCount), static_cast<unsigned>(poolCount),
+          static_cast<unsigned>(static_cast<size_t>(ruleCount) * sizeof(ResidentEntry) +
+                                static_cast<size_t>(poolCount) * sizeof(CssStyle)));
   return true;
 }
 
@@ -1612,6 +1668,8 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
 void CssParser::dropIndex() const {
   cacheRuleOffsets_.clear();
   arenaResident_ = nullptr;
+  arenaStylePool_ = nullptr;
+  arenaStyleCount_ = 0;
   arenaIndex_ = nullptr;
   cacheIndexLoaded_ = false;
   cachedRuleCount_ = 0;

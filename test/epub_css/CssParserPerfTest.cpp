@@ -435,9 +435,10 @@ TEST(CssParserArena, ResidentAndIndexMatchHeapResolution) {
   ASSERT_TRUE(parser.loadFromCache());
   const std::vector<CssStyle> heapStyles = resolveAll(parser);
 
-  // 2) RESIDENT: arena easily large enough for the full ruleset. Assert the whole ruleset
-  //    was materialized (used() ~ N * sizeof(ResidentRule), well past the 8 B/rule index)
-  //    and that resolution is byte-for-byte identical to the heap path.
+  // 2) RESIDENT with dedup: the fixture's 1500 rules cycle through only ~40 distinct styles,
+  //    so the pooled resident (index + distinct-style pool) is an order of magnitude smaller
+  //    than a flat {hash, CssStyle} array (~168 KB) — proving the Calibre-style dedup — while
+  //    resolving byte-for-byte identically to the heap path.
   {
     BuildArena arena(kFixtureRuleCount * 128 + 8192);
     ASSERT_TRUE(arena.valid());
@@ -445,7 +446,9 @@ TEST(CssParserArena, ResidentAndIndexMatchHeapResolution) {
     parser.setIndexArena(&arena);
     parser.setLeanResolve(true);
     ASSERT_TRUE(parser.loadFromCache());
-    EXPECT_GT(arena.used(), kFixtureRuleCount * 64u) << "expected the full resident ruleset in the arena";
+    // Pooled resident: 1500 * 8 B index + ~40 * ~108 B styles ≈ 16 KB, far below the ~168 KB a
+    // flat array would need and below even the 8 B/rule offset index of 12 KB + a full pool.
+    EXPECT_LT(arena.used(), kFixtureRuleCount * 32u) << "expected dedup to shrink the resident ruleset";
     const std::vector<CssStyle> residentStyles = resolveAll(parser);
     for (size_t i = 0; i < probes.size(); ++i) {
       EXPECT_TRUE(stylesEqual(heapStyles[i], residentStyles[i]))
@@ -475,23 +478,63 @@ TEST(CssParserArena, ResidentAndIndexMatchHeapResolution) {
     parser.clear();
   }
 
-  // 4) INDEX-only fallback: an arena that fits the 8 B/rule index (~12 KB) but not the
-  //    ~168 KB resident array. Payloads come from disk; resolution must still match heap.
-  {
-    BuildArena arena(kFixtureRuleCount * 16);  // > index, << resident
-    ASSERT_TRUE(arena.valid());
-    parser.clear();
-    parser.setIndexArena(&arena);
-    parser.setLeanResolve(true);
-    ASSERT_TRUE(parser.loadFromCache());
-    EXPECT_LT(arena.used(), kFixtureRuleCount * 16u) << "expected the small offset index, not the resident ruleset";
-    const std::vector<CssStyle> indexStyles = resolveAll(parser);
-    for (size_t i = 0; i < probes.size(); ++i) {
-      EXPECT_TRUE(stylesEqual(heapStyles[i], indexStyles[i]))
-          << "index-only mismatch for " << probes[i].first << "." << probes[i].second;
-    }
-    parser.clear();
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
+// INDEX-only fallback: when the ruleset is genuinely distinct (no dedup win) and too big for
+// the arena, loadArenaResident bails and the parser reads payloads from disk via the offset
+// index — still resolving identically to the heap path. Uses a stylesheet whose every rule is
+// unique so the pooled resident can't shrink it (unlike the Calibre-style fixture above).
+TEST(CssParserArena, IndexOnlyFallbackMatchesHeapResolution) {
+  constexpr int kDistinct = 400;  // 400 unique styles: pooled ~44 KB, offset index ~3.2 KB
+  std::string css;
+  for (int i = 0; i < kDistinct; ++i) {
+    css += ".u" + std::to_string(i) + " { margin-top: " + std::to_string(i + 1) +
+           "px; text-indent: " + std::to_string(i + 1) + "px; }\n";
   }
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile cssFile;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), cssFile));
+    ASSERT_TRUE(parser.loadFromStream(cssFile));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  std::vector<std::pair<std::string, std::string>> probes;
+  for (int i = 0; i < 30; ++i) probes.emplace_back("p", "u" + std::to_string(i * 13));
+  probes.emplace_back("p", "no_such_rule");
+
+  auto resolveAll = [&](CssParser& p) {
+    std::vector<CssStyle> out;
+    for (const auto& pr : probes) out.push_back(p.resolveStyle(pr.first, pr.second));
+    return out;
+  };
+
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> heapStyles = resolveAll(parser);
+
+  // Arena fits the 8 B/rule offset index (~3.2 KB) but not the ~44 KB distinct-style pool, so
+  // loadArenaResident falls back to the disk-backed index.
+  BuildArena arena(8 * 1024);
+  ASSERT_TRUE(arena.valid());
+  parser.clear();
+  parser.setIndexArena(&arena);
+  parser.setLeanResolve(true);
+  ASSERT_TRUE(parser.loadFromCache());
+  EXPECT_LT(arena.used(), static_cast<size_t>(kDistinct) * 16u)
+      << "expected the offset index, not the (much larger) distinct-style pool";
+  const std::vector<CssStyle> indexStyles = resolveAll(parser);
+  for (size_t i = 0; i < probes.size(); ++i) {
+    EXPECT_TRUE(stylesEqual(heapStyles[i], indexStyles[i])) << "index-only mismatch at " << i;
+  }
+  parser.clear();
 
   removePath(cacheDir);
   std::filesystem::remove(cssPath);
