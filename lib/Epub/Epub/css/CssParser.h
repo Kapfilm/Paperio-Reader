@@ -12,6 +12,8 @@
 
 #include "CssStyle.h"
 
+class BuildArena;  // lib/Memory — optional backing store for the disk index (Phase 2)
+
 /**
  * Lightweight CSS parser for EPUB stylesheets
  *
@@ -173,6 +175,24 @@ class CssParser {
   [[nodiscard]] ResolveStats getResolveStats() const;
   void logResolveStats(const char* context) const;
 
+  // Phase-2 arena mode (docs/compiled-book-pipeline-plan.md). A section built with the
+  // secondary framebuffer BORROWED (not freed) runs with ~52 KB less general heap than a
+  // released build, so the resolver would otherwise self-degrade below MIN_FREE_HEAP_FOR_CSS
+  // and its result gets discarded. These two knobs relocate the resolver's footprint into
+  // the borrowed block instead:
+  //   - setIndexArena(): the sorted disk index (SelectorEntry[]) is bump-allocated from the
+  //     given arena rather than the heap vector. Pass nullptr to return to the heap vector.
+  //     The arena owns the memory (reset per build); the parser only holds a view and drops
+  //     it on clear()/clearCaches(), reloading lazily from disk on the next resolve.
+  //   - setLeanResolve(true): skip the hot-rule LRU entirely (every lookup is index
+  //     binary-search + one disk read) and use the lower LEAN_MIN_FREE_HEAP_FOR_CSS floor.
+  //     With the index off-heap and no hot cache growth, the resolver's heap footprint is a
+  //     few small strings, so the lower floor stays clear of the fault zone.
+  // Both are reset by clear() so the shared per-epub instance never carries them into a
+  // later heap-backed build or leaves a dangling arena view.
+  void setIndexArena(BuildArena* arena) { indexArena_ = arena; }
+  void setLeanResolve(bool enable) { leanResolve_ = enable; }
+
  private:
   // Storage: maps normalized selector -> style properties
   std::unordered_map<std::string, CssStyle> rulesBySelector_;
@@ -193,9 +213,35 @@ class CssParser {
                 "SelectorEntry size changed — update CSS_INDEX_BYTES_PER_RULE so heap gates stay calibrated");
   mutable bool cacheIndexLoaded_ = false;
   mutable size_t cachedRuleCount_ = 0;
-  mutable std::vector<SelectorEntry> cacheRuleOffsets_;
+  mutable std::vector<SelectorEntry> cacheRuleOffsets_;  // heap backing (indexArena_ == nullptr)
   mutable uint32_t totalSelectorCandidates_ = 0;
   mutable uint32_t unsupportedSelectorSkips_ = 0;
+
+  // Phase-2 arena mode (see setIndexArena/setLeanResolve). When indexArena_ is set,
+  // ensureCacheIndexLoaded() puts the ruleset in arena memory (not the heap vector) using
+  // one of two layouts, decided by what fits — mirroring FreeInkBook's resident ruleset
+  // (libs/book/FreeInkBook/src/css/Css.cpp) as far as witchhunt's ~108 B CssStyle allows:
+  //   - RESIDENT (preferred): the whole ruleset as a sorted {hash, CssStyle} array at
+  //     arenaResident_. resolveStyle scans it in RAM — zero disk reads, like FreeInk.
+  //   - INDEX-only (fallback when the resident array won't fit): the sorted 8 B/rule
+  //     SelectorEntry index at arenaIndex_; payloads are read from disk on demand.
+  // Both are non-owning views into arena memory (the arena resets per build); the parser
+  // drops them on clear()/clearCaches() and reloads on the next resolve.
+  struct ResidentRule {
+    uint32_t hash;   // FNV-1a of the normalized selector (same as SelectorEntry::hash)
+    CssStyle style;  // fully decoded — no disk round-trip at lookup
+  };
+  BuildArena* indexArena_ = nullptr;
+  mutable ResidentRule* arenaResident_ = nullptr;
+  mutable SelectorEntry* arenaIndex_ = nullptr;
+  bool leanResolve_ = false;
+
+  // Stream the whole ruleset into the arena as a sorted {hash, CssStyle} array (RESIDENT
+  // mode). Returns false if the arena can't hold it (caller then tries INDEX-only).
+  bool loadArenaResident(FsFile& file, uint16_t ruleCount, uint32_t totalCandidates, uint32_t unsupportedSkips) const;
+  // Forget the current ruleset view (heap vector or either arena layout) so
+  // ensureCacheIndexLoaded() reloads it.
+  void dropIndex() const;
 
   static uint32_t selectorHash(std::string_view s);
 

@@ -18,6 +18,7 @@
 #include "../../lib/Epub/Epub/css/CssParser.h"
 #include "../../lib/ZipFile/ZipFile.h"
 #include "Arduino.h"
+#include "BuildArena.h"
 #include "HalStorage.h"
 
 using Clock = std::chrono::steady_clock;
@@ -368,6 +369,129 @@ TEST(CssParserPerf, CacheSaveLoadAndLowHeapLookup) {
   // "p.rule0_0" — and each probe must skip its disk lookup in low-heap mode.
   EXPECT_EQ(lowHeapStats.lowHeapDiskBypasses, 3u);
   EXPECT_EQ(lowHeapStats.diskHits, 0u);
+
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
+// ---------------------------------------------------------------------------
+// Phase-2 arena CSS (docs/compiled-book-pipeline-plan.md): a build running in the
+// BORROWED secondary framebuffer resolves CSS out of a BuildArena — the whole
+// {hash,CssStyle} ruleset resident when it fits (in-RAM, no disk, FreeInkBook-style),
+// else an arena-backed offset index (disk payloads) — with the hot cache disabled.
+// Both arena layouts must resolve IDENTICALLY to the heap path, and the resident
+// layout must keep resolving under moderate heap pressure (it touches no SD).
+// ---------------------------------------------------------------------------
+namespace {
+bool stylesEqual(const CssStyle& a, const CssStyle& b) {
+  auto len = [](const CssLength& l) { return std::make_pair(l.value, static_cast<int>(l.unit)); };
+  return a.textAlign == b.textAlign && a.fontStyle == b.fontStyle && a.fontWeight == b.fontWeight &&
+         a.textDecoration == b.textDecoration && a.display == b.display && a.verticalAlign == b.verticalAlign &&
+         a.listStyleNone == b.listStyleNone && a.pageBreakBefore == b.pageBreakBefore &&
+         a.pageBreakAfter == b.pageBreakAfter && a.cssFloat == b.cssFloat && a.smallCaps == b.smallCaps &&
+         a.lineHeightMultiplier == b.lineHeightMultiplier && a.fontSizeMultiplier == b.fontSizeMultiplier &&
+         len(a.textIndent) == len(b.textIndent) && len(a.marginTop) == len(b.marginTop) &&
+         len(a.marginBottom) == len(b.marginBottom) && len(a.marginLeft) == len(b.marginLeft) &&
+         len(a.marginRight) == len(b.marginRight) && len(a.paddingTop) == len(b.paddingTop) &&
+         len(a.paddingBottom) == len(b.paddingBottom) && len(a.paddingLeft) == len(b.paddingLeft) &&
+         len(a.paddingRight) == len(b.paddingRight) && len(a.imageHeight) == len(b.imageHeight) &&
+         len(a.imageWidth) == len(b.imageWidth);
+}
+}  // namespace
+
+TEST(CssParserArena, ResidentAndIndexMatchHeapResolution) {
+  const std::string epubPath = FIXTURE_EPUB;
+  const char* cssEntry = "OEBPS/styles/large.css";
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  const std::vector<uint8_t> cssData = readZipEntry(epubPath, cssEntry);
+  ASSERT_FALSE(cssData.empty());
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(cssData, cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile cssFile;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), cssFile));
+    ASSERT_TRUE(parser.loadFromStream(cssFile));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  // Probe a spread of real rules plus a couple of guaranteed misses.
+  std::vector<std::pair<std::string, std::string>> probes;
+  for (int i = 0; i < 25; ++i) probes.emplace_back("p", "rule0_" + std::to_string(i));
+  probes.emplace_back("p", "");
+  probes.emplace_back("div", "no_such_rule_xyz");
+
+  auto resolveAll = [&](CssParser& p) {
+    std::vector<CssStyle> out;
+    out.reserve(probes.size());
+    for (const auto& pr : probes) out.push_back(p.resolveStyle(pr.first, pr.second));
+    return out;
+  };
+
+  // 1) Heap baseline (no arena).
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> heapStyles = resolveAll(parser);
+
+  // 2) RESIDENT: arena easily large enough for the full ruleset. Assert the whole ruleset
+  //    was materialized (used() ~ N * sizeof(ResidentRule), well past the 8 B/rule index)
+  //    and that resolution is byte-for-byte identical to the heap path.
+  {
+    BuildArena arena(kFixtureRuleCount * 128 + 8192);
+    ASSERT_TRUE(arena.valid());
+    parser.clear();
+    parser.setIndexArena(&arena);
+    parser.setLeanResolve(true);
+    ASSERT_TRUE(parser.loadFromCache());
+    EXPECT_GT(arena.used(), kFixtureRuleCount * 64u) << "expected the full resident ruleset in the arena";
+    const std::vector<CssStyle> residentStyles = resolveAll(parser);
+    for (size_t i = 0; i < probes.size(); ++i) {
+      EXPECT_TRUE(stylesEqual(heapStyles[i], residentStyles[i]))
+          << "resident mismatch for " << probes[i].first << "." << probes[i].second;
+    }
+    // No hot cache and no disk reads under RESIDENT mode.
+    EXPECT_EQ(parser.getResolveStats().lowHeapDiskBypasses, 0u);
+    parser.clear();  // drop the arena view before the arena is destroyed
+  }
+
+  // 3) RESIDENT under moderate heap pressure: 30 KB is below the normal 40 KB CSS floor but
+  //    the resident path touches no SD, so it must still resolve (no low-heap bypass).
+  {
+    FreeHeapGuard heapGuard;
+    ESP.setFreeHeap(30 * 1024);
+    BuildArena arena(kFixtureRuleCount * 128 + 8192);
+    ASSERT_TRUE(arena.valid());
+    parser.clear();
+    parser.setIndexArena(&arena);
+    parser.setLeanResolve(true);
+    ASSERT_TRUE(parser.loadFromCache());
+    const std::vector<CssStyle> residentStyles = resolveAll(parser);
+    for (size_t i = 0; i < probes.size(); ++i) {
+      EXPECT_TRUE(stylesEqual(heapStyles[i], residentStyles[i])) << "resident-under-pressure mismatch at " << i;
+    }
+    EXPECT_EQ(parser.getResolveStats().lowHeapDiskBypasses, 0u);
+    parser.clear();
+  }
+
+  // 4) INDEX-only fallback: an arena that fits the 8 B/rule index (~12 KB) but not the
+  //    ~168 KB resident array. Payloads come from disk; resolution must still match heap.
+  {
+    BuildArena arena(kFixtureRuleCount * 16);  // > index, << resident
+    ASSERT_TRUE(arena.valid());
+    parser.clear();
+    parser.setIndexArena(&arena);
+    parser.setLeanResolve(true);
+    ASSERT_TRUE(parser.loadFromCache());
+    EXPECT_LT(arena.used(), kFixtureRuleCount * 16u) << "expected the small offset index, not the resident ruleset";
+    const std::vector<CssStyle> indexStyles = resolveAll(parser);
+    for (size_t i = 0; i < probes.size(); ++i) {
+      EXPECT_TRUE(stylesEqual(heapStyles[i], indexStyles[i]))
+          << "index-only mismatch for " << probes[i].first << "." << probes[i].second;
+    }
+    parser.clear();
+  }
 
   removePath(cacheDir);
   std::filesystem::remove(cssPath);
