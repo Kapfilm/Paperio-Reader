@@ -1141,6 +1141,8 @@ void CssParser::logResolveStats(const char* context) const {
           s.mapHits, s.hotHits, s.diskHits, s.misses, s.negativeHits,
           static_cast<unsigned long>(unsupportedSelectorSkips_), static_cast<unsigned long>(totalSelectorCandidates_),
           static_cast<unsigned>(hotRuleCache_.size()), static_cast<unsigned>(cachedRuleCount_));
+  (void)context;
+  (void)s;
 }
 
 bool CssParser::readCssStylePayload(FsFile& file, CssStyle& style) {
@@ -1409,7 +1411,16 @@ bool CssParser::lookupRule(const std::string& selector, CssStyle& outStyle, cons
       const ResidentEntry* begin = arenaResident_;
       const ResidentEntry* end = arenaResident_ + cachedRuleCount_;
       auto it = std::lower_bound(begin, end, h, [](const ResidentEntry& e, uint32_t key) { return e.hash < key; });
-      if (it != end && it->hash == h) {
+      const bool found = (it != end && it->hash == h);
+      // DIAGNOSTIC: log the first few resident queries — selector, its hash, hit/miss, and the
+      // index bounds (first/last stored hash) so a query-vs-stored hash mismatch is visible.
+      if (residentDiagCount_ < 6) {
+        ++residentDiagCount_;
+        LOG_INF("CSS", "resident lookup: sel='%s' qhash=%08x found=%d n=%u first=%08x last=%08x", selector.c_str(), h,
+                found ? 1 : 0, static_cast<unsigned>(cachedRuleCount_), cachedRuleCount_ ? begin[0].hash : 0u,
+                cachedRuleCount_ ? end[-1].hash : 0u);
+      }
+      if (found) {
         decompressStyle(arenaStylePool_ + it->styleOff + 1, outStyle);  // +1 skips the length prefix
         resolveStats_.diskHits++;                                       // resolved from the (in-RAM) ruleset
         return true;
@@ -1637,32 +1648,32 @@ static void decompressStyle(const uint8_t* in, CssStyle& out) {
   uint16_t enums = 0;
   std::memcpy(&enums, p, 2);
   p += 2;
-  const auto bit = [&](int b) { return (mask >> b) & 1u; };
+  const auto isDefined = [&](int index) { return (mask >> index) & 1u; };
   CssPropertyFlags& d = out.defined;
-  d.textAlign = bit(0);
-  d.fontStyle = bit(1);
-  d.fontWeight = bit(2);
-  d.textDecoration = bit(3);
-  d.textIndent = bit(4);
-  d.marginTop = bit(5);
-  d.marginBottom = bit(6);
-  d.marginLeft = bit(7);
-  d.marginRight = bit(8);
-  d.paddingTop = bit(9);
-  d.paddingBottom = bit(10);
-  d.paddingLeft = bit(11);
-  d.paddingRight = bit(12);
-  d.imageHeight = bit(13);
-  d.imageWidth = bit(14);
-  d.display = bit(15);
-  d.verticalAlign = bit(16);
-  d.listStyleNone = bit(17);
-  d.pageBreakBefore = bit(18);
-  d.pageBreakAfter = bit(19);
-  d.lineHeight = bit(20);
-  d.fontSizeMultiplier = bit(21);
-  d.cssFloat = bit(22);
-  d.smallCaps = bit(23);
+  d.textAlign = isDefined(0);
+  d.fontStyle = isDefined(1);
+  d.fontWeight = isDefined(2);
+  d.textDecoration = isDefined(3);
+  d.textIndent = isDefined(4);
+  d.marginTop = isDefined(5);
+  d.marginBottom = isDefined(6);
+  d.marginLeft = isDefined(7);
+  d.marginRight = isDefined(8);
+  d.paddingTop = isDefined(9);
+  d.paddingBottom = isDefined(10);
+  d.paddingLeft = isDefined(11);
+  d.paddingRight = isDefined(12);
+  d.imageHeight = isDefined(13);
+  d.imageWidth = isDefined(14);
+  d.display = isDefined(15);
+  d.verticalAlign = isDefined(16);
+  d.listStyleNone = isDefined(17);
+  d.pageBreakBefore = isDefined(18);
+  d.pageBreakAfter = isDefined(19);
+  d.lineHeight = isDefined(20);
+  d.fontSizeMultiplier = isDefined(21);
+  d.cssFloat = isDefined(22);
+  d.smallCaps = isDefined(23);
   if (d.textAlign) out.textAlign = static_cast<CssTextAlign>(enums & 7u);
   if (d.fontStyle) out.fontStyle = static_cast<CssFontStyle>((enums >> 3) & 1u);
   if (d.fontWeight) out.fontWeight = static_cast<CssFontWeight>((enums >> 4) & 1u);
@@ -1712,15 +1723,14 @@ static void decompressStyle(const uint8_t* in, CssStyle& out) {
 // then tries the smaller offset index.
 bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const uint32_t totalCandidates,
                                   const uint32_t unsupportedSkips) const {
-  // Reserve from a mark so a failed attempt (won't fit, or a stream error) leaves the arena
+  // Reserve a block so a failed attempt (won't fit, or a stream error) leaves the arena
   // cursor exactly where it was — the caller then reuses that space for the smaller offset
   // index. The file stays open; the caller (ensureCacheIndexLoaded) owns closing it.
-  const size_t mark = indexArena_->mark();
-  ResidentEntry* index = ruleCount > 0
-                             ? static_cast<ResidentEntry*>(indexArena_->alloc(
-                                   static_cast<size_t>(ruleCount) * sizeof(ResidentEntry), alignof(ResidentEntry)))
-                             : nullptr;
+  auto block = indexArena_->reserveBlock();
+  const size_t blockStart = block.start();
+  ResidentEntry* index = ruleCount > 0 ? indexArena_->allocArray<ResidentEntry>(ruleCount) : nullptr;
   if (ruleCount > 0 && index == nullptr) {
+    indexArena_->release(block);
     return false;  // even the index won't fit — caller falls back to the offset index
   }
 
@@ -1735,7 +1745,7 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
     // Skip the sorted offset index (11-byte header + ruleCount * 8) to reach the payload block,
     // then stream it in one sequential pass (fixed-size payloads → no per-record seeking).
     if (!file.seek(static_cast<uint32_t>(11 + static_cast<size_t>(ruleCount) * sizeof(SelectorEntry)))) {
-      indexArena_->release(mark);
+      indexArena_->release(block);
       return false;
     }
     char selectorBuf[MAX_SELECTOR_LENGTH];
@@ -1744,12 +1754,12 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
       uint16_t selectorLen = 0;
       if (file.read(&selectorLen, sizeof(selectorLen)) != sizeof(selectorLen) || selectorLen > MAX_SELECTOR_LENGTH ||
           file.read(selectorBuf, selectorLen) != selectorLen) {
-        indexArena_->release(mark);
+        indexArena_->release(block);
         return false;
       }
       CssStyle style;
       if (!readCssStylePayload(file, style)) {
-        indexArena_->release(mark);
+        indexArena_->release(block);
         return false;
       }
       const size_t recLen = compressStyle(style, rec);
@@ -1770,7 +1780,7 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
       if (!found) {
         auto* slot = static_cast<uint8_t*>(indexArena_->alloc(1 + recLen, 1));
         if (slot == nullptr) {  // pool grew past the arena even after dedup — fall back to index
-          indexArena_->release(mark);
+          indexArena_->release(block);
           return false;
         }
         if (poolBase == nullptr) poolBase = slot;  // first record anchors the pool
@@ -1788,8 +1798,33 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
     arenaStylePool_ = poolBase;
     arenaStyleCount_ = poolCount;
     arenaPoolBytes_ = static_cast<uint32_t>(poolBytes);
+    residentDiagCount_ = 0;
+
+    // DIAGNOSTIC: verify the just-built index is self-consistent on-device — look up the first
+    // entry's own hash and decompress its style. found=0 or defined=0 => the index/pool is
+    // corrupt (memory/arena issue); found=1 with a sane defined mask => the store is fine and a
+    // real-query miss must be a query-vs-stored hash mismatch (see the lookup diag).
+    {
+      const uint32_t h0 = index[0].hash;
+      const ResidentEntry* it =
+          std::lower_bound(index, index + ruleCount, h0, [](const ResidentEntry& e, uint32_t k) { return e.hash < k; });
+      const bool found = (it != index + ruleCount && it->hash == h0);
+      CssStyle probe;
+      if (found) decompressStyle(arenaStylePool_ + it->styleOff + 1, probe);
+      LOG_INF("CSS", "resident self-test: n=%u distinct=%u poolBytes=%u hash0=%08x found=%d off=%u defined=%08x",
+              static_cast<unsigned>(ruleCount), static_cast<unsigned>(poolCount), static_cast<unsigned>(poolBytes), h0,
+              found ? 1 : 0, found ? it->styleOff : 0u, found ? packDefinedMask(probe.defined) : 0u);
+      // DIAGNOSTIC: where in the arena the resident store lives — idx@ is index[0], pool@ is the
+      // pool base, entryMark is the arena offset at entry, usedAfter is the cursor after the load.
+      // Compare against the extract's chunkBuf@/chunkMark: if chunkMark < usedAfter (or chunkBuf@
+      // overlaps [idx@, pool@+poolBytes]) the extract reuses the resident store's bytes.
+      LOG_INF("CSS", "resident placement: idx@=%p pool@=%p entryMark=%u usedAfter=%u", (void*)index, (void*)poolBase,
+              static_cast<unsigned>(blockStart), static_cast<unsigned>(indexArena_->used()));
+      (void)blockStart;
+    }
   }
 
+  indexArena_->commit(block);
   cachedRuleCount_ = ruleCount;
   totalSelectorCandidates_ = totalCandidates;
   unsupportedSelectorSkips_ = unsupportedSkips;

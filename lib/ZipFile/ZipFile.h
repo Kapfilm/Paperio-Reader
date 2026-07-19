@@ -116,9 +116,9 @@ class ZipFile {
   class EntryReader {
    public:
     // arena (optional): carve the read buffer AND the inflate ring from the
-    // given BuildArena instead of malloc. The reader takes an arena mark at
-    // open() and releases it on close()/reset(), so callers must not interleave
-    // their own arena allocations with an open reader's lifetime (LIFO scoping).
+    // given BuildArena instead of malloc. The reader reserves an arena block at
+    // open() and releases it on close()/reset(). Any nested caller block must
+    // be released before closing the reader.
     // Budget per open: chunkSize + InflateReader::ringSizeFor(entrySize) + alignment.
     explicit EntryReader(ZipFile& zf, size_t chunkSize = 1024, BuildArena* arena = nullptr);
     ~EntryReader();

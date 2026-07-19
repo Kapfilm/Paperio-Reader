@@ -725,9 +725,9 @@ struct ZipFile::EntryReader::Impl {
   ZipFile& zf;
   size_t chunkSize;
   // Optional arena backing (see EntryReader ctor doc): readBuf + inflate ring
-  // are carved from it under one mark taken at open(), released in reset().
+  // are carved from one block reserved at open(), released in reset().
   BuildArena* arena = nullptr;
-  size_t arenaMark = 0;
+  BuildArena::Block arenaBlock;
 
   uint16_t method = 0;  // ZIP_METHOD_STORED or ZIP_METHOD_DEFLATED
   FsFile file;
@@ -754,7 +754,9 @@ struct ZipFile::EntryReader::Impl {
       if (!arena) free(readBuf);
       readBuf = nullptr;
     }
-    if (arena) arena->release(arenaMark);
+    if (arena && arenaBlock.valid()) {
+      arena->release(arenaBlock);
+    }
     ctx.file = nullptr;
     ctx.fileRemaining = 0;
     ctx.readBuf = nullptr;
@@ -805,7 +807,7 @@ bool ZipFile::EntryReader::open(const char* filename) {
   }
 
   if (fileStat.method == ZIP_METHOD_DEFLATED) {
-    if (impl_->arena) impl_->arenaMark = impl_->arena->mark();
+    if (impl_->arena) impl_->arenaBlock = impl_->arena->reserveBlock();
     impl_->readBuf = impl_->arena ? static_cast<uint8_t*>(impl_->arena->alloc(impl_->chunkSize))
                                   : static_cast<uint8_t*>(malloc(impl_->chunkSize));
     if (!impl_->readBuf) {
@@ -823,6 +825,11 @@ bool ZipFile::EntryReader::open(const char* filename) {
     if (impl_->arena) {
       const size_t ringSize = InflateReader::ringSizeFor(fileStat.uncompressedSize);
       auto* ring = static_cast<uint8_t*>(impl_->arena->alloc(ringSize));
+      // DIAGNOSTIC: the inflated XHTML lands in this ring first; compare readBuf@/ring@ against the
+      // CSS "resident placement" idx@ — an overlap is the resident-index corruption source.
+      LOG_INF("ZIP", "reader placement: readBuf@=%p ring@=%p ringSize=%u mark=%u used=%u", (void*)impl_->readBuf,
+              (void*)ring, static_cast<unsigned>(ringSize), static_cast<unsigned>(impl_->arenaBlock.start()),
+              static_cast<unsigned>(impl_->arena->used()));
       ringOk = ring && impl_->ctx.reader.initWithExternalRing(ring, ringSize);
     } else {
       ringOk = impl_->ctx.reader.init(true, fileStat.uncompressedSize);
@@ -831,7 +838,9 @@ bool ZipFile::EntryReader::open(const char* filename) {
       LOG_ERR("ZIP", "EntryReader::open: OOM initialising inflate ring buffer");
       if (!impl_->arena) free(impl_->readBuf);
       impl_->readBuf = nullptr;
-      if (impl_->arena) impl_->arena->release(impl_->arenaMark);
+      if (impl_->arena && impl_->arenaBlock.valid()) {
+        impl_->arena->release(impl_->arenaBlock);
+      }
       impl_->file.close();
       return false;
     }

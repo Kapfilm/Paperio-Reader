@@ -45,42 +45,103 @@ TEST(BuildArena, OverflowingAlignmentPaddingIsRefused) {
   EXPECT_EQ(arena.alloc(1, 8), nullptr);
 }
 
-TEST(BuildArena, MarkReleaseReclaimsNested) {
+TEST(BuildArena, InvalidAlignmentIsRefused) {
+  BuildArena arena(64);
+  EXPECT_EQ(arena.alloc(1, 0), nullptr);
+  EXPECT_EQ(arena.alloc(1, 3), nullptr);
+  EXPECT_EQ(arena.used(), 0u);
+}
+
+TEST(BuildArena, BlockReleaseReclaimsNested) {
   BuildArena arena(128);
   arena.alloc(16, 1);
-  const size_t outer = arena.mark();
+  auto outer = arena.reserveBlock();
   arena.alloc(32, 1);
-  const size_t inner = arena.mark();
+  auto inner = arena.reserveBlock();
   arena.alloc(32, 1);
 
-  arena.release(inner);
+  EXPECT_TRUE(arena.release(inner));
   EXPECT_EQ(arena.used(), 48u);
-  arena.release(outer);
+  EXPECT_TRUE(arena.release(outer));
   EXPECT_EQ(arena.used(), 16u);
   // Reclaimed space is reusable.
   EXPECT_NE(arena.alloc(100, 1), nullptr);
 }
 
-TEST(BuildArena, StaleMarkIsIgnored) {
+TEST(BuildArena, OutOfOrderReleaseIsRejected) {
   BuildArena arena(128);
-  const size_t outer = arena.mark();
+  auto outer = arena.reserveBlock();
   arena.alloc(32, 1);
-  const size_t inner = arena.mark();
-  arena.release(outer);  // releases the outer scope first (out of order)
-  arena.release(inner);  // stale: beyond the cursor now — must be a no-op
+  auto inner = arena.reserveBlock();
+  arena.alloc(16, 1);
+
+  EXPECT_FALSE(arena.release(outer));
+  EXPECT_EQ(arena.releaseFailures(), 1u);
+  EXPECT_EQ(arena.used(), 48u);
+  EXPECT_TRUE(arena.release(inner));
+  EXPECT_EQ(arena.used(), 32u);
+  EXPECT_TRUE(arena.release(outer));
   EXPECT_EQ(arena.used(), 0u);
+  EXPECT_FALSE(arena.release(outer));
+  EXPECT_EQ(arena.releaseFailures(), 2u);
+}
+
+TEST(BuildArena, BlockCannotReleaseAnotherArena) {
+  BuildArena first(64);
+  BuildArena second(64);
+  auto firstBlock = first.reserveBlock();
+  auto secondBlock = second.reserveBlock();
+  ASSERT_NE(first.alloc(16, 1), nullptr);
+  ASSERT_NE(second.alloc(16, 1), nullptr);
+
+  EXPECT_FALSE(second.release(firstBlock));
+  EXPECT_EQ(second.used(), 16u);
+  EXPECT_EQ(second.releaseFailures(), 1u);
+  EXPECT_TRUE(second.release(secondBlock));
+  EXPECT_TRUE(first.release(firstBlock));
+}
+
+TEST(BuildArena, ArrayAllocationRejectsSizeOverflow) {
+  BuildArena arena(64);
+  EXPECT_EQ(arena.allocArray<uint32_t>(SIZE_MAX / sizeof(uint32_t) + 1), nullptr);
+  EXPECT_EQ(arena.used(), 0u);
+  EXPECT_EQ(arena.failedAllocSize(), SIZE_MAX);
+}
+
+TEST(BuildArena, CommittedBlockRemainsAllocated) {
+  BuildArena arena(128);
+  auto permanent = arena.reserveBlock();
+  arena.alloc(32, 1);
+  EXPECT_TRUE(arena.commit(permanent));
+
+  auto scratch = arena.reserveBlock();
+  arena.alloc(16, 1);
+  EXPECT_TRUE(arena.release(scratch));
+  EXPECT_EQ(arena.used(), 32u);
+  EXPECT_FALSE(arena.release(permanent));
 }
 
 TEST(BuildArena, HighWaterTracksPeakAcrossReleaseAndReset) {
   BuildArena arena(128);
-  const size_t m = arena.mark();
+  auto block = arena.reserveBlock();
   arena.alloc(100, 1);
-  arena.release(m);
+  EXPECT_TRUE(arena.release(block));
   arena.alloc(10, 1);
   EXPECT_EQ(arena.highWater(), 100u);
   arena.reset();
   EXPECT_EQ(arena.used(), 0u);
   EXPECT_EQ(arena.highWater(), 100u);  // survives reset for post-build diagnostics
+}
+
+TEST(BuildArena, ResetInvalidatesLiveBlocks) {
+  BuildArena arena(128);
+  auto stale = arena.reserveBlock();
+  arena.alloc(32, 1);
+  arena.reset();
+  arena.alloc(16, 1);
+
+  EXPECT_FALSE(arena.release(stale));
+  EXPECT_EQ(arena.used(), 16u);
 }
 
 TEST(BuildArena, ExternalBufferIsUsedInPlace) {
@@ -89,6 +150,15 @@ TEST(BuildArena, ExternalBufferIsUsedInPlace) {
   ASSERT_TRUE(arena.valid());
   auto* p = static_cast<uint8_t*>(arena.alloc(8, 1));
   EXPECT_EQ(p, buf);
+}
+
+TEST(BuildArena, AlignsAgainstUnalignedExternalBuffer) {
+  uint8_t storage[65];
+  BuildArena arena(storage + 1, 64);
+  auto* p = static_cast<uint8_t*>(arena.alloc(8, 8));
+  ASSERT_NE(p, nullptr);
+  EXPECT_EQ(reinterpret_cast<uintptr_t>(p) % 8, 0u);
+  EXPECT_GE(p, storage + 1);
 }
 
 TEST(BuildArena, NullExternalBufferIsInvalidAndRefuses) {

@@ -252,6 +252,7 @@ class CssParser {
   mutable uint8_t* arenaStylePool_ = nullptr;       // distinct styles, sparse-compressed, length-prefixed
   mutable uint16_t arenaStyleCount_ = 0;            // distinct style records in the pool
   mutable uint32_t arenaPoolBytes_ = 0;             // bytes used by the compressed pool
+  mutable uint8_t residentDiagCount_ = 0;           // DIAGNOSTIC: throttle resident-lookup logging
   mutable SelectorEntry* arenaIndex_ = nullptr;
   bool leanResolve_ = false;
 
