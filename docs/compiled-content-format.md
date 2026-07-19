@@ -147,9 +147,15 @@ instead of at CSS parse time; (c) running the UBA in the Stage-1 writer to fill
 `bidiLevel`; (d) an L2 reorder + shaping pass in the Stage-2 layout engine. All
 four are additive to the record fields reserved above.
 
-Open BiDi question: levels are per-*character* but the record is per-*word*. The
-writer must segment words on directional-run boundaries (or store level runs) so a
-mixed-script word can't get a single wrong level — resolve when RTL is implemented.
+BiDi granularity (resolved by the freeink comparison): freeink's ChapterLayout
+stores embedding levels **per byte**, which confirms the per-*word* `bidiLevel`
+reserved above is too coarse for mixed-script text. When RTL lands, levels move to
+per-character storage (a parallel levels blob per text block) — a format addition
+at that point; the per-word field stays a fast-path hint for pure-LTR/pure-RTL
+blocks. freeink also shapes Arabic + mirrors neutrals at *measurement* time and
+bakes the result into runs, so Stage 2 owns shaping and the renderer needs none —
+matching our seam. Its `Page::charStart` is exactly our per-block `charOffset`
+(a layout-parameter-independent reading anchor), independent validation of the split.
 
 ## Migration steps (plan Phase 3, each its own commit series, behind `-DEPUB_STAGE1`)
 
