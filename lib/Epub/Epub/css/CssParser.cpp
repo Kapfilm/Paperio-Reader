@@ -1649,6 +1649,7 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
     arenaResident_ = index;
     arenaStylePool_ = poolBase;
     arenaStyleCount_ = poolCount;
+    arenaPoolBytes_ = static_cast<uint32_t>(poolCount) * sizeof(CssStyle);
   }
 
   cachedRuleCount_ = ruleCount;
@@ -1670,9 +1671,20 @@ void CssParser::dropIndex() const {
   arenaResident_ = nullptr;
   arenaStylePool_ = nullptr;
   arenaStyleCount_ = 0;
+  arenaPoolBytes_ = 0;
   arenaIndex_ = nullptr;
   cacheIndexLoaded_ = false;
   cachedRuleCount_ = 0;
+}
+
+CssParser::ResidentFootprint CssParser::getResidentFootprint() const {
+  ResidentFootprint f;
+  if (arenaResident_ == nullptr) return f;  // only the RESIDENT layout has a pooled footprint
+  f.ruleCount = static_cast<uint16_t>(cachedRuleCount_);
+  f.distinctStyles = arenaStyleCount_;
+  f.indexBytes = static_cast<uint32_t>(cachedRuleCount_) * sizeof(ResidentEntry);
+  f.poolBytes = arenaPoolBytes_;
+  return f;
 }
 
 // Style resolution

@@ -540,6 +540,54 @@ TEST(CssParserArena, IndexOnlyFallbackMatchesHeapResolution) {
   std::filesystem::remove(cssPath);
 }
 
+// Baseline measurement of the resident CSS footprint (index + distinct-style pool) across
+// representative stylesheets, so the dedup/compression win is measured, not estimated. Prints
+// CSS_FOOTPRINT lines the CI log captures; re-run after compression lands to see the delta.
+TEST(CssParserArena, ResidentFootprintBaseline) {
+  auto footprintForCss = [](const std::string& css) {
+    const std::string cacheDir = makeTempDir();
+    std::string cssPath;
+    EXPECT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+    CssParser parser(cacheDir);
+    {
+      FsFile f;
+      EXPECT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), f));
+      EXPECT_TRUE(parser.loadFromStream(f));
+    }
+    EXPECT_TRUE(parser.saveToCache());
+    BuildArena arena(1024 * 1024);  // huge → always resident, so we measure the full pool
+    parser.clear();
+    parser.setIndexArena(&arena);
+    parser.setLeanResolve(true);
+    EXPECT_TRUE(parser.loadFromCache());
+    const CssParser::ResidentFootprint fp = parser.getResidentFootprint();
+    parser.clear();
+    removePath(cacheDir);
+    std::filesystem::remove(cssPath);
+    return fp;
+  };
+
+  std::string calibre;  // hundreds of identically-styled classes (the Calibre pattern)
+  for (int i = 0; i < 800; ++i) calibre += ".calibre" + std::to_string(i) + " { margin-top: 0px; }\n";
+  std::string distinct;  // every rule unique — no dedup possible
+  for (int i = 0; i < 400; ++i)
+    distinct += ".u" + std::to_string(i) + " { margin-top: " + std::to_string(i + 1) + "px; }\n";
+  std::string typical;  // a realistic mix (~24 distinct combinations)
+  for (int i = 0; i < 200; ++i)
+    typical += ".t" + std::to_string(i) + " { margin-top: " + std::to_string(i % 12) +
+               "px; text-align: " + (i % 2 ? "center" : "left") + "; }\n";
+
+  const std::vector<std::pair<const char*, std::string>> sheets = {
+      {"calibre-800-dup", calibre}, {"distinct-400", distinct}, {"typical-200", typical}};
+  for (const auto& [name, css] : sheets) {
+    const CssParser::ResidentFootprint fp = footprintForCss(css);
+    printf("CSS_FOOTPRINT[%-16s] rules=%4u distinct=%4u indexB=%6u poolB=%6u totalB=%6u  %.1f B/distinct\n", name,
+           fp.ruleCount, fp.distinctStyles, fp.indexBytes, fp.poolBytes, fp.totalBytes(),
+           fp.distinctStyles ? static_cast<double>(fp.poolBytes) / fp.distinctStyles : 0.0);
+    EXPECT_GT(fp.ruleCount, 0u);
+  }
+}
+
 // Regression: font-size from stylesheets must survive the disk-cache round trip.
 // Before cache v13, writeCssStylePayload dropped fontSizeMultiplier, so class-based
 // font-size (e.g. Alice's mouse-tale .taleN spans) silently vanished on device —

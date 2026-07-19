@@ -175,6 +175,17 @@ class CssParser {
   [[nodiscard]] ResolveStats getResolveStats() const;
   void logResolveStats(const char* context) const;
 
+  // Resident-arena memory breakdown (valid after a RESIDENT load; zero otherwise). Lets host
+  // benchmarks and device logs quantify the CSS footprint and the dedup/compression win.
+  struct ResidentFootprint {
+    uint16_t ruleCount = 0;       // selectors in the index
+    uint16_t distinctStyles = 0;  // pool entries after dedup
+    uint32_t indexBytes = 0;      // sorted {hash, styleIdx} index
+    uint32_t poolBytes = 0;       // distinct-style pool (compressed once compression lands)
+    uint32_t totalBytes() const { return indexBytes + poolBytes; }
+  };
+  [[nodiscard]] ResidentFootprint getResidentFootprint() const;
+
   // Phase-2 arena mode (docs/compiled-book-pipeline-plan.md). A section built with the
   // secondary framebuffer BORROWED (not freed) runs with ~52 KB less general heap than a
   // released build, so the resolver would otherwise self-degrade below MIN_FREE_HEAP_FOR_CSS
@@ -238,6 +249,7 @@ class CssParser {
   mutable ResidentEntry* arenaResident_ = nullptr;  // sorted by hash, cachedRuleCount_ entries
   mutable CssStyle* arenaStylePool_ = nullptr;      // arenaStyleCount_ distinct styles
   mutable uint16_t arenaStyleCount_ = 0;
+  mutable uint32_t arenaPoolBytes_ = 0;  // bytes the distinct-style pool occupies (for footprint telemetry)
   mutable SelectorEntry* arenaIndex_ = nullptr;
   bool leanResolve_ = false;
 
