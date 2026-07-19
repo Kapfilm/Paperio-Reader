@@ -540,6 +540,62 @@ TEST(CssParserArena, IndexOnlyFallbackMatchesHeapResolution) {
   std::filesystem::remove(cssPath);
 }
 
+// Reproduction from a real book (download.epub) reported as a visual regression: rich rules with
+// percentage margins, shorthands, pt units, and vertical-align:%. Resident resolution of each
+// class must equal the heap path exactly (any divergence = the codec corrupting a real style).
+TEST(CssParserArena, ResidentMatchesHeapForRealRichStylesheet) {
+  const std::string css =
+      ".apnf { font-size: 0.58333em; font-weight: bold; line-height: 1.2; text-decoration: none; "
+      "vertical-align: 70%; margin: 0 0 0 0.2em; }\n"
+      ".auteur { display: block; margin-bottom: 0%; margin-left: 30%; margin-top: 0%; "
+      "page-break-after: avoid; text-align: right; text-indent: 0%; padding: 0%; }\n"
+      ".bl { display: block; margin-bottom: 0%; margin-top: 0%; padding: 0%; }\n"
+      ".border { color: gray; display: block; height: 2px; margin: 0.2em 0; }\n"
+      ".calibre { display: block; font-size: 1.125em; height: 100%; line-height: 1.2; width: 100%; "
+      "padding: 0% 0; margin: 0 5pt; }\n"
+      ".titre { text-align: center; font-size: 1.5em; font-weight: bold; margin: 1em 0; "
+      "page-break-before: always; text-transform: uppercase; }\n";
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile f;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), f));
+    ASSERT_TRUE(parser.loadFromStream(f));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  const std::vector<std::string> classes = {"apnf", "auteur", "bl", "border", "calibre", "titre"};
+  auto resolveAll = [&](CssParser& p) {
+    std::vector<CssStyle> out;
+    for (const auto& c : classes) out.push_back(p.resolveStyle("p", c));
+    return out;
+  };
+
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> heapStyles = resolveAll(parser);
+
+  BuildArena arena(64 * 1024);
+  ASSERT_TRUE(arena.valid());
+  parser.clear();
+  parser.setIndexArena(&arena);
+  parser.setLeanResolve(true);
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> residentStyles = resolveAll(parser);
+
+  for (size_t i = 0; i < classes.size(); ++i) {
+    EXPECT_TRUE(stylesEqual(heapStyles[i], residentStyles[i])) << "resident != heap for ." << classes[i];
+  }
+  EXPECT_GT(parser.getResolveStats().diskHits, 0u) << "these classes should resolve (hit)";
+  parser.clear();
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
 // The resident path must actually HIT for element, class, and combined selectors — not just
 // agree with the heap path (which both-miss on unmatched probes would trivially satisfy). Asserts
 // each probe returns the styled (non-default) value AND equals the heap resolution.
