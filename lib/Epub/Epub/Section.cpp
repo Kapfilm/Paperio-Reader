@@ -669,6 +669,21 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   if (p.embeddedStyle) {
     st.cssParser = epub->getCssParser();
     if (st.cssParser) {
+      // Phase-2: a build running in the BORROWED secondary framebuffer (external arena) has
+      // ~52 KB less heap than a released build, so resolve CSS out of the arena instead of the
+      // heap — resident {hash,style} ruleset when it fits, else an arena-backed index — with the
+      // hot cache off and a lower floor, so the resolver doesn't self-degrade and force a
+      // released rebuild. Set deterministically (not just when external) so the shared per-epub
+      // parser never carries a stale lean flag into an owned/heap-backed build. No-op when
+      // EPUB_BUILD_ARENA=0 (st.arena is null → heap CSS).
+#if EPUB_BUILD_ARENA
+      const bool externalArena = st.arena && st.arena != st.ownedArena.get();
+      st.cssParser->setIndexArena(externalArena ? st.arena : nullptr);
+      st.cssParser->setLeanResolve(externalArena);
+#else
+      st.cssParser->setIndexArena(nullptr);
+      st.cssParser->setLeanResolve(false);
+#endif
       if (!st.cssParser->loadFromCache()) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
       }
