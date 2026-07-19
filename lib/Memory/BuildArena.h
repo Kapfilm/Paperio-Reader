@@ -32,11 +32,10 @@ class BuildArena {
  public:
   // Heap-backed arena. valid() is false when the buffer allocation failed —
   // callers treat that exactly like a refused build (retry released/smaller).
-  explicit BuildArena(const size_t capacity) : capacity_(capacity) {
-    owned_ = makeUniqueNoThrow<uint8_t[]>(capacity);
-    base_ = owned_.get();
-    if (!base_) capacity_ = 0;
-  }
+  // Members init in declaration order (owned_, base_, capacity_): owned_ allocates,
+  // base_ views it, capacity_ collapses to 0 when the allocation failed.
+  explicit BuildArena(const size_t capacity)
+      : owned_(makeUniqueNoThrow<uint8_t[]>(capacity)), base_(owned_.get()), capacity_(base_ ? capacity : 0) {}
 
   // Caller-supplied buffer (e.g. a released framebuffer region). Not owned.
   BuildArena(uint8_t* buffer, const size_t capacity) : base_(buffer), capacity_(buffer ? capacity : 0) {}
