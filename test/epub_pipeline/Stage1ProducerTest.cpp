@@ -110,12 +110,19 @@ void compileSpine0(const std::string& epubName, const std::string& cacheDir, Cap
   compileSpine(epubName, 0, cacheDir, sink);
 }
 
-// The producer's text-word sequence for a spine (image blocks contribute no words).
+// The producer's word sequence for a spine, in document order: text-block words, and
+// table-cell words row-major (image blocks contribute none).
 std::vector<std::string> producerWords(const CapturingSink& sink) {
   std::vector<std::string> out;
   for (const auto& cap : sink.blocks) {
-    if (cap.block.type != compiled::BlockType::Text) continue;
-    for (size_t i = 0; i < cap.block.words.size(); ++i) out.push_back(wordText(cap.block, i));
+    const auto& b = cap.block;
+    if (b.type == compiled::BlockType::Text) {
+      for (size_t i = 0; i < b.words.size(); ++i) out.push_back(wordText(b, i));
+    } else if (b.type == compiled::BlockType::Table) {
+      for (const auto& row : b.rows)
+        for (const auto& cell : row.cells)
+          for (size_t i = 0; i < cell.words.size(); ++i) out.emplace_back(&cell.text[cell.words[i].textOff]);
+    }
   }
   return out;
 }
@@ -135,9 +142,19 @@ std::vector<std::string> layoutWords(const std::string& epubName, int spineIndex
     const auto page = section.loadPageFromSectionFile();
     if (!page) break;
     for (const auto& el : page->elements) {
-      if (el->getTag() != TAG_PageLine) continue;
-      const auto& block = *static_cast<const PageLine&>(*el).getBlock();
-      for (uint16_t w = 0; w < block.wordCount(); ++w) out.emplace_back(block.wordText(w));
+      if (el->getTag() == TAG_PageLine) {
+        const auto& block = *static_cast<const PageLine&>(*el).getBlock();
+        for (uint16_t w = 0; w < block.wordCount(); ++w) out.emplace_back(block.wordText(w));
+      } else if (el->getTag() == TAG_PageTable) {
+        // Grid tables: cell text lives in the fragment, not PageLines. Walk row-major.
+        for (const auto& row : static_cast<const PageTableFragment&>(*el).getRows()) {
+          for (const auto& cell : row.cells) {
+            for (const auto& line : cell.lines) {
+              for (uint16_t w = 0; w < line->wordCount(); ++w) out.emplace_back(line->wordText(w));
+            }
+          }
+        }
+      }
     }
   }
   return out;
@@ -275,6 +292,7 @@ TEST(Stage1Producer, TextMatchesLayoutWords) {
       {"test_headings.epub", "chapter1"},    // headings + paragraphs + a list
       {"test_font_sizes.epub", "chapter1"},  // inline font-size spans + a list
       {"test_png_images.epub", "chapter2"},  // text around a block image
+      {"test_tables.epub", "ch001"},         // grid + paragraph-fallback tables
   };
   for (const auto& c : cases) {
     const int spine = spineIndexForHref(c.book, freshCacheDir(std::string("eqv_find_") + c.book), c.href);

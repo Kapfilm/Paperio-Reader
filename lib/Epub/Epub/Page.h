@@ -114,6 +114,7 @@ class PageTableFragment final : public PageElement {
   static std::unique_ptr<PageTableFragment> deserialize(FsFile& file);
   PageElementTag getTag() const override { return TAG_PageTable; }
   uint16_t getTotalHeight() const { return totalHeight; }
+  const std::vector<TableRow>& getRows() const { return rows; }
 
   // In-cell graphics participate in the Page-level image passes below.
   bool hasImages() const;
