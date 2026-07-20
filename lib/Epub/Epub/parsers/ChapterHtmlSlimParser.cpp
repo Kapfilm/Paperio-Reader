@@ -14,6 +14,7 @@
 
 #include "../../Epub.h"
 #include "../Page.h"
+#include "../content/BlockSink.h"
 #include "../converters/ImageDecoderFactory.h"
 #include "../converters/ImageToFramebufferDecoder.h"
 #include "../htmlEntities.h"
@@ -403,6 +404,7 @@ bool ChapterHtmlSlimParser::flushPartWordBuffer() {
       attachPendingFloatImage(currentTextBlock->getBlockStyle());
     }
     currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, effectiveSizePct);
+    stage1AddWord(partWordBuffer, fontStyle, effectiveSizePct, nextWordContinues);
 
     if (currentTextBlock->size() > 96) {
       if (!ensureHeapForTextLayout("long-block split")) {
@@ -560,6 +562,69 @@ void ChapterHtmlSlimParser::attachPendingFloatImage(BlockStyle& bs) {
 }
 
 // start a new text block if needed
+// --- Stage-1 producer tap ---------------------------------------------------
+// No-ops when stage1Sink_ is null, so the shipping fused path is byte-identical.
+// Emits a materialized compiled::Block per text block; text is stored raw Unicode in
+// LOGICAL order (RTL shaping/reordering is a Stage-2 concern). See
+// docs/stage1-extraction-design.md.
+
+// Map the layout font-style bitmask to the stable on-disk styleSpan layout.
+static uint8_t stage1MapStyleSpan(const EpdFontFamily::Style style, const bool attachToPrevious) {
+  uint8_t span = 0;
+  if (style & EpdFontFamily::BOLD) span |= compiled::kSpanBold;
+  if (style & EpdFontFamily::ITALIC) span |= compiled::kSpanItalic;
+  if (style & EpdFontFamily::UNDERLINE) span |= compiled::kSpanUnderline;
+  if (style & EpdFontFamily::STRIKETHROUGH) span |= compiled::kSpanStrikethrough;
+  if (style & EpdFontFamily::SUP) span |= compiled::kSpanSuper;
+  if (style & EpdFontFamily::SUB) span |= compiled::kSpanSub;
+  if (style & EpdFontFamily::SMALL_CAPS) span |= compiled::kSpanSmallCaps;
+  if (attachToPrevious) span |= compiled::kSpanAttachPrev;
+  return span;
+}
+
+// Count Unicode codepoints (non-continuation bytes) for the reading-progress offset.
+static uint32_t stage1CountCodepoints(const char* s) {
+  uint32_t n = 0;
+  for (const char* p = s; *p != '\0'; ++p) {
+    if ((static_cast<uint8_t>(*p) & 0xC0) != 0x80) ++n;
+  }
+  return n;
+}
+
+void ChapterHtmlSlimParser::stage1FlushBlock() {
+  if (!stage1Sink_ || !stage1Block_) return;
+  if (stage1Block_->words.empty()) {  // empty shell (e.g. reused block that took no text) — drop
+    stage1Block_.reset();
+    return;
+  }
+  stage1Block_->type = compiled::BlockType::Text;
+  stage1Sink_->onBlock(std::move(*stage1Block_), stage1BlockCssStyle_);
+  stage1Block_.reset();
+}
+
+void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
+  if (!stage1Sink_) return;
+  stage1FlushBlock();  // hand off the previous block before starting a new one
+  stage1Block_.reset(new (std::nothrow) compiled::Block());
+  if (!stage1Block_) return;  // OOM: skip Stage-1 for this block, layout is unaffected
+  stage1Block_->charOffset = stage1CharOffset_;
+  stage1BlockCssStyle_ = style;
+}
+
+void ChapterHtmlSlimParser::stage1AddWord(const char* text, const EpdFontFamily::Style style, const uint8_t sizePct,
+                                          const bool attachToPrevious) {
+  if (!stage1Sink_ || !stage1Block_) return;
+  compiled::Word w;
+  w.textOff = static_cast<uint32_t>(stage1Block_->text.size());
+  w.styleSpan = stage1MapStyleSpan(style, attachToPrevious);
+  w.sizePct = sizePct;
+  w.bidiLevel = 0;  // LTR; RTL embedding levels are resolved in Stage-2 (see design "RTL / BiDi")
+  stage1Block_->words.push_back(w);
+  stage1Block_->text.append(text);
+  stage1Block_->text.push_back('\0');  // words back-to-back, each NUL-terminated (format spec)
+  stage1CharOffset_ += stage1CountCodepoints(text);
+}
+
 void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   nextWordContinues = false;  // New block = new paragraph, no continuation
   // Base style for the new block — normally the incoming blockStyle, but when falling
@@ -629,6 +694,9 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   currentTextBlock.reset(new (std::nothrow) ParsedText(extraParagraphSpacing, hyphenationEnabled, blockStyleWithIndent,
                                                        bionicReadingEnabled));
   wordsExtractedInBlock = 0;
+  // Stage-1: open a matching compiled block, carrying the block's pre-px CssStyle
+  // (currentCssStyle was set to this block's resolved style just before the call).
+  stage1OpenBlock(currentCssStyle);
 }
 
 void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const char** atts) {
@@ -2270,6 +2338,11 @@ bool ChapterHtmlSlimParser::finalize() {
             (trunc & SaxParser::kTruncMaxAttrs) != 0, (trunc & SaxParser::kTruncMaxDepth) != 0,
             (trunc & SaxParser::kVoidTagRepaired) != 0);
   }
+
+  // Stage-1: hand off the final accumulated block (no subsequent stage1OpenBlock will)
+  // and signal end-of-spine so the sink can flush any trailing state.
+  stage1FlushBlock();
+  if (stage1Sink_) stage1Sink_->onSpineEnd();
 
   // Process last page if there is still text. Done unconditionally so that a partial
   // success scenario still flushes whatever pages were produced.

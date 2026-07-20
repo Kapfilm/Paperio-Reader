@@ -27,17 +27,19 @@ namespace compiled {
 inline constexpr char kMagic[4] = {'W', 'B', 'C', '1'};
 inline constexpr uint8_t kVersion = 1;
 
-// Word::styleSpan bits. Low 6 = inline font style; bit 6 = word attaches to the
-// previous word with no space before it (inline-element boundary, e.g. <b>foo</b>bar).
-// Bit 7 spare. Layout-independent, so it lives in Stage-1.
+// Word::styleSpan bits. Bits 0-6 = inline font style (the EpdFontFamily::Style set,
+// remapped to a stable on-disk layout); bit 7 = word attaches to the previous word
+// with no space before it (inline-element boundary, e.g. <b>foo</b>bar). All
+// layout-independent, so they live in Stage-1.
 enum WordStyleSpan : uint8_t {
   kSpanBold = 1 << 0,
   kSpanItalic = 1 << 1,
   kSpanUnderline = 1 << 2,
-  kSpanSuper = 1 << 3,
-  kSpanSub = 1 << 4,
-  kSpanSmallCaps = 1 << 5,
-  kSpanAttachPrev = 1 << 6,  // no leading space (ParsedText wordContinues)
+  kSpanStrikethrough = 1 << 3,
+  kSpanSuper = 1 << 4,
+  kSpanSub = 1 << 5,
+  kSpanSmallCaps = 1 << 6,
+  kSpanAttachPrev = 1 << 7,  // no leading space (ParsedText wordContinues)
 };
 
 // Per-word settings-independent data — the slice of today's TextBlock that survives

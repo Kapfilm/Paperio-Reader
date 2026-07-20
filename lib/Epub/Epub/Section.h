@@ -13,6 +13,9 @@ class GfxRenderer;
 class ChapterHtmlSlimParser;
 class CssParser;
 class BuildArena;
+namespace compiled {
+struct BlockSink;
+}  // namespace compiled
 
 class Section {
   std::shared_ptr<Epub> epub;
@@ -55,6 +58,8 @@ class Section {
   std::unique_ptr<BuildState> buildState_;
   // See setExternalBuildScratch. Not owned; must outlive any active build.
   BuildArena* externalScratch_ = nullptr;
+  // See setStage1Sink. Not owned; forwarded to the parser when the build's visitor is created.
+  compiled::BlockSink* stage1Sink_ = nullptr;
   // Outcome of one phase method. Mostly maps to BuildStep: More means the phase yielded
   // mid-way after spending its time budget; RetryNoCss asks the entry function to tear the
   // state down and restart from setup with embeddedStyle=false.
@@ -163,6 +168,10 @@ class Section {
   // Call before the first stepSectionBuild/createSectionFile of a build; a null
   // pointer reverts to the internal heap-backed arena.
   void setExternalBuildScratch(BuildArena* scratch) { externalScratch_ = scratch; }
+  // Attach a Stage-1 content sink (default null). When set, the section build's parser
+  // also emits materialized compiled::Blocks through it, with layout output unchanged
+  // (see docs/stage1-extraction-design.md). Used by the Stage-1 producer + its tests.
+  void setStage1Sink(compiled::BlockSink* sink) { stage1Sink_ = sink; }
   // Percent of the spine XHTML consumed by the in-flight build (0–100; 100 once the
   // stream is exhausted and only Finalize remains). 0 when no build is live. Feeds the
   // DEBUG_BACKGROUND_WORK overlay.

@@ -18,6 +18,7 @@
 #include "../ParsedText.h"
 #include "../blocks/ImageBlock.h"
 #include "../blocks/TextBlock.h"
+#include "../content/CompiledContent.h"  // compiled::Block (unique_ptr member needs the complete type)
 #include "../css/CssParser.h"
 #include "../css/CssStyle.h"
 
@@ -25,6 +26,9 @@ class Page;
 class PageImage;  // forward declaration — Page.h included in .cpp
 class GfxRenderer;
 class Epub;
+namespace compiled {
+struct BlockSink;
+}  // namespace compiled
 
 #define MAX_WORD_SIZE 200
 
@@ -244,6 +248,18 @@ class ChapterHtmlSlimParser final : public Print {
   bool bionicReadingEnabled = false;
   bool layoutFailed = false;
 
+  // Stage-1 (settings-independent content compile) producer tap. When stage1Sink_ is set,
+  // the walk ALSO emits a materialized compiled::Block per text block through the sink, with
+  // the fused layout path untouched (see docs/stage1-extraction-design.md). Null by default:
+  // every hook below is a no-op, so the shipping fused parse is byte-identical. The block is
+  // accumulated as words are flushed (stage1AddWord) and handed off at the block boundary
+  // (stage1OpenBlock flushes the prior one; finalize() flushes the last). Text is stored raw
+  // Unicode in logical order so RTL shaping/reordering stays a Stage-2 concern.
+  compiled::BlockSink* stage1Sink_ = nullptr;
+  std::unique_ptr<compiled::Block> stage1Block_;  // current accumulator (null when closed)
+  CssStyle stage1BlockCssStyle_;                  // the block's pre-px style, captured at open
+  uint32_t stage1CharOffset_ = 0;                 // running codepoint offset within the spine
+
   // Per-chapter caches: resolveStyle and parseInlineStyle are called for every HTML element;
   // caching by (tag|classAttr) and styleAttr avoids repeated string operations and hash lookups.
   std::unordered_map<std::string, CssStyle> cssStyleCache_;
@@ -354,7 +370,17 @@ class ChapterHtmlSlimParser final : public Print {
   // effective font size differs from the body resolve to the nearest real font on it.
   void setFontSizeLadder(const FontSizeLadder& ladder) { fontSizeLadder_ = ladder; }
 
+  // Attach a Stage-1 content sink (null clears it). Non-null makes the walk emit a
+  // materialized compiled::Block per text block in addition to laying out — the fused
+  // layout output is unchanged. See docs/stage1-extraction-design.md.
+  void setStage1Sink(compiled::BlockSink* sink) { stage1Sink_ = sink; }
+
  private:
+  // Stage-1 producer tap (no-ops when stage1Sink_ is null). Defined in the .cpp where
+  // compiled::Block is complete.
+  void stage1OpenBlock(const CssStyle& style);  // flush prior block, start a fresh accumulator
+  void stage1AddWord(const char* text, EpdFontFamily::Style style, uint8_t sizePct, bool attachToPrevious);
+  void stage1FlushBlock();  // emit the accumulated block through the sink, if non-empty
   // Snap a completed block's effective font size (block multiplier, after uniform per-word
   // folding) to the size ladder: sets headingFontId to the chosen real font and reduces
   // fontSizeMultiplier to the residual. Applies the one-aux-font-per-section budget and is

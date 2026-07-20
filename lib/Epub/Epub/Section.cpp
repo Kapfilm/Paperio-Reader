@@ -702,6 +702,7 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
       st.cssParser, epub->getImageManifest());
   st.visitor->setExternalPageBreakAnchors(std::move(externalPageBreakAnchors));
   st.visitor->setFontSizeLadder(p.fontSizeLadder);
+  st.visitor->setStage1Sink(stage1Sink_);  // null unless a Stage-1 compile is driving this build
   Hyphenator::setPreferredLanguage(epub->getLanguage());
 
   // Inline footnote previews come from the book-level footnotes.bin gathered up front

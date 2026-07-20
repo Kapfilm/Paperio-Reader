@@ -92,9 +92,9 @@ common:
   charOffset  u32     absolute char offset of this block's first char (reading progress)
 TEXT:
   wordCount   u16
-  per word:   textOff u16 (into text[]), styleSpan u8 (bits 0-5 = bold/italic/
-              underline/super/sub/smallcaps; bit 6 = attaches to previous word with
-              no leading space, e.g. <b>foo</b>bar; bit 7 spare), sizePct u8
+  per word:   textOff u16 (into text[]), styleSpan u8 (bits 0-6 = bold/italic/
+              underline/strikethrough/super/sub/smallcaps; bit 7 = attaches to previous
+              word with no leading space, e.g. <b>foo</b>bar), sizePct u8
               (100 = inherit), bidiLevel u8 (Unicode embedding level; 0 = pure-LTR — see RTL)
   text        char[]  words back-to-back, each NUL-terminated (raw Unicode; shaping
               is a Stage-2 concern)
