@@ -11,9 +11,9 @@ struct WifiCredential {
   uint8_t bssid[6] = {0, 0, 0, 0, 0, 0};
   uint8_t channel = 0;
 
-  // Cached IP configuration to skip DHCP on reconnect. Valid only when ip[0] != 0 AND
-  // we connect to the same BSSID (cached above). cacheTimestamp is epoch seconds at
-  // capture; 0 means "unknown time, no TTL enforced".
+  // Last observed IP configuration, retained for connection diagnostics. Reconnects
+  // use DHCP because leases, gateways, and DNS servers can change independently of BSSID.
+  // cacheTimestamp is epoch seconds at capture; 0 means "unknown time, no TTL enforced".
   uint8_t ip[4] = {0, 0, 0, 0};
   uint8_t gateway[4] = {0, 0, 0, 0};
   uint8_t mask[4] = {0, 0, 0, 0};
@@ -65,8 +65,8 @@ class WifiCredentialStore {
   bool removeCredential(const std::string& ssid);
   const WifiCredential* findCredential(const std::string& ssid) const;
 
-  // Update cached BSSID/channel hint AND IP configuration in one write. ip/gw/mask/dns
-  // may be all-zero to mean "no IP cache". cacheTimestamp is epoch seconds (0 if unsynced).
+  // Update cached BSSID/channel hint and last observed IP configuration in one write.
+  // ip/gw/mask/dns may be all-zero. cacheTimestamp is epoch seconds (0 if unsynced).
   // Persists only if anything changed.
   bool updateConnectionCache(const std::string& ssid, const uint8_t bssid[6], uint8_t channel, const uint8_t ip[4],
                              const uint8_t gateway[4], const uint8_t mask[4], const uint8_t dns[4],

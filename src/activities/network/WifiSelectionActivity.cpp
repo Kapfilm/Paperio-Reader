@@ -54,6 +54,7 @@ void WifiSelectionActivity::onEnter() {
   // STA_GOT_IP    = DHCP done.
   evtIdConnected = WiFi.onEvent(
       [this](WiFiEvent_t /*event*/, WiFiEventInfo_t /*info*/) {
+        currentAttemptAssociated = true;
         LOG_DBG("WIFI", "EVT associated at %lu ms", millis() - connectionStartTime);
       },
       ARDUINO_EVENT_WIFI_STA_CONNECTED);
@@ -384,14 +385,13 @@ void WifiSelectionActivity::prepareForConnect() {
 void WifiSelectionActivity::issueWifiBegin(bool useHint) {
   std::memset(currentAttemptBssid, 0, 6);
   currentAttemptChannel = 0;
-  bool appliedStaticIp = false;
+  currentAttemptAssociated = false;
 
   if (useHint) {
     const auto* cred = WIFI_STORE.findCredential(selectedSSID);
     if (cred && cred->channel != 0) {
-      // Discard the whole cached profile (BSSID/channel hint + IP) once it ages past the
-      // TTL: a >1-week-old hint and DHCP lease can no longer be trusted, so fall back to a
-      // full scan + DHCP for this attempt too. cacheTimestamp==0 means it predates clock
+      // Discard the cached BSSID/channel hint once it ages past the TTL. The observed IP
+      // profile is cleared with it, but is never replayed. cacheTimestamp==0 predates clock
       // sync (trust indefinitely); now==0 means the clock isn't synced right now so we
       // can't judge age (keep it). Signed arithmetic so a future timestamp (clock corrected
       // backwards between write and read) reads as fresh rather than ancient.
@@ -408,32 +408,31 @@ void WifiSelectionActivity::issueWifiBegin(bool useHint) {
         std::memcpy(currentAttemptBssid, cred->bssid, 6);
         currentAttemptChannel = cred->channel;
 
-        // Replay the cached static IP to skip DHCP. Captured alongside this BSSID/channel on
-        // the last successful connect, so it's only applied together with the hint above.
+        // DHCP-derived IP and DNS data can become stale long before the hint TTL.
+        // Keep it only for diagnostics; always renew the network profile through DHCP.
         if (cred->ip[0] != 0) {
           IPAddress ip(cred->ip[0], cred->ip[1], cred->ip[2], cred->ip[3]);
           IPAddress gw(cred->gateway[0], cred->gateway[1], cred->gateway[2], cred->gateway[3]);
           IPAddress mask(cred->mask[0], cred->mask[1], cred->mask[2], cred->mask[3]);
           IPAddress dns(cred->dns[0], cred->dns[1], cred->dns[2], cred->dns[3]);
-          WiFi.config(ip, gw, mask, dns);
-          appliedStaticIp = true;
+          LOG_DBG("WIFI", "Cached network profile ignored: ip=%s gw=%s mask=%s dns=%s ts=%u age=%lld",
+                  ip.toString().c_str(), gw.toString().c_str(), mask.toString().c_str(), dns.toString().c_str(),
+                  cred->cacheTimestamp, static_cast<long long>(elapsed));
         }
       }
     }
   }
 
-  if (!appliedStaticIp) {
-    // Reset to DHCP in case a previous attempt left a static config behind.
-    WiFi.config(IPAddress(), IPAddress(), IPAddress(), IPAddress());
-  }
+  // Reset to DHCP in case a previous attempt left a static config behind.
+  WiFi.config(IPAddress(), IPAddress(), IPAddress(), IPAddress());
 
   const char* pwd = (selectedRequiresPassword && !enteredPassword.empty()) ? enteredPassword.c_str() : nullptr;
   const unsigned long preBeginMs = millis() - connectionStartTime;
   if (currentAttemptChannel != 0) {
-    LOG_DBG("WIFI", "WiFi.begin -> %s ch=%d bssid=%02x:%02x:%02x:%02x:%02x:%02x staticIp=%s (pre-begin %lu ms)",
+      LOG_DBG("WIFI", "WiFi.begin -> %s ch=%d bssid=%02x:%02x:%02x:%02x:%02x:%02x dhcp=yes (pre-begin %lu ms)",
             selectedSSID.c_str(), currentAttemptChannel, currentAttemptBssid[0], currentAttemptBssid[1],
             currentAttemptBssid[2], currentAttemptBssid[3], currentAttemptBssid[4], currentAttemptBssid[5],
-            appliedStaticIp ? "yes" : "no", preBeginMs);
+        preBeginMs);
     WiFi.begin(selectedSSID.c_str(), pwd, currentAttemptChannel, currentAttemptBssid, true);
   } else {
     LOG_DBG("WIFI", "WiFi.begin -> %s (no hint, pre-begin %lu ms)", selectedSSID.c_str(), preBeginMs);
@@ -452,7 +451,11 @@ bool WifiSelectionActivity::checkCaptivePortal() {
   HTTPClient http;
   http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
   http.setTimeout(5000);
+  const unsigned long probeStart = millis();
+  LOG_DBG("WIFI", "Captive portal probe start: dns=%s gw=%s rssi=%d", WiFi.dnsIP().toString().c_str(),
+          WiFi.gatewayIP().toString().c_str(), WiFi.RSSI());
   if (!http.begin(client, "http://connectivitycheck.gstatic.com/generate_204")) {
+    LOG_DBG("WIFI", "Captive portal probe setup failed after %lu ms", millis() - probeStart);
     return false;
   }
   const int code = http.GET();
@@ -460,9 +463,12 @@ bool WifiSelectionActivity::checkCaptivePortal() {
   http.end();
 
   if (code < 0) {
-    LOG_DBG("WIFI", "Captive portal probe failed (connection error %d)", code);
+    LOG_DBG("WIFI", "Captive portal probe failed after %lu ms (connection error %d, dns=%s)",
+            millis() - probeStart, code, WiFi.dnsIP().toString().c_str());
     return false;
   }
+
+  LOG_DBG("WIFI", "Captive portal probe completed after %lu ms (HTTP %d)", millis() - probeStart, code);
 
   if (code == 204) {
     return false;  // Open internet, no captive portal
@@ -490,13 +496,13 @@ void WifiSelectionActivity::checkConnectionStatus() {
     connectedIP = ipStr;
     autoConnecting = false;
 
-    LOG_DBG("WIFI", "Connected to %s in %lu ms (rssi=%d ch=%d ip=%s, hint=%s)", selectedSSID.c_str(),
-            millis() - connectionStartTime, WiFi.RSSI(), WiFi.channel(), ipStr,
-            currentAttemptChannel != 0 ? "yes" : "no");
+        LOG_DBG("WIFI", "Connected to %s in %lu ms (rssi=%d ch=%d ip=%s gw=%s mask=%s dns=%s hint=%s)",
+            selectedSSID.c_str(), millis() - connectionStartTime, WiFi.RSSI(), WiFi.channel(), ipStr,
+            WiFi.gatewayIP().toString().c_str(), WiFi.subnetMask().toString().c_str(), WiFi.dnsIP().toString().c_str(),
+          currentAttemptChannel != 0 ? "yes" : "no");
 
-    // Save this as the last connected network and cache the full connection profile
-    // (BSSID/channel + IP/gw/mask/dns) so the next reconnect can skip both channel
-    // scanning and DHCP. SD card operations need lock as we use SPI for both.
+    // Cache BSSID/channel to skip channel scanning. Retain the DHCP profile only for
+    // diagnostics; reconnects always renew it. SD card operations need the display lock.
     {
       RenderLock lock(*this);
       WIFI_STORE.setLastConnectedSsid(selectedSSID);
@@ -547,8 +553,8 @@ void WifiSelectionActivity::checkConnectionStatus() {
   const bool usingHint = currentAttemptChannel != 0;
   const bool hintHardFail =
       usingHint && !hintFallbackDone && (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL);
-  const bool hintTimedOut =
-      usingHint && !hintFallbackDone && (millis() - connectionStartTime > HINT_ATTEMPT_TIMEOUT_MS);
+    const bool hintTimedOut = usingHint && !hintFallbackDone && !currentAttemptAssociated &&
+                (millis() - connectionStartTime > HINT_ATTEMPT_TIMEOUT_MS);
   if (hintHardFail || hintTimedOut) {
     LOG_DBG("WIFI", "Hint attempt did not connect (%s after %lu ms), retrying with full scan",
             hintHardFail ? "hard fail" : "timeout", millis() - connectionStartTime);

@@ -459,6 +459,10 @@ bool syncNtp(char* errorBuf, size_t errorBufSize) {
     return false;
   }
 
+  const unsigned long syncStartMs = millis();
+  LOG_DBG("CLK", "NTP sync start: dns=%s gw=%s rssi=%ld ip=%s", WiFi.dnsIP().toString().c_str(),
+          WiFi.gatewayIP().toString().c_str(), static_cast<long>(WiFi.RSSI()), WiFi.localIP().toString().c_str());
+
   time_t preSyncTime = time(nullptr);
   time_t prevSyncTime = nvsReadSyncTime();
   float prevSyncTemp = nvsReadLastSyncTemp();
@@ -483,7 +487,8 @@ bool syncNtp(char* errorBuf, size_t errorBufSize) {
     if (errorBuf && errorBufSize > 0) {
       snprintf(errorBuf, errorBufSize, "NTP timeout (%s)", statusName);
     }
-    LOG_ERR("CLK", "NTP sync timeout (%s)", statusName);
+    LOG_ERR("CLK", "NTP sync timeout after %lu ms (%s, dns=%s)", millis() - syncStartMs, statusName,
+            WiFi.dnsIP().toString().c_str());
     // Stop SNTP on the failure path so a later applyClientTime() (which
     // refuses while SNTP is enabled) isn't blocked by a dangling instance.
     esp_sntp_stop();

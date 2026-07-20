@@ -114,8 +114,9 @@ constexpr unsigned TLS_CONTIG_HEAP_TOLERANCE = 0;
 void logWifiSnapshot(const char* stage) {
   const wl_status_t status = WiFi.status();
   const int32_t rssi = WiFi.RSSI();
-  LOG_DBG("KOSync", "%s: wifi_status=%d rssi=%ld ip=%s", stage, static_cast<int>(status), static_cast<long>(rssi),
-          WiFi.localIP().toString().c_str());
+  LOG_DBG("KOSync", "%s: wifi_status=%d rssi=%ld ip=%s gw=%s dns=%s", stage, static_cast<int>(status),
+          static_cast<long>(rssi), WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(),
+          WiFi.dnsIP().toString().c_str());
 }
 
 // Base64 encode for HTTP Basic Auth
@@ -295,6 +296,9 @@ static inline bool hasCredentials() {
 }
 
 void KOReaderSyncClient::beginPersistentSession() {
+  if (g_keepSessionOpen) {
+    return;
+  }
   g_keepSessionOpen = true;
   g_sessionHttp.reset();  // fresh client; created lazily on first request
 }

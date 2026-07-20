@@ -95,6 +95,7 @@ class WifiSelectionActivity final : public Activity {
   // BSSID/channel hint used on the current attempt (channel==0 means no hint).
   uint8_t currentAttemptBssid[6] = {0};
   uint8_t currentAttemptChannel = 0;
+  volatile bool currentAttemptAssociated = false;
   // Whether we've already done the silent fallback retry without the hint for this
   // user-initiated connection. Prevents loops if the AP genuinely isn't reachable.
   bool hintFallbackDone = false;
