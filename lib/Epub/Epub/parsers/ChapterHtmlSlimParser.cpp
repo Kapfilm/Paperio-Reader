@@ -628,6 +628,23 @@ void ChapterHtmlSlimParser::stage1EmitPendingAnchor() {
   stage1PendingAnchor_.clear();
 }
 
+void ChapterHtmlSlimParser::stage1EmitImageBlock(const std::string& entryPath, const int16_t width,
+                                                 const int16_t height, const uint8_t floatSide,
+                                                 const std::string& alt) {
+  if (!stage1Sink_) return;
+  stage1FlushBlock();         // emit any pending text block first (document order)
+  stage1EmitPendingAnchor();  // an anchor introducing this image points at it
+  compiled::Block b;
+  b.type = compiled::BlockType::Image;
+  b.charOffset = stage1CharOffset_;
+  b.entryPath = entryPath;
+  b.width = width;
+  b.height = height;
+  b.floatSide = floatSide;
+  b.alt = alt;
+  stage1Sink_->onBlock(std::move(b), CssStyle{});  // image blocks carry their own dims, not a pooled style
+}
+
 void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
   if (!stage1Sink_) return;
   stage1FlushBlock();         // hand off the previous block before starting a new one
@@ -1327,6 +1344,10 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                 self->currentPage->elements.push_back(pageImage);
                 self->currentPageNextY += displayHeight;
                 self->currentPageNextY += imageSpacingBottom;
+                // Stage-1: emit the image as a standalone block with its INTRINSIC dims
+                // (Stage-2 rescales); floatSide 0 = a centered block image, not a float.
+                self->stage1EmitImageBlock(resolvedPath, static_cast<int16_t>(dims.width),
+                                           static_cast<int16_t>(dims.height), 0, alt);
 
                 LOG_DBG("EHP", "Image placed: x=%d y=%d w=%d h=%d nextY=%d", xPos, pageImage->yPos, displayWidth,
                         displayHeight, self->currentPageNextY);

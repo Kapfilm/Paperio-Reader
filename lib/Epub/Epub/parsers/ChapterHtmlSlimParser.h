@@ -388,6 +388,9 @@ class ChapterHtmlSlimParser final : public Print {
   void stage1AddWord(const char* text, EpdFontFamily::Style style, uint8_t sizePct, bool attachToPrevious);
   void stage1FlushBlock();         // emit the accumulated block through the sink, if non-empty
   void stage1EmitPendingAnchor();  // emit a stashed anchor id against the block about to be emitted
+  // Flush any pending text, then emit a standalone image block (intrinsic dims, EPUB entry path).
+  void stage1EmitImageBlock(const std::string& entryPath, int16_t width, int16_t height, uint8_t floatSide,
+                            const std::string& alt);
   // Snap a completed block's effective font size (block multiplier, after uniform per-word
   // folding) to the size ladder: sets headingFontId to the chosen real font and reduces
   // fontSizeMultiplier to the residual. Applies the one-aux-font-per-section budget and is

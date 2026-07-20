@@ -192,6 +192,30 @@ TEST(Stage1Producer, EmitsAnchorsForContentIds) {
   }
 }
 
+TEST(Stage1Producer, EmitsImageBlocks) {
+  // chapter2.xhtml embeds <img src="images/png_format.png">.
+  const int spine = spineIndexForHref("test_png_images.epub", freshCacheDir("img_find"), "chapter2");
+  ASSERT_GE(spine, 0);
+  CapturingSink sink;
+  compileSpine("test_png_images.epub", spine, freshCacheDir("images"), sink);
+
+  size_t imageBlocks = 0;
+  bool sawPngFormat = false;
+  for (const auto& cap : sink.blocks) {
+    const auto& b = cap.block;
+    if (b.type != compiled::BlockType::Image) continue;
+    ++imageBlocks;
+    EXPECT_FALSE(b.entryPath.empty()) << "image block must carry an EPUB entry path";
+    EXPECT_GT(b.width, 0) << "intrinsic width";
+    EXPECT_GT(b.height, 0) << "intrinsic height";
+    EXPECT_EQ(b.floatSide, 0) << "block images are centered, not floated";
+    EXPECT_TRUE(b.words.empty()) << "image blocks carry no text words";
+    if (b.entryPath.find("png_format.png") != std::string::npos) sawPngFormat = true;
+  }
+  EXPECT_GT(imageBlocks, 0u) << "chapter2 has a block image";
+  EXPECT_TRUE(sawPngFormat) << "the image block's entryPath is the EPUB path, not the display cache path";
+}
+
 TEST(Stage1Producer, IsDeterministic) {
   CapturingSink a;
   CapturingSink b;
