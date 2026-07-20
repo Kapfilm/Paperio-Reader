@@ -1,6 +1,8 @@
 # Compiled-Book Pipeline Migration Plan
 
-Status: PROPOSED (not started)
+Status: IN PROGRESS — Phase 0 (harness), Phase 1 (fingerprint), Phase 2 (arena, now
+unconditional) DONE; Phase 3 (Stage-1 content.bin) sub-steps 2a/2b DONE, step 2c
+(rendererless Stage-1 pass) in progress — see `stage1-extraction-design.md`.
 Scope: `lib/Epub/**`, `src/activities/reader/EpubReaderActivity.cpp`, `test/**`
 
 ## Goal
