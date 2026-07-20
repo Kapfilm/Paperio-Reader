@@ -27,12 +27,25 @@ namespace compiled {
 inline constexpr char kMagic[4] = {'W', 'B', 'C', '1'};
 inline constexpr uint8_t kVersion = 1;
 
+// Word::styleSpan bits. Low 6 = inline font style; bit 6 = word attaches to the
+// previous word with no space before it (inline-element boundary, e.g. <b>foo</b>bar).
+// Bit 7 spare. Layout-independent, so it lives in Stage-1.
+enum WordStyleSpan : uint8_t {
+  kSpanBold = 1 << 0,
+  kSpanItalic = 1 << 1,
+  kSpanUnderline = 1 << 2,
+  kSpanSuper = 1 << 3,
+  kSpanSub = 1 << 4,
+  kSpanSmallCaps = 1 << 5,
+  kSpanAttachPrev = 1 << 6,  // no leading space (ParsedText wordContinues)
+};
+
 // Per-word settings-independent data — the slice of today's TextBlock that survives
 // a relayout. No xpos: Stage-2 measurement computes it. bidiLevel is 0 for LTR books
 // and reserved for RTL (see docs/compiled-content-format.md "RTL / BiDi").
 struct Word {
   uint32_t textOff = 0;   // byte offset of the word's text within Block::text
-  uint8_t styleSpan = 0;  // inline bold/italic/underline/super/sub/smallcaps bitmask
+  uint8_t styleSpan = 0;  // WordStyleSpan bitmask (style + attach-to-previous)
   uint8_t sizePct = 100;  // per-word font-size percent; 100 = inherit block size
   uint8_t bidiLevel = 0;  // Unicode embedding level; 0 = LTR
 };

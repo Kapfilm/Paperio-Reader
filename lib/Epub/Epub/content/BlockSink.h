@@ -20,6 +20,7 @@
 #include <string>
 
 #include "CompiledContent.h"  // compiled::Block
+#include "Epub/css/CssStyle.h"
 
 struct FootnoteEntry;  // ../FootnoteEntry.h — reference-only here
 
@@ -31,9 +32,13 @@ namespace compiled {
 struct BlockSink {
   virtual ~BlockSink() = default;
 
-  // One complete block (text runs + interned-later style, or image ref). Ownership
-  // is moved to the sink.
-  virtual void onBlock(Block&& block) = 0;
+  // One complete block (text runs, or image ref) plus the block's resolved CssStyle
+  // (em/%, logical align — pre-px, settings-independent, captured at block START before
+  // em->px resolution; NOT the finished ParsedText's px BlockStyle). Block::styleId is
+  // left unset and is the sink's to resolve: ContentSink interns `style` into its pool
+  // and stamps styleId; LayoutSink ignores styleId and builds a px BlockStyle from
+  // `style` directly. Ownership of `block` moves to the sink.
+  virtual void onBlock(Block&& block, const CssStyle& style) = 0;
 
   // An element id at the current block/char position. LayoutSink resolves it to a
   // page (anchorData); ContentSink records id -> (blockIndex, charOffsetInBlock).

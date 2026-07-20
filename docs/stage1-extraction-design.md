@@ -78,7 +78,8 @@ style + words, or image ref), then emits it. Mirrors microreader's `ParagraphSin
 ```cpp
 struct BlockSink {
   virtual ~BlockSink() = default;
-  virtual void onBlock(compiled::Block&& block) = 0;   // one complete block
+  // Block + its resolved CssStyle (pre-px); sink resolves styleId (intern) or BlockStyle.
+  virtual void onBlock(compiled::Block&& block, const CssStyle& style) = 0;
   virtual void onAnchor(const std::string& id) = 0;    // id at the current block/char position
   virtual void onChapter(uint8_t level, const std::string& title) = 0;
   virtual void onPageBreakLabel(const std::string& label) = 0;
@@ -87,12 +88,28 @@ struct BlockSink {
 };
 ```
 
-`compiled::Block` already carries everything Stage 1 needs (`type`, `styleId` after intern,
-`flags`, `charOffset`, `words{textOff,styleSpan,sizePct,bidiLevel}`+`text`, or `entryPath`/
-`width`/`height`/`floatSide`/`alt`). The per-word inline style (bold/italic/…/sizePct) is
-built exactly as `flushPartWordBuffer` computes `fontStyle`/`effectiveSizePct` today
-([cpp:365-405](../lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp#L365)); the block `CssStyle`
-is the `resolveStyle()` result `startNewTextBlock` already has.
+**Findings that shaped this interface (from reading the parser + model):**
+1. **Style is passed alongside, not pre-interned.** `compiled::Block::styleId` indexes a pool
+   the *sink* owns, and `LayoutSink` needs the `CssStyle` itself (to build a px `BlockStyle`),
+   not an index. So `onBlock` carries the block's resolved `CssStyle` — the em/% value the walk
+   holds at block START, *before* the `getFontAscenderSize` em→px step
+   ([cpp:1008,1356](../lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp#L1008)). The finished
+   `ParsedText` is no good here: its `BlockStyle` is already px (settings-dependent).
+2. **Word-attach needs a bit.** `ParsedText` tracks `wordContinues` (`<b>foo</b>bar` = no space),
+   but `compiled::Word` didn't. Added as `WordStyleSpan::kSpanAttachPrev` (`styleSpan` bit 6 —
+   free, serialized wholesale). Without it the producer can't reproduce spacing.
+3. **Producer-first, not LayoutSink-first.** `startNewTextBlock` records `anchorData` as a
+   *page number* ([cpp:597,622](../lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp#L597)) and the
+   >96-word split lays out mid-block — so "route today's layout through a sink" tangles
+   anchor→page with anchor→block-position and the mid-block split. Instead the producer is built
+   **additively first** (below): emit blocks with layout untouched, so goldens are byte-identical
+   by construction, and the block-emission is validated before the consumer-side unification.
+
+`compiled::Block` otherwise carries everything Stage 1 needs (`type`, `flags`, `charOffset`,
+`words{textOff,styleSpan,sizePct,bidiLevel}`+`text`, or `entryPath`/`width`/`height`/`floatSide`/
+`alt`). The per-word inline style is built exactly as `flushPartWordBuffer` computes
+`fontStyle`/`effectiveSizePct`/`nextWordContinues` today
+([cpp:365-405](../lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp#L365)).
 
 Tables and lists are **synthesized inside the core** (it already buffers `currentTable` and
 `listStack`) and replayed as ordinary `onBlock` calls — the sink never sees `<table>`/`<li>`,
@@ -122,41 +139,37 @@ now; implemented at the Stage-2 flip.
 
 ## Incremental commit sequence (each golden-green)
 
-The whole point of the sink is that the refactor is *mechanical and reversible per step*.
-`EPUB_STAGE1` (default 0) gates only the *new* ContentSink call sites; the LayoutSink
-extraction (steps 2–4) is a pure refactor that ships unconditionally and must keep every
-host test + golden identical at each commit.
+**Producer-first.** The naive "route today's layout through the sink first" order is unsafe
+(finding 3: anchor→page coupling + mid-block split). Instead, build and validate the *producer*
+additively — with the fused layout untouched, so goldens are byte-identical by construction —
+then build the consumer (`LayoutSink`), then unify. `EPUB_STAGE1` (default 0) gates the new
+ContentSink/producer wiring so the shipping path is untouched until the unify step.
 
-1. **Flag + interface.** Add `EPUB_STAGE1` (`#ifndef/#define … 0`, mirroring the retired
-   `EPUB_BUILD_ARENA` pattern) and `BlockSink.h` (the pure-virtual push interface above; the
-   pull `IBlockSource` is stubbed with a doc note, built at the Stage-2 flip). No call sites
-   yet. Additive; zero behavior change.
-2. **Introduce `LayoutSink`** implementing `BlockSink` and owning the layout members
-   (`currentTextBlock`, pages, floats, `makePages`, renderer). `ChapterHtmlSlimParser` builds
-   a `compiled::Block` per paragraph and calls `sink_->onBlock(...)`, with `LayoutSink`
-   reproducing today's measure+paginate byte-for-byte. This is the risky move (parser now
-   materializes a block before layout) — done first, verified against goldens before anything
-   depends on it.
-3. **Move the remaining emissions to the sink.** Route `onAnchor`/`onChapter`/
-   `onPageBreakLabel`/`onFootnote`/`onSpineEnd` (and table/list-synthesized `onBlock`s)
-   through `sink_`, `LayoutSink` being the sink. One family per commit, each diffed against
-   goldens. At the end the state machine is renderer-free and emits only through `BlockSink`.
-4. **Extract `HtmlWalkCore`** as the state machine minus the layout members;
-   `ChapterHtmlSlimParser` becomes `HtmlWalkCore` + `LayoutSink` glue (Stage-2 entry point,
-   unchanged signature/output).
-5. **Add `ContentSink` + `ContentCompiler`** (behind `EPUB_STAGE1`): drive `HtmlWalkCore`
-   with a `BlockSink` that `internStyle()`s each `onBlock` and streams it (split-at-write)
-   into `content.bin`, plus the anchor/chapter/charOffset tables. New `content_stage1_dump`
-   target in `test/epub_pipeline/`.
-6. **Equivalence gate.** Stage-1→Stage-2 vs. today's fused path: byte-identical section
-   dumps across the settings matrix (default, large font, hyphenation on/off, bionic,
-   narrow margins); determinism (two Stage-1 runs identical `content.bin`); footnote/anchor
-   set equality.
+1. **Flag + interface** (done). `EPUB_STAGE1` (`Stage1Config.h`) + `BlockSink.h`. Additive.
+2. **Additive producer, text blocks.** Add `BlockSink* stage1Sink_` (+ setter) to the parser.
+   Where it builds words (`flushPartWordBuffer`) and starts blocks (`startNewTextBlock`), also
+   accumulate a `compiled::Block` (words{styleSpan incl. attach, sizePct}, text) and capture the
+   block's `CssStyle`; at the block boundary emit `onBlock(block, style)` **when `stage1Sink_`
+   is set**. Layout is untouched → goldens byte-identical. Host test: a capturing sink over
+   `test_headings.epub` asserts the block/word sequence.
+3. **Producer, remaining block kinds + tables/lists/images + anchors/chapters/footnotes.** One
+   family per commit; each extends the capturing-sink test. Still additive; goldens untouched.
+4. **`ContentSink` + `content.bin`** (behind `EPUB_STAGE1`): a `BlockSink` that `internStyle()`s
+   each `onBlock` and streams it (split-at-write) with the anchor/chapter/charOffset tables. New
+   `content_stage1_dump` target in `test/epub_pipeline/`; determinism check (two runs identical).
+5. **`LayoutSink`** implementing `BlockSink`: consumes `onBlock(block, style)` and reproduces
+   `resolveBlockFont`+`makePages`+float layout byte-for-byte (the >96-word split lives here).
+   Verified by running the parser driving `LayoutSink` and diffing section dumps vs. the fused
+   path across the settings matrix.
+6. **Unify + extract `HtmlWalkCore`.** Flip the parser to drive *only* sinks (remove the inline
+   fused layout, now provided by `LayoutSink`); split the state machine into `HtmlWalkCore` +
+   the `LayoutSink` glue. `ChapterHtmlSlimParser`'s Stage-2 entry point + output stay unchanged.
+   Full equivalence gate: settings matrix byte-identical, footnote/anchor set equality.
 
-Steps 2–4 carry the golden risk and land first, unflagged; 5–6 are additive behind the
-flag. Only after 6 is green do later steps (Stage-2 reads `content.bin` in the real build,
-footnote/image-manifest folding, `html_<spine>.bin` retirement) proceed — those are the
-back half of Phase 3 in the master plan.
+Steps 2–4 are additive (producer only) and behind `EPUB_STAGE1`; 5–6 carry the golden risk and
+land last, once the producer they consume is validated. Only after 6 do later steps (Stage-2
+reads `content.bin` in the real build via the pull `IBlockSource`, footnote/image-manifest
+folding, `html_<spine>.bin` retirement) proceed — the back half of Phase 3 in the master plan.
 
 ## Non-goals for step 2c
 
