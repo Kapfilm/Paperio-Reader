@@ -85,6 +85,9 @@ enum BlockFlags : uint8_t {
   // line's worth of top margin when merging it into the following paragraph, exactly
   // as the fused parser's empty-block-reuse path does.
   kFromBrElement = 1 << 5,
+  // Continuation of the previous TEXT block, produced by the writer's 8 KB
+  // split-at-write; Stage-2 treats the run as one logical paragraph.
+  kContinuation = 1 << 6,
 };
 
 // One content block. Text fields are used when type==Text, image fields when
