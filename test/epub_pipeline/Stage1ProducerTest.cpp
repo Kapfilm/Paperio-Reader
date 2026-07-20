@@ -62,6 +62,16 @@ std::vector<std::string> allWords(const compiled::Block& b) {
   return out;
 }
 
+// A table cell's text (words joined by spaces, honoring attach-to-previous).
+std::string cellText(const compiled::TableCell& c) {
+  std::string s;
+  for (size_t i = 0; i < c.words.size(); ++i) {
+    if (i != 0 && (c.words[i].styleSpan & compiled::kSpanAttachPrev) == 0) s.push_back(' ');
+    s.append(&c.text[c.words[i].textOff]);
+  }
+  return s;
+}
+
 // Words joined honoring the attach-to-previous bit (matches the producer's title build).
 std::string joinWords(const compiled::Block& b) {
   std::string s;
@@ -275,6 +285,35 @@ TEST(Stage1Producer, TextMatchesLayoutWords) {
     EXPECT_EQ(producerWords(sink), layoutWords(c.book, spine, cacheDir))
         << "producer vs layout word mismatch: " << c.book << " " << c.href;
   }
+}
+
+TEST(Stage1Producer, EmitsTableBlocks) {
+  const int spine = spineIndexForHref("test_tables.epub", freshCacheDir("tbl_find"), "ch001");
+  ASSERT_GE(spine, 0);
+  CapturingSink sink;
+  compileSpine("test_tables.epub", spine, freshCacheDir("tables"), sink);
+
+  std::vector<const compiled::Block*> tables;
+  for (const auto& cap : sink.blocks) {
+    if (cap.block.type == compiled::BlockType::Table) tables.push_back(&cap.block);
+  }
+  ASSERT_GE(tables.size(), 2u) << "ch001 has two tables";
+
+  // First table: header row [Col 1, Col 2], data row [Some, Text].
+  const auto& t = *tables[0];
+  ASSERT_EQ(t.rows.size(), 2u);
+  ASSERT_EQ(t.rows[0].cells.size(), 2u);
+  EXPECT_TRUE(t.rows[0].isHeaderRow);
+  EXPECT_TRUE(t.rows[0].cells[0].isHeader);
+  EXPECT_EQ(cellText(t.rows[0].cells[0]), "Col 1");
+  EXPECT_EQ(cellText(t.rows[0].cells[1]), "Col 2");
+  ASSERT_EQ(t.rows[1].cells.size(), 2u);
+  EXPECT_FALSE(t.rows[1].cells[0].isHeader);
+  EXPECT_EQ(cellText(t.rows[1].cells[0]), "Some");
+  EXPECT_EQ(cellText(t.rows[1].cells[1]), "Text");
+
+  // Second table is 3 columns.
+  EXPECT_EQ(tables[1]->rows[0].cells.size(), 3u);
 }
 
 TEST(Stage1Producer, IsDeterministic) {

@@ -391,6 +391,9 @@ class ChapterHtmlSlimParser final : public Print {
   // Flush any pending text, then emit a standalone image block (intrinsic dims, EPUB entry path).
   void stage1EmitImageBlock(const std::string& entryPath, int16_t width, int16_t height, uint8_t floatSide,
                             const std::string& alt);
+  // Flush any pending text, then emit a Table block reconstructed from the buffered table
+  // (settings-independent rows/cells; Stage-2 reproduces grid-or-paragraph).
+  void stage1EmitTableBlock(const BufferedTable& table);
   // Snap a completed block's effective font size (block multiplier, after uniform per-word
   // folding) to the size ladder: sets headingFontId to the chosen real font and reduces
   // fontSizeMultiplier to the residual. Applies the one-aux-font-per-section budget and is

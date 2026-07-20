@@ -645,6 +645,48 @@ void ChapterHtmlSlimParser::stage1EmitImageBlock(const std::string& entryPath, c
   stage1Sink_->onBlock(std::move(b), CssStyle{});  // image blocks carry their own dims, not a pooled style
 }
 
+void ChapterHtmlSlimParser::stage1EmitTableBlock(const BufferedTable& table) {
+  if (!stage1Sink_) return;
+  stage1FlushBlock();         // emit any pending text block first (document order)
+  stage1EmitPendingAnchor();  // an anchor introducing the table points at it
+  compiled::Block b;
+  b.type = compiled::BlockType::Table;
+  b.charOffset = stage1CharOffset_;
+  b.hasBorder = table.hasBorder;
+  for (const BufferedTableRow& row : table.rows) {
+    compiled::TableRow crow;
+    crow.isHeaderRow = row.isHeaderRow;
+    for (const BufferedTableCell& cell : row.cells) {
+      compiled::TableCell ccell;
+      ccell.isHeader = cell.isHeader;
+      ccell.colSpan = cell.colSpan;
+      if (cell.text) {
+        for (size_t i = 0; i < cell.text->size(); ++i) {
+          const std::string& word = cell.text->wordText(i);
+          compiled::Word w;
+          w.textOff = static_cast<uint32_t>(ccell.text.size());
+          w.styleSpan = stage1MapStyleSpan(cell.text->wordStyle(i), cell.text->wordAttachesToPrevious(i));
+          w.sizePct = cell.text->wordSizePct(i);
+          w.bidiLevel = 0;
+          ccell.words.push_back(w);
+          ccell.text.append(word);
+          ccell.text.push_back('\0');
+          stage1CharOffset_ += stage1CountCodepoints(word.c_str());
+        }
+      }
+      if (!cell.imageSrc.empty()) {
+        // EPUB entry path; intrinsic dims for cell images are a follow-up (no corpus book
+        // exercises them yet) — Stage-2 can still resolve via the image manifest.
+        ccell.imageEntryPath = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(contentBase + cell.imageSrc));
+        ccell.imageAlt = cell.imageAlt;
+      }
+      crow.cells.push_back(std::move(ccell));
+    }
+    b.rows.push_back(std::move(crow));
+  }
+  stage1Sink_->onBlock(std::move(b), CssStyle{});
+}
+
 void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
   if (!stage1Sink_) return;
   stage1FlushBlock();         // hand off the previous block before starting a new one
@@ -2683,6 +2725,12 @@ static constexpr size_t MIN_FREE_HEAP_FOR_TABLE = 20 * 1024;
 
 void ChapterHtmlSlimParser::emitBufferedTable() {
   if (!currentTable) return;
+
+  // Stage-1: emit the settings-independent Table block once, up front, regardless of which
+  // layout path (grid / paragraph fallback) runs below. The fallback's per-cell
+  // startNewTextBlock calls open only empty stage1 accumulators (cell words never flow
+  // through stage1AddWord), which are dropped — so no double emission.
+  stage1EmitTableBlock(*currentTable);
 
   if (currentTable->unsupported || currentTable->rows.empty()) {
     LOG_DBG("EHP", "Table unsupported or empty — falling back to paragraph mode");

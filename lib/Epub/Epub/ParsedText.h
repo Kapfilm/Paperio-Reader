@@ -109,6 +109,12 @@ class ParsedText {
   size_t size() const { return words.size(); }
   bool isEmpty() const { return words.empty(); }
   bool isContinuation() const { return isContinuation_; }
+  // Read-only word access for the Stage-1 content producer, which reconstructs buffered
+  // table cells before layout consumes them. Indices are in [0, size()).
+  const std::string& wordText(size_t i) const { return words[i]; }
+  EpdFontFamily::Style wordStyle(size_t i) const { return wordStyles[i]; }
+  bool wordAttachesToPrevious(size_t i) const { return wordContinues[i]; }
+  uint8_t wordSizePct(size_t i) const { return wordSizes[i]; }
   void layoutAndExtractLines(
       const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
       const std::function<LineProcessResult(std::shared_ptr<TextBlock>, bool, bool)>& processLine,
