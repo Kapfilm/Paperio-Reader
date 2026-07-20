@@ -24,6 +24,7 @@
 // throwing new); valid() must be checked before use.
 #include <Memory.h>
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 
@@ -37,6 +38,10 @@ class BuildArena {
     Block(Block&& other) noexcept { *this = static_cast<Block&&>(other); }
     Block& operator=(Block&& other) noexcept {
       if (this != &other) {
+        // Overwriting a still-live token orphans its scope in the arena's active
+        // chain (the cursor can no longer be rewound to it): a caller must release
+        // or commit a block before reassigning the variable that holds it.
+        assert(!valid() && "overwriting a live BuildArena::Block token");
         start_ = other.start_;
         id_ = other.id_;
         parentId_ = other.parentId_;

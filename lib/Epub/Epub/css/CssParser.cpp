@@ -1411,16 +1411,7 @@ bool CssParser::lookupRule(const std::string& selector, CssStyle& outStyle, cons
       const ResidentEntry* begin = arenaResident_;
       const ResidentEntry* end = arenaResident_ + cachedRuleCount_;
       auto it = std::lower_bound(begin, end, h, [](const ResidentEntry& e, uint32_t key) { return e.hash < key; });
-      const bool found = (it != end && it->hash == h);
-      // DIAGNOSTIC: log the first few resident queries — selector, its hash, hit/miss, and the
-      // index bounds (first/last stored hash) so a query-vs-stored hash mismatch is visible.
-      if (residentDiagCount_ < 6) {
-        ++residentDiagCount_;
-        LOG_INF("CSS", "resident lookup: sel='%s' qhash=%08x found=%d n=%u first=%08x last=%08x", selector.c_str(), h,
-                found ? 1 : 0, static_cast<unsigned>(cachedRuleCount_), cachedRuleCount_ ? begin[0].hash : 0u,
-                cachedRuleCount_ ? end[-1].hash : 0u);
-      }
-      if (found) {
+      if (it != end && it->hash == h) {
         decompressStyle(arenaStylePool_ + it->styleOff + 1, outStyle);  // +1 skips the length prefix
         resolveStats_.diskHits++;                                       // resolved from the (in-RAM) ruleset
         return true;
@@ -1727,7 +1718,6 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
   // cursor exactly where it was — the caller then reuses that space for the smaller offset
   // index. The file stays open; the caller (ensureCacheIndexLoaded) owns closing it.
   auto block = indexArena_->reserveBlock();
-  const size_t blockStart = block.start();
   ResidentEntry* index = ruleCount > 0 ? indexArena_->allocArray<ResidentEntry>(ruleCount) : nullptr;
   if (ruleCount > 0 && index == nullptr) {
     indexArena_->release(block);
@@ -1798,30 +1788,6 @@ bool CssParser::loadArenaResident(FsFile& file, const uint16_t ruleCount, const 
     arenaStylePool_ = poolBase;
     arenaStyleCount_ = poolCount;
     arenaPoolBytes_ = static_cast<uint32_t>(poolBytes);
-    residentDiagCount_ = 0;
-
-    // DIAGNOSTIC: verify the just-built index is self-consistent on-device — look up the first
-    // entry's own hash and decompress its style. found=0 or defined=0 => the index/pool is
-    // corrupt (memory/arena issue); found=1 with a sane defined mask => the store is fine and a
-    // real-query miss must be a query-vs-stored hash mismatch (see the lookup diag).
-    {
-      const uint32_t h0 = index[0].hash;
-      const ResidentEntry* it =
-          std::lower_bound(index, index + ruleCount, h0, [](const ResidentEntry& e, uint32_t k) { return e.hash < k; });
-      const bool found = (it != index + ruleCount && it->hash == h0);
-      CssStyle probe;
-      if (found) decompressStyle(arenaStylePool_ + it->styleOff + 1, probe);
-      LOG_INF("CSS", "resident self-test: n=%u distinct=%u poolBytes=%u hash0=%08x found=%d off=%u defined=%08x",
-              static_cast<unsigned>(ruleCount), static_cast<unsigned>(poolCount), static_cast<unsigned>(poolBytes), h0,
-              found ? 1 : 0, found ? it->styleOff : 0u, found ? packDefinedMask(probe.defined) : 0u);
-      // DIAGNOSTIC: where in the arena the resident store lives — idx@ is index[0], pool@ is the
-      // pool base, entryMark is the arena offset at entry, usedAfter is the cursor after the load.
-      // Compare against the extract's chunkBuf@/chunkMark: if chunkMark < usedAfter (or chunkBuf@
-      // overlaps [idx@, pool@+poolBytes]) the extract reuses the resident store's bytes.
-      LOG_INF("CSS", "resident placement: idx@=%p pool@=%p entryMark=%u usedAfter=%u", (void*)index, (void*)poolBase,
-              static_cast<unsigned>(blockStart), static_cast<unsigned>(indexArena_->used()));
-      (void)blockStart;
-    }
   }
 
   indexArena_->commit(block);

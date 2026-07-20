@@ -528,11 +528,6 @@ struct Section::BuildState {
     chunkBlock = arena->reserveBlock();
     chunkBuf = static_cast<uint8_t*>(arena->alloc(PARSE_CHUNK_BYTES));
     baseChunkBuf = chunkBuf;
-    // DIAGNOSTIC: compare chunkBuf@/chunkMark against the CSS "resident placement" log. If chunkMark
-    // is below the resident store's usedAfter (i.e. the arena was reset/rewound after CSS load), the
-    // extract writes XHTML over the resident index — the resolve-time corruption we're chasing.
-    LOG_INF("SCT", "chunk placement: chunkBuf@=%p chunkMark=%u usedAfter=%u", (void*)chunkBuf,
-            static_cast<unsigned>(chunkBlock.start()), static_cast<unsigned>(arena->used()));
 #else
     chunkOwner.reset(new (std::nothrow) uint8_t[PARSE_CHUNK_BYTES]);
     chunkBuf = chunkOwner.get();

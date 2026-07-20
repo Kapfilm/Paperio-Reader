@@ -825,11 +825,6 @@ bool ZipFile::EntryReader::open(const char* filename) {
     if (impl_->arena) {
       const size_t ringSize = InflateReader::ringSizeFor(fileStat.uncompressedSize);
       auto* ring = static_cast<uint8_t*>(impl_->arena->alloc(ringSize));
-      // DIAGNOSTIC: the inflated XHTML lands in this ring first; compare readBuf@/ring@ against the
-      // CSS "resident placement" idx@ — an overlap is the resident-index corruption source.
-      LOG_INF("ZIP", "reader placement: readBuf@=%p ring@=%p ringSize=%u mark=%u used=%u", (void*)impl_->readBuf,
-              (void*)ring, static_cast<unsigned>(ringSize), static_cast<unsigned>(impl_->arenaBlock.start()),
-              static_cast<unsigned>(impl_->arena->used()));
       ringOk = ring && impl_->ctx.reader.initWithExternalRing(ring, ringSize);
     } else {
       ringOk = impl_->ctx.reader.init(true, fileStat.uncompressedSize);
