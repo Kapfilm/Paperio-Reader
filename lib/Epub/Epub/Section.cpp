@@ -10,19 +10,12 @@
 #include <esp_system.h>
 #include <esp_task_wdt.h>
 
-// Phase-2 migration flag (docs/compiled-book-pipeline-plan.md): 1 routes the
-// build's scratch buffers through a preallocated BuildArena, 0 keeps the
-// legacy per-site new/realloc path. Host golden tests build BOTH modes and
-// must dump byte-identically. Default is arena since the 2026-07-18 device
-// validation (X3: highWater=9216/10240, failedAlloc=0, build time neutral);
-// the legacy path remains selectable for A/B until its sites are deleted.
-#ifndef EPUB_BUILD_ARENA
-#define EPUB_BUILD_ARENA 1
-#endif
-#if EPUB_BUILD_ARENA
+// The build's scratch buffers are carved from a preallocated BuildArena
+// (docs/compiled-book-pipeline-plan.md Phase 2), device-validated 2026-07-18
+// (X3: highWater=9216/10240, failedAlloc=0, build time neutral). The former
+// per-site new/realloc path has been removed.
 #include <BuildArena.h>
 #include <InflateReader.h>
-#endif
 
 #include <algorithm>
 #include <cstring>
@@ -118,13 +111,10 @@ constexpr size_t PARSE_CHUNK_BYTES = 1024;
 // PARSE_CHUNK_BYTES before phase (b). The grow is best-effort: on failure the 1 KB buffer is kept.
 constexpr size_t EXTRACT_CHUNK_BYTES = 8192;
 
-#if EPUB_BUILD_ARENA
 // Parse-scratch arena budget (Phase 2 of docs/compiled-book-pipeline-plan.md).
-// One up-front allocation backing the build's scratch buffers; grows as more
-// sites migrate off ad-hoc new/realloc. Currently: chunk feed buffer
+// One up-front allocation backing the build's scratch buffers: chunk feed buffer
 // (PARSE_CHUNK_BYTES base + EXTRACT_CHUNK_BYTES extraction scope) + alignment.
 constexpr size_t SCT_PARSE_ARENA_BYTES = 10 * 1024;
-#endif
 
 // Bump when preview expansion semantics change. This is hashed only for preview-enabled
 // variants, leaving the much more common preview-off section caches untouched.
@@ -468,7 +458,6 @@ struct Section::BuildState {
   // (reader holds a reference to it). chunkBuf (PARSE_CHUNK_BYTES) is the feed buffer —
   // heap because it must survive across slices. The inflate ring inside the reader is
   // sized to the entry (≤32 KB).
-#if EPUB_BUILD_ARENA
   // Active scratch arena: either ownedArena (heap-backed, resident builds) or an
   // external region supplied by the caller — the borrowed secondary framebuffer
   // (see Section::setExternalBuildScratch). Set once by initArena(). Declared
@@ -498,13 +487,11 @@ struct Section::BuildState {
   std::unique_ptr<BuildArena> zipArena;
   // Peak use of the (destroyed-by-log-time) zipArena, for the done-telemetry.
   uint32_t zipArenaHighWater = 0;
-#endif
   std::unique_ptr<ZipFile> zip;
   std::unique_ptr<ZipFile::EntryReader> reader;
-  // Raw view of the feed buffer; backed by the build arena (arena mode) or
-  // chunkOwner (legacy). Managed exclusively through the lifecycle methods below.
+  // Raw view of the feed buffer, backed by the build arena. Managed exclusively
+  // through the lifecycle methods below.
   uint8_t* chunkBuf = nullptr;
-#if EPUB_BUILD_ARENA
   BuildArena::Block chunkBlock;
   BuildArena::Block extractGrowBlock;
   uint8_t* baseChunkBuf = nullptr;
@@ -513,32 +500,23 @@ struct Section::BuildState {
     zipArenaHighWater = static_cast<uint32_t>(zipArena->highWater());
     zipArena.reset();
   }
-#else
-  std::unique_ptr<uint8_t[]> chunkOwner;
-#endif
   // Capacity of chunkBuf during phase (a). Grown to EXTRACT_CHUNK_BYTES once the inflate ring is
   // allocated (see runBuildParse); stays PARSE_CHUNK_BYTES if that grow fails or on the reused-HTML
   // path. Phase (b) always feeds PARSE_CHUNK_BYTES and chunkBuf is shrunk back before it runs.
   size_t extractCap = PARSE_CHUNK_BYTES;
 
   // --- chunk feed-buffer lifecycle ---
-  // Base allocation (PARSE_CHUNK_BYTES). False on OOM (arena invalid / heap exhausted).
+  // Base allocation (PARSE_CHUNK_BYTES). False on OOM (arena invalid).
   bool allocChunk() {
-#if EPUB_BUILD_ARENA
     chunkBlock = arena->reserveBlock();
     chunkBuf = static_cast<uint8_t*>(arena->alloc(PARSE_CHUNK_BYTES));
     baseChunkBuf = chunkBuf;
-#else
-    chunkOwner.reset(new (std::nothrow) uint8_t[PARSE_CHUNK_BYTES]);
-    chunkBuf = chunkOwner.get();
-#endif
     extractCap = PARSE_CHUNK_BYTES;
     return chunkBuf != nullptr;
   }
   // Best-effort grow for phase (a): on success chunkBuf/extractCap switch to the
   // larger buffer; on failure the base buffer is kept (extraction just runs slower).
   void growChunkForExtract() {
-#if EPUB_BUILD_ARENA
     // Preallocated arena: the grow consumes no heap, so no free-heap gate needed.
     extractGrowBlock = arena->reserveBlock();
     if (auto* grown = static_cast<uint8_t*>(arena->alloc(EXTRACT_CHUNK_BYTES))) {
@@ -547,50 +525,27 @@ struct Section::BuildState {
     } else {
       arena->release(extractGrowBlock);
     }
-#else
-    // Heap-gated: only grow when free stays well clear of the resident build's
-    // ~30 KB low-heap abort floor — the grow itself must not trip the abort.
-    if (esp_get_free_heap_size() < EXTRACT_CHUNK_BYTES + 48 * 1024) return;
-    if (auto* grown = new (std::nothrow) uint8_t[EXTRACT_CHUNK_BYTES]) {
-      chunkOwner.reset(grown);
-      chunkBuf = grown;
-      extractCap = EXTRACT_CHUNK_BYTES;
-    }
-#endif
   }
-  // Shrink back to PARSE_CHUNK_BYTES before phase (b). Arena mode releases the
-  // extraction scope (cannot fail); legacy re-allocates and can OOM.
+  // Shrink back to PARSE_CHUNK_BYTES before phase (b) by releasing the extraction
+  // scope; fails only if the block is no longer the newest live reservation.
   bool shrinkChunkAfterExtract() {
     if (extractCap == PARSE_CHUNK_BYTES) return true;
-#if EPUB_BUILD_ARENA
     if (!arena->release(extractGrowBlock)) return false;
     chunkBuf = baseChunkBuf;
     extractCap = PARSE_CHUNK_BYTES;
     return true;
-#else
-    chunkOwner.reset(new (std::nothrow) uint8_t[PARSE_CHUNK_BYTES]);
-    chunkBuf = chunkOwner.get();
-    extractCap = PARSE_CHUNK_BYTES;
-    return chunkBuf != nullptr;
-#endif
   }
   void dropChunk() {
-#if EPUB_BUILD_ARENA
     if (extractGrowBlock.valid()) arena->release(extractGrowBlock);
     arena->release(chunkBlock);
     baseChunkBuf = nullptr;
-#else
-    chunkOwner.reset();
-#endif
     chunkBuf = nullptr;
   }
-#if EPUB_BUILD_ARENA
   ~BuildState() {
     if (extractGrowBlock.valid()) arena->release(extractGrowBlock);
     reader.reset();
     if (chunkBlock.valid()) arena->release(chunkBlock);
   }
-#endif
   bool parseStarted = false;
   // Two-phase sliced parse, latched at the first parse call (so a build started in the
   // background stays on this path when the foreground resumes it with budget 0):
@@ -690,16 +645,10 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
       // heap — resident {hash,style} ruleset when it fits, else an arena-backed index — with the
       // hot cache off and a lower floor, so the resolver doesn't self-degrade and force a
       // released rebuild. Set deterministically (not just when external) so the shared per-epub
-      // parser never carries a stale lean flag into an owned/heap-backed build. No-op when
-      // EPUB_BUILD_ARENA=0 (st.arena is null → heap CSS).
-#if EPUB_BUILD_ARENA
+      // parser never carries a stale lean flag into an owned/heap-backed build.
       const bool externalArena = st.arena && st.arena != st.ownedArena.get();
       st.cssParser->setIndexArena(externalArena ? st.arena : nullptr);
       st.cssParser->setLeanResolve(externalArena);
-#else
-      st.cssParser->setIndexArena(nullptr);
-      st.cssParser->setLeanResolve(false);
-#endif
       if (!st.cssParser->loadFromCache()) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
       }
@@ -834,7 +783,6 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
       st.zip.reset(new (std::nothrow) ZipFile(epub->getPath()));
       if (st.zip) {
         epub->primeZip(*st.zip);  // reuse the book's cached EOCD details (skip the rescan)
-#if EPUB_BUILD_ARENA
         const size_t zipArenaBytes =
             PARSE_CHUNK_BYTES + InflateReader::ringSizeFor(st.inflatedSize) + 2 * alignof(std::max_align_t);
         // External region (borrowed framebuffer) with room for the ZIP scope:
@@ -846,8 +794,7 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
           st.reader.reset(new (std::nothrow) ZipFile::EntryReader(*st.zip, PARSE_CHUNK_BYTES, st.arena));
         } else {
           // Heap-backed: one entry-sized block for the reader's readBuf + ring,
-          // alive only through phase (a) — same total bytes as the legacy
-          // separate allocations, but a single scope the reader releases.
+          // alive only through phase (a) — a single scope the reader releases.
           st.zipArena = makeUniqueNoThrow<BuildArena>(zipArenaBytes);
           if (st.zipArena && st.zipArena->valid()) {
             st.reader.reset(new (std::nothrow) ZipFile::EntryReader(*st.zip, PARSE_CHUNK_BYTES, st.zipArena.get()));
@@ -857,9 +804,6 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
             st.zipArena.reset();
           }
         }
-#else
-        st.reader.reset(new (std::nothrow) ZipFile::EntryReader(*st.zip, PARSE_CHUNK_BYTES));
-#endif
       }
       if (!st.reader) {
         LOG_ERR("SCT", "Failed to allocate entry reader (%u bytes scratch, free=%lu)",
@@ -874,7 +818,7 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
           // now grow the extraction feed buffer, so a bigger buffer draws from the remainder and can
           // never starve the ring (the OOM->blocking regression this replaced). Best-effort: on
           // failure the 1 KB buffer is kept and extraction runs slower. Shrunk back after phase (a).
-          // Heap gating (legacy) / arena scoping (EPUB_BUILD_ARENA) live inside the method.
+          // Arena scoping lives inside the method.
           st.growChunkForExtract();
         }
       }
@@ -911,28 +855,18 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
               static_cast<uint32_t>(st.reader->bytesProduced()));
       streamFailed = true;
     }
-#if EPUB_BUILD_ARENA
+    // Release the extraction scope before closing the nested ZIP block, so the
+    // reader's arena block stays the newest live reservation (LIFO release order).
     if (!st.shrinkChunkAfterExtract()) {
       LOG_ERR("SCT", "Failed to release extraction buffer block");
       streamFailed = true;
     }
-#endif
     st.reader.reset();
     st.zip.reset();
-#if EPUB_BUILD_ARENA
     st.dropZipArena();
-#endif
     st.tempFile.flush();
     st.tempFile.close();
     st.extractDone = true;
-    // The arena block was already shrunk before closing the nested ZIP block.
-#if !EPUB_BUILD_ARENA
-    if (!streamFailed && !st.shrinkChunkAfterExtract()) {
-      LOG_ERR("SCT", "Failed to shrink parse buffer to %u bytes (free=%lu)", static_cast<uint32_t>(PARSE_CHUNK_BYTES),
-              esp_get_free_heap_size());
-      streamFailed = true;
-    }
-#endif
     if (!streamFailed) {
       if (!Storage.openFileForRead("SCT", st.tempPath, st.tempFile)) {
         streamFailed = true;
@@ -1002,14 +936,10 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
   // Stream exhausted or failed — wrap up the phase exactly as the one-shot path did.
   // Release the ZIP-side state (no-ops on the sliced path, which dropped it after
   // extraction) and the temp file before the visitor finalizes.
-#if EPUB_BUILD_ARENA
   if (!st.shrinkChunkAfterExtract()) streamFailed = true;
-#endif
   st.reader.reset();
   st.zip.reset();
-#if EPUB_BUILD_ARENA
   st.dropZipArena();
-#endif
   st.dropChunk();
   if (st.tempFile) {
     st.tempFile.close();
@@ -1195,15 +1125,12 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   LOG_INF("SCT",
           "createSectionFile spine=%d done: total=%ums (stream=%u setup=%u parse=%u finalize=%u) pages=%u bytes=%u",
           spineIndex, totalMs, streamMs, st.setupMs, st.parseMs, finalizeMs, pageCount, fileSize);
-#if EPUB_BUILD_ARENA
-  // Device A/B telemetry: proves which mode a build ran in and how much of the
-  // arena budgets it actually used (plan Phase 2 exit data). zipHW is the
+  // Arena telemetry: how much of the budgets a build actually used. zipHW is the
   // entry-sized phase-(a) arena's peak (0 = reused-HTML path, no ZIP state).
   LOG_INF("SCT", "createSectionFile spine=%d arena: cap=%u highWater=%u failedAlloc=%u zipHW=%u", spineIndex,
           st.arena ? static_cast<uint32_t>(st.arena->capacity()) : 0,
           st.arena ? static_cast<uint32_t>(st.arena->highWater()) : 0,
           st.arena ? static_cast<uint32_t>(st.arena->failedAllocSize()) : 0, st.zipArenaHighWater);
-#endif
   return BuildPhaseResult::Done;
 }
 
@@ -1275,13 +1202,11 @@ bool Section::startBuild(const BuildParams& params, const std::function<void(int
     LOG_ERR("SCT", "Failed to allocate build state (free=%lu)", esp_get_free_heap_size());
     return false;
   }
-#if EPUB_BUILD_ARENA
   if (!buildState_->initArena(externalScratch_)) {
     LOG_ERR("SCT", "Failed to allocate build arena (free=%lu)", esp_get_free_heap_size());
     buildState_.reset();
     return false;
   }
-#endif
   buildState_->params = p;
   buildState_->progressFn = progressFn;
   buildState_->requestedHash = requestedHash;

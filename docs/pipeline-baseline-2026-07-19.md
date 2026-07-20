@@ -3,7 +3,8 @@
 Second dated section for the migration record (see compiled-book-pipeline-plan.md
 and the first baseline, `pipeline-baseline-2026-07-17.md`). Captures the state
 after **Phase 2** landed and was device-validated: arena-backed build path
-(`EPUB_BUILD_ARENA=1` default), secondary-framebuffer **borrow** for released
+(then the `EPUB_BUILD_ARENA=1` default, since made unconditional and the flag
+removed), secondary-framebuffer **borrow** for released
 Background-C builds, and CSS resolution relocated **into the borrow arena**
 (resident ruleset when it fits, else offset index).
 
@@ -44,7 +45,7 @@ Deltas vs 2026-07-17:
   (`setIndexArena(nullptr)`), so only the borrowed-FB device path exercises the
   new resident/index arena code (covered by the `CssParserArena` gtest instead).
 
-## Device (X3, `EPUB_BUILD_ARENA=1`, refactor-parsing @ f9e989fe)
+## Device (X3, arena path, refactor-parsing @ f9e989fe)
 
 Authoritative speed/memory reference. Measured on the cold-cache first open of
 **"Lindsey Davis — Shadows in Bronze"** (108 spines, 178 CSS selectors), spine 60

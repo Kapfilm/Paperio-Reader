@@ -107,11 +107,14 @@ parser buffers; sized to the released-FB budget, smaller resident profile) and a
 **layout arena** (blocks/pages working set), deliberately split so they need not
 be contiguous (FreeInkBook `ChapterLayout.h:125-134` pattern).
 
-Steps:
-1. `BuildArena` class: bump alloc, `mark()`/`release()`, `reset()`, `highWater()`,
-   `failedAllocSize()`. Standalone unit tests first.
+Steps (DONE):
+1. `BuildArena` class: bump alloc, `reserveBlock()`/`release(block)`/`commit(block)`,
+   `reset()`, `highWater()`, `failedAllocSize()`. Standalone unit tests first.
 2. Convert allocation sites incrementally — one site (or one build phase) per
-   commit, old path retained behind `-DEPUB_BUILD_ARENA=0/1` for A/B.
+   commit. During the migration the old path was retained behind
+   `-DEPUB_BUILD_ARENA=0/1` for A/B; the arena is now the only path and the flag
+   (with its legacy `new`/`realloc` branches and the `EpubPipelineTestLegacyAlloc`
+   A/B target) has been removed.
 3. Delete superseded heap gates only after the whole path is converted and
    device-validated.
 

@@ -89,7 +89,8 @@ reading anchor) — model charOffset accounting on it. freeink is also the RTL b
 
 ## Suggested first steps
 
-1. Add `EPUB_STAGE1` (mirror `EPUB_BUILD_ARENA` in `Section.cpp:19-20`), default 0.
+1. Add `EPUB_STAGE1` compile-time flag (`#ifndef`/`#define ... 0` at the top of the new TU,
+   the same pattern `EPUB_BUILD_ARENA` used before it was made unconditional), default 0.
 2. Define the `BlockSink` interface + a `ContentCompiler` that owns a yxml-driven walk; wire a
    host `content_stage1_dump` tool in `test/epub_pipeline/` that runs it and prints the block model.
 3. Get one simple book (e.g. `test/epubs/test_headings.epub`) producing correct blocks, then grow
@@ -104,7 +105,7 @@ reading anchor) — model charOffset accounting on it. freeink is also the RTL b
   fix (arena-resident CSS) is device-validated; a real-book validation sweep + merge + release is
   the parallel Tier-1 track (see `project-pipeline-migration`).
 - freeink submodule now pinned to reachable `fork/chore-borrow` (jpirnay/freeink-sdk).
-- `EPUB_BUILD_ARENA=1` is default; `EPUB_STAGE1` does not exist yet.
+- The arena build path is unconditional (`EPUB_BUILD_ARENA` removed); `EPUB_STAGE1` does not exist yet.
 - Parser divergence for reference: witchhunt's parser is 2,866 lines vs crosspoint-reader
   upstream's 1,443 (witchhunt added footnotes/tables/floats/bionic) — the Stage-1 pass must
   reproduce witchhunt's behavior, not upstream's.
