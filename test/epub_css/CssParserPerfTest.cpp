@@ -435,9 +435,10 @@ TEST(CssParserArena, ResidentAndIndexMatchHeapResolution) {
   ASSERT_TRUE(parser.loadFromCache());
   const std::vector<CssStyle> heapStyles = resolveAll(parser);
 
-  // 2) RESIDENT: arena easily large enough for the full ruleset. Assert the whole ruleset
-  //    was materialized (used() ~ N * sizeof(ResidentRule), well past the 8 B/rule index)
-  //    and that resolution is byte-for-byte identical to the heap path.
+  // 2) RESIDENT with dedup: the fixture's 1500 rules cycle through only ~40 distinct styles,
+  //    so the pooled resident (index + distinct-style pool) is an order of magnitude smaller
+  //    than a flat {hash, CssStyle} array (~168 KB) — proving the Calibre-style dedup — while
+  //    resolving byte-for-byte identically to the heap path.
   {
     BuildArena arena(kFixtureRuleCount * 128 + 8192);
     ASSERT_TRUE(arena.valid());
@@ -445,7 +446,9 @@ TEST(CssParserArena, ResidentAndIndexMatchHeapResolution) {
     parser.setIndexArena(&arena);
     parser.setLeanResolve(true);
     ASSERT_TRUE(parser.loadFromCache());
-    EXPECT_GT(arena.used(), kFixtureRuleCount * 64u) << "expected the full resident ruleset in the arena";
+    // Pooled resident: 1500 * 8 B index + ~40 * ~108 B styles ≈ 16 KB, far below the ~168 KB a
+    // flat array would need and below even the 8 B/rule offset index of 12 KB + a full pool.
+    EXPECT_LT(arena.used(), kFixtureRuleCount * 32u) << "expected dedup to shrink the resident ruleset";
     const std::vector<CssStyle> residentStyles = resolveAll(parser);
     for (size_t i = 0; i < probes.size(); ++i) {
       EXPECT_TRUE(stylesEqual(heapStyles[i], residentStyles[i]))
@@ -475,26 +478,273 @@ TEST(CssParserArena, ResidentAndIndexMatchHeapResolution) {
     parser.clear();
   }
 
-  // 4) INDEX-only fallback: an arena that fits the 8 B/rule index (~12 KB) but not the
-  //    ~168 KB resident array. Payloads come from disk; resolution must still match heap.
-  {
-    BuildArena arena(kFixtureRuleCount * 16);  // > index, << resident
-    ASSERT_TRUE(arena.valid());
-    parser.clear();
-    parser.setIndexArena(&arena);
-    parser.setLeanResolve(true);
-    ASSERT_TRUE(parser.loadFromCache());
-    EXPECT_LT(arena.used(), kFixtureRuleCount * 16u) << "expected the small offset index, not the resident ruleset";
-    const std::vector<CssStyle> indexStyles = resolveAll(parser);
-    for (size_t i = 0; i < probes.size(); ++i) {
-      EXPECT_TRUE(stylesEqual(heapStyles[i], indexStyles[i]))
-          << "index-only mismatch for " << probes[i].first << "." << probes[i].second;
-    }
-    parser.clear();
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
+// INDEX-only fallback: when the ruleset is genuinely distinct (no dedup win) and too big for
+// the arena, loadArenaResident bails and the parser reads payloads from disk via the offset
+// index — still resolving identically to the heap path. Uses a stylesheet whose every rule is
+// unique so the pooled resident can't shrink it (unlike the Calibre-style fixture above).
+TEST(CssParserArena, IndexOnlyFallbackMatchesHeapResolution) {
+  constexpr int kDistinct = 400;  // 400 unique styles: pooled ~44 KB, offset index ~3.2 KB
+  std::string css;
+  for (int i = 0; i < kDistinct; ++i) {
+    css += ".u" + std::to_string(i) + " { margin-top: " + std::to_string(i + 1) +
+           "px; text-indent: " + std::to_string(i + 1) + "px; }\n";
   }
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile cssFile;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), cssFile));
+    ASSERT_TRUE(parser.loadFromStream(cssFile));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  std::vector<std::pair<std::string, std::string>> probes;
+  for (int i = 0; i < 30; ++i) probes.emplace_back("p", "u" + std::to_string(i * 13));
+  probes.emplace_back("p", "no_such_rule");
+
+  auto resolveAll = [&](CssParser& p) {
+    std::vector<CssStyle> out;
+    for (const auto& pr : probes) out.push_back(p.resolveStyle(pr.first, pr.second));
+    return out;
+  };
+
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> heapStyles = resolveAll(parser);
+
+  // Arena fits the 8 B/rule offset index (~3.2 KB) but not the ~44 KB distinct-style pool, so
+  // loadArenaResident falls back to the disk-backed index.
+  BuildArena arena(8 * 1024);
+  ASSERT_TRUE(arena.valid());
+  parser.clear();
+  parser.setIndexArena(&arena);
+  parser.setLeanResolve(true);
+  ASSERT_TRUE(parser.loadFromCache());
+  EXPECT_LT(arena.used(), static_cast<size_t>(kDistinct) * 16u)
+      << "expected the offset index, not the (much larger) distinct-style pool";
+  const std::vector<CssStyle> indexStyles = resolveAll(parser);
+  for (size_t i = 0; i < probes.size(); ++i) {
+    EXPECT_TRUE(stylesEqual(heapStyles[i], indexStyles[i])) << "index-only mismatch at " << i;
+  }
+  parser.clear();
 
   removePath(cacheDir);
   std::filesystem::remove(cssPath);
+}
+
+// Reproduction from a real book (download.epub) reported as a visual regression: rich rules with
+// percentage margins, shorthands, pt units, and vertical-align:%. Resident resolution of each
+// class must equal the heap path exactly (any divergence = the codec corrupting a real style).
+TEST(CssParserArena, ResidentMatchesHeapForRealRichStylesheet) {
+  const std::string css =
+      ".apnf { font-size: 0.58333em; font-weight: bold; line-height: 1.2; text-decoration: none; "
+      "vertical-align: 70%; margin: 0 0 0 0.2em; }\n"
+      ".auteur { display: block; margin-bottom: 0%; margin-left: 30%; margin-top: 0%; "
+      "page-break-after: avoid; text-align: right; text-indent: 0%; padding: 0%; }\n"
+      ".bl { display: block; margin-bottom: 0%; margin-top: 0%; padding: 0%; }\n"
+      ".border { color: gray; display: block; height: 2px; margin: 0.2em 0; }\n"
+      ".calibre { display: block; font-size: 1.125em; height: 100%; line-height: 1.2; width: 100%; "
+      "padding: 0% 0; margin: 0 5pt; }\n"
+      ".titre { text-align: center; font-size: 1.5em; font-weight: bold; margin: 1em 0; "
+      "page-break-before: always; text-transform: uppercase; }\n";
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile f;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), f));
+    ASSERT_TRUE(parser.loadFromStream(f));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  const std::vector<std::string> classes = {"apnf", "auteur", "bl", "border", "calibre", "titre"};
+  auto resolveAll = [&](CssParser& p) {
+    std::vector<CssStyle> out;
+    for (const auto& c : classes) out.push_back(p.resolveStyle("p", c));
+    return out;
+  };
+
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> heapStyles = resolveAll(parser);
+
+  BuildArena arena(64 * 1024);
+  ASSERT_TRUE(arena.valid());
+  parser.clear();
+  parser.setIndexArena(&arena);
+  parser.setLeanResolve(true);
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> residentStyles = resolveAll(parser);
+
+  for (size_t i = 0; i < classes.size(); ++i) {
+    EXPECT_TRUE(stylesEqual(heapStyles[i], residentStyles[i])) << "resident != heap for ." << classes[i];
+  }
+  EXPECT_GT(parser.getResolveStats().diskHits, 0u) << "these classes should resolve (hit)";
+  parser.clear();
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
+// The resident path must actually HIT for element, class, and combined selectors — not just
+// agree with the heap path (which both-miss on unmatched probes would trivially satisfy). Asserts
+// each probe returns the styled (non-default) value AND equals the heap resolution.
+TEST(CssParserArena, ResidentHitsElementClassAndCombinedSelectors) {
+  const std::string css =
+      "p { margin-top: 5px; }\n"
+      ".note { text-align: center; }\n"
+      "div.warn { font-weight: bold; }\n";
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile f;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), f));
+    ASSERT_TRUE(parser.loadFromStream(f));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  BuildArena arena(64 * 1024);
+  ASSERT_TRUE(arena.valid());
+  parser.clear();
+  parser.setIndexArena(&arena);
+  parser.setLeanResolve(true);
+  ASSERT_TRUE(parser.loadFromCache());
+
+  // Element selector "p" must hit.
+  const CssStyle p = parser.resolveStyle("p", "");
+  EXPECT_TRUE(p.hasMarginTop()) << "resident MISS on element selector 'p'";
+  // Class selector ".note" must hit.
+  const CssStyle note = parser.resolveStyle("span", "note");
+  EXPECT_TRUE(note.hasTextAlign()) << "resident MISS on class selector '.note'";
+  EXPECT_EQ(note.textAlign, CssTextAlign::Center);
+  // Combined "div.warn" must hit.
+  const CssStyle warn = parser.resolveStyle("div", "warn");
+  EXPECT_TRUE(warn.hasFontWeight()) << "resident MISS on combined selector 'div.warn'";
+  EXPECT_EQ(warn.fontWeight, CssFontWeight::Bold);
+  // A genuine non-match must still miss.
+  const CssStyle none = parser.resolveStyle("h1", "absent");
+  EXPECT_FALSE(none.hasMarginTop());
+  EXPECT_FALSE(none.hasTextAlign());
+
+  const auto stats = parser.getResolveStats();
+  EXPECT_GT(stats.diskHits, 0u) << "resident produced zero hits for matching selectors";
+  parser.clear();
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
+// The sparse codec must round-trip EVERY style field, not just the margins/font-size the other
+// fixtures exercise. Resolve a rule that sets a diverse spread of properties through the resident
+// (compress-on-load, decompress-on-lookup) path and require it byte-identical to the heap path.
+TEST(CssParserArena, ResidentPreservesAllStyleFields) {
+  const std::string css =
+      ".a { text-align: center; font-weight: bold; font-style: italic; text-decoration: underline; "
+      "margin: 2em; padding-left: 5px; padding-right: 3px; text-indent: 1.5em; line-height: 1.6; "
+      "font-size: 120%; vertical-align: super; float: left; font-variant: small-caps; "
+      "list-style: none; page-break-before: always; page-break-after: always; }\n"
+      ".b { margin-top: 3px; text-align: right; }\n"
+      ".c { display: none; }\n";
+  const std::string cacheDir = makeTempDir();
+  ASSERT_FALSE(cacheDir.empty());
+  std::string cssPath;
+  ASSERT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+
+  CssParser parser(cacheDir);
+  {
+    FsFile f;
+    ASSERT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), f));
+    ASSERT_TRUE(parser.loadFromStream(f));
+  }
+  ASSERT_TRUE(parser.saveToCache());
+
+  const std::vector<std::pair<std::string, std::string>> probes = {
+      {"p", "a"}, {"p", "b"}, {"div", "c"}, {"span", "a"}, {"p", "none"}};
+  auto resolveAll = [&](CssParser& p) {
+    std::vector<CssStyle> out;
+    for (const auto& pr : probes) out.push_back(p.resolveStyle(pr.first, pr.second));
+    return out;
+  };
+
+  parser.clear();
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> heapStyles = resolveAll(parser);
+
+  BuildArena arena(64 * 1024);
+  ASSERT_TRUE(arena.valid());
+  parser.clear();
+  parser.setIndexArena(&arena);
+  parser.setLeanResolve(true);
+  ASSERT_TRUE(parser.loadFromCache());
+  const std::vector<CssStyle> residentStyles = resolveAll(parser);
+  for (size_t i = 0; i < probes.size(); ++i) {
+    EXPECT_TRUE(stylesEqual(heapStyles[i], residentStyles[i]))
+        << "field round-trip mismatch for " << probes[i].first << "." << probes[i].second;
+  }
+  parser.clear();
+  removePath(cacheDir);
+  std::filesystem::remove(cssPath);
+}
+
+// Baseline measurement of the resident CSS footprint (index + distinct-style pool) across
+// representative stylesheets, so the dedup/compression win is measured, not estimated. Prints
+// CSS_FOOTPRINT lines the CI log captures; re-run after compression lands to see the delta.
+TEST(CssParserArena, ResidentFootprintBaseline) {
+  auto footprintForCss = [](const std::string& css) {
+    const std::string cacheDir = makeTempDir();
+    std::string cssPath;
+    EXPECT_TRUE(writeTempCssFile(std::vector<uint8_t>(css.begin(), css.end()), cssPath));
+    CssParser parser(cacheDir);
+    {
+      FsFile f;
+      EXPECT_TRUE(Storage.openFileForRead("CSS", cssPath.c_str(), f));
+      EXPECT_TRUE(parser.loadFromStream(f));
+    }
+    EXPECT_TRUE(parser.saveToCache());
+    BuildArena arena(1024 * 1024);  // huge → always resident, so we measure the full pool
+    parser.clear();
+    parser.setIndexArena(&arena);
+    parser.setLeanResolve(true);
+    EXPECT_TRUE(parser.loadFromCache());
+    const CssParser::ResidentFootprint fp = parser.getResidentFootprint();
+    parser.clear();
+    removePath(cacheDir);
+    std::filesystem::remove(cssPath);
+    return fp;
+  };
+
+  std::string calibre;  // hundreds of identically-styled classes (the Calibre pattern)
+  for (int i = 0; i < 800; ++i) calibre += ".calibre" + std::to_string(i) + " { margin-top: 0px; }\n";
+  std::string distinct;  // every rule unique — no dedup possible
+  for (int i = 0; i < 400; ++i)
+    distinct += ".u" + std::to_string(i) + " { margin-top: " + std::to_string(i + 1) + "px; }\n";
+  std::string typical;  // a realistic mix (~24 distinct combinations)
+  for (int i = 0; i < 200; ++i)
+    typical += ".t" + std::to_string(i) + " { margin-top: " + std::to_string(i % 12) +
+               "px; text-align: " + (i % 2 ? "center" : "left") + "; }\n";
+
+  const std::vector<std::pair<const char*, std::string>> sheets = {
+      {"calibre-800-dup", calibre}, {"distinct-400", distinct}, {"typical-200", typical}};
+  for (const auto& [name, css] : sheets) {
+    const CssParser::ResidentFootprint fp = footprintForCss(css);
+    printf("CSS_FOOTPRINT[%-16s] rules=%4u distinct=%4u indexB=%6u poolB=%6u totalB=%6u  %.1f B/distinct\n", name,
+           fp.ruleCount, fp.distinctStyles, fp.indexBytes, fp.poolBytes, fp.totalBytes(),
+           fp.distinctStyles ? static_cast<double>(fp.poolBytes) / fp.distinctStyles : 0.0);
+    EXPECT_GT(fp.ruleCount, 0u);
+  }
 }
 
 // Regression: font-size from stylesheets must survive the disk-cache round trip.

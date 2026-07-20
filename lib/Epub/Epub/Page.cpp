@@ -31,6 +31,7 @@ std::unique_ptr<PageLine> PageLine::deserialize(FsFile& file) {
 }
 
 void PageImage::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
+  (void)fontId;
   imageBlock->render(renderer, xPos + xOffset, yPos + yOffset);
 }
 
@@ -62,6 +63,7 @@ std::unique_ptr<PageImage> PageImage::deserialize(FsFile& file) {
 }
 
 void PageHR::render(GfxRenderer& renderer, const int fontId, const int xOffset, const int yOffset) {
+  (void)fontId;
   renderer.drawLine(xPos + xOffset, yPos + yOffset, xPos + xOffset + width - 1, yPos + yOffset);
 }
 
@@ -382,8 +384,11 @@ bool Page::serialize(FsFile& file) const {
 std::unique_ptr<Page> Page::deserialize(FsFile& file) {
   auto page = std::unique_ptr<Page>(new Page());
 
-  uint16_t count;
-  serialization::readPod(file, count);
+  uint16_t count = 0;
+  if (file.read(reinterpret_cast<uint8_t*>(&count), sizeof(count)) != sizeof(count)) {
+    LOG_ERR("PGE", "Deserialization failed: missing element count");
+    return nullptr;
+  }
 
   // Guard a corrupt cache header from reserving an absurd number of elements. A real page is
   // bounded by screen-height/min-line-height plus images/tables — well under this cap.

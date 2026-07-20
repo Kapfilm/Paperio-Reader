@@ -161,3 +161,19 @@ TEST_F(ZipEntryReaderTest, ArenaTooSmallFailsCleanly) {
   EXPECT_EQ(arena.used(), 0u);
   EXPECT_GT(arena.failedAllocSize(), 0u);
 }
+
+TEST_F(ZipEntryReaderTest, CloseCannotReleaseNewerCallerBlock) {
+  BuildArena arena(40 * 1024);
+  ZipFile::EntryReader reader(zip_, 1024, &arena);
+  ASSERT_TRUE(reader.open(kTestEntry));
+  const size_t readerUsed = arena.used();
+
+  auto callerBlock = arena.reserveBlock();
+  ASSERT_NE(arena.alloc(64, 1), nullptr);
+  reader.close();
+  EXPECT_GT(arena.used(), readerUsed);
+
+  EXPECT_TRUE(arena.release(callerBlock));
+  reader.close();
+  EXPECT_EQ(arena.used(), 0u);
+}

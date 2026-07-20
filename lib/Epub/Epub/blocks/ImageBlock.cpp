@@ -160,7 +160,8 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
     if (bufferRow >= rowsInBuffer) {
       const int toRead = (rowsToRender - row < rowsPerRead) ? (rowsToRender - row) : rowsPerRead;
       const size_t bytes = (size_t)toRead * bytesPerRow;
-      if (cacheFile.read(readBuffer, bytes) != bytes) {
+      const int bytesRead = cacheFile.read(readBuffer, bytes);
+      if (bytesRead < 0 || static_cast<size_t>(bytesRead) != bytes) {
         LOG_ERR("IMG", "Cache read error at row %d", srcYOffset + row);
         free(readBuffer);
         cacheFile.close();

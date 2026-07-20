@@ -101,29 +101,6 @@ target_link_libraries(EpubPipelineTest PRIVATE
 )
 gtest_discover_tests(EpubPipelineTest PROPERTIES TIMEOUT 300)
 
-# Same suite compiled with the LEGACY allocation path (EPUB_BUILD_ARENA=0; the
-# firmware default is arena since the 2026-07-18 device validation): the golden
-# tests prove both backings dump byte-identically until legacy is deleted.
-add_executable(EpubPipelineTestLegacyAlloc
-  EpubPipelineTest.cpp
-  FingerprintTest.cpp
-  ${PIPELINE_SOURCES}
-)
-target_include_directories(EpubPipelineTestLegacyAlloc PRIVATE ${PIPELINE_INCLUDES})
-target_compile_definitions(EpubPipelineTestLegacyAlloc PRIVATE
-  CORPUS_DIR="${REPO_ROOT}/test/epubs"
-  GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/goldens"
-  ENABLE_SERIAL_LOG=1
-  LOG_LEVEL=2
-  EPUB_BUILD_ARENA=0
-)
-target_link_libraries(EpubPipelineTestLegacyAlloc PRIVATE
-  crosspoint_test_common
-  SaxParser
-  GTest::gtest_main
-)
-gtest_discover_tests(EpubPipelineTestLegacyAlloc PROPERTIES TIMEOUT 300)
-
 # HeapTrack overrides malloc/free process-wide — CLI tool only, never the gtest.
 add_executable(epub_pipeline_dump
   DumpMain.cpp

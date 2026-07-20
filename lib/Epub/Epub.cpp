@@ -99,12 +99,10 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, OpfCac
     return false;
   }
 
-  const unsigned long streamStart = millis();
   if (!readItemContentsToStream(contentOpfFilePath, opfParser, 1024)) {
     LOG_ERR("EBP", "Could not read content.opf");
     return false;
   }
-  const unsigned long streamMs = millis() - streamStart;
 
   // Grab data from opfParser into epub
   bookMetadata.title = opfParser.title;
@@ -1459,7 +1457,8 @@ int Epub::getSpineIndexForTextReference() const {
   }
 
   // loop through spine items to get the correct index matching the text href
-  for (size_t i = 0; i < getSpineItemsCount(); i++) {
+  const int spineCount = getSpineItemsCount();
+  for (int i = 0; i < spineCount; i++) {
     if (getSpineItem(i).href == bookMetadataCache->coreMetadata.textReferenceHref) {
       LOG_DBG("EBP", "Text reference %s found at index %d", bookMetadataCache->coreMetadata.textReferenceHref.c_str(),
               i);

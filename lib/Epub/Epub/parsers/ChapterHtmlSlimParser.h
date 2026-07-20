@@ -233,7 +233,7 @@ class ChapterHtmlSlimParser final : public Print {
   bool insideFootnoteLink = false;
   int footnoteLinkDepth = -1;
   FootnoteEntry currentFootnote = {};
-  int currentFootnoteLinkTextLen = 0;
+  size_t currentFootnoteLinkTextLen = 0;
   // Non-owning; the Section's BuildState keeps the lookup alive across build slices.
   // Membership in the book-level preview cache is the sole expansion gate: it already
   // encodes "this link points at a real note", so no epub:type/same-file checks here.
@@ -305,6 +305,8 @@ class ChapterHtmlSlimParser final : public Print {
 
       : epub(epub),
         renderer(renderer),
+        completePageFn(completePageFn),
+        progressFn(progressFn),
         fontId(fontId),
         lineCompression(lineCompression),
         extraParagraphSpacing(extraParagraphSpacing),
@@ -312,16 +314,14 @@ class ChapterHtmlSlimParser final : public Print {
         viewportWidth(viewportWidth),
         viewportHeight(viewportHeight),
         hyphenationEnabled(hyphenationEnabled),
-        bionicReadingEnabled(bionicReadingEnabled),
-        completePageFn(completePageFn),
-        progressFn(progressFn),
         cssParser(cssParser),
         imageManifest(imageManifest),
         embeddedStyle(embeddedStyle),
         imageRendering(imageRendering),
         contentBase(contentBase),
         imageBasePath(imageBasePath),
-        tocAnchors(std::move(tocAnchors)) {}
+        tocAnchors(std::move(tocAnchors)),
+        bionicReadingEnabled(bionicReadingEnabled) {}
 
   ~ChapterHtmlSlimParser() override;
 

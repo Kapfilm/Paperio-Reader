@@ -175,6 +175,17 @@ class CssParser {
   [[nodiscard]] ResolveStats getResolveStats() const;
   void logResolveStats(const char* context) const;
 
+  // Resident-arena memory breakdown (valid after a RESIDENT load; zero otherwise). Lets host
+  // benchmarks and device logs quantify the CSS footprint and the dedup/compression win.
+  struct ResidentFootprint {
+    uint16_t ruleCount = 0;       // selectors in the index
+    uint16_t distinctStyles = 0;  // pool entries after dedup
+    uint32_t indexBytes = 0;      // sorted {hash, styleIdx} index
+    uint32_t poolBytes = 0;       // distinct-style pool (compressed once compression lands)
+    uint32_t totalBytes() const { return indexBytes + poolBytes; }
+  };
+  [[nodiscard]] ResidentFootprint getResidentFootprint() const;
+
   // Phase-2 arena mode (docs/compiled-book-pipeline-plan.md). A section built with the
   // secondary framebuffer BORROWED (not freed) runs with ~52 KB less general heap than a
   // released build, so the resolver would otherwise self-degrade below MIN_FREE_HEAP_FOR_CSS
@@ -221,23 +232,32 @@ class CssParser {
   // ensureCacheIndexLoaded() puts the ruleset in arena memory (not the heap vector) using
   // one of two layouts, decided by what fits — mirroring FreeInkBook's resident ruleset
   // (libs/book/FreeInkBook/src/css/Css.cpp) as far as witchhunt's ~108 B CssStyle allows:
-  //   - RESIDENT (preferred): the whole ruleset as a sorted {hash, CssStyle} array at
-  //     arenaResident_. resolveStyle scans it in RAM — zero disk reads, like FreeInk.
-  //   - INDEX-only (fallback when the resident array won't fit): the sorted 8 B/rule
+  //   - RESIDENT (preferred): a sorted {hash, styleOff} index at arenaResident_ plus a pool of
+  //     DISTINCT styles at arenaStylePool_, each SPARSE-COMPRESSED (only the fields the CSS
+  //     'defined' mask flags — a real rule sets 1-4 of 24 properties, vs ~108 B for the full
+  //     struct). Identical styles are deduplicated (Calibre emits hundreds of differently-named
+  //     classes with byte-identical declarations). Compression + dedup together let a large or
+  //     repetitive stylesheet that a flat {hash, CssStyle} array couldn't hold resolve in RAM
+  //     with zero disk reads; styles decompress on lookup (build-time, ~microseconds).
+  //   - INDEX-only (fallback when even the compressed pool won't fit): the sorted 8 B/rule
   //     SelectorEntry index at arenaIndex_; payloads are read from disk on demand.
-  // Both are non-owning views into arena memory (the arena resets per build); the parser
+  // All are non-owning views into arena memory (the arena resets per build); the parser
   // drops them on clear()/clearCaches() and reloads on the next resolve.
-  struct ResidentRule {
-    uint32_t hash;   // FNV-1a of the normalized selector (same as SelectorEntry::hash)
-    CssStyle style;  // fully decoded — no disk round-trip at lookup
-  };
+  struct ResidentEntry {
+    uint32_t hash;      // FNV-1a of the normalized selector (same as SelectorEntry::hash)
+    uint32_t styleOff;  // byte offset of this rule's compressed style within arenaStylePool_
+  };  // {u32,u32} = 8 B with no padding (vs a padded {u32,u16})
   BuildArena* indexArena_ = nullptr;
-  mutable ResidentRule* arenaResident_ = nullptr;
+  mutable ResidentEntry* arenaResident_ = nullptr;  // sorted by hash, cachedRuleCount_ entries
+  mutable uint8_t* arenaStylePool_ = nullptr;       // distinct styles, sparse-compressed, length-prefixed
+  mutable uint16_t arenaStyleCount_ = 0;            // distinct style records in the pool
+  mutable uint32_t arenaPoolBytes_ = 0;             // bytes used by the compressed pool
   mutable SelectorEntry* arenaIndex_ = nullptr;
   bool leanResolve_ = false;
 
-  // Stream the whole ruleset into the arena as a sorted {hash, CssStyle} array (RESIDENT
-  // mode). Returns false if the arena can't hold it (caller then tries INDEX-only).
+  // Stream the whole ruleset into the arena as a sorted {hash, styleIdx} index plus a pool of
+  // distinct CssStyles (RESIDENT mode; identical styles deduplicated). Returns false if the
+  // arena can't hold it (caller then tries INDEX-only).
   bool loadArenaResident(FsFile& file, uint16_t ruleCount, uint32_t totalCandidates, uint32_t unsupportedSkips) const;
   // Forget the current ruleset view (heap vector or either arena layout) so
   // ensureCacheIndexLoaded() reloads it.
