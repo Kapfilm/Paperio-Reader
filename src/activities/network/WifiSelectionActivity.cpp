@@ -429,10 +429,9 @@ void WifiSelectionActivity::issueWifiBegin(bool useHint) {
   const char* pwd = (selectedRequiresPassword && !enteredPassword.empty()) ? enteredPassword.c_str() : nullptr;
   const unsigned long preBeginMs = millis() - connectionStartTime;
   if (currentAttemptChannel != 0) {
-      LOG_DBG("WIFI", "WiFi.begin -> %s ch=%d bssid=%02x:%02x:%02x:%02x:%02x:%02x dhcp=yes (pre-begin %lu ms)",
+    LOG_DBG("WIFI", "WiFi.begin -> %s ch=%d bssid=%02x:%02x:%02x:%02x:%02x:%02x dhcp=yes (pre-begin %lu ms)",
             selectedSSID.c_str(), currentAttemptChannel, currentAttemptBssid[0], currentAttemptBssid[1],
-            currentAttemptBssid[2], currentAttemptBssid[3], currentAttemptBssid[4], currentAttemptBssid[5],
-        preBeginMs);
+            currentAttemptBssid[2], currentAttemptBssid[3], currentAttemptBssid[4], currentAttemptBssid[5], preBeginMs);
     WiFi.begin(selectedSSID.c_str(), pwd, currentAttemptChannel, currentAttemptBssid, true);
   } else {
     LOG_DBG("WIFI", "WiFi.begin -> %s (no hint, pre-begin %lu ms)", selectedSSID.c_str(), preBeginMs);
@@ -463,8 +462,8 @@ bool WifiSelectionActivity::checkCaptivePortal() {
   http.end();
 
   if (code < 0) {
-    LOG_DBG("WIFI", "Captive portal probe failed after %lu ms (connection error %d, dns=%s)",
-            millis() - probeStart, code, WiFi.dnsIP().toString().c_str());
+    LOG_DBG("WIFI", "Captive portal probe failed after %lu ms (connection error %d, dns=%s)", millis() - probeStart,
+            code, WiFi.dnsIP().toString().c_str());
     return false;
   }
 
@@ -496,10 +495,10 @@ void WifiSelectionActivity::checkConnectionStatus() {
     connectedIP = ipStr;
     autoConnecting = false;
 
-        LOG_DBG("WIFI", "Connected to %s in %lu ms (rssi=%d ch=%d ip=%s gw=%s mask=%s dns=%s hint=%s)",
+    LOG_DBG("WIFI", "Connected to %s in %lu ms (rssi=%d ch=%d ip=%s gw=%s mask=%s dns=%s hint=%s)",
             selectedSSID.c_str(), millis() - connectionStartTime, WiFi.RSSI(), WiFi.channel(), ipStr,
             WiFi.gatewayIP().toString().c_str(), WiFi.subnetMask().toString().c_str(), WiFi.dnsIP().toString().c_str(),
-          currentAttemptChannel != 0 ? "yes" : "no");
+            currentAttemptChannel != 0 ? "yes" : "no");
 
     // Cache BSSID/channel to skip channel scanning. Retain the DHCP profile only for
     // diagnostics; reconnects always renew it. SD card operations need the display lock.
@@ -553,8 +552,8 @@ void WifiSelectionActivity::checkConnectionStatus() {
   const bool usingHint = currentAttemptChannel != 0;
   const bool hintHardFail =
       usingHint && !hintFallbackDone && (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL);
-    const bool hintTimedOut = usingHint && !hintFallbackDone && !currentAttemptAssociated &&
-                (millis() - connectionStartTime > HINT_ATTEMPT_TIMEOUT_MS);
+  const bool hintTimedOut = usingHint && !hintFallbackDone && !currentAttemptAssociated &&
+                            (millis() - connectionStartTime > HINT_ATTEMPT_TIMEOUT_MS);
   if (hintHardFail || hintTimedOut) {
     LOG_DBG("WIFI", "Hint attempt did not connect (%s after %lu ms), retrying with full scan",
             hintHardFail ? "hard fail" : "timeout", millis() - connectionStartTime);
