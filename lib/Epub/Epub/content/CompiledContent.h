@@ -94,6 +94,13 @@ struct Block {
   // Text block:
   std::vector<Word> words;
   std::string text;  // words back-to-back, each NUL-terminated
+  // Optional inline (float) image rendered beside this paragraph's text. Stage-2 places
+  // it; Stage-1 just records the ref (empty entryPath = none). intrinsic dims, pre-probed.
+  std::string inlineImageEntryPath;
+  int16_t inlineImageWidth = 0;
+  int16_t inlineImageHeight = 0;
+  uint8_t inlineImageSide = 0;  // 1 left / 2 right (0 = none)
+  std::string inlineImageAlt;
 
   // Image block:
   std::string entryPath;  // EPUB-internal path (e.g. OEBPS/images/x.jpg)

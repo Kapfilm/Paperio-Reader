@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -38,9 +39,16 @@ struct CapturingSink : compiled::BlockSink {
     std::string id;
     size_t blockIndex;  // block this anchor introduces (sink block count at emit time)
   };
+  struct Footnote {
+    int wordIndex;
+    std::string number;
+    std::string href;
+    size_t blockIndex;  // block the footnote anchors into (current block at emit time)
+  };
   std::vector<Captured> blocks;
   std::vector<Chapter> chapters;
   std::vector<Anchor> anchors;
+  std::vector<Footnote> footnotes;
   int spineEnds = 0;
 
   void onBlock(compiled::Block&& b, const CssStyle& s) override { blocks.push_back({std::move(b), s}); }
@@ -49,7 +57,9 @@ struct CapturingSink : compiled::BlockSink {
     chapters.push_back({level, title, blocks.empty() ? 0 : blocks.size() - 1});
   }
   void onPageBreakLabel(const std::string&) override {}
-  void onFootnote(int, const FootnoteEntry&) override {}
+  void onFootnote(int wordIndex, const FootnoteEntry& e) override {
+    footnotes.push_back({wordIndex, e.number, e.href, blocks.size()});
+  }
   void onSpineEnd() override { ++spineEnds; }
 };
 
@@ -89,10 +99,10 @@ std::string freshCacheDir(const std::string& tag) {
   return dir.string();
 }
 
-// Build the given spine of a corpus book with a capturing sink attached.
-void compileSpine(const std::string& epubName, int spineIndex, const std::string& cacheDir, CapturingSink& sink) {
+// Build the given spine of an EPUB at `epubPath` with a capturing sink attached.
+void compileSpineAt(const std::string& epubPath, int spineIndex, const std::string& cacheDir, CapturingSink& sink) {
   GfxRenderer renderer;
-  auto epub = std::make_shared<Epub>(std::string(CORPUS_DIR) + "/" + epubName, cacheDir);
+  auto epub = std::make_shared<Epub>(epubPath, cacheDir);
   ASSERT_TRUE(epub->load(true));
   epub->loadImageManifest();
 
@@ -104,6 +114,11 @@ void compileSpine(const std::string& epubName, int spineIndex, const std::string
                                         /*hyphenationEnabled=*/false, /*embeddedStyle=*/true,
                                         /*bionicReadingEnabled=*/false, /*inlineFootnotePreviews=*/false,
                                         /*imageRendering=*/0, {}, /*skipEviction=*/true, {}));
+}
+
+// Build a corpus book's spine (path derived from CORPUS_DIR).
+void compileSpine(const std::string& epubName, int spineIndex, const std::string& cacheDir, CapturingSink& sink) {
+  compileSpineAt(std::string(CORPUS_DIR) + "/" + epubName, spineIndex, cacheDir, sink);
 }
 
 void compileSpine0(const std::string& epubName, const std::string& cacheDir, CapturingSink& sink) {
@@ -332,6 +347,65 @@ TEST(Stage1Producer, EmitsTableBlocks) {
 
   // Second table is 3 columns.
   EXPECT_EQ(tables[1]->rows[0].cells.size(), 3u);
+}
+
+TEST(Stage1Producer, EmitsFootnotes) {
+  const char* book = "test_spine_toc_edges.epub";  // the corpus book with recognized footnote links
+  int spineCount = 0;
+  {
+    auto epub = std::make_shared<Epub>(std::string(CORPUS_DIR) + "/" + book, freshCacheDir("fn_count"));
+    ASSERT_TRUE(epub->load(true));
+    spineCount = epub->getSpineItemsCount();
+  }
+  ASSERT_GT(spineCount, 0);
+
+  std::vector<CapturingSink> sinks(spineCount);
+  size_t total = 0;
+  bool sawNumberAndHref = false;
+  for (int i = 0; i < spineCount; ++i) {
+    compileSpine(book, i, freshCacheDir("fn_" + std::to_string(i)), sinks[i]);
+    total += sinks[i].footnotes.size();
+    for (const auto& f : sinks[i].footnotes) {
+      if (!f.number.empty() && !f.href.empty()) sawNumberAndHref = true;
+      EXPECT_LT(f.blockIndex, sinks[i].blocks.size() + 1);  // anchors into (or just past) a real block
+    }
+  }
+  EXPECT_GT(total, 0u) << "test_font_sizes has footnote/cross-reference links";
+  EXPECT_TRUE(sawNumberAndHref) << "footnotes carry a marker number and an href";
+}
+
+TEST(Stage1Producer, EmitsInlineImagesForFloats) {
+  // A real book with CSS-floated images (float:left/right in its stylesheet). Not in the
+  // synthetic corpus, so this is an opt-in local check — skipped when absent.
+  const char* home = std::getenv("HOME");
+  const std::string alice = home ? std::string(home) + "/Downloads/alice.epub" : "";
+  if (alice.empty() || !fs::exists(alice)) GTEST_SKIP() << "~/Downloads/alice.epub not present";
+
+  int spineCount = 0;
+  {
+    auto epub = std::make_shared<Epub>(alice, freshCacheDir("alice_count"));
+    ASSERT_TRUE(epub->load(true));
+    spineCount = epub->getSpineItemsCount();
+  }
+  ASSERT_GT(spineCount, 0);
+
+  std::vector<CapturingSink> sinks(spineCount);
+  const compiled::Block* sample = nullptr;
+  size_t inlineImages = 0;
+  for (int i = 0; i < spineCount && inlineImages == 0; ++i) {
+    compileSpineAt(alice, i, freshCacheDir("alice_" + std::to_string(i)), sinks[i]);
+    for (const auto& cap : sinks[i].blocks) {
+      if (cap.block.type == compiled::BlockType::Text && !cap.block.inlineImageEntryPath.empty()) {
+        ++inlineImages;
+        if (!sample) sample = &cap.block;
+      }
+    }
+  }
+  ASSERT_GT(inlineImages, 0u) << "alice.epub has CSS-floated images";
+  EXPECT_GT(sample->inlineImageWidth, 0) << "intrinsic width";
+  EXPECT_GT(sample->inlineImageHeight, 0) << "intrinsic height";
+  EXPECT_TRUE(sample->inlineImageSide == 1 || sample->inlineImageSide == 2) << "left or right float";
+  EXPECT_FALSE(sample->words.empty()) << "the float attaches to a paragraph that has text";
 }
 
 TEST(Stage1Producer, IsDeterministic) {

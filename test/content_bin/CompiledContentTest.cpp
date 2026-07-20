@@ -137,6 +137,11 @@ void expectEqual(const CompiledContent& in, const CompiledContent& out) {
       EXPECT_EQ(a.height, b.height);
       EXPECT_EQ(a.floatSide, b.floatSide);
       EXPECT_EQ(a.alt, b.alt);
+      EXPECT_EQ(a.inlineImageEntryPath, b.inlineImageEntryPath);
+      EXPECT_EQ(a.inlineImageWidth, b.inlineImageWidth);
+      EXPECT_EQ(a.inlineImageHeight, b.inlineImageHeight);
+      EXPECT_EQ(a.inlineImageSide, b.inlineImageSide);
+      EXPECT_EQ(a.inlineImageAlt, b.inlineImageAlt);
       EXPECT_EQ(a.hasBorder, b.hasBorder);
       ASSERT_EQ(a.rows.size(), b.rows.size());
       for (size_t ri = 0; ri < a.rows.size(); ++ri) {
@@ -200,7 +205,13 @@ TEST(CompiledContent, RoundTripPreservesModel) {
   SpineContent s0;
   s0.firstCharOffset = 0;
   s0.blocks.push_back(textBlock(1, compiled::kStartsChapter | compiled::kPageBreakBefore, 0, {"Chapter", "One"}));
-  s0.blocks.push_back(textBlock(0, 0, 10, {"Call", "me", "Ishmael."}));
+  Block ishmael = textBlock(0, 0, 10, {"Call", "me", "Ishmael."});
+  ishmael.inlineImageEntryPath = "OEBPS/images/figure.png";  // a float image beside this paragraph
+  ishmael.inlineImageWidth = 120;
+  ishmael.inlineImageHeight = 90;
+  ishmael.inlineImageSide = 2;  // right
+  ishmael.inlineImageAlt = "a small figure";
+  s0.blocks.push_back(std::move(ishmael));
   s0.blocks.push_back(imageBlock(2, "OEBPS/images/whale.jpg", 640, 480, 1, "a whale"));
   s0.anchors.push_back({"chap01", 0, 0});
   s0.anchors.push_back({"para_ishmael", 1, 5});

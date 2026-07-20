@@ -262,6 +262,14 @@ class ChapterHtmlSlimParser final : public Print {
   uint8_t stage1PendingHeadingLevel_ = 0;         // set by a heading tag, consumed at the next block open
   uint8_t stage1BlockHeadingLevel_ = 0;           // heading level (1-6) of the open block; 0 = not a heading
   std::string stage1PendingAnchor_;               // element id awaiting the block it precedes
+  // Deferred float image awaiting the paragraph it floats beside — attached to that block when
+  // its first word arrives (mirrors the layout's pendingInlineImage_). Intrinsic dims.
+  std::string stage1InlineImagePath_;
+  std::string stage1InlineImageAlt_;
+  int16_t stage1InlineImageW_ = 0;
+  int16_t stage1InlineImageH_ = 0;
+  uint8_t stage1InlineImageSide_ = 0;  // 1 left / 2 right
+  bool stage1InlineImagePending_ = false;
 
   // Per-chapter caches: resolveStyle and parseInlineStyle are called for every HTML element;
   // caching by (tag|classAttr) and styleAttr avoids repeated string operations and hash lookups.

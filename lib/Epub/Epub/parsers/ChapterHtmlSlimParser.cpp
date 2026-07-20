@@ -729,6 +729,15 @@ void ChapterHtmlSlimParser::stage1AdoptBlock(const CssStyle& style) {
 void ChapterHtmlSlimParser::stage1AddWord(const char* text, const EpdFontFamily::Style style, const uint8_t sizePct,
                                           const bool attachToPrevious) {
   if (!stage1Sink_ || !stage1Block_) return;
+  // A deferred float image attaches to the paragraph that receives the first following word.
+  if (stage1InlineImagePending_ && stage1Block_->inlineImageEntryPath.empty()) {
+    stage1Block_->inlineImageEntryPath = stage1InlineImagePath_;
+    stage1Block_->inlineImageWidth = stage1InlineImageW_;
+    stage1Block_->inlineImageHeight = stage1InlineImageH_;
+    stage1Block_->inlineImageSide = stage1InlineImageSide_;
+    stage1Block_->inlineImageAlt = stage1InlineImageAlt_;
+    stage1InlineImagePending_ = false;
+  }
   compiled::Word w;
   w.textOff = static_cast<uint32_t>(stage1Block_->text.size());
   w.styleSpan = stage1MapStyleSpan(style, attachToPrevious);
@@ -1319,6 +1328,16 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                   self->pendingInlineImage_.isRight =
                       (self->floatDepth_ > 0) && self->floatOpenSides_[self->floatDepth_ - 1];
                   self->pendingInlineImage_.active = true;
+                  // Stage-1: defer the same float image, with INTRINSIC dims (Stage-2 rescales),
+                  // to attach to the paragraph that gets the first following word.
+                  if (self->stage1Sink_) {
+                    self->stage1InlineImagePath_ = resolvedPath;
+                    self->stage1InlineImageAlt_ = alt;
+                    self->stage1InlineImageW_ = static_cast<int16_t>(dims.width);
+                    self->stage1InlineImageH_ = static_cast<int16_t>(dims.height);
+                    self->stage1InlineImageSide_ = self->pendingInlineImage_.isRight ? 2 : 1;
+                    self->stage1InlineImagePending_ = true;
+                  }
                   LOG_DBG("EHP", "Inline image deferred: w=%d h=%d", displayWidth, displayHeight);
                   // Don't flush the current text block — let it continue into the next paragraph.
                   self->depth += 1;
@@ -2218,6 +2237,8 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
       int wordIndex =
           self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
       self->pendingFootnotes.push_back({wordIndex, entry});
+      // Stage-1: anchor the footnote to the current block at the same word position.
+      if (self->stage1Sink_) self->stage1Sink_->onFootnote(wordIndex, entry);
     }
     if (self->inlineFootnotePreviews && self->currentFootnote.href[0] != '\0') {
       // Membership in the book-level preview cache is the gate: the gatherer only

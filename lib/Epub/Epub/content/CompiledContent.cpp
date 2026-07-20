@@ -204,6 +204,15 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
       writePod(out, b.charOffset);
       if (b.type == BlockType::Text) {
         writeWords(out, b.words, b.text);
+        const bool hasInline = !b.inlineImageEntryPath.empty();
+        writePod(out, static_cast<uint8_t>(hasInline));
+        if (hasInline) {
+          writeString(out, b.inlineImageEntryPath);
+          writePod(out, b.inlineImageWidth);
+          writePod(out, b.inlineImageHeight);
+          writePod(out, b.inlineImageSide);
+          writeString(out, b.inlineImageAlt);
+        }
       } else if (b.type == BlockType::Table) {
         writePod(out, static_cast<uint8_t>(b.hasBorder));
         writePod(out, static_cast<uint32_t>(b.rows.size()));
@@ -284,6 +293,15 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
       readPod(in, b.charOffset);
       if (b.type == BlockType::Text) {
         if (!readWords(in, b.words, b.text)) return false;
+        uint8_t hasInline = 0;
+        readPod(in, hasInline);
+        if (hasInline) {
+          if (!readString(in, b.inlineImageEntryPath)) return false;
+          readPod(in, b.inlineImageWidth);
+          readPod(in, b.inlineImageHeight);
+          readPod(in, b.inlineImageSide);
+          if (!readString(in, b.inlineImageAlt)) return false;
+        }
       } else if (b.type == BlockType::Table) {
         uint8_t hasBorder = 1;
         readPod(in, hasBorder);
