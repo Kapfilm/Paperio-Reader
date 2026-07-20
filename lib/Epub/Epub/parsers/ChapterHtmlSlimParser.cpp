@@ -591,24 +591,62 @@ static uint32_t stage1CountCodepoints(const char* s) {
   return n;
 }
 
+// Join a block's words into a single string, honoring the attach-to-previous bit
+// (no space before attached words) — used as a heading/chapter title.
+static std::string stage1JoinWords(const compiled::Block& b) {
+  std::string title;
+  for (size_t i = 0; i < b.words.size(); ++i) {
+    if (i != 0 && (b.words[i].styleSpan & compiled::kSpanAttachPrev) == 0) title.push_back(' ');
+    title.append(&b.text[b.words[i].textOff]);
+  }
+  return title;
+}
+
 void ChapterHtmlSlimParser::stage1FlushBlock() {
   if (!stage1Sink_ || !stage1Block_) return;
   if (stage1Block_->words.empty()) {  // empty shell (e.g. reused block that took no text) — drop
     stage1Block_.reset();
+    stage1BlockHeadingLevel_ = 0;
     return;
   }
   stage1Block_->type = compiled::BlockType::Text;
+  const uint8_t headingLevel = stage1BlockHeadingLevel_;
+  const std::string title = headingLevel > 0 ? stage1JoinWords(*stage1Block_) : std::string();
   stage1Sink_->onBlock(std::move(*stage1Block_), stage1BlockCssStyle_);
   stage1Block_.reset();
+  stage1BlockHeadingLevel_ = 0;
+  // A heading block is a chapter/heading boundary: report it against the block just emitted.
+  if (headingLevel > 0) stage1Sink_->onChapter(headingLevel, title);
 }
 
 void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
   if (!stage1Sink_) return;
   stage1FlushBlock();  // hand off the previous block before starting a new one
   stage1Block_.reset(new (std::nothrow) compiled::Block());
+  const uint8_t headingLevel = stage1PendingHeadingLevel_;
+  stage1PendingHeadingLevel_ = 0;
   if (!stage1Block_) return;  // OOM: skip Stage-1 for this block, layout is unaffected
   stage1Block_->charOffset = stage1CharOffset_;
   stage1BlockCssStyle_ = style;
+  stage1BlockHeadingLevel_ = headingLevel;
+  if (headingLevel > 0) stage1Block_->flags |= compiled::kStartsChapter;
+}
+
+void ChapterHtmlSlimParser::stage1AdoptBlock(const CssStyle& style) {
+  // Only meaningful while the accumulator is open and still empty: the layout is reusing
+  // its empty block for a new element, so the block's identity (style, char start, heading
+  // level) is the NEW element's, not the one stage1OpenBlock first captured.
+  if (!stage1Sink_ || !stage1Block_ || !stage1Block_->words.empty()) return;
+  stage1BlockCssStyle_ = style;
+  stage1Block_->charOffset = stage1CharOffset_;
+  const uint8_t headingLevel = stage1PendingHeadingLevel_;
+  stage1PendingHeadingLevel_ = 0;
+  stage1BlockHeadingLevel_ = headingLevel;
+  if (headingLevel > 0) {
+    stage1Block_->flags |= compiled::kStartsChapter;
+  } else {
+    stage1Block_->flags &= static_cast<uint8_t>(~compiled::kStartsChapter);
+  }
 }
 
 void ChapterHtmlSlimParser::stage1AddWord(const char* text, const EpdFontFamily::Style style, const uint8_t sizePct,
@@ -666,7 +704,11 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       // If an inline image is waiting, fall through to place it now rather than
       // returning early — otherwise the image skips empty wrapper blocks and
       // attaches to the *second* paragraph instead of the first.
-      if (!pendingInlineImage_.active) return;
+      if (!pendingInlineImage_.active) {
+        // Stage-1: the reused empty block now belongs to this element (its style/heading).
+        stage1AdoptBlock(currentCssStyle);
+        return;
+      }
       // Fall through: use the merged style as the base so parent-element margins
       // (accumulated into this empty block) are carried into the new paragraph.
       effectiveBase = &currentTextBlock->getBlockStyle();
@@ -1458,6 +1500,8 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
         headerBlockStyle.fontSizeMultiplier = kHeadingMultiplier[level - 1];
       }
     }
+    // Stage-1: tag the block about to open as a chapter/heading of this level.
+    self->stage1PendingHeadingLevel_ = static_cast<uint8_t>(name[1] - '0');  // 'h1'->1 … 'h6'->6
     self->startNewTextBlock(headerBlockStyle);
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();

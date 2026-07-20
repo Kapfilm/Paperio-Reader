@@ -26,12 +26,20 @@ struct CapturingSink : compiled::BlockSink {
     compiled::Block block;
     CssStyle style;
   };
+  struct Chapter {
+    uint8_t level;
+    std::string title;
+    size_t blockIndex;  // block emitted immediately before this onChapter
+  };
   std::vector<Captured> blocks;
+  std::vector<Chapter> chapters;
   int spineEnds = 0;
 
   void onBlock(compiled::Block&& b, const CssStyle& s) override { blocks.push_back({std::move(b), s}); }
   void onAnchor(const std::string&) override {}
-  void onChapter(uint8_t, const std::string&) override {}
+  void onChapter(uint8_t level, const std::string& title) override {
+    chapters.push_back({level, title, blocks.empty() ? 0 : blocks.size() - 1});
+  }
   void onPageBreakLabel(const std::string&) override {}
   void onFootnote(int, const FootnoteEntry&) override {}
   void onSpineEnd() override { ++spineEnds; }
@@ -44,6 +52,16 @@ std::vector<std::string> allWords(const compiled::Block& b) {
   std::vector<std::string> out;
   for (size_t i = 0; i < b.words.size(); ++i) out.push_back(wordText(b, i));
   return out;
+}
+
+// Words joined honoring the attach-to-previous bit (matches the producer's title build).
+std::string joinWords(const compiled::Block& b) {
+  std::string s;
+  for (size_t i = 0; i < b.words.size(); ++i) {
+    if (i != 0 && (b.words[i].styleSpan & compiled::kSpanAttachPrev) == 0) s.push_back(' ');
+    s += wordText(b, i);
+  }
+  return s;
 }
 
 std::string freshCacheDir(const std::string& tag) {
@@ -98,6 +116,33 @@ TEST(Stage1Producer, EmitsBlocksForHeadings) {
     }
     EXPECT_GE(b.charOffset, prevCharOffset) << "char offsets are monotonic in document order";
     prevCharOffset = b.charOffset;
+  }
+}
+
+TEST(Stage1Producer, EmitsChaptersForHeadings) {
+  CapturingSink sink;
+  compileSpine0("test_headings.epub", freshCacheDir("chapters"), sink);
+
+  ASSERT_FALSE(sink.chapters.empty()) << "test_headings has headings";
+
+  // First chapter is the h1 (level 1) with the heading's text as title.
+  EXPECT_EQ(sink.chapters[0].level, 1);
+  EXPECT_EQ(sink.chapters[0].title, "H1 Heading (default multiplier 1.6x)");
+
+  // Every chapter references a heading block: the block carries kStartsChapter and its
+  // joined text equals the chapter title. Chapters and heading-blocks are 1:1.
+  size_t headingBlocks = 0;
+  for (const auto& cap : sink.blocks) {
+    if (cap.block.flags & compiled::kStartsChapter) ++headingBlocks;
+  }
+  EXPECT_EQ(headingBlocks, sink.chapters.size());
+  for (const auto& ch : sink.chapters) {
+    ASSERT_LT(ch.blockIndex, sink.blocks.size());
+    const auto& b = sink.blocks[ch.blockIndex].block;
+    EXPECT_NE(b.flags & compiled::kStartsChapter, 0) << "chapter must point at a heading block";
+    EXPECT_GE(ch.level, 1);
+    EXPECT_LE(ch.level, 6);
+    EXPECT_EQ(ch.title, joinWords(b));
   }
 }
 
