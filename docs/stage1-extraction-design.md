@@ -1,4 +1,4 @@
-# Stage-1 extraction design — shared yxml-walk core
+# Stage-1 extraction design — shared yxml-walk core, coarse block seam
 
 Phase 3 step 2c of `compiled-book-pipeline-plan.md`. Companion to
 `parser-stage1-handover.md` (mission) and `compiled-content-format.md` (WBC1 output).
@@ -6,25 +6,42 @@ This is the **contract** for the chosen approach — *extract a shared walk core
 before any parser surgery, because the gate is **byte-identical goldens** and the state
 machine is 2,862 lines.
 
+Seam shape validated against **microreader** (`CidVonHighwind/microreader`,
+`content/{ContentModel,EpubParser,IParagraphSource,TextLayout}.h`, `content/mrb/`), the only
+studied reader with a real settings-independent compile. Its lessons, adopted below:
+
+- The seam unit is a **whole materialized paragraph/block**, not per-word/per-tag events.
+  microreader's `ParagraphSink` emits a complete `Paragraph` at a time; we already have that
+  unit as `compiled::Block`. → **coarse `BlockSink`, one handoff per block.**
+- Producer and consumer are a **symmetric push/pull pair** with the serialized file between:
+  push `ParagraphSink` on the write side, pull `IParagraphSource` (random access) on the
+  layout side. The on-disk source (`MrbChapterSource`) loads on demand with a **32-item
+  sliding-window cache**, so relayout never holds a whole chapter in RAM.
+- **Split-at-write** (microreader `kMaxSerializedBody = 8192`) bounds read-time allocs — the
+  same 8 KB record cap our format spec already mandates. It lives in the ContentSink, not the
+  seam.
+
 ## Decision
 
 `ChapterHtmlSlimParser` fuses a settings-independent **walk** with settings-dependent
-**layout**. We split it so both a Stage-1 content compiler and today's Stage-2 layout
-parser drive the *same* walk through a sink interface:
+**layout**. Split it so the walk emits a **materialized `compiled::Block`** through a coarse
+push sink; today's layout and the new content writer are two implementations of that sink:
 
 ```
                        ┌───────────────────────────┐
-  XHTML ─▶ yxml ─▶     │  HtmlWalkCore             │ ─▶ HtmlWalkSink (virtual)
-                       │  depth/skip, inline-style │        ├─ LayoutSink   → pages   (Stage 2, today's output)
-                       │  stack, CSS resolve, tag  │        └─ ContentSink  → content.bin (Stage 1, new)
+  XHTML ─▶ yxml ─▶     │  HtmlWalkCore             │ ─▶ BlockSink::onBlock(compiled::Block&&)
+                       │  depth/skip, inline-style │        ├─ LayoutSink  → measure+paginate → pages (Stage 2, today)
+                       │  stack, CSS resolve, tag  │        └─ ContentSink → split-at-write   → content.bin (Stage 1)
                        │  dispatch, word segment,  │
-                       │  tables, lists, anchors,  │
-                       │  chapters, charOffset      │
+                       │  tables, lists, anchors,  │   ── later: Stage-2 pulls blocks back via
+                       │  chapters, charOffset      │       IBlockSource (sliding-window cache)
                        └───────────────────────────┘
 ```
 
-The walk core calls `resolveStyle()` and hands the sink a **`CssStyle`** (em/%, logical
-align) — *exactly* Stage-1's block style — never touching `GfxRenderer`.
+The walk core builds each block fully (words + interned `CssStyle`, em/%, logical align —
+*exactly* Stage-1's block style), then hands it off in one `onBlock` call. It never touches
+`GfxRenderer`. One handoff per block, not a per-word event stream — lower golden-risk and
+`compiled::Block` is reused verbatim as the seam type.
 
 ## The seam: what stays in the core vs. moves to the sink
 
@@ -47,34 +64,61 @@ reference. These reproduce today's behavior byte-for-byte in `LayoutSink`.
 
 Load-bearing consequence: the >96-word mid-flush split (`flushPartWordBuffer`
 [cpp:407-457](../lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp#L407)) is **layout**
-(page-fitting) and lives entirely in `LayoutSink`. Stage-1's only block cap is the
-serialization 8 KB split at write time (format spec) — a *different*, settings-independent
-cut. So the core emits words; each sink decides its own block boundaries.
+(page-fitting) and lives entirely in `LayoutSink`. The walk core accumulates a full
+`compiled::Block` (all its words) and hands it off once; `LayoutSink` does its own measure /
+mid-block split / paginate, and `ContentSink` does the *different* settings-independent 8 KB
+serialization split at write time. Block boundaries in the seam are semantic (paragraph),
+not page-fit — matching microreader's whole-`Paragraph` handoff.
 
-## Event interface (`HtmlWalkSink`)
+## Push seam (`BlockSink`) — producer side
 
-Grounded in the parser's current emission points. All positional/size resolution is the
-sink's job; the core passes logical values only.
+One coarse handoff per semantic block. The walk core fills a `compiled::Block` (interned
+style + words, or image ref), then emits it. Mirrors microreader's `ParagraphSink`.
 
-| Sink method | Emitted from (today) | Payload |
-|---|---|---|
-| `onSpineStart(spineIndex)` / `onSpineEnd()` | setup / finalize | — |
-| `onBlockStart(const CssStyle&, uint8_t flags)` | `startNewTextBlock` [cpp:563](../lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp#L563) | resolved block style; flags = chapter/pagebreak bits |
-| `onWord(const char* text, EpdFontFamily::Style, uint8_t sizePct, bool continues)` | `flushPartWordBuffer` `addWord` [cpp:396,405](../lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp#L396) | one segmented word + inline style span |
-| `onBlockEnd()` | next `startNewTextBlock` / end-of-doc | closes the current block |
-| `onBlockImage(entryPath, w, h, floatSide, alt)` | block image / `placeImageBlockAsBlock` | pre-probed intrinsic dims |
-| `onAnchor(const std::string& id)` | `pendingAnchorId` resolution [cpp:723](../lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp#L723) | id → (block, charOffsetInBlock); sink maps to page/blockIndex |
-| `onChapter(uint8_t level, const std::string& title)` | heading close | TOC/heading entry |
-| `onPageBreakLabel(const std::string& label)` | `recordPageBreakLabel` | printed-page label at the current position |
-| `onFootnote(int wordIndex, const FootnoteEntry&)` | `pendingFootnotes` | note anchored to a word in the current block |
+```cpp
+struct BlockSink {
+  virtual ~BlockSink() = default;
+  virtual void onBlock(compiled::Block&& block) = 0;   // one complete block
+  virtual void onAnchor(const std::string& id) = 0;    // id at the current block/char position
+  virtual void onChapter(uint8_t level, const std::string& title) = 0;
+  virtual void onPageBreakLabel(const std::string& label) = 0;
+  virtual void onFootnote(int wordIndex, const FootnoteEntry&) = 0;
+  virtual void onSpineEnd() = 0;                        // flush trailing state
+};
+```
 
-Tables and lists are **synthesized inside the core** (it already buffers `currentTable`
-and `listStack`) and replayed to the sink as ordinary `onBlockStart`/`onWord`/`onBlockImage`
-calls — so the sink never sees `<table>`/`<li>`, only the resulting blocks. This keeps
-both sinks simple and preserves the exact block sequence the goldens encode.
+`compiled::Block` already carries everything Stage 1 needs (`type`, `styleId` after intern,
+`flags`, `charOffset`, `words{textOff,styleSpan,sizePct,bidiLevel}`+`text`, or `entryPath`/
+`width`/`height`/`floatSide`/`alt`). The per-word inline style (bold/italic/…/sizePct) is
+built exactly as `flushPartWordBuffer` computes `fontStyle`/`effectiveSizePct` today
+([cpp:365-405](../lib/Epub/Epub/parsers/ChapterHtmlSlimParser.cpp#L365)); the block `CssStyle`
+is the `resolveStyle()` result `startNewTextBlock` already has.
 
-`anchorData` (id→page) is a `LayoutSink` product; `ContentSink` records id→(blockIndex,
-charOffsetInBlock). Both consume the same `onAnchor`.
+Tables and lists are **synthesized inside the core** (it already buffers `currentTable` and
+`listStack`) and replayed as ordinary `onBlock` calls — the sink never sees `<table>`/`<li>`,
+only the resulting blocks, preserving the exact block sequence the goldens encode.
+
+`LayoutSink::onBlock` runs `resolveBlockFont` + `makePages` (today's path, byte-identical).
+`ContentSink::onBlock` runs `internStyle()` + split-at-write into `content.bin`. `onAnchor`:
+`LayoutSink` records id→**page** (`anchorData`), `ContentSink` records id→(blockIndex,
+charOffsetInBlock) — both fed the same call.
+
+## Pull seam (`IBlockSource`) — later, Stage-2-from-content.bin
+
+When Stage 2 stops re-parsing and reads `content.bin` (a later step, not 2c), it consumes a
+random-access source, mirroring microreader's `IParagraphSource` + `MrbChapterSource`:
+
+```cpp
+struct IBlockSource {
+  virtual size_t blockCount() const = 0;
+  virtual const compiled::Block& block(size_t index) const = 0;  // sliding-window cached
+};
+```
+
+The on-disk impl keeps only a **~32-block window** resident (scan the spine's block offsets
+on open, load on demand, evict outside the window) so relayout of a long chapter never loads
+it whole. Noted here so the `content.bin` layout (offset table per spine) is designed for it
+now; implemented at the Stage-2 flip.
 
 ## Incremental commit sequence (each golden-green)
 
@@ -84,21 +128,26 @@ extraction (steps 2–4) is a pure refactor that ships unconditionally and must 
 host test + golden identical at each commit.
 
 1. **Flag + interface.** Add `EPUB_STAGE1` (`#ifndef/#define … 0`, mirroring the retired
-   `EPUB_BUILD_ARENA` pattern) and `HtmlWalkSink.h` (the pure-virtual interface above). No
-   call sites yet. Additive; zero behavior change.
-2. **Introduce `LayoutSink`** owning the layout members, but keep `ChapterHtmlSlimParser`
-   calling it *directly* (methods delegate). Goldens identical — this is the risky move,
-   done first and verified before anything depends on it.
-3. **Route emissions through the sink.** Replace each direct layout touch in the state
-   machine with the corresponding `sink_->onX()` call, `LayoutSink` being the sink. One
-   event family (block / word / image / anchor / chapter / table / list) per commit, each
-   diffed against goldens. At the end the state machine is renderer-free.
+   `EPUB_BUILD_ARENA` pattern) and `BlockSink.h` (the pure-virtual push interface above; the
+   pull `IBlockSource` is stubbed with a doc note, built at the Stage-2 flip). No call sites
+   yet. Additive; zero behavior change.
+2. **Introduce `LayoutSink`** implementing `BlockSink` and owning the layout members
+   (`currentTextBlock`, pages, floats, `makePages`, renderer). `ChapterHtmlSlimParser` builds
+   a `compiled::Block` per paragraph and calls `sink_->onBlock(...)`, with `LayoutSink`
+   reproducing today's measure+paginate byte-for-byte. This is the risky move (parser now
+   materializes a block before layout) — done first, verified against goldens before anything
+   depends on it.
+3. **Move the remaining emissions to the sink.** Route `onAnchor`/`onChapter`/
+   `onPageBreakLabel`/`onFootnote`/`onSpineEnd` (and table/list-synthesized `onBlock`s)
+   through `sink_`, `LayoutSink` being the sink. One family per commit, each diffed against
+   goldens. At the end the state machine is renderer-free and emits only through `BlockSink`.
 4. **Extract `HtmlWalkCore`** as the state machine minus the layout members;
    `ChapterHtmlSlimParser` becomes `HtmlWalkCore` + `LayoutSink` glue (Stage-2 entry point,
    unchanged signature/output).
 5. **Add `ContentSink` + `ContentCompiler`** (behind `EPUB_STAGE1`): drive `HtmlWalkCore`
-   with a sink that `internStyle()`s + emits `compiled::Block`/`Word`/`Anchor`/`Chapter`
-   into `content.bin`. New `content_stage1_dump` target in `test/epub_pipeline/`.
+   with a `BlockSink` that `internStyle()`s each `onBlock` and streams it (split-at-write)
+   into `content.bin`, plus the anchor/chapter/charOffset tables. New `content_stage1_dump`
+   target in `test/epub_pipeline/`.
 6. **Equivalence gate.** Stage-1→Stage-2 vs. today's fused path: byte-identical section
    dumps across the settings matrix (default, large font, hyphenation on/off, bionic,
    narrow margins); determinism (two Stage-1 runs identical `content.bin`); footnote/anchor
