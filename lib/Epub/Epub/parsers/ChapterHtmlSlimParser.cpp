@@ -619,9 +619,19 @@ void ChapterHtmlSlimParser::stage1FlushBlock() {
   if (headingLevel > 0) stage1Sink_->onChapter(headingLevel, title);
 }
 
+// Emit a stashed anchor id. Call AFTER any prior block has been flushed, so the sink's
+// block count equals the index of the block this anchor introduces (block granularity,
+// charOffsetInBlock 0 — microreader's para_idx model; mid-block precision is a later refinement).
+void ChapterHtmlSlimParser::stage1EmitPendingAnchor() {
+  if (!stage1Sink_ || stage1PendingAnchor_.empty()) return;
+  stage1Sink_->onAnchor(stage1PendingAnchor_);
+  stage1PendingAnchor_.clear();
+}
+
 void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
   if (!stage1Sink_) return;
-  stage1FlushBlock();  // hand off the previous block before starting a new one
+  stage1FlushBlock();         // hand off the previous block before starting a new one
+  stage1EmitPendingAnchor();  // the anchor introduces the block we are about to open
   stage1Block_.reset(new (std::nothrow) compiled::Block());
   const uint8_t headingLevel = stage1PendingHeadingLevel_;
   stage1PendingHeadingLevel_ = 0;
@@ -647,6 +657,7 @@ void ChapterHtmlSlimParser::stage1AdoptBlock(const CssStyle& style) {
   } else {
     stage1Block_->flags &= static_cast<uint8_t>(~compiled::kStartsChapter);
   }
+  stage1EmitPendingAnchor();  // the reused block is the one this anchor introduces
 }
 
 void ChapterHtmlSlimParser::stage1AddWord(const char* text, const EpdFontFamily::Style style, const uint8_t sizePct,
@@ -697,6 +708,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
             emitPage(lastBodyChildByteOffset);
           }
         }
+        if (stage1Sink_) stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
         anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
         pendingAnchorId.clear();
       }
@@ -726,6 +738,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   }
   // Record deferred anchor after previous block is flushed (and any TOC page break)
   if (!pendingAnchorId.empty()) {
+    if (stage1Sink_) stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
     anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
     pendingAnchorId.clear();
   }

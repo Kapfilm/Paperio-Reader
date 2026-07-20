@@ -6,6 +6,7 @@
 #include <GfxRenderer.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -31,12 +32,17 @@ struct CapturingSink : compiled::BlockSink {
     std::string title;
     size_t blockIndex;  // block emitted immediately before this onChapter
   };
+  struct Anchor {
+    std::string id;
+    size_t blockIndex;  // block this anchor introduces (sink block count at emit time)
+  };
   std::vector<Captured> blocks;
   std::vector<Chapter> chapters;
+  std::vector<Anchor> anchors;
   int spineEnds = 0;
 
   void onBlock(compiled::Block&& b, const CssStyle& s) override { blocks.push_back({std::move(b), s}); }
-  void onAnchor(const std::string&) override {}
+  void onAnchor(const std::string& id) override { anchors.push_back({id, blocks.size()}); }
   void onChapter(uint8_t level, const std::string& title) override {
     chapters.push_back({level, title, blocks.empty() ? 0 : blocks.size() - 1});
   }
@@ -71,14 +77,14 @@ std::string freshCacheDir(const std::string& tag) {
   return dir.string();
 }
 
-// Build spine 0 of the given corpus book with a capturing sink attached.
-void compileSpine0(const std::string& epubName, const std::string& cacheDir, CapturingSink& sink) {
+// Build the given spine of a corpus book with a capturing sink attached.
+void compileSpine(const std::string& epubName, int spineIndex, const std::string& cacheDir, CapturingSink& sink) {
   GfxRenderer renderer;
   auto epub = std::make_shared<Epub>(std::string(CORPUS_DIR) + "/" + epubName, cacheDir);
   ASSERT_TRUE(epub->load(true));
   epub->loadImageManifest();
 
-  Section section(epub, 0, renderer);
+  Section section(epub, spineIndex, renderer);
   section.setStage1Sink(&sink);
   // Default profile (matches EpubPipelineTest's golden profile).
   ASSERT_TRUE(section.createSectionFile(/*fontId=*/0, /*lineCompression=*/1.0f, /*extraParagraphSpacing=*/false,
@@ -86,6 +92,20 @@ void compileSpine0(const std::string& epubName, const std::string& cacheDir, Cap
                                         /*hyphenationEnabled=*/false, /*embeddedStyle=*/true,
                                         /*bionicReadingEnabled=*/false, /*inlineFootnotePreviews=*/false,
                                         /*imageRendering=*/0, {}, /*skipEviction=*/true, {}));
+}
+
+void compileSpine0(const std::string& epubName, const std::string& cacheDir, CapturingSink& sink) {
+  compileSpine(epubName, 0, cacheDir, sink);
+}
+
+// Find the spine index whose href contains `needle`.
+int spineIndexForHref(const std::string& epubName, const std::string& cacheDir, const std::string& needle) {
+  auto epub = std::make_shared<Epub>(std::string(CORPUS_DIR) + "/" + epubName, cacheDir);
+  EXPECT_TRUE(epub->load(true));
+  for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
+    if (epub->getSpineItem(i).href.find(needle) != std::string::npos) return i;
+  }
+  return -1;
 }
 
 }  // namespace
@@ -143,6 +163,32 @@ TEST(Stage1Producer, EmitsChaptersForHeadings) {
     EXPECT_GE(ch.level, 1);
     EXPECT_LE(ch.level, 6);
     EXPECT_EQ(ch.title, joinWords(b));
+  }
+}
+
+TEST(Stage1Producer, EmitsAnchorsForContentIds) {
+  const std::string cacheDir = freshCacheDir("anchors");
+  // frontmatter.xhtml carries <h2 id="dedication">, id="epigraph", id="foreword".
+  const int spine = spineIndexForHref("test_spine_toc_edges.epub", freshCacheDir("anchors_find"), "frontmatter");
+  ASSERT_GE(spine, 0);
+
+  CapturingSink sink;
+  compileSpine("test_spine_toc_edges.epub", spine, cacheDir, sink);
+
+  // Collect the emitted anchor ids.
+  std::vector<std::string> ids;
+  for (const auto& a : sink.anchors) ids.push_back(a.id);
+  for (const char* want : {"dedication", "epigraph", "foreword"}) {
+    EXPECT_NE(std::find(ids.begin(), ids.end(), want), ids.end()) << "missing anchor id: " << want;
+  }
+
+  // Each anchor introduces a real block, and its target block's first word starts the
+  // heading text (the id sits on the <h2>). 'dedication' -> the "Dedication" heading block.
+  for (const auto& a : sink.anchors) {
+    ASSERT_LE(a.blockIndex, sink.blocks.size());
+    if (a.blockIndex < sink.blocks.size() && a.id == "dedication") {
+      EXPECT_EQ(wordText(sink.blocks[a.blockIndex].block, 0), "Dedication");
+    }
   }
 }
 

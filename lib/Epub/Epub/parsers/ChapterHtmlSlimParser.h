@@ -261,6 +261,7 @@ class ChapterHtmlSlimParser final : public Print {
   uint32_t stage1CharOffset_ = 0;                 // running codepoint offset within the spine
   uint8_t stage1PendingHeadingLevel_ = 0;         // set by a heading tag, consumed at the next block open
   uint8_t stage1BlockHeadingLevel_ = 0;           // heading level (1-6) of the open block; 0 = not a heading
+  std::string stage1PendingAnchor_;               // element id awaiting the block it precedes
 
   // Per-chapter caches: resolveStyle and parseInlineStyle are called for every HTML element;
   // caching by (tag|classAttr) and styleAttr avoids repeated string operations and hash lookups.
@@ -385,7 +386,8 @@ class ChapterHtmlSlimParser final : public Print {
   // new element (startNewTextBlock's merge path) — adopts the new style + pending heading level.
   void stage1AdoptBlock(const CssStyle& style);
   void stage1AddWord(const char* text, EpdFontFamily::Style style, uint8_t sizePct, bool attachToPrevious);
-  void stage1FlushBlock();  // emit the accumulated block through the sink, if non-empty
+  void stage1FlushBlock();         // emit the accumulated block through the sink, if non-empty
+  void stage1EmitPendingAnchor();  // emit a stashed anchor id against the block about to be emitted
   // Snap a completed block's effective font size (block multiplier, after uniform per-word
   // folding) to the size ladder: sets headingFontId to the chosen real font and reduces
   // fontSizeMultiplier to the residual. Applies the one-aux-font-per-section budget and is
