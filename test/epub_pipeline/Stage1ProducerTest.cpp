@@ -13,7 +13,9 @@
 #include <vector>
 
 #include "Epub.h"
+#include "Epub/Page.h"
 #include "Epub/Section.h"
+#include "Epub/blocks/TextBlock.h"
 #include "Epub/content/BlockSink.h"
 #include "Epub/content/CompiledContent.h"
 
@@ -96,6 +98,39 @@ void compileSpine(const std::string& epubName, int spineIndex, const std::string
 
 void compileSpine0(const std::string& epubName, const std::string& cacheDir, CapturingSink& sink) {
   compileSpine(epubName, 0, cacheDir, sink);
+}
+
+// The producer's text-word sequence for a spine (image blocks contribute no words).
+std::vector<std::string> producerWords(const CapturingSink& sink) {
+  std::vector<std::string> out;
+  for (const auto& cap : sink.blocks) {
+    if (cap.block.type != compiled::BlockType::Text) continue;
+    for (size_t i = 0; i < cap.block.words.size(); ++i) out.push_back(wordText(cap.block, i));
+  }
+  return out;
+}
+
+// The layout's word sequence for a spine, read back from the built section cache (cache
+// hit — the build already ran in compileSpine with the same cacheDir + default profile).
+std::vector<std::string> layoutWords(const std::string& epubName, int spineIndex, const std::string& cacheDir) {
+  std::vector<std::string> out;
+  GfxRenderer renderer;
+  auto epub = std::make_shared<Epub>(std::string(CORPUS_DIR) + "/" + epubName, cacheDir);
+  EXPECT_TRUE(epub->load(true));
+  epub->loadImageManifest();
+  Section section(epub, spineIndex, renderer);
+  if (!section.loadSectionFile(0, 1.0f, false, 0, 300, 400, false, true, false, false, 0)) return out;
+  for (uint16_t p = 0; p < section.pageCount; ++p) {
+    section.currentPage = p;
+    const auto page = section.loadPageFromSectionFile();
+    if (!page) break;
+    for (const auto& el : page->elements) {
+      if (el->getTag() != TAG_PageLine) continue;
+      const auto& block = *static_cast<const PageLine&>(*el).getBlock();
+      for (uint16_t w = 0; w < block.wordCount(); ++w) out.emplace_back(block.wordText(w));
+    }
+  }
+  return out;
 }
 
 // Find the spine index whose href contains `needle`.
@@ -214,6 +249,32 @@ TEST(Stage1Producer, EmitsImageBlocks) {
   }
   EXPECT_GT(imageBlocks, 0u) << "chapter2 has a block image";
   EXPECT_TRUE(sawPngFormat) << "the image block's entryPath is the EPUB path, not the display cache path";
+}
+
+// Strong equivalence: the producer's text-word sequence must exactly equal the layout's,
+// in reading order, for every construct the producer handles. This is the intermediate gate
+// until step 6 (full Stage-1->Stage-2 golden diff). Add (book, href) pairs as producer
+// coverage grows; a book with a construct the producer does not yet emit (e.g. table cells)
+// would fail here, which is the point.
+TEST(Stage1Producer, TextMatchesLayoutWords) {
+  struct Case {
+    const char* book;
+    const char* href;  // spine href fragment (headings, paragraphs, block images, lists)
+  };
+  const std::vector<Case> cases = {
+      {"test_headings.epub", "chapter1"},    // headings + paragraphs + a list
+      {"test_font_sizes.epub", "chapter1"},  // inline font-size spans + a list
+      {"test_png_images.epub", "chapter2"},  // text around a block image
+  };
+  for (const auto& c : cases) {
+    const int spine = spineIndexForHref(c.book, freshCacheDir(std::string("eqv_find_") + c.book), c.href);
+    ASSERT_GE(spine, 0) << c.book << " " << c.href;
+    const std::string cacheDir = freshCacheDir(std::string("eqv_") + c.book + "_" + c.href);
+    CapturingSink sink;
+    compileSpine(c.book, spine, cacheDir, sink);
+    EXPECT_EQ(producerWords(sink), layoutWords(c.book, spine, cacheDir))
+        << "producer vs layout word mismatch: " << c.book << " " << c.href;
+  }
 }
 
 TEST(Stage1Producer, IsDeterministic) {

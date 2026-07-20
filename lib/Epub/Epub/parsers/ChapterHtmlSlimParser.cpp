@@ -660,10 +660,17 @@ void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
 }
 
 void ChapterHtmlSlimParser::stage1AdoptBlock(const CssStyle& style) {
-  // Only meaningful while the accumulator is open and still empty: the layout is reusing
-  // its empty block for a new element, so the block's identity (style, char start, heading
-  // level) is the NEW element's, not the one stage1OpenBlock first captured.
-  if (!stage1Sink_ || !stage1Block_ || !stage1Block_->words.empty()) return;
+  // The layout is reusing its empty currentTextBlock for a new element, so the block's
+  // identity (style, char start, heading level) is the NEW element's.
+  if (!stage1Sink_) return;
+  if (!stage1Block_) {
+    // The accumulator was closed (e.g. by a preceding image block); the reused empty block
+    // needs a fresh accumulator or the following text is dropped. Nothing to flush.
+    stage1Block_.reset(new (std::nothrow) compiled::Block());
+    if (!stage1Block_) return;
+  } else if (!stage1Block_->words.empty()) {
+    return;  // already has content — not an empty reuse
+  }
   stage1BlockCssStyle_ = style;
   stage1Block_->charOffset = stage1CharOffset_;
   const uint8_t headingLevel = stage1PendingHeadingLevel_;
@@ -1611,6 +1618,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
               strcpy(marker, "\xe2\x80\xa2");
             }
             self->currentTextBlock->addWord(marker, EpdFontFamily::REGULAR);
+            self->stage1AddWord(marker, EpdFontFamily::REGULAR, ParsedText::DEFAULT_WORD_SIZE_PCT, false);
           }
         }
       } else if (strcmp(name, "pre") == 0) {
@@ -1963,6 +1971,7 @@ void ChapterHtmlSlimParser::characterData(void* userData, const char* s, const i
         // will produce a line of the correct height instead of reusing the empty block.
         if (self->currentTextBlock->isEmpty()) {
           self->currentTextBlock->addWord(" ", EpdFontFamily::REGULAR);
+          self->stage1AddWord(" ", EpdFontFamily::REGULAR, ParsedText::DEFAULT_WORD_SIZE_PCT, false);
         }
         self->startNewTextBlock(self->currentTextBlock->getBlockStyle());
         self->nextWordContinues = false;
