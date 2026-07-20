@@ -92,6 +92,22 @@ Block imageBlock(uint16_t styleId, const std::string& path, int16_t w, int16_t h
   return b;
 }
 
+compiled::TableCell textCell(const std::vector<std::string>& words, bool isHeader, uint8_t colSpan) {
+  compiled::TableCell c;
+  c.isHeader = isHeader;
+  c.colSpan = colSpan;
+  for (uint8_t i = 0; i < words.size(); ++i) {
+    Word w;
+    w.textOff = static_cast<uint32_t>(c.text.size());
+    w.styleSpan = i;
+    w.sizePct = static_cast<uint8_t>(100 + i);
+    c.words.push_back(w);
+    c.text.append(words[i]);
+    c.text.push_back('\0');
+  }
+  return c;
+}
+
 void expectEqual(const CompiledContent& in, const CompiledContent& out) {
   ASSERT_EQ(in.stylePool.size(), out.stylePool.size());
   for (size_t i = 0; i < in.stylePool.size(); ++i) {
@@ -121,6 +137,30 @@ void expectEqual(const CompiledContent& in, const CompiledContent& out) {
       EXPECT_EQ(a.height, b.height);
       EXPECT_EQ(a.floatSide, b.floatSide);
       EXPECT_EQ(a.alt, b.alt);
+      EXPECT_EQ(a.hasBorder, b.hasBorder);
+      ASSERT_EQ(a.rows.size(), b.rows.size());
+      for (size_t ri = 0; ri < a.rows.size(); ++ri) {
+        EXPECT_EQ(a.rows[ri].isHeaderRow, b.rows[ri].isHeaderRow);
+        ASSERT_EQ(a.rows[ri].cells.size(), b.rows[ri].cells.size());
+        for (size_t ci = 0; ci < a.rows[ri].cells.size(); ++ci) {
+          const auto& ca = a.rows[ri].cells[ci];
+          const auto& cb = b.rows[ri].cells[ci];
+          EXPECT_EQ(ca.isHeader, cb.isHeader);
+          EXPECT_EQ(ca.colSpan, cb.colSpan);
+          EXPECT_EQ(ca.text, cb.text);
+          ASSERT_EQ(ca.words.size(), cb.words.size());
+          for (size_t wi = 0; wi < ca.words.size(); ++wi) {
+            EXPECT_EQ(ca.words[wi].textOff, cb.words[wi].textOff);
+            EXPECT_EQ(ca.words[wi].styleSpan, cb.words[wi].styleSpan);
+            EXPECT_EQ(ca.words[wi].sizePct, cb.words[wi].sizePct);
+            EXPECT_EQ(ca.words[wi].bidiLevel, cb.words[wi].bidiLevel);
+          }
+          EXPECT_EQ(ca.imageEntryPath, cb.imageEntryPath);
+          EXPECT_EQ(ca.imageWidth, cb.imageWidth);
+          EXPECT_EQ(ca.imageHeight, cb.imageHeight);
+          EXPECT_EQ(ca.imageAlt, cb.imageAlt);
+        }
+      }
     }
     ASSERT_EQ(in.spines[s].anchors.size(), out.spines[s].anchors.size()) << "anchors, spine " << s;
     for (size_t ai = 0; ai < in.spines[s].anchors.size(); ++ai) {
@@ -173,6 +213,40 @@ TEST(CompiledContent, RoundTripPreservesModel) {
 
   in.chapters.push_back({0, 0, 1, "Chapter One"});
   in.chapters.push_back({1, 0, 2, "The End"});
+
+  expectEqual(in, roundTrip(in));
+}
+
+TEST(CompiledContent, RoundTripPreservesTable) {
+  CompiledContent in;
+  SpineContent s0;
+
+  Block t;
+  t.type = BlockType::Table;
+  t.charOffset = 100;
+  t.hasBorder = false;  // border="0"
+
+  compiled::TableRow header;
+  header.isHeaderRow = true;
+  header.cells.push_back(textCell({"Name"}, true, 1));
+  header.cells.push_back(textCell({"Top", "Score"}, true, 2));  // colSpan 2
+  t.rows.push_back(std::move(header));
+
+  compiled::TableRow row;
+  row.cells.push_back(textCell({"Alice"}, false, 1));
+  row.cells.push_back(textCell({"9000"}, false, 1));
+  compiled::TableCell imgCell;  // a cell holding an image, no text
+  imgCell.imageEntryPath = "OEBPS/images/star.png";
+  imgCell.imageWidth = 16;
+  imgCell.imageHeight = 12;
+  imgCell.imageAlt = "gold star";
+  row.cells.push_back(std::move(imgCell));
+  t.rows.push_back(std::move(row));
+
+  s0.blocks.push_back(textBlock(0, 0, 0, {"before"}));
+  s0.blocks.push_back(std::move(t));
+  s0.blocks.push_back(textBlock(0, 0, 200, {"after"}));
+  in.spines.push_back(std::move(s0));
 
   expectEqual(in, roundTrip(in));
 }

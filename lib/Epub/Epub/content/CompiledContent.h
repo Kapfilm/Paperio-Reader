@@ -52,7 +52,26 @@ struct Word {
   uint8_t bidiLevel = 0;  // Unicode embedding level; 0 = LTR
 };
 
-enum class BlockType : uint8_t { Text = 0, Image = 1 };
+enum class BlockType : uint8_t { Text = 0, Image = 1, Table = 2 };
+
+// One table cell: text runs (a mini text block) and/or a single cell image. Settings-
+// independent — Stage-2 reproduces today's grid-or-paragraph decision (which is
+// font-dependent) from this structure, so grid tables survive relayout unchanged.
+struct TableCell {
+  std::vector<Word> words;
+  std::string text;            // words back-to-back, each NUL-terminated
+  std::string imageEntryPath;  // optional cell image (empty = none)
+  int16_t imageWidth = 0;      // intrinsic dims, pre-probed at compile
+  int16_t imageHeight = 0;
+  std::string imageAlt;
+  bool isHeader = false;  // <th> cell
+  uint8_t colSpan = 1;
+};
+
+struct TableRow {
+  std::vector<TableCell> cells;
+  bool isHeaderRow = false;  // all cells are <th>
+};
 
 // Block::flags bits (docs/compiled-content-format.md).
 enum BlockFlags : uint8_t {
@@ -82,6 +101,10 @@ struct Block {
   int16_t height = 0;
   uint8_t floatSide = 0;  // 0 none / 1 left / 2 right
   std::string alt;
+
+  // Table block:
+  std::vector<TableRow> rows;
+  bool hasBorder = true;  // border="0" clears it (affects Stage-2 grid rendering)
 };
 
 // Named position for anchor navigation (TOC targets, in-book links). Resolves to a

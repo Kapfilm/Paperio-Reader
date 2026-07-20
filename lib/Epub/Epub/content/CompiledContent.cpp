@@ -17,6 +17,31 @@ void writeLength(FsFile& f, const CssLength& len) {
   writePod(f, static_cast<uint8_t>(len.unit));
 }
 
+// Word run + its backing text — shared by text blocks and table cells.
+void writeWords(FsFile& f, const std::vector<Word>& words, const std::string& text) {
+  writePod(f, static_cast<uint32_t>(words.size()));
+  for (const Word& w : words) {
+    writePod(f, w.textOff);
+    writePod(f, w.styleSpan);
+    writePod(f, w.sizePct);
+    writePod(f, w.bidiLevel);
+  }
+  writeString(f, text);
+}
+
+bool readWords(FsFile& f, std::vector<Word>& words, std::string& text) {
+  uint32_t count = 0;
+  readPod(f, count);
+  words.resize(count);
+  for (Word& w : words) {
+    readPod(f, w.textOff);
+    readPod(f, w.styleSpan);
+    readPod(f, w.sizePct);
+    readPod(f, w.bidiLevel);
+  }
+  return readString(f, text);
+}
+
 void readLength(FsFile& f, CssLength& len) {
   readPod(f, len.value);
   uint8_t unit = 0;
@@ -178,14 +203,23 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
       writePod(out, b.flags);
       writePod(out, b.charOffset);
       if (b.type == BlockType::Text) {
-        writePod(out, static_cast<uint32_t>(b.words.size()));
-        for (const Word& w : b.words) {
-          writePod(out, w.textOff);
-          writePod(out, w.styleSpan);
-          writePod(out, w.sizePct);
-          writePod(out, w.bidiLevel);
+        writeWords(out, b.words, b.text);
+      } else if (b.type == BlockType::Table) {
+        writePod(out, static_cast<uint8_t>(b.hasBorder));
+        writePod(out, static_cast<uint32_t>(b.rows.size()));
+        for (const TableRow& r : b.rows) {
+          writePod(out, static_cast<uint8_t>(r.isHeaderRow));
+          writePod(out, static_cast<uint32_t>(r.cells.size()));
+          for (const TableCell& c : r.cells) {
+            writePod(out, static_cast<uint8_t>(c.isHeader));
+            writePod(out, c.colSpan);
+            writeWords(out, c.words, c.text);
+            writeString(out, c.imageEntryPath);
+            writePod(out, c.imageWidth);
+            writePod(out, c.imageHeight);
+            writeString(out, c.imageAlt);
+          }
         }
-        writeString(out, b.text);
       } else {
         writeString(out, b.entryPath);
         writePod(out, b.width);
@@ -249,17 +283,35 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
       readPod(in, b.flags);
       readPod(in, b.charOffset);
       if (b.type == BlockType::Text) {
-        uint32_t wordCount = 0;
-        readPod(in, wordCount);
-        b.words.resize(wordCount);
-        for (uint32_t wi = 0; wi < wordCount; ++wi) {
-          Word& w = b.words[wi];
-          readPod(in, w.textOff);
-          readPod(in, w.styleSpan);
-          readPod(in, w.sizePct);
-          readPod(in, w.bidiLevel);
+        if (!readWords(in, b.words, b.text)) return false;
+      } else if (b.type == BlockType::Table) {
+        uint8_t hasBorder = 1;
+        readPod(in, hasBorder);
+        b.hasBorder = hasBorder != 0;
+        uint32_t rowCount = 0;
+        readPod(in, rowCount);
+        b.rows.resize(rowCount);
+        for (uint32_t ri = 0; ri < rowCount; ++ri) {
+          TableRow& r = b.rows[ri];
+          uint8_t isHeaderRow = 0;
+          readPod(in, isHeaderRow);
+          r.isHeaderRow = isHeaderRow != 0;
+          uint32_t cellCount = 0;
+          readPod(in, cellCount);
+          r.cells.resize(cellCount);
+          for (uint32_t ci = 0; ci < cellCount; ++ci) {
+            TableCell& c = r.cells[ci];
+            uint8_t isHeader = 0;
+            readPod(in, isHeader);
+            c.isHeader = isHeader != 0;
+            readPod(in, c.colSpan);
+            if (!readWords(in, c.words, c.text)) return false;
+            if (!readString(in, c.imageEntryPath)) return false;
+            readPod(in, c.imageWidth);
+            readPod(in, c.imageHeight);
+            if (!readString(in, c.imageAlt)) return false;
+          }
         }
-        if (!readString(in, b.text)) return false;
       } else {
         if (!readString(in, b.entryPath)) return false;
         readPod(in, b.width);
