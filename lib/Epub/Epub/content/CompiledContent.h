@@ -81,6 +81,10 @@ enum BlockFlags : uint8_t {
   // bits 3-4: base direction (0 auto, 1 LTR, 2 RTL) — reserved for RTL.
   kDirectionShift = 3,
   kDirectionMask = 0b11 << 3,
+  // This (empty) block came from a <br> section separator: Stage-2 injects a blank
+  // line's worth of top margin when merging it into the following paragraph, exactly
+  // as the fused parser's empty-block-reuse path does.
+  kFromBrElement = 1 << 5,
 };
 
 // One content block. Text fields are used when type==Text, image fields when

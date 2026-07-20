@@ -84,12 +84,26 @@ String/aux tables: streamed through temp files during the pass, spliced at finis
 ### Block record
 
 ```
-type          u8      0 = TEXT, 1 = IMAGE
+type          u8      0 = TEXT, 1 = IMAGE, 2 = TABLE
 common:
   styleId     u16     index into the book-level dedup'd CssStyle pool (see below)
   flags       u8      bit0: startsChapter, bit1: pageBreakBefore, bit2: pageBreakAfter,
-                      bits3-4: base direction (0 auto, 1 LTR, 2 RTL) — see "RTL / BiDi"
-  charOffset  u32     absolute char offset of this block's first char (reading progress)
+                      bits3-4: base direction (0 auto, 1 LTR, 2 RTL) — see "RTL / BiDi",
+                      bit5: fromBrElement (<br> separator block; Stage-2 injects the blank-
+                      line gap when merging it into the following paragraph)
+  charOffset  u32     absolute char offset of this block's first char (reading progress).
+                      DEFINITION: cumulative count of word text CODEPOINTS only — inter-word
+                      separators are not counted (they are not stored). Per-spine records
+                      start at the spine's firstCharOffset; the writer accumulates across
+                      spines so offsets are book-absolute.
+
+Zero-word TEXT blocks are legal and REQUIRED: the block sequence is a 1:1 transcript of
+the parser's block opens, including empty wrapper/spacer/<br> blocks. The fused layout
+derives real spacing from those (empty-block margin merge via getCombinedBlockStyle, <br>
+gap injection, wrapper spacing applied around images), so Stage-2 must receive the same
+sequence to replay the merges byte-identically. Printed-page labels (NCX pageList /
+doc-pagebreak markers) are likewise position-anchored: recorded against the block index
+at which they occur, mapped to pages by Stage-2.
 TEXT:
   wordCount   u16
   per word:   textOff u16 (into text[]), styleSpan u8 (bits 0-6 = bold/italic/
@@ -98,11 +112,22 @@ TEXT:
               (100 = inherit), bidiLevel u8 (Unicode embedding level; 0 = pure-LTR — see RTL)
   text        char[]  words back-to-back, each NUL-terminated (raw Unicode; shaping
               is a Stage-2 concern)
+  hasInlineImage u8   1 = an inline (CSS float) image renders beside this paragraph:
+    entryPath str, width/height i16 (intrinsic), side u8 (1 left / 2 right), alt str
 IMAGE:
   entryPath   str     EPUB-internal path (e.g. OEBPS/images/x.jpg)
   width,height i16    intrinsic dimensions (pre-probed at compile)
   floatSide   u8      0 none / 1 left / 2 right
   alt         str
+TABLE:              (resolved open question: distinct type, NOT flattened — Stage-2
+                     reproduces today's font-dependent grid-or-paragraph decision)
+  hasBorder   u8
+  rowCount    u32, per row:
+    isHeaderRow u8
+    cellCount   u32, per cell:
+      isHeader u8, colSpan u8,
+      words (same encoding as TEXT wordCount/words/text),
+      imageEntryPath str (empty = none), imageWidth/Height i16, imageAlt str
 ```
 
 Notes:
@@ -174,12 +199,12 @@ matching our seam. Its `Page::charStart` is exactly our per-block `charOffset`
   inline `<b>/<i>/<span style>`; confirm that byte-per-word encoding is lossless
   vs. the parser's `StyleStackEntry`, or store spans as runs `{startWord, len,
   styleSpan}` if denser.
-- **Tables**: the parser buffers a table model and emits grid-or-paragraphs. Does
-  the table model serialize as a distinct block type (2 = TABLE) or pre-flatten to
-  text/image blocks at Stage 1? Leaning: flatten at Stage 1 (keeps Stage 2 simple),
-  but grid geometry is font-dependent — needs a check.
-- **char-offset table** granularity (per block vs per word) for progress accuracy
-  vs size — start per-block, revisit if progress % is too coarse.
+- **Tables** — RESOLVED (2026-07-20): distinct block type (2 = TABLE), not flattened.
+  Flattening would have made Stage-2 paragraph-only and failed the byte-identical
+  golden gate for every grid-rendered table (grid-vs-paragraph is font-dependent and
+  belongs to Stage 2). See the TABLE record above.
+- **char-offset granularity** — RESOLVED: per block, defined as cumulative word-text
+  codepoints (no separators); revisit only if progress % proves too coarse.
 - **Storage budget**: plan caps `content.bin` at ≤ 1.5× source EPUB; the
   block+text+style-pool encoding should sit well under that — measure in step 2.
 ```

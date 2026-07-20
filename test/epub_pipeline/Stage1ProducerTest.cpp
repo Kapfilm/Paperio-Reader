@@ -49,6 +49,7 @@ struct CapturingSink : compiled::BlockSink {
   std::vector<Chapter> chapters;
   std::vector<Anchor> anchors;
   std::vector<Footnote> footnotes;
+  std::vector<std::pair<std::string, size_t>> labels;  // printed-page label, block index
   int spineEnds = 0;
 
   void onBlock(compiled::Block&& b, const CssStyle& s) override { blocks.push_back({std::move(b), s}); }
@@ -56,7 +57,7 @@ struct CapturingSink : compiled::BlockSink {
   void onChapter(uint8_t level, const std::string& title) override {
     chapters.push_back({level, title, blocks.empty() ? 0 : blocks.size() - 1});
   }
-  void onPageBreakLabel(const std::string&) override {}
+  void onPageBreakLabel(const std::string& label) override { labels.push_back({label, blocks.size()}); }
   void onFootnote(int wordIndex, const FootnoteEntry& e) override {
     footnotes.push_back({wordIndex, e.number, e.href, blocks.size()});
   }
@@ -194,22 +195,29 @@ TEST(Stage1Producer, EmitsBlocksForHeadings) {
   EXPECT_EQ(sink.spineEnds, 1) << "onSpineEnd must fire exactly once per spine build";
   ASSERT_GE(sink.blocks.size(), 4u) << "test_headings has several headings + paragraphs";
 
-  // The first block is the h1 heading (golden: 'H1 Heading (default multiplier 1.6x)').
-  EXPECT_EQ(allWords(sink.blocks[0].block),
+  // The first NON-EMPTY block is the h1 heading (empty wrapper transcript blocks may precede).
+  size_t firstContent = 0;
+  while (firstContent < sink.blocks.size() && sink.blocks[firstContent].block.words.empty()) ++firstContent;
+  ASSERT_LT(firstContent, sink.blocks.size());
+  EXPECT_EQ(allWords(sink.blocks[firstContent].block),
             (std::vector<std::string>{"H1", "Heading", "(default", "multiplier", "1.6x)"}));
 
-  // Structural invariants across every captured block.
+  // Structural invariants across every captured block. Empty blocks are the
+  // wrapper/spacer/<br> transcript (legal, word-free); word invariants apply to the rest.
   uint32_t prevCharOffset = 0;
   for (const auto& cap : sink.blocks) {
     const auto& b = cap.block;
     EXPECT_EQ(b.type, compiled::BlockType::Text);
-    ASSERT_FALSE(b.words.empty()) << "empty blocks are dropped, never emitted";
-    EXPECT_FALSE(b.text.empty());
-    // First word of a block starts a new paragraph — never an attach-to-previous.
-    EXPECT_EQ(b.words[0].styleSpan & compiled::kSpanAttachPrev, 0);
-    for (const auto& w : b.words) {
-      ASSERT_LT(w.textOff, b.text.size());
-      EXPECT_NE(b.text[w.textOff], '\0') << "each word points at non-empty NUL-terminated text";
+    if (!b.words.empty()) {
+      EXPECT_FALSE(b.text.empty());
+      // First word of a block starts a new paragraph — never an attach-to-previous.
+      EXPECT_EQ(b.words[0].styleSpan & compiled::kSpanAttachPrev, 0);
+      for (const auto& w : b.words) {
+        ASSERT_LT(w.textOff, b.text.size());
+        EXPECT_NE(b.text[w.textOff], '\0') << "each word points at non-empty NUL-terminated text";
+      }
+    } else {
+      EXPECT_TRUE(b.text.empty()) << "an empty transcript block carries no text bytes";
     }
     EXPECT_GE(b.charOffset, prevCharOffset) << "char offsets are monotonic in document order";
     prevCharOffset = b.charOffset;
@@ -259,13 +267,16 @@ TEST(Stage1Producer, EmitsAnchorsForContentIds) {
     EXPECT_NE(std::find(ids.begin(), ids.end(), want), ids.end()) << "missing anchor id: " << want;
   }
 
-  // Each anchor introduces a real block, and its target block's first word starts the
-  // heading text (the id sits on the <h2>). 'dedication' -> the "Dedication" heading block.
+  // Each anchor introduces a block position; the first CONTENT block at or after it is
+  // the anchored element (empty wrapper transcript blocks may sit in between at the same
+  // charOffset). 'dedication' -> the "Dedication" heading block.
   for (const auto& a : sink.anchors) {
     ASSERT_LE(a.blockIndex, sink.blocks.size());
-    if (a.blockIndex < sink.blocks.size() && a.id == "dedication") {
-      EXPECT_EQ(wordText(sink.blocks[a.blockIndex].block, 0), "Dedication");
-    }
+    if (a.id != "dedication") continue;
+    size_t i = a.blockIndex;
+    while (i < sink.blocks.size() && sink.blocks[i].block.words.empty()) ++i;
+    ASSERT_LT(i, sink.blocks.size());
+    EXPECT_EQ(wordText(sink.blocks[i].block, 0), "Dedication");
   }
 }
 
@@ -304,10 +315,12 @@ TEST(Stage1Producer, TextMatchesLayoutWords) {
     const char* href;  // spine href fragment (headings, paragraphs, block images, lists)
   };
   const std::vector<Case> cases = {
-      {"test_headings.epub", "chapter1"},    // headings + paragraphs + a list
-      {"test_font_sizes.epub", "chapter1"},  // inline font-size spans + a list
-      {"test_png_images.epub", "chapter2"},  // text around a block image
-      {"test_tables.epub", "ch001"},         // grid + paragraph-fallback tables
+      {"test_headings.epub", "chapter1"},      // headings + paragraphs + a list
+      {"test_font_sizes.epub", "chapter1"},    // inline font-size spans + a list
+      {"test_png_images.epub", "chapter2"},    // text around a block image
+      {"test_tables.epub", "ch001"},           // grid + paragraph-fallback tables
+      {"test_float_images.epub", "ch1"},       // CSS-floated images beside paragraphs
+      {"test_display_none.epub", "chapter1"},  // display:none content must be absent from BOTH
   };
   for (const auto& c : cases) {
     const int spine = spineIndexForHref(c.book, freshCacheDir(std::string("eqv_find_") + c.book), c.href);
@@ -375,37 +388,35 @@ TEST(Stage1Producer, EmitsFootnotes) {
 }
 
 TEST(Stage1Producer, EmitsInlineImagesForFloats) {
-  // A real book with CSS-floated images (float:left/right in its stylesheet). Not in the
-  // synthetic corpus, so this is an opt-in local check — skipped when absent.
-  const char* home = std::getenv("HOME");
-  const std::string alice = home ? std::string(home) + "/Downloads/alice.epub" : "";
-  if (alice.empty() || !fs::exists(alice)) GTEST_SKIP() << "~/Downloads/alice.epub not present";
-
+  // test_float_images has CSS float:left/right images in every chapter.
   int spineCount = 0;
   {
-    auto epub = std::make_shared<Epub>(alice, freshCacheDir("alice_count"));
+    auto epub = std::make_shared<Epub>(std::string(CORPUS_DIR) + "/test_float_images.epub", freshCacheDir("flt_count"));
     ASSERT_TRUE(epub->load(true));
     spineCount = epub->getSpineItemsCount();
   }
   ASSERT_GT(spineCount, 0);
 
-  std::vector<CapturingSink> sinks(spineCount);
-  const compiled::Block* sample = nullptr;
   size_t inlineImages = 0;
-  for (int i = 0; i < spineCount && inlineImages == 0; ++i) {
-    compileSpineAt(alice, i, freshCacheDir("alice_" + std::to_string(i)), sinks[i]);
-    for (const auto& cap : sinks[i].blocks) {
-      if (cap.block.type == compiled::BlockType::Text && !cap.block.inlineImageEntryPath.empty()) {
-        ++inlineImages;
-        if (!sample) sample = &cap.block;
-      }
+  bool sawLeft = false;
+  bool sawRight = false;
+  for (int i = 0; i < spineCount; ++i) {
+    CapturingSink sink;
+    compileSpine("test_float_images.epub", i, freshCacheDir("flt_" + std::to_string(i)), sink);
+    for (const auto& cap : sink.blocks) {
+      const auto& b = cap.block;
+      if (b.type != compiled::BlockType::Text || b.inlineImageEntryPath.empty()) continue;
+      ++inlineImages;
+      EXPECT_GT(b.inlineImageWidth, 0) << "intrinsic width";
+      EXPECT_GT(b.inlineImageHeight, 0) << "intrinsic height";
+      ASSERT_TRUE(b.inlineImageSide == 1 || b.inlineImageSide == 2) << "left or right float";
+      if (b.inlineImageSide == 1) sawLeft = true;
+      if (b.inlineImageSide == 2) sawRight = true;
+      EXPECT_FALSE(b.words.empty()) << "the float attaches to a paragraph that has text";
     }
   }
-  ASSERT_GT(inlineImages, 0u) << "alice.epub has CSS-floated images";
-  EXPECT_GT(sample->inlineImageWidth, 0) << "intrinsic width";
-  EXPECT_GT(sample->inlineImageHeight, 0) << "intrinsic height";
-  EXPECT_TRUE(sample->inlineImageSide == 1 || sample->inlineImageSide == 2) << "left or right float";
-  EXPECT_FALSE(sample->words.empty()) << "the float attaches to a paragraph that has text";
+  EXPECT_GT(inlineImages, 0u) << "test_float_images has floated images";
+  EXPECT_TRUE(sawLeft && sawRight) << "corpus exercises both float sides";
 }
 
 TEST(Stage1Producer, IsDeterministic) {

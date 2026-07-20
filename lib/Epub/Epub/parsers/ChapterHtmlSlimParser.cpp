@@ -493,6 +493,9 @@ void ChapterHtmlSlimParser::recordPageBreakLabel(const std::string& label) {
   // Record the printed page label for the current rendered section page.
   // Do not alter pagination; the reader keeps its own page breaks.
   pageBreakLabels.emplace_back(static_cast<uint16_t>(completedPageCount), label);
+  // Stage-1: the label is position-anchored (like anchors, at block granularity); the
+  // sink records it against its current block count and Stage-2 maps it to a page.
+  if (stage1Sink_) stage1Sink_->onPageBreakLabel(label);
 }
 
 void ChapterHtmlSlimParser::setExternalPageBreakAnchors(std::vector<std::pair<std::string, std::string>> anchors) {
@@ -604,11 +607,10 @@ static std::string stage1JoinWords(const compiled::Block& b) {
 
 void ChapterHtmlSlimParser::stage1FlushBlock() {
   if (!stage1Sink_ || !stage1Block_) return;
-  if (stage1Block_->words.empty()) {  // empty shell (e.g. reused block that took no text) — drop
-    stage1Block_.reset();
-    stage1BlockHeadingLevel_ = 0;
-    return;
-  }
+  // Empty blocks are emitted too: they are the wrapper/spacer/<br> transcript. The fused
+  // layout derives real spacing from them (empty-block margin merge, <br> gap injection,
+  // pendingImageBlockStyle around images), so Stage-2 needs the same sequence to replay
+  // those merges byte-identically. They carry no words, so they cost a few bytes each.
   stage1Block_->type = compiled::BlockType::Text;
   const uint8_t headingLevel = stage1BlockHeadingLevel_;
   const std::string title = headingLevel > 0 ? stage1JoinWords(*stage1Block_) : std::string();
@@ -689,46 +691,33 @@ void ChapterHtmlSlimParser::stage1EmitTableBlock(const BufferedTable& table) {
 
 void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
   if (!stage1Sink_) return;
-  stage1FlushBlock();         // hand off the previous block before starting a new one
+  stage1FlushBlock();         // hand off the previous block (even an empty wrapper — transcript)
   stage1EmitPendingAnchor();  // the anchor introduces the block we are about to open
   stage1Block_.reset(new (std::nothrow) compiled::Block());
   const uint8_t headingLevel = stage1PendingHeadingLevel_;
+  const bool fromBr = stage1PendingFromBr_;
   stage1PendingHeadingLevel_ = 0;
+  stage1PendingFromBr_ = false;
   if (!stage1Block_) return;  // OOM: skip Stage-1 for this block, layout is unaffected
   stage1Block_->charOffset = stage1CharOffset_;
   stage1BlockCssStyle_ = style;
   stage1BlockHeadingLevel_ = headingLevel;
   if (headingLevel > 0) stage1Block_->flags |= compiled::kStartsChapter;
-}
-
-void ChapterHtmlSlimParser::stage1AdoptBlock(const CssStyle& style) {
-  // The layout is reusing its empty currentTextBlock for a new element, so the block's
-  // identity (style, char start, heading level) is the NEW element's.
-  if (!stage1Sink_) return;
-  if (!stage1Block_) {
-    // The accumulator was closed (e.g. by a preceding image block); the reused empty block
-    // needs a fresh accumulator or the following text is dropped. Nothing to flush.
-    stage1Block_.reset(new (std::nothrow) compiled::Block());
-    if (!stage1Block_) return;
-  } else if (!stage1Block_->words.empty()) {
-    return;  // already has content — not an empty reuse
-  }
-  stage1BlockCssStyle_ = style;
-  stage1Block_->charOffset = stage1CharOffset_;
-  const uint8_t headingLevel = stage1PendingHeadingLevel_;
-  stage1PendingHeadingLevel_ = 0;
-  stage1BlockHeadingLevel_ = headingLevel;
-  if (headingLevel > 0) {
-    stage1Block_->flags |= compiled::kStartsChapter;
-  } else {
-    stage1Block_->flags &= static_cast<uint8_t>(~compiled::kStartsChapter);
-  }
-  stage1EmitPendingAnchor();  // the reused block is the one this anchor introduces
+  if (fromBr) stage1Block_->flags |= compiled::kFromBrElement;
 }
 
 void ChapterHtmlSlimParser::stage1AddWord(const char* text, const EpdFontFamily::Style style, const uint8_t sizePct,
                                           const bool attachToPrevious) {
-  if (!stage1Sink_ || !stage1Block_) return;
+  if (!stage1Sink_) return;
+  if (!stage1Block_) {
+    // Words can reach the (still existing, empty) layout block without a new block-element
+    // open — e.g. bare text directly after an image emit closed the accumulator. Reopen so
+    // no text is silently dropped; the word-equivalence tests police this.
+    stage1Block_.reset(new (std::nothrow) compiled::Block());
+    if (!stage1Block_) return;
+    stage1Block_->charOffset = stage1CharOffset_;
+    stage1BlockCssStyle_ = currentCssStyle;
+  }
   // A deferred float image attaches to the paragraph that receives the first following word.
   if (stage1InlineImagePending_ && stage1Block_->inlineImageEntryPath.empty()) {
     stage1Block_->inlineImageEntryPath = stage1InlineImagePath_;
@@ -751,6 +740,9 @@ void ChapterHtmlSlimParser::stage1AddWord(const char* text, const EpdFontFamily:
 
 void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   nextWordContinues = false;  // New block = new paragraph, no continuation
+  // Stage-1: remember whether the incoming block is a <br> separator; consumed by the
+  // open below (either path) so the transcript block carries kFromBrElement.
+  stage1PendingFromBr_ = blockStyle.fromBrElement;
   // Base style for the new block — normally the incoming blockStyle, but when falling
   // through from the empty-block merge path (see below) we use the merged style so that
   // accumulated parent-element margins are preserved for the inline-image paragraph.
@@ -792,8 +784,10 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       // returning early — otherwise the image skips empty wrapper blocks and
       // attaches to the *second* paragraph instead of the first.
       if (!pendingInlineImage_.active) {
-        // Stage-1: the reused empty block now belongs to this element (its style/heading).
-        stage1AdoptBlock(currentCssStyle);
+        // Stage-1: the layout reuses its empty block, but the transcript emits the wrapper
+        // block (with its own style) and opens a fresh one for this element — Stage-2
+        // replays the same empty-into-next margin merge the layout does here.
+        stage1OpenBlock(currentCssStyle);
         return;
       }
       // Fall through: use the merged style as the base so parent-element margins

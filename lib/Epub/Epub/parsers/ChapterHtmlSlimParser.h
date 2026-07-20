@@ -261,6 +261,7 @@ class ChapterHtmlSlimParser final : public Print {
   uint32_t stage1CharOffset_ = 0;                 // running codepoint offset within the spine
   uint8_t stage1PendingHeadingLevel_ = 0;         // set by a heading tag, consumed at the next block open
   uint8_t stage1BlockHeadingLevel_ = 0;           // heading level (1-6) of the open block; 0 = not a heading
+  bool stage1PendingFromBr_ = false;              // incoming block came from a <br> separator
   std::string stage1PendingAnchor_;               // element id awaiting the block it precedes
   // Deferred float image awaiting the paragraph it floats beside — attached to that block when
   // its first word arrives (mirrors the layout's pendingInlineImage_). Intrinsic dims.
@@ -389,10 +390,10 @@ class ChapterHtmlSlimParser final : public Print {
  private:
   // Stage-1 producer tap (no-ops when stage1Sink_ is null). Defined in the .cpp where
   // compiled::Block is complete.
-  void stage1OpenBlock(const CssStyle& style);  // flush prior block, start a fresh accumulator
-  // Re-identify the open (still empty) accumulator when the layout reuses its empty block for a
-  // new element (startNewTextBlock's merge path) — adopts the new style + pending heading level.
-  void stage1AdoptBlock(const CssStyle& style);
+  // Flush the prior block (INCLUDING empty wrapper/spacer/<br> blocks — the emitted
+  // sequence is a 1:1 transcript of the layout's block opens, so Stage-2 can replay the
+  // exact same empty-block margin merges), then start a fresh accumulator.
+  void stage1OpenBlock(const CssStyle& style);
   void stage1AddWord(const char* text, EpdFontFamily::Style style, uint8_t sizePct, bool attachToPrevious);
   void stage1FlushBlock();         // emit the accumulated block through the sink, if non-empty
   void stage1EmitPendingAnchor();  // emit a stashed anchor id against the block about to be emitted
