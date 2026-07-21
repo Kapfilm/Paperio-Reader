@@ -1,5 +1,6 @@
 #include "HttpDownloader.h"
 
+#include "CrossPointSettings.h"
 #include <Arduino.h>
 #include <CrossPointRoots.h>
 #include <HalClock.h>
@@ -69,7 +70,7 @@ bool ensureClockForTls() {
   }
   LOG_INF("HTTP", "Clock unset/implausible (epoch %ld); running SNTP before TLS", static_cast<long>(time(nullptr)));
   char err[64] = {0};
-  if (!HalClock::syncNtp(err, sizeof(err))) {
+  if (!HalClock::syncNtp(err, sizeof(err), SETTINGS.ntpServer)) {
     LOG_ERR("HTTP", "SNTP sync failed: %s — TLS verification may fail until clock is set", err);
     return false;
   }

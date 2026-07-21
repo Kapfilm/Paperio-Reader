@@ -10,6 +10,7 @@
 #include <esp_system.h>
 #include <esp_wifi.h>
 
+#include "CrossPointSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderDocumentId.h"
 #include "MappedInputManager.h"
@@ -92,7 +93,7 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   // Avoid repeated NTP churn during rapid sync retries; it can fragment heap
   // right before TLS. Re-sync only when clock is stale.
   if (shouldSyncNtpNow()) {
-    HalClock::syncNtp();
+    HalClock::syncNtp(SETTINGS.ntpServer);
   } else {
     LOG_DBG("KOSync", "Skipping NTP sync (recently synced)");
   }

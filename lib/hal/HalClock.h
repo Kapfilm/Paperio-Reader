@@ -28,12 +28,17 @@ namespace HalClock {
 
 /// Perform an NTP sync (requires WiFi to be connected).  Starts SNTP,
 /// waits up to 5 seconds for completion, then captures the result.
-/// Returns true if the sync succeeded.
-bool syncNtp();
+/// Returns true if the sync succeeded.  `preferredServer` behaves as in the
+/// error-reporting overload below.
+bool syncNtp(const char* preferredServer = nullptr);
 
 /// Same as syncNtp(), but fills `errorBuf` with a short failure reason when
-/// the sync fails.
-bool syncNtp(char* errorBuf, size_t errorBufSize);
+/// the sync fails.  `preferredServer`, when non-null and non-empty, is polled
+/// as the primary NTP server (a user-configured host or IP); a hardcoded
+/// anycast IP and pool.ntp.org are always registered as fallbacks. Passing
+/// nullptr uses only the built-in servers. The HAL takes the address as an
+/// argument rather than reading app settings, mirroring applyTimezone().
+bool syncNtp(char* errorBuf, size_t errorBufSize, const char* preferredServer = nullptr);
 
 /// Apply timezone/DST rules via the POSIX TZ string for the given setting.
 void applyTimezone(uint8_t timeZoneSetting);

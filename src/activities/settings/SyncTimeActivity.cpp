@@ -96,7 +96,7 @@ void SyncTimeActivity::performSync() {
   prevSyncTime = HalClock::lastSyncTime();
   syncErrorMsg[0] = '\0';
 
-  bool ok = HalClock::syncNtp(syncErrorMsg, sizeof(syncErrorMsg));
+  bool ok = HalClock::syncNtp(syncErrorMsg, sizeof(syncErrorMsg), SETTINGS.ntpServer);
 
   if (ok && hadTimeBeforeSync) {
     driftSeconds = (int32_t)(time(nullptr) - preSyncTime);
