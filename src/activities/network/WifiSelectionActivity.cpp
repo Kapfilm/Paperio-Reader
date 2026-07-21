@@ -374,7 +374,7 @@ void WifiSelectionActivity::prepareForConnect() {
   if (needsReset) {
     WiFi.disconnect(true, true);
   }
-  
+
   // Scan all channels so networks with multiple APs use the strongest matching
   // BSSID instead of the first match found by the framework's default fast scan.
   WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
@@ -527,16 +527,20 @@ void WifiSelectionActivity::checkConnectionStatus() {
       }
     }
 
-    // Check for captive portal before declaring success
-    if (checkCaptivePortal()) {
-      state = WifiSelectionState::CAPTIVE_PORTAL;
-      requestUpdate();
-      return;
-    }
+    // Only probe for a captive portal on a network the user just entered
+    // credentials for. A saved auto-connect network is one we've reached the
+    // internet on before, so the probe can only waste a full HTTP timeout
+    // (~5 s, blocking the loop) when DNS/upstream is slow.
+    const bool isNewNetwork = !usedSavedPassword && !enteredPassword.empty();
+    if (isNewNetwork) {
+      // Check for captive portal before declaring success
+      if (checkCaptivePortal()) {
+        state = WifiSelectionState::CAPTIVE_PORTAL;
+        requestUpdate();
+        return;
+      }
 
-    // If we entered a new password, ask if user wants to save it
-    // Otherwise, immediately complete so parent can start web server
-    if (!usedSavedPassword && !enteredPassword.empty()) {
+      // We entered a new password, ask if user wants to save it
       state = WifiSelectionState::SAVE_PROMPT;
       savePromptSelection = 0;  // Default to "Yes"
       requestUpdate();

@@ -14,6 +14,8 @@
 #include <string>
 #include <utility>
 
+#include "CrossPointSettings.h"
+
 // All HTTPS runs over the wolfSSL-backed SecureNet stack (verified against the
 // curated CrossPointRoots); plain http uses SecureNet's WiFiClient passthrough.
 // The former mbedtls/esp_http_client path (with its per-host cert pins and
@@ -69,7 +71,7 @@ bool ensureClockForTls() {
   }
   LOG_INF("HTTP", "Clock unset/implausible (epoch %ld); running SNTP before TLS", static_cast<long>(time(nullptr)));
   char err[64] = {0};
-  if (!HalClock::syncNtp(err, sizeof(err))) {
+  if (!HalClock::syncNtp(err, sizeof(err), SETTINGS.ntpServer)) {
     LOG_ERR("HTTP", "SNTP sync failed: %s — TLS verification may fail until clock is set", err);
     return false;
   }

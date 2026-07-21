@@ -446,7 +446,7 @@ static const char* sntpStatusName(sntp_sync_status_t status) {
   }
 }
 
-bool syncNtp(char* errorBuf, size_t errorBufSize) {
+bool syncNtp(char* errorBuf, size_t errorBufSize, const char* preferredServer) {
   if (errorBuf && errorBufSize > 0) {
     errorBuf[0] = '\0';
   }
@@ -472,7 +472,20 @@ bool syncNtp(char* errorBuf, size_t errorBufSize) {
   }
 
   esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
-  esp_sntp_setservername(0, "pool.ntp.org");
+  // Register servers in priority order. A user-configured server (host or IP),
+  // when set, is polled first. The hardcoded anycast IP (Cloudflare
+  // time.cloudflare.com) needs no DNS lookup, so it always sits ahead of the
+  // pool hostname -- this avoids a full timeout when the local resolver is slow
+  // to answer right after DHCP. SNTP polls all registered servers, so a working
+  // answer from any of them completes the sync.
+  uint8_t idx = 0;
+  const bool havePreferred = (preferredServer != nullptr) && (preferredServer[0] != '\0');
+  if (havePreferred) {
+    esp_sntp_setservername(idx++, preferredServer);
+    LOG_DBG("CLK", "NTP preferred server: %s", preferredServer);
+  }
+  esp_sntp_setservername(idx++, "162.159.200.1");
+  esp_sntp_setservername(idx++, "pool.ntp.org");
   esp_sntp_init();
 
   int retry = 0;
@@ -546,7 +559,7 @@ bool syncNtp(char* errorBuf, size_t errorBufSize) {
   return true;
 }
 
-bool syncNtp() { return syncNtp(nullptr, 0); }
+bool syncNtp(const char* preferredServer) { return syncNtp(nullptr, 0, preferredServer); }
 
 void saveBeforeSleep(bool keepLpAlive) {
   if (!isSynced()) {

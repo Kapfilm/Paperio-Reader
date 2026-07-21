@@ -15,4 +15,5 @@ class ClockSettingsActivity final : public MenuListActivity {
   void buildMenuItems();
   void onActionSelected(int index) override;
   void onSettingToggled(int index) override;
+  std::string getItemValueString(int index) const override;
 };

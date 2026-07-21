@@ -340,6 +340,10 @@ class CrossPointSettings {
   uint8_t clockFormat12h = 0;
   // Timezone selection (applies POSIX TZ rules for DST)
   uint8_t timeZone = TZ_UTC;
+  // Preferred NTP server (host or IP). Empty = use built-in servers only
+  // (Cloudflare anycast IP + pool.ntp.org). When set, it is polled first, with
+  // the built-ins kept as fallbacks. Passed into HalClock::syncNtp() by callers.
+  char ntpServer[64] = "";
   // Use clock and keep the LP timer running during deep sleep (GPIO13 HIGH)
   // so time can be accurately restored on wake. Increases sleep current by ~3-4 mA.
   uint8_t useClock = 0;

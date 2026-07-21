@@ -5,11 +5,13 @@
 #include <HalGPIO.h>
 #include <I18n.h>
 
+#include <cstring>
 #include <string>
 
 #include "CrossPointSettings.h"
 #include "DetectTimezoneActivity.h"
 #include "SyncTimeActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -31,9 +33,21 @@ void ClockSettingsActivity::buildMenuItems() {
     menuItems.push_back(std::move(tzSetting));
   }
 
+  // NTP server: ACTION item edited via the on-screen keyboard (STRING types have
+  // no inline on-device editor). Empty value falls back to the built-in servers.
+  menuItems.push_back(SettingInfo::Action(StrId::STR_NTP_SERVER, SettingAction::None));
+
   menuItems.push_back(SettingInfo::Action(StrId::STR_DETECT_TIMEZONE, SettingAction::DetectTimezone)
                           .withSubcategory(StrId::STR_READER_TOOLS));
   menuItems.push_back(SettingInfo::Action(StrId::STR_SYNC_TIME, SettingAction::SyncTime));
+}
+
+std::string ClockSettingsActivity::getItemValueString(int index) const {
+  const auto& item = menuItems[index];
+  if (item.nameId == StrId::STR_NTP_SERVER) {
+    return SETTINGS.ntpServer[0] == '\0' ? std::string(tr(STR_DEFAULT_VALUE)) : std::string(SETTINGS.ntpServer);
+  }
+  return MenuListActivity::getItemValueString(index);
 }
 
 void ClockSettingsActivity::onActionSelected(int index) {
@@ -44,6 +58,18 @@ void ClockSettingsActivity::onActionSelected(int index) {
   } else if (item.nameId == StrId::STR_SYNC_TIME) {
     auto resultHandler = [](const ActivityResult&) { SETTINGS.saveToFile(); };
     startActivityForResult(std::make_unique<SyncTimeActivity>(renderer, mappedInput), resultHandler);
+  } else if (item.nameId == StrId::STR_NTP_SERVER) {
+    startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_NTP_SERVER),
+                                                                   std::string(SETTINGS.ntpServer),
+                                                                   sizeof(SETTINGS.ntpServer) - 1, InputType::Url),
+                           [this](const ActivityResult& result) {
+                             if (!result.isCancelled) {
+                               const auto& kb = std::get<KeyboardResult>(result.data);
+                               strncpy(SETTINGS.ntpServer, kb.text.c_str(), sizeof(SETTINGS.ntpServer) - 1);
+                               SETTINGS.ntpServer[sizeof(SETTINGS.ntpServer) - 1] = '\0';
+                               SETTINGS.saveToFile();
+                             }
+                           });
   }
 }
 
