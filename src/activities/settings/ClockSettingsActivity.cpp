@@ -59,18 +59,17 @@ void ClockSettingsActivity::onActionSelected(int index) {
     auto resultHandler = [](const ActivityResult&) { SETTINGS.saveToFile(); };
     startActivityForResult(std::make_unique<SyncTimeActivity>(renderer, mappedInput), resultHandler);
   } else if (item.nameId == StrId::STR_NTP_SERVER) {
-    startActivityForResult(
-        std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_NTP_SERVER),
-                                                std::string(SETTINGS.ntpServer), sizeof(SETTINGS.ntpServer) - 1,
-                                                InputType::Url),
-        [this](const ActivityResult& result) {
-          if (!result.isCancelled) {
-            const auto& kb = std::get<KeyboardResult>(result.data);
-            strncpy(SETTINGS.ntpServer, kb.text.c_str(), sizeof(SETTINGS.ntpServer) - 1);
-            SETTINGS.ntpServer[sizeof(SETTINGS.ntpServer) - 1] = '\0';
-            SETTINGS.saveToFile();
-          }
-        });
+    startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_NTP_SERVER),
+                                                                   std::string(SETTINGS.ntpServer),
+                                                                   sizeof(SETTINGS.ntpServer) - 1, InputType::Url),
+                           [this](const ActivityResult& result) {
+                             if (!result.isCancelled) {
+                               const auto& kb = std::get<KeyboardResult>(result.data);
+                               strncpy(SETTINGS.ntpServer, kb.text.c_str(), sizeof(SETTINGS.ntpServer) - 1);
+                               SETTINGS.ntpServer[sizeof(SETTINGS.ntpServer) - 1] = '\0';
+                               SETTINGS.saveToFile();
+                             }
+                           });
   }
 }
 

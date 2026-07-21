@@ -374,7 +374,7 @@ void WifiSelectionActivity::prepareForConnect() {
   if (needsReset) {
     WiFi.disconnect(true, true);
   }
-  
+
   // Scan all channels so networks with multiple APs use the strongest matching
   // BSSID instead of the first match found by the framework's default fast scan.
   WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);

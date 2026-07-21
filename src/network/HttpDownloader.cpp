@@ -1,6 +1,5 @@
 #include "HttpDownloader.h"
 
-#include "CrossPointSettings.h"
 #include <Arduino.h>
 #include <CrossPointRoots.h>
 #include <HalClock.h>
@@ -14,6 +13,8 @@
 #include <memory>
 #include <string>
 #include <utility>
+
+#include "CrossPointSettings.h"
 
 // All HTTPS runs over the wolfSSL-backed SecureNet stack (verified against the
 // curated CrossPointRoots); plain http uses SecureNet's WiFiClient passthrough.
