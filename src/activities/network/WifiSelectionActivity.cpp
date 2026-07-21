@@ -374,6 +374,11 @@ void WifiSelectionActivity::prepareForConnect() {
   if (needsReset) {
     WiFi.disconnect(true, true);
   }
+  
+  // Scan all channels so networks with multiple APs use the strongest matching
+  // BSSID instead of the first match found by the framework's default fast scan.
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
 
   // Use stable base MAC so hostname suffix is deterministic across WiFi states.
   uint8_t baseMac[6];
