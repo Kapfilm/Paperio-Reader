@@ -13,6 +13,8 @@ set(PIPELINE_SOURCES
   ${REPO_ROOT}/lib/Epub/Epub/Page.cpp
   ${REPO_ROOT}/lib/Epub/Epub/ParsedText.cpp
   ${REPO_ROOT}/lib/Epub/Epub/BookMetadataCache.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/content/CompiledContent.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/content/ContentSink.cpp
   ${REPO_ROOT}/lib/Epub/Epub/FootnotePreviews.cpp
   ${REPO_ROOT}/lib/Epub/Epub/EpubImageManifest.cpp
   ${REPO_ROOT}/lib/Epub/Epub/htmlEntities.cpp
@@ -86,6 +88,7 @@ add_executable(EpubPipelineTest
   EpubPipelineTest.cpp
   FingerprintTest.cpp
   Stage1ProducerTest.cpp
+  ContentSinkTest.cpp
   ${PIPELINE_SOURCES}
 )
 target_include_directories(EpubPipelineTest PRIVATE ${PIPELINE_INCLUDES})
@@ -94,6 +97,7 @@ target_compile_definitions(EpubPipelineTest PRIVATE
   GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/goldens"
   ENABLE_SERIAL_LOG=1
   LOG_LEVEL=2
+  EPUB_STAGE1=1
 )
 target_link_libraries(EpubPipelineTest PRIVATE
   crosspoint_test_common
@@ -114,6 +118,23 @@ target_compile_definitions(epub_pipeline_dump PRIVATE
   LOG_LEVEL=2
 )
 target_link_libraries(epub_pipeline_dump PRIVATE
+  crosspoint_test_common
+  SaxParser
+)
+
+# Stage-1 content.bin dump: drives every spine of a book through one ContentSink,
+# serializes content.bin, and prints a canonical text dump (Phase 3 step 4).
+add_executable(content_stage1_dump
+  Stage1DumpMain.cpp
+  ${PIPELINE_SOURCES}
+)
+target_include_directories(content_stage1_dump PRIVATE ${PIPELINE_INCLUDES})
+target_compile_definitions(content_stage1_dump PRIVATE
+  ENABLE_SERIAL_LOG=1
+  LOG_LEVEL=2
+  EPUB_STAGE1=1
+)
+target_link_libraries(content_stage1_dump PRIVATE
   crosspoint_test_common
   SaxParser
 )

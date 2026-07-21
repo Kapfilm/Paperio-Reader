@@ -11,6 +11,8 @@
 #include <ostream>
 #include <string>
 
+#include "Epub/content/ContentSink.h"
+
 namespace pipeline_harness {
 
 // A named render-settings profile — the section-cache variant under test.
@@ -39,5 +41,13 @@ using SpineStatFn = std::function<void(int spineIndex, uint16_t pages, int64_t e
 // cacheDir exercises the warm (cache-hit) path and must dump identically.
 bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const Profile& profile, std::ostream& out,
                 const SpineStatFn& spineStat = {});
+
+// Stage-1 driver (Phase 3 step 4): compile every spine of `epubPath` through one
+// ContentSink, filling `sink` with the whole book's settings-independent CompiledContent.
+// Attaches the sink via Section::setStage1Sink and builds each spine at `profile` (the
+// producer is settings-independent, but a build must run to drive it). Returns false on
+// any pipeline failure (already-logged to `out`).
+bool compileContent(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+                    compiled::ContentSink& sink, std::ostream& out);
 
 }  // namespace pipeline_harness

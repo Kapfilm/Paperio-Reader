@@ -123,4 +123,31 @@ bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const 
   return true;
 }
 
+bool compileContent(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+                    compiled::ContentSink& sink, std::ostream& out) {
+  GfxRenderer renderer;
+
+  auto epub = std::make_shared<Epub>(epubPath, cacheDir);
+  if (!epub->load(true)) {
+    out << "ERROR load failed\n";
+    return false;
+  }
+  epub->loadImageManifest();
+
+  for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
+    sink.beginSpine();
+    Section section(epub, i, renderer);
+    section.setStage1Sink(&sink);
+    if (!section.createSectionFile(profile.fontId, profile.lineCompression, profile.extraParagraphSpacing,
+                                   profile.paragraphAlignment, profile.viewportWidth, profile.viewportHeight,
+                                   profile.hyphenationEnabled, profile.embeddedStyle, profile.bionicReadingEnabled,
+                                   profile.inlineFootnotePreviews, profile.imageRendering, {}, /*skipEviction=*/true,
+                                   {})) {
+      out << "SPINE " << i << " ERROR build failed\n";
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace pipeline_harness
