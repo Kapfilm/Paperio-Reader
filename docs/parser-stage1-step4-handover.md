@@ -59,30 +59,40 @@ The design doc's 6-step incremental sequence:
   `content_bin` unit test), added `ContentSinkTest.cpp` to `EpubPipelineTest`, set
   `EPUB_STAGE1=1` on it, and added the `content_stage1_dump` target.
 
-## Verification status — IMPORTANT, do this first on the next machine
+## Verification status — DONE (host-verified 2026-07-22)
 
-- **Syntax-only checks PASS** on this Windows host (clang `-fsyntax-only`, pipeline include
-  set, `-DEPUB_STAGE1=1`): `ContentSink.cpp`, `Stage1DumpMain.cpp`, `PipelineRunner.cpp`,
-  `ContentSinkTest.cpp` all clean.
-- **The existing `content_bin` unit test still builds + passes** (5/5) — the WBC1
-  serialization foundation ContentSink builds on is green.
-- **Full `EpubPipelineTest` / `content_stage1_dump` were NOT built/run here.** This Windows
-  `build/` dir hits a PRE-EXISTING `lib/TJpgDec/src/tjpgd.h` typedef conflict (`_WIN32`
-  branch redefines `uint32_t` as `unsigned long`, clashing with `<stdint.h>`), which already
-  broke the pre-existing `epub_pipeline_dump` target before step 4. It is a
-  Windows-clang-only toolchain wart; CI (Linux) uses the `#else` real-`<stdint.h>` branch and
-  is unaffected.
+Step 4 is now **host-verified end-to-end** on the Windows/MSYS2 (UCRT64, gcc 16.1) host:
 
-**Next session, on Linux (or CI-style):**
+- **`content_stage1_dump` + `EpubPipelineTest` built clean** (gcc, Ninja, `-DEPUB_STAGE1=1`).
+- **ContentSink tests: 4/4 green** — `RoundTripsThroughContentBin`,
+  `SplitsOversizedTextBlockAtWrite`, `ProducesDeterministicContentBin`, `CompilesImageBlocks`.
+- **Stage1Producer: 9/9 green**; **full synthetic-corpus goldens: green** across `ColdRunsAreDeterministic`,
+  `WarmRunMatchesColdRun`, `MatchesGolden` (fused path untouched — `stage1Sink_` only attached by
+  the new driver). Zero real failures (the only ctest "failures" were `_NOT_BUILT` placeholders for
+  targets deliberately not built).
+- **Dump eyeballed** on `test_headings.epub`: `styles=4 spines=1 chapters=7`, headings interned to
+  style 1 with `flags=1`, body to style 2, `char` offsets advancing by codepoint count
+  (0→32→206→238). Coherent and correct.
+
+### The tjpgd.h toolchain wart — FIXED
+
+The prior session couldn't build here because `lib/TJpgDec/src/tjpgd.h` gated its manual
+`uint32_t`/`int32_t` typedefs on `#if defined(_WIN32)` — but MinGW/MSYS2 defines `_WIN32` *and*
+ships a real `<stdint.h>`, so the manual typedefs conflicted with the standard ones. The upstream
+comment said the branch was for "VC++ or some compiler **without** stdint.h", so the `_WIN32` guard
+was simply wrong for MinGW. Fixed the guard to `#if defined(_MSC_VER) && (_MSC_VER < 1600)` (only
+truly old MSVC lacks `<stdint.h>`); every other toolchain (embedded, MinGW, MSVC 2010+) takes the
+real `<stdint.h>`. One-line change to a vendored file; CI (Linux) was already on the `<stdint.h>`
+branch and is unaffected. This unblocks *all* Windows pipeline targets, not just step 4.
+
+**To reproduce the verification (Windows/MSYS2 or Linux):**
 ```
 cmake -S test -B build/test -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/test --target EpubPipelineTest content_stage1_dump
-ctest --test-dir build/test --output-on-failure -R ContentSink
-./build/test/epub_pipeline/content_stage1_dump test/epubs/test_headings.epub   # eyeball the dump
+ctest --test-dir build/test --output-on-failure -R "ContentSink|Stage1Producer|EpubPipeline"
+./build/test/epub_pipeline/content_stage1_dump test/epubs/test_headings.epub 2>/dev/null | grep -v '^\[DBG\]'
 ```
-Expect: all `ContentSink.*` tests green, existing `EpubPipelineTest` goldens still green
-(the fused path is untouched — `stage1Sink_` is only attached by the new driver), determinism
-test byte-identical. If the split-at-write test's per-record byte estimate is off, reconcile
+If the split-at-write test's per-record byte estimate ever drifts, reconcile
 `kWordRecordBytes`/`kTextRecordOverhead` in `ContentSink.cpp` with `writeWords`/
 `writeContentBin` in `CompiledContent.cpp` (they must mirror the real serializer).
 
