@@ -22,7 +22,12 @@ namespace {
 // otherwise image-bearing goldens are machine-specific and fail in CI.
 std::string normalizePath(const std::string& path, const std::string& cacheDir) {
   std::string p = (path.rfind(cacheDir, 0) == 0) ? "<cache>" + path.substr(cacheDir.size()) : path;
-  return std::regex_replace(p, std::regex("epub_[0-9]+"), "epub_<hash>");
+  p = std::regex_replace(p, std::regex("epub_[0-9]+"), "epub_<hash>");
+  // The image cache basename is img_<spine>_<propertyHash>_<counter>.<ext>. propertyHash is
+  // settings-derived; canonicalize it so the dump compares on image IDENTITY (spine, counter,
+  // extension) rather than the settings hash — this lets LayoutSink (which does not recompute
+  // the section propertyHash) match the fused dump while still asserting the right image.
+  return std::regex_replace(p, std::regex("img_([0-9]+)_[0-9a-f]{8}_"), "img_$1_<hash>_");
 }
 
 void dumpTextLine(std::ostream& out, const PageLine& line) {
@@ -178,8 +183,14 @@ bool layoutViaSink(const std::string& epubPath, const std::string& cacheDir, con
   // Empty ladder: matches the {} the PipelineRunner passes to createSectionFile, so
   // resolveBlockFont takes the same scale-only fallback on both sides of the diff.
 
+  params.epubFilePath = epub->getPath();
+
   for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
     std::vector<std::unique_ptr<Page>> pages;
+    // Cache-path prefix in the fused shape img_<spine>_<hash>_; the propertyHash is canonicalized
+    // away by the dump's normalizePath, so a placeholder hash is fine — only spine + counter +
+    // ext are compared.
+    params.imageBasePath = epub->getCachePath() + "/img_" + std::to_string(i) + "_00000000_";
     compiled::LayoutSink sink(renderer, params,
                               [&pages](std::unique_ptr<Page> page) { pages.push_back(std::move(page)); });
 

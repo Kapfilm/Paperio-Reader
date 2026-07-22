@@ -52,6 +52,11 @@ struct LayoutParams {
   bool bionicReadingEnabled = false;
   bool embeddedStyle = true;  // honor publisher CSS text-align (see the alignment resolution)
   FontSizeLadder fontSizeLadder;  // body-font sibling-size ladder (see resolveBlockFont)
+  // Cache-path prefix for extracted images: <cache>/img_<spine>_<hash>_. The sink appends a
+  // per-image counter + source extension, mirroring Section::getImageBasePath + imageCounter.
+  // (Intrinsic dims ride on the compiled Block, so no image manifest is needed here.)
+  std::string imageBasePath;
+  std::string epubFilePath;  // for ImageBlock lazy extraction (epub->getPath())
 };
 
 // Per-page XPath LUT entry — mirrors ChapterHtmlSlimParser::ParagraphLutEntry so the
@@ -100,6 +105,12 @@ class LayoutSink : public BlockSink {
   // Rebuild a ParsedText from a materialized text block, adding words through the same
   // ParsedText::addWord path the fused walk uses (and replaying the >96-word split).
   void layoutTextBlock(Block&& block, const BlockStyle& blockStyle);
+  // Place a standalone (centered, full-width) block image: resolve display dims via the shared
+  // helper, apply the pending-block spacing, page-break, and push a PageImage. Mirrors the
+  // fused <img> block path (ChapterHtmlSlimParser.cpp block-image branch).
+  void placeBlockImage(const Block& block, const CssStyle& imgStyle);
+  // Allocate the next image cache path (imageBasePath + counter + ext), matching the fused walk.
+  std::string nextImageCachePath(const std::string& entryPath);
 
   GfxRenderer& renderer_;
   std::function<void(std::unique_ptr<Page>)> completePageFn_;
@@ -115,6 +126,9 @@ class LayoutSink : public BlockSink {
   const bool bionicReadingEnabled_;
   const bool embeddedStyle_;
   FontSizeLadder fontSizeLadder_;
+  const std::string imageBasePath_;
+  const std::string epubFilePath_;
+  int imageCounter_ = 0;  // per-spine image counter, mirrors the parser's imageCounter
 
   // Empty-block merge reconstruction. The producer emits empty wrapper / <br> blocks as a
   // 1:1 transcript; the fused path merges their styles into the following paragraph (reusing

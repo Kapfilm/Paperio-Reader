@@ -2,9 +2,13 @@
 
 #include <GfxRenderer.h>
 
+#include <algorithm>
+
 #include "Epub/Page.h"
 #include "Epub/ParsedText.h"
+#include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
+#include "ImageLayout.h"
 
 namespace compiled {
 namespace {
@@ -38,7 +42,9 @@ LayoutSink::LayoutSink(GfxRenderer& renderer, LayoutParams params,
       hyphenationEnabled_(params.hyphenationEnabled),
       bionicReadingEnabled_(params.bionicReadingEnabled),
       embeddedStyle_(params.embeddedStyle),
-      fontSizeLadder_(std::move(params.fontSizeLadder)) {}
+      fontSizeLadder_(std::move(params.fontSizeLadder)),
+      imageBasePath_(std::move(params.imageBasePath)),
+      epubFilePath_(std::move(params.epubFilePath)) {}
 
 LayoutSink::~LayoutSink() = default;
 
@@ -236,12 +242,75 @@ void LayoutSink::layoutTextBlock(Block&& block, const BlockStyle& blockStyle) {
   makePages();
 }
 
+std::string LayoutSink::nextImageCachePath(const std::string& entryPath) {
+  std::string ext;
+  const size_t extPos = entryPath.rfind('.');
+  if (extPos != std::string::npos) ext = entryPath.substr(extPos);
+  return imageBasePath_ + std::to_string(imageCounter_++) + ext;
+}
+
+// Port of the fused <img> block-image path (ChapterHtmlSlimParser.cpp block branch). The pending
+// empty-block style (figure/div/h1 wrapper margins) becomes the image's surrounding spacing —
+// this is the LayoutSink analogue of the fused pendingImageBlockStyle, sourced from the pending
+// merge accumulated by onBlock.
+void LayoutSink::placeBlockImage(const Block& block, const CssStyle& imgStyle) {
+  // Container width for CSS sizing = viewport minus the pending block's horizontal inset.
+  int containerWidth = viewportWidth_;
+  if (hasPendingMerge_) {
+    const int inset = pendingMergeStyle_.totalHorizontalInset();
+    if (inset > 0 && inset < viewportWidth_) containerWidth = viewportWidth_ - inset;
+  }
+  const float emSize = static_cast<float>(renderer_.getFontAscenderSize(fontId_));
+  const ImageDisplaySize ds =
+      computeImageDisplaySize(block.width, block.height, imgStyle, viewportWidth_, viewportHeight_, containerWidth,
+                              emSize);
+
+  // Spacing from the pending empty-block wrapper style (fused cpp:1289-1298).
+  int spacingTop = 0;
+  int spacingBottom = 0;
+  if (hasPendingMerge_) {
+    spacingTop = std::max(0, static_cast<int>(pendingMergeStyle_.marginTop)) +
+                 std::max(0, static_cast<int>(pendingMergeStyle_.paddingTop));
+    spacingBottom = std::max(0, static_cast<int>(pendingMergeStyle_.marginBottom)) +
+                    std::max(0, static_cast<int>(pendingMergeStyle_.paddingBottom));
+  }
+  // The pending wrapper spacing is consumed around the image; it must not leak into the next
+  // paragraph (fused resets the empty block after the image).
+  hasPendingMerge_ = false;
+  pendingMergeFromBr_ = false;
+
+  const int totalHeight = spacingTop + ds.height + spacingBottom;
+  if (currentPage_ && !currentPage_->elements.empty() && (currentPageNextY_ + totalHeight > viewportHeight_)) {
+    emitPage(lastBodyChildByteOffset_);
+  } else if (!currentPage_) {
+    currentPage_.reset(new Page());
+    currentPageNextY_ = 0;
+  }
+
+  currentPageNextY_ += static_cast<int16_t>(spacingTop);
+
+  const std::string cachePath = nextImageCachePath(block.entryPath);
+  auto imageBlock = std::make_shared<ImageBlock>(cachePath, static_cast<int16_t>(ds.width),
+                                                 static_cast<int16_t>(ds.height), block.alt, epubFilePath_,
+                                                 block.entryPath);
+  const int16_t xPos = static_cast<int16_t>((viewportWidth_ - ds.width) / 2);
+  currentPage_->elements.push_back(std::make_shared<PageImage>(imageBlock, xPos, currentPageNextY_));
+  currentPageNextY_ += static_cast<int16_t>(ds.height);
+  currentPageNextY_ += static_cast<int16_t>(spacingBottom);
+}
+
 // --- BlockSink overrides. ---
 
 void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
+  if (block.type == BlockType::Image) {
+    // A standalone (centered) block image. floatSide != 0 would be a float, but the producer
+    // emits floats as fields on the following Text block, not as Image blocks — so every Image
+    // block here is a centered block image.
+    placeBlockImage(block, style);
+    return;
+  }
   if (block.type != BlockType::Text) {
-    // Image/Table blocks land in commits 3-4. Flush any pending merge as a bare block so the
-    // sequence stays aligned, then ignore the non-text block for now.
+    // Table blocks land in commit 4.
     return;
   }
 
