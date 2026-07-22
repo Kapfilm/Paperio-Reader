@@ -133,11 +133,30 @@ int LayoutSink::addLineToPage(const std::shared_ptr<TextBlock>& line, const bool
     return static_cast<int>(ParsedText::LineProcessResult::RetryWithoutHyphenation);
   }
 
+  const bool isFirstLineOfBlock = (wordsExtractedInBlock_ == 0);
   wordsExtractedInBlock_ += line->wordCount();
 
-  // Apply horizontal left inset. Float-zone x-shift lands in commit 3.
-  const int16_t xOffset = line->getBlockStyle().leftInset();
+  // Apply horizontal left inset. For lines overlapping an active LEFT float zone, also shift
+  // right by the zone width so text starts after the image (cpp:2580-2593). Right floats narrow
+  // the line width (handled in widthForLine) but don't shift text.
+  int16_t xOffset = line->getBlockStyle().leftInset();
+  {
+    const auto& bs = line->getBlockStyle();
+    for (int zi = 0; zi < bs.floatZoneCount; ++zi) {
+      const auto& z = bs.floatZones[zi];
+      if (!z.isRight && currentPageNextY_ < z.bottom && currentPageNextY_ + lineHeight > z.top) {
+        xOffset = static_cast<int16_t>(xOffset + z.width);
+      }
+    }
+  }
   currentPage_->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY_));
+
+  // On the first line of a block with a deferred inline float image, fix the image's yPos to the
+  // line top (cpp:2596-2603).
+  if (isFirstLineOfBlock && deferredPageImage_) {
+    deferredPageImage_->yPos = static_cast<int16_t>(currentPageNextY_);
+    deferredPageImage_.reset();
+  }
 
   currentPageNextY_ += lineHeight;
   return static_cast<int>(ParsedText::LineProcessResult::Accepted);
@@ -181,6 +200,39 @@ void LayoutSink::makePages() {
   const uint16_t effectiveWidth =
       (horizontalInset < viewportWidth_) ? static_cast<uint16_t>(viewportWidth_ - horizontalInset) : viewportWidth_;
 
+  // Active-float propagation (cpp:2664-2699). A tall float spans several blocks: it is attached
+  // to the first (originating) block; here we re-inject the same zone into every later block that
+  // still overlaps it vertically, then drop it once layout passes the image bottom.
+  const bool isOriginatingBlock = static_cast<bool>(deferredPageImage_);
+  if (activeFloatBottom_ > 0 && currentPageNextY_ >= activeFloatBottom_) {
+    activeFloatBottom_ = 0;  // layout has moved past the image
+  }
+  if (!isOriginatingBlock && activeFloatBottom_ > 0 && currentPageNextY_ < activeFloatBottom_ &&
+      currentTextBlock_->getBlockStyle().floatZoneCount == 0) {
+    BlockStyle& mbs = currentTextBlock_->getBlockStyle();
+    auto& z = mbs.floatZones[mbs.floatZoneCount++];
+    z.top = activeFloatTop_;  // absolute (already-anchored) image coordinates
+    z.bottom = activeFloatBottom_;
+    z.width = activeFloatWidth_;
+    z.isRight = activeFloatIsRight_;
+  }
+
+  // Pre-correct float zone coordinates before line-breaking so widthForLine and the xOffset
+  // check in addLineToPage use the same y values (cpp:2683-2699). Only the originating block
+  // re-anchors its zone (and the image) to the first line top; injected zones already carry
+  // absolute image coordinates.
+  const int lineHeightForFloat = (blockStyle.floatZoneCount > 0) ? effectiveLineHeight(blockStyle) : 0;
+  if (isOriginatingBlock && blockStyle.floatZoneCount > 0) {
+    BlockStyle& mbs = currentTextBlock_->getBlockStyle();
+    for (int zi = 0; zi < mbs.floatZoneCount; ++zi) {
+      const int imgH = mbs.floatZones[zi].bottom - mbs.floatZones[zi].top;
+      mbs.floatZones[zi].top = static_cast<int16_t>(currentPageNextY_);
+      mbs.floatZones[zi].bottom = static_cast<int16_t>(currentPageNextY_ + imgH);
+    }
+    activeFloatTop_ = static_cast<int16_t>(currentPageNextY_);
+    activeFloatBottom_ = static_cast<int16_t>(currentPageNextY_ + (mbs.floatZones[0].bottom - mbs.floatZones[0].top));
+  }
+
   currentTextBlock_->layoutAndExtractLines(
       renderer_, fontId_, effectiveWidth,
       [this](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
@@ -188,7 +240,7 @@ void LayoutSink::makePages() {
         return static_cast<ParsedText::LineProcessResult>(
             addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry));
       },
-      /*includeLastLine=*/true, static_cast<int16_t>(currentPageNextY_), /*lineHeight=*/0);
+      /*includeLastLine=*/true, static_cast<int16_t>(currentPageNextY_), lineHeightForFloat);
 
   if (blockStyle.marginBottom > 0) {
     currentPageNextY_ += blockStyle.marginBottom;
@@ -213,6 +265,14 @@ void LayoutSink::layoutTextBlock(Block&& block, const BlockStyle& blockStyle) {
                                                         bionicReadingEnabled_));
   if (!currentTextBlock_) return;
   wordsExtractedInBlock_ = 0;
+
+  // A float image rides on this Text block: attach it before layout so its zone is present when
+  // the first line breaks (fused attaches on the first word, cpp:403-405). The image's own CSS
+  // is not transmitted for floats — the intrinsic dims + default sizing suffice (the float gate
+  // already capped size), so pass an empty style to the shared helper.
+  if (!block.inlineImageEntryPath.empty()) {
+    attachFloatImage(block, CssStyle{}, currentTextBlock_->getBlockStyle());
+  }
 
   // Add words through the same ParsedText::addWord path the fused walk uses, replaying the
   // >96-word mid-block split (flushPartWordBuffer cpp:409-459) so page breaks land identically.
@@ -297,6 +357,49 @@ void LayoutSink::placeBlockImage(const Block& block, const CssStyle& imgStyle) {
   currentPage_->elements.push_back(std::make_shared<PageImage>(imageBlock, xPos, currentPageNextY_));
   currentPageNextY_ += static_cast<int16_t>(ds.height);
   currentPageNextY_ += static_cast<int16_t>(spacingBottom);
+}
+
+void LayoutSink::attachFloatImage(const Block& block, const CssStyle& imgStyle, BlockStyle& bs) {
+  if (!currentPage_) currentPage_.reset(new (std::nothrow) Page());
+
+  // The producer transmits INTRINSIC dims; recompute the display dims exactly as the fused
+  // isInlineCandidate gate did (via the shared helper) before using them as the float size.
+  int containerWidth = viewportWidth_;
+  const int inset = bs.totalHorizontalInset();
+  if (inset > 0 && inset < viewportWidth_) containerWidth = viewportWidth_ - inset;
+  const float emSize = static_cast<float>(renderer_.getFontAscenderSize(fontId_));
+  const ImageDisplaySize ds = computeImageDisplaySize(block.inlineImageWidth, block.inlineImageHeight, imgStyle,
+                                                      viewportWidth_, viewportHeight_, containerWidth, emSize);
+  const int16_t imgH = static_cast<int16_t>(ds.height);
+  const int16_t imgW = static_cast<int16_t>(ds.width);
+  const bool imgIsRight = (block.inlineImageSide == 2);
+
+  // A float never crosses a page boundary: break first if it would not fit (cpp:532-534).
+  if (imgH > static_cast<int16_t>(viewportHeight_ - currentPageNextY_) && currentPage_ &&
+      !currentPage_->elements.empty()) {
+    emitPage(lastBodyChildByteOffset_);
+  }
+
+  const int16_t imgX = imgIsRight ? static_cast<int16_t>(viewportWidth_ - imgW) : 0;
+  const int16_t top = static_cast<int16_t>(currentPageNextY_);
+
+  const std::string cachePath = nextImageCachePath(block.inlineImageEntryPath);
+  auto fullImageBlock =
+      std::make_shared<ImageBlock>(cachePath, imgW, imgH, block.inlineImageAlt, epubFilePath_, block.inlineImageEntryPath);
+  deferredPageImage_ = std::make_shared<PageImage>(fullImageBlock, imgX, top);
+  currentPage_->elements.push_back(deferredPageImage_);
+
+  if (bs.floatZoneCount < BlockStyle::kMaxFloatZones) {
+    auto& z = bs.floatZones[bs.floatZoneCount++];
+    z.top = top;
+    z.bottom = static_cast<int16_t>(top + imgH);
+    z.width = static_cast<int16_t>(imgW + 4);
+    z.isRight = imgIsRight;
+  }
+  activeFloatTop_ = top;
+  activeFloatBottom_ = static_cast<int16_t>(top + imgH);
+  activeFloatWidth_ = static_cast<int16_t>(imgW + 4);
+  activeFloatIsRight_ = imgIsRight;
 }
 
 // --- BlockSink overrides. ---

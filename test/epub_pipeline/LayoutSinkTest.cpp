@@ -133,13 +133,13 @@ TEST_P(LayoutSinkEquivalence, PageDumpMatchesFused) {
   EXPECT_EQ(fused, sink) << "LayoutSink diverged from the fused layout for " << book;
 }
 
-// Text + block-image corpus books. Float images (test_float_images), HR (test_text_rendering),
-// tables (test_tables), and footnote-bearing cover books (test_kerning_ligature,
-// test_spine_toc_edges) join as their paths land (commits 3c-5).
+// Text + block-image + float-image corpus books. HR (test_text_rendering), tables (test_tables),
+// and footnote-bearing cover books (test_kerning_ligature, test_spine_toc_edges) join as their
+// paths land (commits 3d-5).
 INSTANTIATE_TEST_SUITE_P(TextCorpus, LayoutSinkEquivalence,
                          testing::Values("test_headings.epub", "test_font_sizes.epub",
                                          "test_br_section_break.epub", "test_png_images.epub",
-                                         "test_jpeg_images.epub", "test_mixed_images.epub"),
+                                         "test_jpeg_images.epub", "test_mixed_images.epub", "test_float_images.epub"),
                          [](const testing::TestParamInfo<std::string>& info) {
                            std::string n = info.param;
                            for (char& c : n) {

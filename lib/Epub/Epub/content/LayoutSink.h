@@ -111,6 +111,10 @@ class LayoutSink : public BlockSink {
   void placeBlockImage(const Block& block, const CssStyle& imgStyle);
   // Allocate the next image cache path (imageBasePath + counter + ext), matching the fused walk.
   std::string nextImageCachePath(const std::string& entryPath);
+  // Attach a block's inline float image (its inlineImage* fields) beside the paragraph text:
+  // page-break if it won't fit, push a deferred PageImage, set the block's float zone and the
+  // active-float state. Mirrors attachPendingFloatImage (cpp:518-566).
+  void attachFloatImage(const Block& block, const CssStyle& imgStyle, BlockStyle& bs);
 
   GfxRenderer& renderer_;
   std::function<void(std::unique_ptr<Page>)> completePageFn_;
