@@ -15,6 +15,7 @@
 #include "../../Epub.h"
 #include "../Page.h"
 #include "../content/BlockSink.h"
+#include "../content/ImageLayout.h"
 #include "../converters/ImageDecoderFactory.h"
 #include "../converters/ImageToFramebufferDecoder.h"
 #include "../htmlEntities.h"
@@ -632,7 +633,7 @@ void ChapterHtmlSlimParser::stage1EmitPendingAnchor() {
 
 void ChapterHtmlSlimParser::stage1EmitImageBlock(const std::string& entryPath, const int16_t width,
                                                  const int16_t height, const uint8_t floatSide,
-                                                 const std::string& alt) {
+                                                 const std::string& alt, const CssStyle& imgStyle) {
   if (!stage1Sink_) return;
   stage1FlushBlock();         // emit any pending text block first (document order)
   stage1EmitPendingAnchor();  // an anchor introducing this image points at it
@@ -644,7 +645,9 @@ void ChapterHtmlSlimParser::stage1EmitImageBlock(const std::string& entryPath, c
   b.height = height;
   b.floatSide = floatSide;
   b.alt = alt;
-  stage1Sink_->onBlock(std::move(b), CssStyle{});  // image blocks carry their own dims, not a pooled style
+  // Pass the image's resolved CSS (width/height) as the block style so Stage-2 reproduces the
+  // display-dimension scaling; the intrinsic w/h ride on the block fields.
+  stage1Sink_->onBlock(std::move(b), imgStyle);
 }
 
 void ChapterHtmlSlimParser::stage1EmitTableBlock(const BufferedTable& table) {
@@ -1212,8 +1215,6 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                     it = self->inlineStyleCache_.emplace(styleAttr, CssParser::parseInlineStyle(styleAttr)).first;
                   imgStyle.applyOver(it->second);
                 }
-                const bool hasCssHeight = imgStyle.hasImageHeight();
-                const bool hasCssWidth = imgStyle.hasImageWidth();
                 int containerWidth = self->viewportWidth;
                 if (self->currentTextBlock) {
                   const int inset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
@@ -1222,81 +1223,15 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                   }
                 }
 
-                if (hasCssHeight && hasCssWidth && dims.width > 0 && dims.height > 0) {
-                  // Both CSS height and width set: resolve both, then clamp to
-                  // current container preserving requested ratio.
-                  displayHeight = static_cast<int>(
-                      imgStyle.imageHeight.toPixels(emSize, static_cast<float>(self->viewportHeight)) + 0.5f);
-                  displayWidth =
-                      static_cast<int>(imgStyle.imageWidth.toPixels(emSize, static_cast<float>(containerWidth)) + 0.5f);
-                  if (displayHeight < 1) displayHeight = 1;
-                  if (displayWidth < 1) displayWidth = 1;
-                  if (displayWidth > containerWidth || displayHeight > self->viewportHeight) {
-                    float scaleX =
-                        (displayWidth > containerWidth) ? static_cast<float>(containerWidth) / displayWidth : 1.0f;
-                    float scaleY = (displayHeight > self->viewportHeight)
-                                       ? static_cast<float>(self->viewportHeight) / displayHeight
-                                       : 1.0f;
-                    float scale = (scaleX < scaleY) ? scaleX : scaleY;
-                    displayWidth = static_cast<int>(displayWidth * scale + 0.5f);
-                    displayHeight = static_cast<int>(displayHeight * scale + 0.5f);
-                    if (displayWidth < 1) displayWidth = 1;
-                    if (displayHeight < 1) displayHeight = 1;
-                  }
-                  LOG_DBG("EHP", "Display size from CSS height+width: %dx%d", displayWidth, displayHeight);
-                } else if (hasCssHeight && !hasCssWidth && dims.width > 0 && dims.height > 0) {
-                  // Use CSS height (resolve % against viewport height) and derive width from aspect ratio
-                  displayHeight = static_cast<int>(
-                      imgStyle.imageHeight.toPixels(emSize, static_cast<float>(self->viewportHeight)) + 0.5f);
-                  if (displayHeight < 1) displayHeight = 1;
-                  displayWidth =
-                      static_cast<int>(displayHeight * (static_cast<float>(dims.width) / dims.height) + 0.5f);
-                  if (displayHeight > self->viewportHeight) {
-                    displayHeight = self->viewportHeight;
-                    // Rescale width to preserve aspect ratio when height is clamped
-                    displayWidth =
-                        static_cast<int>(displayHeight * (static_cast<float>(dims.width) / dims.height) + 0.5f);
-                    if (displayWidth < 1) displayWidth = 1;
-                  }
-                  if (displayWidth > containerWidth) {
-                    displayWidth = containerWidth;
-                    // Rescale height to preserve aspect ratio when width is clamped
-                    displayHeight =
-                        static_cast<int>(displayWidth * (static_cast<float>(dims.height) / dims.width) + 0.5f);
-                    if (displayHeight < 1) displayHeight = 1;
-                  }
-                  if (displayWidth < 1) displayWidth = 1;
-                  LOG_DBG("EHP", "Display size from CSS height: %dx%d", displayWidth, displayHeight);
-                } else if (hasCssWidth && !hasCssHeight && dims.width > 0 && dims.height > 0) {
-                  // Use CSS width (resolve % against container width) and derive
-                  // height from aspect ratio.
-                  displayWidth =
-                      static_cast<int>(imgStyle.imageWidth.toPixels(emSize, static_cast<float>(containerWidth)) + 0.5f);
-                  if (displayWidth > containerWidth) displayWidth = containerWidth;
-                  if (displayWidth < 1) displayWidth = 1;
-                  displayHeight =
-                      static_cast<int>(displayWidth * (static_cast<float>(dims.height) / dims.width) + 0.5f);
-                  if (displayHeight > self->viewportHeight) {
-                    displayHeight = self->viewportHeight;
-                    // Rescale width to preserve aspect ratio when height is clamped
-                    displayWidth =
-                        static_cast<int>(displayHeight * (static_cast<float>(dims.width) / dims.height) + 0.5f);
-                    if (displayWidth < 1) displayWidth = 1;
-                  }
-                  if (displayHeight < 1) displayHeight = 1;
-                  LOG_DBG("EHP", "Display size from CSS width: %dx%d", displayWidth, displayHeight);
-                } else {
-                  // Scale to fit current container while maintaining aspect ratio.
-                  int maxWidth = containerWidth;
-                  int maxHeight = self->viewportHeight;
-                  float scaleX = (dims.width > maxWidth) ? (float)maxWidth / dims.width : 1.0f;
-                  float scaleY = (dims.height > maxHeight) ? (float)maxHeight / dims.height : 1.0f;
-                  float scale = (scaleX < scaleY) ? scaleX : scaleY;
-                  if (scale > 1.0f) scale = 1.0f;
-
-                  displayWidth = (int)(dims.width * scale);
-                  displayHeight = (int)(dims.height * scale);
-                  LOG_DBG("EHP", "Display size: %dx%d (scale %.2f)", displayWidth, displayHeight, scale);
+                // Display-dimension math lives in the shared helper so LayoutSink reproduces it
+                // byte-for-byte (docs/parser-stage1-step5-design.md). Keep both in lockstep.
+                {
+                  const compiled::ImageDisplaySize ds = compiled::computeImageDisplaySize(
+                      dims.width, dims.height, imgStyle, self->viewportWidth, self->viewportHeight, containerWidth,
+                      emSize);
+                  displayWidth = ds.width;
+                  displayHeight = ds.height;
+                  LOG_DBG("EHP", "Display size: %dx%d", displayWidth, displayHeight);
                 }
 
                 // Inline image path: if inside a CSS float context and the image leaves a
@@ -1409,7 +1344,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                 // Stage-1: emit the image as a standalone block with its INTRINSIC dims
                 // (Stage-2 rescales); floatSide 0 = a centered block image, not a float.
                 self->stage1EmitImageBlock(resolvedPath, static_cast<int16_t>(dims.width),
-                                           static_cast<int16_t>(dims.height), 0, alt);
+                                           static_cast<int16_t>(dims.height), 0, alt, imgStyle);
 
                 LOG_DBG("EHP", "Image placed: x=%d y=%d w=%d h=%d nextY=%d", xPos, pageImage->yPos, displayWidth,
                         displayHeight, self->currentPageNextY);

@@ -398,8 +398,10 @@ class ChapterHtmlSlimParser final : public Print {
   void stage1FlushBlock();         // emit the accumulated block through the sink, if non-empty
   void stage1EmitPendingAnchor();  // emit a stashed anchor id against the block about to be emitted
   // Flush any pending text, then emit a standalone image block (intrinsic dims, EPUB entry path).
+  // imgStyle carries the image element's resolved CSS (width/height only matter) so Stage-2
+  // can reproduce the settings-dependent display-dimension scaling from the intrinsic dims.
   void stage1EmitImageBlock(const std::string& entryPath, int16_t width, int16_t height, uint8_t floatSide,
-                            const std::string& alt);
+                            const std::string& alt, const CssStyle& imgStyle);
   // Flush any pending text, then emit a Table block reconstructed from the buffered table
   // (settings-independent rows/cells; Stage-2 reproduces grid-or-paragraph).
   void stage1EmitTableBlock(const BufferedTable& table);
