@@ -15,6 +15,7 @@ set(PIPELINE_SOURCES
   ${REPO_ROOT}/lib/Epub/Epub/BookMetadataCache.cpp
   ${REPO_ROOT}/lib/Epub/Epub/content/CompiledContent.cpp
   ${REPO_ROOT}/lib/Epub/Epub/content/ContentSink.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/content/LayoutSink.cpp
   ${REPO_ROOT}/lib/Epub/Epub/FootnotePreviews.cpp
   ${REPO_ROOT}/lib/Epub/Epub/EpubImageManifest.cpp
   ${REPO_ROOT}/lib/Epub/Epub/htmlEntities.cpp
@@ -89,6 +90,7 @@ add_executable(EpubPipelineTest
   FingerprintTest.cpp
   Stage1ProducerTest.cpp
   ContentSinkTest.cpp
+  LayoutSinkTest.cpp
   ${PIPELINE_SOURCES}
 )
 target_include_directories(EpubPipelineTest PRIVATE ${PIPELINE_INCLUDES})
