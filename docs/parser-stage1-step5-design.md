@@ -150,6 +150,29 @@ this equivalence proof.
   are NOT severed here; they stay in the walk. Severing the em→px walk uses is outer-step 6's work.
 - `content.bin` is not read back for layout yet (the pull `IBlockSource` is a later Stage-2-flip step).
 
+## Resolved during commit 2 (the settings-split)
+
+The seam passes raw `CssStyle`, but the fused `BlockStyle` embeds walk-context decisions the raw
+CSS doesn't carry. We split them by whether they depend on a USER SETTING (validated against
+microreader's .mrb design — it does the same):
+
+- **Settings-INDEPENDENT** intent → the producer folds it into the captured `CssStyle` so BOTH
+  sinks (ContentSink→content.bin, LayoutSink) reproduce it:
+  - heading `kHeadingMultiplier` → `CssStyle.fontSizeMultiplier` (relative, like microreader's
+    per-run `size_pct`);
+  - `<li>` depth indent (`emSize*1.5*depth`) → `CssStyle.marginLeft`;
+  - span-level poem `margin-left` (mutates the OPEN block after capture) → `CssStyle.textIndent`.
+- **Settings-DEPENDENT** intent stays sink-side (must NOT enter content.bin):
+  - text ALIGNMENT — headings default Center, blocks default `paragraphAlignment`, publisher
+    text-align overrides when `embeddedStyle && paragraphAlignment==None`. LayoutSink applies this
+    in `buildBlockStyle` using the `kStartsChapter` flag to pick the heading vs block default.
+    (microreader stores only optional CSS align + resolves the global pref at layout via
+    `align_override` — same shape.)
+- **`<br>` blocks** use a NEUTRAL layout style (only alignment context + any transmitted
+  text-indent), never the element's CSS margins — matching the fused `brStyle`. This holds for
+  empty section-separator `<br>` (which also gets the injected line-gap on merge) AND inline `<br>`
+  that later receives text.
+
 ## Open risks to watch (ranked)
 
 1. **96-word split vs whole-block split** producing a different page break in some edge case — the #1

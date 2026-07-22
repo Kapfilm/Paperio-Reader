@@ -1594,6 +1594,12 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       const int level = name[1] - '0';  // 'h1'->1, 'h2'->2, …
       if (level >= 1 && level <= 3) {
         headerBlockStyle.fontSizeMultiplier = kHeadingMultiplier[level - 1];
+        // Stage-1: fold the settings-INDEPENDENT default multiplier into the captured
+        // CssStyle so both sinks (ContentSink -> content.bin, LayoutSink) reproduce the
+        // heading's effective size without re-deriving it from the tag. Alignment is NOT
+        // folded — it depends on paragraphAlignment (a user setting) and stays sink-side.
+        self->currentCssStyle.fontSizeMultiplier = kHeadingMultiplier[level - 1];
+        self->currentCssStyle.defined.fontSizeMultiplier = 1;
       }
     }
     // Stage-1: tag the block about to open as a chapter/heading of this level.
@@ -1651,6 +1657,10 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       if (strcmp(name, "li") == 0 && !cssStyle.hasMarginLeft() && !self->listStack.empty()) {
         const int depth = static_cast<int>(std::min(self->listStack.size(), size_t(3)));
         blockStyle.marginLeft = static_cast<int16_t>(emSize * 1.5f * depth);
+        // Stage-1: fold the settings-independent list indent into the CssStyle captured at
+        // block open, so both sinks reproduce the <li> left inset (already px).
+        self->currentCssStyle.marginLeft = CssLength(static_cast<float>(blockStyle.marginLeft));
+        self->currentCssStyle.defined.marginLeft = 1;
       }
       self->startNewTextBlock(blockStyle);
       self->updateEffectiveInlineStyle();
@@ -1917,6 +1927,13 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
           updatedStyle.textIndent = marginPx;
           updatedStyle.textIndentDefined = true;
           self->currentTextBlock->setBlockStyle(updatedStyle);
+          // Stage-1: this span-level poem indent mutates the OPEN block's style after it was
+          // captured; transmit it (settings-independent, already px) so both sinks reproduce
+          // the first-line indent. Stored as a pixel CssLength that fromCssStyle round-trips.
+          if (self->stage1Sink_) {
+            self->stage1BlockCssStyle_.textIndent = CssLength(static_cast<float>(marginPx));
+            self->stage1BlockCssStyle_.defined.textIndent = 1;
+          }
         }
       }
       applySupSubDefaultSize(entry);  // vertical-align: super/sub spans get the 50% default

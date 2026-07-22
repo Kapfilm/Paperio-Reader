@@ -50,6 +50,7 @@ struct LayoutParams {
   uint16_t viewportHeight = 0;
   bool hyphenationEnabled = false;
   bool bionicReadingEnabled = false;
+  bool embeddedStyle = true;  // honor publisher CSS text-align (see the alignment resolution)
   FontSizeLadder fontSizeLadder;  // body-font sibling-size ladder (see resolveBlockFont)
 };
 
@@ -86,6 +87,19 @@ class LayoutSink : public BlockSink {
   int effectiveFontId(const BlockStyle& bs) const { return bs.headingFontId != 0 ? bs.headingFontId : fontId_; }
   int effectiveLineHeight(const BlockStyle& bs) const;
   void emitPage(uint32_t xhtmlByteOffset);
+  // Layout the current block into pages (port of ChapterHtmlSlimParser::makePages, text path).
+  void makePages();
+  // Append one laid-out line to the current page (port of addLineToPage).
+  int addLineToPage(const std::shared_ptr<TextBlock>& line, bool lineEndsWithHyphenatedWord,
+                    bool suppressHyphenationRetry);
+  // Reconstruct the px BlockStyle from the block's pre-px CssStyle. Alignment stays sink-side
+  // (it depends on paragraphAlignment, a user setting): headings default to Center, blocks to
+  // paragraphAlignment, and publisher text-align overrides when embeddedStyle. The heading
+  // font-size multiplier is already folded into `style` by the producer (settings-independent).
+  BlockStyle buildBlockStyle(const CssStyle& style, bool isHeading) const;
+  // Rebuild a ParsedText from a materialized text block, adding words through the same
+  // ParsedText::addWord path the fused walk uses (and replaying the >96-word split).
+  void layoutTextBlock(Block&& block, const BlockStyle& blockStyle);
 
   GfxRenderer& renderer_;
   std::function<void(std::unique_ptr<Page>)> completePageFn_;
@@ -99,7 +113,19 @@ class LayoutSink : public BlockSink {
   const uint16_t viewportHeight_;
   const bool hyphenationEnabled_;
   const bool bionicReadingEnabled_;
+  const bool embeddedStyle_;
   FontSizeLadder fontSizeLadder_;
+
+  // Empty-block merge reconstruction. The producer emits empty wrapper / <br> blocks as a
+  // 1:1 transcript; the fused path merges their styles into the following paragraph (reusing
+  // its empty currentTextBlock). We instead hold the accumulated merged style across empty
+  // blocks and fold it into the next non-empty block's style — replaying the same margins.
+  bool hasPendingMerge_ = false;
+  BlockStyle pendingMergeStyle_;
+  bool pendingMergeFromBr_ = false;
+  // Alignment context a <br> block inherits (fused: the current block's alignment at <br>).
+  CssTextAlign lastBlockAlignment_ = CssTextAlign::Justify;
+  bool lastBlockAlignmentDefined_ = false;
 
   // Layout state (moved from ChapterHtmlSlimParser — see the design doc's state table).
   std::unique_ptr<ParsedText> currentTextBlock_;

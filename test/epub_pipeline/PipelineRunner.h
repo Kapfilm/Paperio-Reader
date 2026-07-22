@@ -8,10 +8,15 @@
 // docs/compiled-book-pipeline-plan.md Phase 0.
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <ostream>
 #include <string>
+#include <vector>
 
 #include "Epub/content/ContentSink.h"
+#include "Epub/content/LayoutSink.h"
+
+class Page;
 
 namespace pipeline_harness {
 
@@ -49,5 +54,15 @@ bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const 
 // any pipeline failure (already-logged to `out`).
 bool compileContent(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
                     compiled::ContentSink& sink, std::ostream& out);
+
+// Step 5 equivalence driver: build every spine of `epubPath` driving a compiled::LayoutSink
+// (attached via Section::setStage1Sink) instead of reading the fused section cache, and dump
+// the LayoutSink's Page stream in the SAME canonical format as runAndDump. Diffing the two
+// dumps is the byte-identical gate. Returns false on any pipeline failure (already-logged).
+bool layoutViaSink(const std::string& epubPath, const std::string& cacheDir, const Profile& profile, std::ostream& out);
+
+// Dump one already-built page in the canonical PAGE/LINE/IMG/TABLE/HR/FN format (shared by
+// runAndDump and layoutViaSink so both sides of the equivalence diff format identically).
+void dumpOnePage(std::ostream& out, const Page& page, uint16_t pageIndex, const std::string& cacheDir);
 
 }  // namespace pipeline_harness

@@ -37,7 +37,9 @@ void dumpTextLine(std::ostream& out, const PageLine& line) {
   }
 }
 
-void dumpPage(std::ostream& out, const Page& page, const uint16_t pageIndex, const std::string& cacheDir) {
+}  // namespace
+
+void dumpOnePage(std::ostream& out, const Page& page, const uint16_t pageIndex, const std::string& cacheDir) {
   out << " PAGE " << pageIndex << " elements=" << page.elements.size() << " footnotes=" << page.footnotes.size()
       << "\n";
   for (const auto& el : page.elements) {
@@ -66,8 +68,6 @@ void dumpPage(std::ostream& out, const Page& page, const uint16_t pageIndex, con
     out << "  FN n=" << fn.number << " href=" << fn.href << "\n";
   }
 }
-
-}  // namespace
 
 bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const Profile& profile, std::ostream& out,
                 const SpineStatFn& spineStat) {
@@ -112,7 +112,7 @@ bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const 
         out << " PAGE " << p << " ERROR load failed\n";
         return false;
       }
-      dumpPage(out, *page, p, cacheDir);
+      dumpOnePage(out, *page, p, cacheDir);
     }
     if (spineStat) {
       const auto us =
@@ -145,6 +145,64 @@ bool compileContent(const std::string& epubPath, const std::string& cacheDir, co
                                    {})) {
       out << "SPINE " << i << " ERROR build failed\n";
       return false;
+    }
+  }
+  return true;
+}
+
+bool layoutViaSink(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+                   std::ostream& out) {
+  GfxRenderer renderer;
+
+  auto epub = std::make_shared<Epub>(epubPath, cacheDir);
+  if (!epub->load(true)) {
+    out << "ERROR load failed\n";
+    return false;
+  }
+  epub->loadImageManifest();
+  FootnotePreviews::gather(*epub);
+
+  out << "BOOK title=" << epub->getTitle() << " lang=" << epub->getLanguage() << " spine=" << epub->getSpineItemsCount()
+      << " toc=" << epub->getTocItemsCount() << " reliableToc=" << (epub->hasReliableToc() ? 1 : 0) << "\n";
+
+  compiled::LayoutParams params;
+  params.fontId = profile.fontId;
+  params.lineCompression = profile.lineCompression;
+  params.extraParagraphSpacing = profile.extraParagraphSpacing;
+  params.paragraphAlignment = profile.paragraphAlignment;
+  params.viewportWidth = profile.viewportWidth;
+  params.viewportHeight = profile.viewportHeight;
+  params.hyphenationEnabled = profile.hyphenationEnabled;
+  params.bionicReadingEnabled = profile.bionicReadingEnabled;
+  params.embeddedStyle = profile.embeddedStyle;
+  // Empty ladder: matches the {} the PipelineRunner passes to createSectionFile, so
+  // resolveBlockFont takes the same scale-only fallback on both sides of the diff.
+
+  for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
+    std::vector<std::unique_ptr<Page>> pages;
+    compiled::LayoutSink sink(renderer, params,
+                              [&pages](std::unique_ptr<Page> page) { pages.push_back(std::move(page)); });
+
+    Section section(epub, i, renderer);
+    section.setStage1Sink(&sink);
+    // The fused build still writes its own section cache to disk; we ignore it and dump the
+    // LayoutSink's Page stream instead. The producer drives BOTH in one walk.
+    if (!section.createSectionFile(profile.fontId, profile.lineCompression, profile.extraParagraphSpacing,
+                                   profile.paragraphAlignment, profile.viewportWidth, profile.viewportHeight,
+                                   profile.hyphenationEnabled, profile.embeddedStyle, profile.bionicReadingEnabled,
+                                   profile.inlineFootnotePreviews, profile.imageRendering, {}, /*skipEviction=*/true,
+                                   {})) {
+      out << "SPINE " << i << " ERROR build failed\n";
+      return false;
+    }
+    // Match runAndDump's SPINE line exactly. truncated/cssFallback are section-cache
+    // properties with no LayoutSink analogue; emit the same 0/0 the text corpus produces so
+    // the dumps line up (any book that actually truncates or falls back is out of the
+    // text-corpus subset and handled when those paths are covered).
+    out << "SPINE " << i << " href=" << epub->getSpineItem(i).href << " pages=" << pages.size()
+        << " truncated=0 cssFallback=0\n";
+    for (uint16_t p = 0; p < pages.size(); ++p) {
+      dumpOnePage(out, *pages[p], p, cacheDir);
     }
   }
   return true;

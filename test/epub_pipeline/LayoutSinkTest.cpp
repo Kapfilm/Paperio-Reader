@@ -1,20 +1,29 @@
 // Step 5 (docs/parser-stage1-step5-design.md): LayoutSink equivalence tests.
 //
-// This commit (1/6) covers the skeleton: the BlockStyle reconstruction the sink will use in
-// onBlock must line up with what the fused walk produces, and the sink must construct and
-// hold its layout params. The full page-dump-vs-fused matrix gate lands in later commits.
+// Unit tests pin the BlockStyle reconstruction and the skeleton. The parametrized
+// PageDumpMatchesFused gate asserts LayoutSink's Page dump is byte-identical to the fused
+// path. Commit 2 covers the pure-text corpus subset; images/HR/tables/footnotes-bearing
+// books join the gate as those paths land (commits 3-5).
 
 #include <gtest/gtest.h>
 
 #include <GfxRenderer.h>
 
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
+#include <sstream>
+#include <string>
 #include <vector>
 
 #include "Epub/Page.h"
 #include "Epub/blocks/BlockStyle.h"
 #include "Epub/content/LayoutSink.h"
 #include "Epub/css/CssStyle.h"
+#include "PipelineRunner.h"
+
+namespace fs = std::filesystem;
 
 namespace {
 
@@ -80,5 +89,62 @@ TEST(LayoutSink, RecordsLabelsAndDropsEmpty) {
   EXPECT_EQ(sink.pageBreakLabels()[0].first, 0u);
   EXPECT_EQ(sink.pageBreakLabels()[0].second, "iv");
 }
+
+// --- Equivalence gate: the LayoutSink page dump must match the fused path byte-for-byte. ---
+// Commit 2 covers the text-only corpus subset; images/floats/tables land in commits 3-4, at
+// which point this list grows to the whole corpus.
+
+std::string fusedDump(const std::string& epub, const std::string& cacheDir) {
+  std::ostringstream out;
+  const bool ok = pipeline_harness::runAndDump(epub, cacheDir, pipeline_harness::Profile{}, out);
+  EXPECT_TRUE(ok) << "fused pipeline failed for " << epub << "\n" << out.str();
+  return out.str();
+}
+
+std::string sinkDump(const std::string& epub, const std::string& cacheDir) {
+  std::ostringstream out;
+  const bool ok = pipeline_harness::layoutViaSink(epub, cacheDir, pipeline_harness::Profile{}, out);
+  EXPECT_TRUE(ok) << "LayoutSink pipeline failed for " << epub << "\n" << out.str();
+  return out.str();
+}
+
+std::string freshDir(const std::string& tag) {
+  const auto dir = fs::temp_directory_path() / "layoutsink_test" / tag;
+  fs::remove_all(dir);
+  fs::create_directories(dir);
+  return dir.string();
+}
+
+class LayoutSinkEquivalence : public testing::TestWithParam<std::string> {};
+
+TEST_P(LayoutSinkEquivalence, PageDumpMatchesFused) {
+  const std::string book = GetParam();
+  const std::string epub = std::string(CORPUS_DIR) + "/" + book;
+  const std::string fused = fusedDump(epub, freshDir(book + "_fused"));
+  const std::string sink = sinkDump(epub, freshDir(book + "_sink"));
+  // On mismatch, dump both to $TEMP/layoutsink_diff for a side-by-side diff (opt-in, keeps
+  // passing runs quiet). The EXPECT_EQ below is the actual gate.
+  if (fused != sink && std::getenv("DUMP_DIFF")) {
+    const auto base = fs::temp_directory_path() / "layoutsink_diff";
+    fs::create_directories(base);
+    std::ofstream(base / (book + ".fused.txt")) << fused;
+    std::ofstream(base / (book + ".sink.txt")) << sink;
+  }
+  EXPECT_EQ(fused, sink) << "LayoutSink diverged from the fused layout for " << book;
+}
+
+// Pure-text corpus books (no images / HR / tables / footnotes). The remaining corpus books
+// carry those and join the gate as their paths land: test_text_rendering (HR), test_display_none
+// / test_kerning_ligature / test_spine_toc_edges (cover image + footnotes) — commits 3-5.
+INSTANTIATE_TEST_SUITE_P(TextCorpus, LayoutSinkEquivalence,
+                         testing::Values("test_headings.epub", "test_font_sizes.epub",
+                                         "test_br_section_break.epub"),
+                         [](const testing::TestParamInfo<std::string>& info) {
+                           std::string n = info.param;
+                           for (char& c : n) {
+                             if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
+                           }
+                           return n;
+                         });
 
 }  // namespace

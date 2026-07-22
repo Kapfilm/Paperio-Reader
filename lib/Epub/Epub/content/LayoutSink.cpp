@@ -4,8 +4,26 @@
 
 #include "Epub/Page.h"
 #include "Epub/ParsedText.h"
+#include "Epub/blocks/TextBlock.h"
 
 namespace compiled {
+namespace {
+
+// Reverse of stage1MapStyleSpan (ChapterHtmlSlimParser.cpp): the on-disk styleSpan bitmask
+// back to the EpdFontFamily::Style the layout's ParsedText::addWord expects.
+EpdFontFamily::Style spanToFontStyle(uint8_t span) {
+  int s = EpdFontFamily::REGULAR;
+  if (span & kSpanBold) s |= EpdFontFamily::BOLD;
+  if (span & kSpanItalic) s |= EpdFontFamily::ITALIC;
+  if (span & kSpanUnderline) s |= EpdFontFamily::UNDERLINE;
+  if (span & kSpanStrikethrough) s |= EpdFontFamily::STRIKETHROUGH;
+  if (span & kSpanSuper) s |= EpdFontFamily::SUP;
+  if (span & kSpanSub) s |= EpdFontFamily::SUB;
+  if (span & kSpanSmallCaps) s |= EpdFontFamily::SMALL_CAPS;
+  return static_cast<EpdFontFamily::Style>(s);
+}
+
+}  // namespace
 
 LayoutSink::LayoutSink(GfxRenderer& renderer, LayoutParams params,
                        std::function<void(std::unique_ptr<Page>)> completePageFn)
@@ -19,6 +37,7 @@ LayoutSink::LayoutSink(GfxRenderer& renderer, LayoutParams params,
       viewportHeight_(params.viewportHeight),
       hyphenationEnabled_(params.hyphenationEnabled),
       bionicReadingEnabled_(params.bionicReadingEnabled),
+      embeddedStyle_(params.embeddedStyle),
       fontSizeLadder_(std::move(params.fontSizeLadder)) {}
 
 LayoutSink::~LayoutSink() = default;
@@ -67,13 +86,226 @@ void LayoutSink::emitPage(uint32_t xhtmlByteOffset) {
   }
 }
 
-// --- BlockSink overrides. Text/image/table paths land in commits 2-5; stubbed here so the
-// skeleton compiles and the BlockStyle-reconstruction path is testable in isolation. ---
+BlockStyle LayoutSink::buildBlockStyle(const CssStyle& style, const bool isHeading) const {
+  const float emSize = static_cast<float>(renderer_.getFontAscenderSize(fontId_));
+  // Headings default to Center (cpp:1582); blocks default to paragraphAlignment (cpp:1563).
+  const CssTextAlign defaultAlign = isHeading ? CssTextAlign::Center : static_cast<CssTextAlign>(paragraphAlignment_);
+  BlockStyle bs = BlockStyle::fromCssStyle(style, emSize, defaultAlign, viewportWidth_);
+  if (isHeading) bs.textAlignDefined = true;  // cpp:1583
+  // Publisher text-align overrides the default when embeddedStyle and the user left alignment
+  // at None (cpp:1584-1586 for headings, cpp:1644-1648 for blocks — identical condition).
+  if (embeddedStyle_ && style.hasTextAlign() &&
+      paragraphAlignment_ == static_cast<uint8_t>(CssTextAlign::None)) {
+    bs.alignment = style.textAlign;
+    bs.textAlignDefined = true;
+  }
+  return bs;
+}
 
-void LayoutSink::onBlock(Block&& /*block*/, const CssStyle& /*style*/) {
-  // Commit 2+: reconstruct the px BlockStyle via BlockStyle::fromCssStyle(style, emSize,
-  // align, viewportWidth) — the same call the fused walk makes at cpp:1562-1564 — then run
-  // the empty-block merge / makePages / split. emSize = renderer_.getFontAscenderSize(fontId_).
+// Port of ChapterHtmlSlimParser::addLineToPage (cpp:2539). Image/float branches land in
+// commit 3; the text-line placement + page-break + footnote assignment are complete here.
+int LayoutSink::addLineToPage(const std::shared_ptr<TextBlock>& line, const bool lineEndsWithHyphenatedWord,
+                              const bool suppressHyphenationRetry) {
+  int lineHeight = effectiveLineHeight(line->getBlockStyle());
+  const uint8_t maxPct = line->maxSizePct();
+  if (maxPct != 100) {
+    lineHeight = lineHeight * maxPct / 100;
+  }
+
+  if (!currentPage_) {
+    currentPage_.reset(new Page());
+    currentPageNextY_ = 0;
+  }
+
+  if (currentPageNextY_ + lineHeight > viewportHeight_) {
+    emitPage(lastBodyChildByteOffset_);
+  }
+
+  const bool noRoomForAnotherLine = currentPageNextY_ + lineHeight <= viewportHeight_ &&
+                                    currentPageNextY_ + (lineHeight * 2) > viewportHeight_;
+  if (lineEndsWithHyphenatedWord && !suppressHyphenationRetry && noRoomForAnotherLine) {
+    return static_cast<int>(ParsedText::LineProcessResult::RetryWithoutHyphenation);
+  }
+
+  wordsExtractedInBlock_ += line->wordCount();
+
+  // Apply horizontal left inset. Float-zone x-shift lands in commit 3.
+  const int16_t xOffset = line->getBlockStyle().leftInset();
+  currentPage_->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY_));
+
+  currentPageNextY_ += lineHeight;
+  return static_cast<int>(ParsedText::LineProcessResult::Accepted);
+}
+
+// Port of ChapterHtmlSlimParser::makePages (cpp:2609), text path. Active-float propagation
+// (cpp:2664-2699) lands in commit 3; everything else — font resolve, margin collapse,
+// effective width, layout, bottom spacing — is reproduced here.
+void LayoutSink::makePages() {
+  if (layoutFailed_) {
+    currentTextBlock_.reset();
+    return;
+  }
+  if (!currentTextBlock_) return;
+
+  if (!currentPage_) {
+    currentPage_.reset(new Page());
+    currentPageNextY_ = 0;
+  }
+
+  if (!currentTextBlock_->isContinuation()) {
+    currentTextBlock_->foldUniformWordSizes();
+  }
+  resolveBlockFont(currentTextBlock_->getBlockStyle());
+
+  const BlockStyle& blockStyle = currentTextBlock_->getBlockStyle();
+  const int lineHeight = effectiveLineHeight(blockStyle);
+
+  if (!currentTextBlock_->isContinuation()) {
+    if (blockStyle.marginTop > 0) {
+      const int16_t collapse = std::min(lastBlockMarginBottom_, blockStyle.marginTop);
+      currentPageNextY_ += static_cast<int16_t>(blockStyle.marginTop - collapse);
+    }
+    if (blockStyle.paddingTop > 0) {
+      currentPageNextY_ += blockStyle.paddingTop;
+    }
+  }
+  lastBlockMarginBottom_ = 0;
+
+  const int horizontalInset = blockStyle.totalHorizontalInset();
+  const uint16_t effectiveWidth =
+      (horizontalInset < viewportWidth_) ? static_cast<uint16_t>(viewportWidth_ - horizontalInset) : viewportWidth_;
+
+  currentTextBlock_->layoutAndExtractLines(
+      renderer_, fontId_, effectiveWidth,
+      [this](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
+             const bool suppressHyphenationRetry) {
+        return static_cast<ParsedText::LineProcessResult>(
+            addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry));
+      },
+      /*includeLastLine=*/true, static_cast<int16_t>(currentPageNextY_), /*lineHeight=*/0);
+
+  if (blockStyle.marginBottom > 0) {
+    currentPageNextY_ += blockStyle.marginBottom;
+    lastBlockMarginBottom_ = blockStyle.marginBottom;
+  } else {
+    lastBlockMarginBottom_ = 0;
+  }
+  if (blockStyle.paddingBottom > 0) {
+    currentPageNextY_ += blockStyle.paddingBottom;
+  }
+
+  // Extra paragraph spacing (default). The <pre>-suppression the fused path applies is a
+  // walk concern (preUntilDepth); a compiled block carries no pre flag yet, so this always
+  // applies here — the text corpus has no <pre>, and pre handling folds in with a later flag.
+  if (extraParagraphSpacing_) {
+    currentPageNextY_ += lineHeight / 2;
+  }
+}
+
+void LayoutSink::layoutTextBlock(Block&& block, const BlockStyle& blockStyle) {
+  currentTextBlock_.reset(new (std::nothrow) ParsedText(extraParagraphSpacing_, hyphenationEnabled_, blockStyle,
+                                                        bionicReadingEnabled_));
+  if (!currentTextBlock_) return;
+  wordsExtractedInBlock_ = 0;
+
+  // Add words through the same ParsedText::addWord path the fused walk uses, replaying the
+  // >96-word mid-block split (flushPartWordBuffer cpp:409-459) so page breaks land identically.
+  for (const Word& w : block.words) {
+    const char* text = &block.text[w.textOff];
+    const EpdFontFamily::Style fontStyle = spanToFontStyle(w.styleSpan);
+    const bool attach = (w.styleSpan & kSpanAttachPrev) != 0;
+    currentTextBlock_->addWord(text, fontStyle, /*underline=*/false, attach, w.sizePct);
+
+    if (currentTextBlock_->size() > 96) {
+      auto& splitBlockStyle = currentTextBlock_->getBlockStyle();
+      resolveBlockFont(splitBlockStyle);
+      const int horizontalInset = splitBlockStyle.totalHorizontalInset();
+      const uint16_t effectiveWidth = (horizontalInset < viewportWidth_)
+                                          ? static_cast<uint16_t>(viewportWidth_ - horizontalInset)
+                                          : viewportWidth_;
+      currentTextBlock_->layoutAndExtractLines(
+          renderer_, fontId_, effectiveWidth,
+          [this](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
+                 const bool suppressHyphenationRetry) {
+            return static_cast<ParsedText::LineProcessResult>(
+                addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry));
+          },
+          /*includeLastLine=*/false, static_cast<int16_t>(currentPageNextY_), /*lineHeight=*/0);
+    }
+  }
+  makePages();
+}
+
+// --- BlockSink overrides. ---
+
+void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
+  if (block.type != BlockType::Text) {
+    // Image/Table blocks land in commits 3-4. Flush any pending merge as a bare block so the
+    // sequence stays aligned, then ignore the non-text block for now.
+    return;
+  }
+
+  const bool isHeading = (block.flags & kStartsChapter) != 0;
+  const bool fromBr = (block.flags & kFromBrElement) != 0;
+
+  BlockStyle blockStyle;
+  if (fromBr) {
+    // EVERY <br> block gets a NEUTRAL layout style (fused cpp:1639-1642): only the current
+    // alignment context, never the element's CSS margins — those would over-space and (for an
+    // empty <br>) mis-place the injected line-gap. This holds whether the block stays empty (a
+    // section separator) or later receives text (an inline <br>, or a poem line). The one CSS
+    // property a <br> block DOES carry is a span-level text-indent (poem stanza pattern): it is
+    // applied to the open <br> block after brStyle, so the producer transmits it via textIndent.
+    blockStyle.alignment = lastBlockAlignment_;
+    blockStyle.textAlignDefined = lastBlockAlignmentDefined_;
+    blockStyle.fromBrElement = true;
+    if (style.hasTextIndent()) {
+      const float emSize = static_cast<float>(renderer_.getFontAscenderSize(fontId_));
+      blockStyle.textIndent = style.textIndent.toPixelsInt16(emSize, static_cast<float>(viewportWidth_));
+      blockStyle.textIndentDefined = true;
+    }
+  } else {
+    blockStyle = buildBlockStyle(style, isHeading);
+  }
+
+  // Empty wrapper / <br> transcript block: don't lay it out. Accumulate its style into a
+  // pending merge that folds into the next non-empty block, reproducing the fused path's
+  // empty-currentTextBlock reuse (startNewTextBlock cpp:752-796).
+  if (block.words.empty()) {
+    if (hasPendingMerge_) {
+      // Chain of consecutive empty blocks: combine styles as the fused reuse path does.
+      BlockStyle incoming = blockStyle;
+      if (pendingMergeFromBr_) {
+        const int16_t lh = static_cast<int16_t>(renderer_.getLineHeight(fontId_) * lineCompression_ + 0.5f);
+        incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lh);
+      }
+      pendingMergeStyle_ = pendingMergeStyle_.getCombinedBlockStyle(incoming);
+    } else {
+      pendingMergeStyle_ = blockStyle;
+    }
+    pendingMergeFromBr_ = blockStyle.fromBrElement;
+    hasPendingMerge_ = true;
+    return;
+  }
+
+  // Non-empty block: fold any pending empty-block merge into its style first.
+  if (hasPendingMerge_) {
+    BlockStyle incoming = blockStyle;
+    if (pendingMergeFromBr_) {
+      const int16_t lh = static_cast<int16_t>(renderer_.getLineHeight(fontId_) * lineCompression_ + 0.5f);
+      incoming.marginTop = static_cast<int16_t>(incoming.marginTop + lh);
+    }
+    blockStyle = pendingMergeStyle_.getCombinedBlockStyle(incoming);
+    hasPendingMerge_ = false;
+    pendingMergeFromBr_ = false;
+  }
+
+  // Track the alignment context for a subsequent <br> block (fused reads it from the current
+  // block at the <br>). Captured from the final merged style actually laid out.
+  lastBlockAlignment_ = blockStyle.alignment;
+  lastBlockAlignmentDefined_ = blockStyle.textAlignDefined;
+
+  layoutTextBlock(std::move(block), blockStyle);
 }
 
 void LayoutSink::onAnchor(const std::string& id) { pendingAnchorId_ = id; }
@@ -88,7 +320,16 @@ void LayoutSink::onPageBreakLabel(const std::string& label) {
 void LayoutSink::onFootnote(int /*wordIndex*/, const FootnoteEntry& /*entry*/) {}
 
 void LayoutSink::onSpineEnd() {
-  // Commit 2+: flush the last accumulated block (makePages) and emit the final page.
+  // Flush the last accumulated block and emit the final page (finalize() cpp:2493-2509).
+  if (currentTextBlock_) {
+    makePages();
+    if (!layoutFailed_) {
+      const bool hasFinalPageContent = currentPage_ && !currentPage_->elements.empty();
+      if (hasFinalPageContent) {
+        emitPage(0u);
+      }
+    }
+  }
 }
 
 }  // namespace compiled
