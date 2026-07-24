@@ -655,6 +655,15 @@ void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
   const bool isHeading = (block.flags & kStartsChapter) != 0;
   const bool fromBr = (block.flags & kFromBrElement) != 0;
 
+  // The alignment CONTEXT a <br> inherits is the fused parser's *current block* alignment at the
+  // <br> (cpp:1633) — which, when an empty block is being reused, is that empty block's alignment
+  // AFTER the endElement reset (see below). Model it as the live merge context: the pending empty
+  // chain's alignment if one is open, else the last laid-out block's. NOT lastBlockAlignment_
+  // alone, which ignores intervening (reset) empty blocks and wrongly carried a heading's Center
+  // across the chain (Moby Dick <p class="toc"> regression).
+  const CssTextAlign contextAlign = hasPendingMerge_ ? pendingMergeStyle_.alignment : lastBlockAlignment_;
+  const bool contextAlignDefined = hasPendingMerge_ ? pendingMergeStyle_.textAlignDefined : lastBlockAlignmentDefined_;
+
   BlockStyle blockStyle;
   if (fromBr) {
     // EVERY <br> block gets a NEUTRAL layout style (fused cpp:1639-1642): only the current
@@ -663,8 +672,8 @@ void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
     // section separator) or later receives text (an inline <br>, or a poem line). The one CSS
     // property a <br> block DOES carry is a span-level text-indent (poem stanza pattern): it is
     // applied to the open <br> block after brStyle, so the producer transmits it via textIndent.
-    blockStyle.alignment = lastBlockAlignment_;
-    blockStyle.textAlignDefined = lastBlockAlignmentDefined_;
+    blockStyle.alignment = contextAlign;
+    blockStyle.textAlignDefined = contextAlignDefined;
     blockStyle.fromBrElement = true;
     if (style.hasTextIndent()) {
       const float emSize = static_cast<float>(renderer_.getFontAscenderSize(fontId_));
@@ -679,6 +688,20 @@ void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
   // pending merge that folds into the next non-empty block, reproducing the fused path's
   // empty-currentTextBlock reuse (startNewTextBlock cpp:752-796).
   if (block.words.empty()) {
+    // Reproduce the fused endElement empty-block ALIGNMENT RESET (cpp:2365-2377, issue #1026): on
+    // closing a header/block tag that stayed empty, the fused path clears the block's alignment so
+    // a centered empty heading does not bleed its (Center, textAlignDefined=true) alignment through
+    // the empty-block-reuse chain into the next paragraph. The reset fires for every empty block
+    // EXCEPT a <br> (which preserves alignment for text in the same container, cpp:2370). This
+    // reset alignment also becomes the context a following <br> inherits (above) — matching the
+    // fused <br> reading the just-reset current block. Alignment only; margins/padding accumulate
+    // through the merge untouched. The producer can't transmit this (a tag-close layout mutation).
+    if (!blockStyle.fromBrElement) {
+      blockStyle.textAlignDefined = false;
+      blockStyle.alignment = (paragraphAlignment_ == static_cast<uint8_t>(CssTextAlign::None))
+                                 ? CssTextAlign::Justify
+                                 : static_cast<CssTextAlign>(paragraphAlignment_);
+    }
     if (hasPendingMerge_) {
       // Chain of consecutive empty blocks: combine styles as the fused reuse path does.
       BlockStyle incoming = blockStyle;

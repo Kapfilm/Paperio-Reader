@@ -1547,6 +1547,11 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   if (cssStyle.pageBreakBefore &&
       (matches(name, HEADER_TAGS, NUM_HEADER_TAGS) || matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS)) && self->currentPage &&
       !self->currentPage->elements.empty()) {
+    // Stage-1: the fused break fires at element-open (possibly a wrapper div whose text lands in a
+    // child block). Flag the NEXT opened block with kPageBreakBefore — reusing the pending-break
+    // path the TOC-boundary case already uses — so the sink breaks before the same content.
+    // Settings-independent CSS property (real-book: Project Gutenberg's `h2 { page-break-before }`).
+    if (self->stage1Sink_) self->stage1PendingPageBreak_ = true;
     self->emitPage(self->lastBodyChildByteOffset);
   }
 
