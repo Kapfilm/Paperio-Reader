@@ -98,6 +98,7 @@ add_executable(EpubPipelineTest
 target_include_directories(EpubPipelineTest PRIVATE ${PIPELINE_INCLUDES})
 target_compile_definitions(EpubPipelineTest PRIVATE
   CORPUS_DIR="${REPO_ROOT}/test/epubs"
+  FIXTURES_DIR="${REPO_ROOT}/test/fixtures"
   GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/goldens"
   ENABLE_SERIAL_LOG=1
   LOG_LEVEL=2
