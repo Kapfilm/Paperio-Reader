@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "Epub/content/CompiledContent.h"
+#include "Serialization.h"
 #include "Epub/content/ContentSink.h"
 #include "PipelineRunner.h"
 
@@ -192,6 +193,53 @@ TEST(ContentSink, SplitsOversizedTextBlockAtWrite) {
     }
   }
   EXPECT_EQ(gotWords, expectWords);
+}
+
+// Regression (design-review 2026-07-24, bug #1): a block of LONG words can have serialized body
+// under kMaxSerializedBody (8 KB) while its raw text exceeds serialization MAX_STRING_LENGTH
+// (4 KB) — which writes fine but fails readback via readString. The split must bound each record's
+// TEXT bytes, not just the serialized body. Assert each record's text fits AND the whole thing
+// round-trips through writeContentBin/readContentBin (the pre-fix code failed the readback).
+TEST(ContentSink, SplitsBoundRecordTextToStringCap) {
+  ContentSink sink;
+  sink.beginSpine();
+
+  // ~80-byte words: with ~7 bytes/word serialized overhead, the serialized-body cap would allow a
+  // run whose text alone is ~7 KB (> 4 KB) — the exact case that broke readback before the fix.
+  const std::string longWord(80, 'x');
+  constexpr int kWordCount = 400;  // ~32 KB of text total -> several records
+  Block big;
+  big.type = BlockType::Text;
+  big.charOffset = 0;
+  for (int i = 0; i < kWordCount; ++i) {
+    Word w;
+    w.textOff = static_cast<uint32_t>(big.text.size());
+    w.sizePct = 100;
+    big.words.push_back(w);
+    big.text.append(longWord);
+    big.text.push_back('\0');
+  }
+  sink.onBlock(std::move(big), CssStyle{});
+  sink.onSpineEnd();
+
+  const auto& blocks = sink.content().spines.at(0).blocks;
+  ASSERT_GT(blocks.size(), 1u);
+  for (const auto& b : blocks) {
+    EXPECT_LE(b.text.size(), static_cast<size_t>(serialization::MAX_STRING_LENGTH))
+        << "each record's text must fit the readString cap";
+  }
+
+  // The real proof: it must survive a content.bin round-trip (pre-fix, readback returned false).
+  const std::string dir = freshDir("textcap");
+  FsFile out;
+  ASSERT_TRUE(out.openForWrite(dir + "/c.bin"));
+  ASSERT_TRUE(compiled::writeContentBin(out, sink.content()));
+  out.close();
+  FsFile in;
+  ASSERT_TRUE(in.openForRead(dir + "/c.bin"));
+  CompiledContent readback;
+  EXPECT_TRUE(compiled::readContentBin(in, readback)) << "long-word block must survive readback";
+  in.close();
 }
 
 // Two full compiles of the same book produce a byte-identical content.bin.

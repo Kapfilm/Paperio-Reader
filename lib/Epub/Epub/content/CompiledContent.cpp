@@ -232,7 +232,7 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
       } else if (b.type == BlockType::Hr) {
         // A horizontal rule carries no body: type + charOffset (already written) are enough.
         // Stage-2 derives its centered geometry from the viewport at layout time.
-      } else {
+      } else {  // BlockType::Image — the reader dispatches the mirror image case explicitly.
         writeString(out, b.entryPath);
         writePod(out, b.width);
         writePod(out, b.height);
@@ -335,12 +335,17 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
         }
       } else if (b.type == BlockType::Hr) {
         // No body — the writer emitted only the header (type/charOffset).
-      } else {
+      } else if (b.type == BlockType::Image) {
         if (!readString(in, b.entryPath)) return false;
         readPod(in, b.width);
         readPod(in, b.height);
         readPod(in, b.floatSide);
         if (!readString(in, b.alt)) return false;
+      } else {
+        // Unknown block type: a newer WBC1 wrote a variant this reader doesn't know. The body
+        // layout is unknown, so continuing would misalign the whole stream — fail cleanly (the
+        // version check should have caught this; this is defense in depth against a bad file).
+        return false;
       }
     }
     uint32_t anchorCount = 0;

@@ -1,6 +1,7 @@
 #include "ContentSink.h"
 
 #include "Epub/FootnoteEntry.h"
+#include "Serialization.h"  // serialization::MAX_STRING_LENGTH — the readString cap the run text must fit
 
 namespace compiled {
 namespace {
@@ -58,6 +59,8 @@ void ContentSink::appendTextSplit(Block&& block) {
   bool first = true;
   while (wordStart < srcWords.size()) {
     size_t used = kTextRecordOverhead;
+    size_t runTextBytes = 0;  // the run's concatenated word text — must fit serialization's
+                              // MAX_STRING_LENGTH (readString rejects a longer text on readback).
     size_t wordEnd = wordStart;
     while (wordEnd < srcWords.size()) {
       // Byte length of this word's text (up to and including its NUL).
@@ -65,9 +68,17 @@ void ContentSink::appendTextSplit(Block&& block) {
       const size_t textEnd = srcText.find('\0', textOff);
       const size_t wordBytes = (textEnd == std::string::npos ? srcText.size() : textEnd + 1) - textOff;
       const size_t add = kWordRecordBytes + wordBytes;
-      // Always take at least one word per run so a single oversized word still progresses.
-      if (wordEnd != wordStart && used + add > kMaxSerializedBody) break;
+      // Two independent caps, each honored with an always-take-one-word floor so a single
+      // oversized word still progresses: the serialized-body cap (read-time alloc bound) AND the
+      // text-bytes cap (MAX_STRING_LENGTH — else the record writes but fails readback via
+      // readString). The serialized-body cap (8 KB) exceeds the text cap (4 KB), and per-word
+      // overhead only widens the gap, so in practice the text cap binds first for long paragraphs.
+      if (wordEnd != wordStart &&
+          (used + add > kMaxSerializedBody || runTextBytes + wordBytes > serialization::MAX_STRING_LENGTH)) {
+        break;
+      }
       used += add;
+      runTextBytes += wordBytes;
       ++wordEnd;
     }
 
