@@ -1638,9 +1638,11 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       if (strcmp(name, "li") == 0 && !cssStyle.hasMarginLeft() && !self->listStack.empty()) {
         const int depth = static_cast<int>(std::min(self->listStack.size(), size_t(3)));
         blockStyle.marginLeft = static_cast<int16_t>(emSize * 1.5f * depth);
-        // Stage-1: fold the settings-independent list indent into the CssStyle captured at
-        // block open, so both sinks reproduce the <li> left inset (already px).
-        self->currentCssStyle.marginLeft = CssLength(static_cast<float>(blockStyle.marginLeft));
+        // Stage-1: fold the list indent as an em-based CssLength (1.5em per nesting level) — NOT
+        // the px value, which depends on emSize and would make content.bin settings-dependent. The
+        // sink resolves 1.5*depth em with its own emSize to the identical px, keeping content.bin
+        // settings-independent (compiled-content-format.md: px belongs to the Stage-2 cache).
+        self->currentCssStyle.marginLeft = CssLength(1.5f * static_cast<float>(depth), CssUnit::Em);
         self->currentCssStyle.defined.marginLeft = 1;
       }
       self->startNewTextBlock(blockStyle);
@@ -1913,10 +1915,12 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
           updatedStyle.textIndentDefined = true;
           self->currentTextBlock->setBlockStyle(updatedStyle);
           // Stage-1: this span-level poem indent mutates the OPEN block's style after it was
-          // captured; transmit it (settings-independent, already px) so both sinks reproduce
-          // the first-line indent. Stored as a pixel CssLength that fromCssStyle round-trips.
+          // captured; transmit the ORIGINAL em/%-based CssLength (NOT the px-resolved marginPx —
+          // px depends on font size + viewport, which would make content.bin settings-dependent).
+          // The sink re-resolves em->px with its own emSize, so the result is byte-identical while
+          // content.bin stays settings-independent (compiled-content-format.md: px stays Stage-2).
           if (self->stage1Sink_) {
-            self->stage1BlockCssStyle_.textIndent = CssLength(static_cast<float>(marginPx));
+            self->stage1BlockCssStyle_.textIndent = cssStyle.marginLeft;
             self->stage1BlockCssStyle_.defined.textIndent = 1;
           }
         }
