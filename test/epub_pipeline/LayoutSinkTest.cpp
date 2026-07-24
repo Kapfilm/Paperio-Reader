@@ -95,20 +95,6 @@ TEST(LayoutSink, RecordsLabelsAndDropsEmpty) {
 // Commit 2 covers the text-only corpus subset; images/floats/tables land in commits 3-4, at
 // which point this list grows to the whole corpus.
 
-std::string fusedDump(const std::string& epub, const std::string& cacheDir) {
-  std::ostringstream out;
-  const bool ok = pipeline_harness::runAndDump(epub, cacheDir, pipeline_harness::Profile{}, out);
-  EXPECT_TRUE(ok) << "fused pipeline failed for " << epub << "\n" << out.str();
-  return out.str();
-}
-
-std::string sinkDump(const std::string& epub, const std::string& cacheDir) {
-  std::ostringstream out;
-  const bool ok = pipeline_harness::layoutViaSink(epub, cacheDir, pipeline_harness::Profile{}, out);
-  EXPECT_TRUE(ok) << "LayoutSink pipeline failed for " << epub << "\n" << out.str();
-  return out.str();
-}
-
 std::string freshDir(const std::string& tag) {
   const auto dir = fs::temp_directory_path() / "layoutsink_test" / tag;
   fs::remove_all(dir);
@@ -116,27 +102,58 @@ std::string freshDir(const std::string& tag) {
   return dir.string();
 }
 
-class LayoutSinkEquivalence : public testing::TestWithParam<std::string> {};
-
-TEST_P(LayoutSinkEquivalence, PageDumpMatchesFused) {
-  const std::string book = GetParam();
-  const std::string epub = std::string(CORPUS_DIR) + "/" + book;
-  const std::string fused = fusedDump(epub, freshDir(book + "_fused"));
-  const std::string sink = sinkDump(epub, freshDir(book + "_sink"));
-  // On mismatch, dump both to $TEMP/layoutsink_diff for a side-by-side diff (opt-in, keeps
-  // passing runs quiet). The EXPECT_EQ below is the actual gate.
-  if (fused != sink && std::getenv("DUMP_DIFF")) {
-    const auto base = fs::temp_directory_path() / "layoutsink_diff";
-    fs::create_directories(base);
-    std::ofstream(base / (book + ".fused.txt")) << fused;
-    std::ofstream(base / (book + ".sink.txt")) << sink;
-  }
-  EXPECT_EQ(fused, sink) << "LayoutSink diverged from the fused layout for " << book;
+std::string fusedDump(const std::string& epub, const std::string& cacheDir, const pipeline_harness::Profile& p) {
+  std::ostringstream out;
+  const bool ok = pipeline_harness::runAndDump(epub, cacheDir, p, out);
+  EXPECT_TRUE(ok) << "fused pipeline failed for " << epub << "\n" << out.str();
+  return out.str();
 }
 
-// The WHOLE synthetic corpus: LayoutSink must reproduce the fused page dump byte-for-byte for
-// every book (text, headings, images, floats, HR, tables, footnotes, covers). New corpus books
-// are picked up automatically.
+std::string sinkDump(const std::string& epub, const std::string& cacheDir, const pipeline_harness::Profile& p) {
+  std::ostringstream out;
+  const bool ok = pipeline_harness::layoutViaSink(epub, cacheDir, p, out);
+  EXPECT_TRUE(ok) << "LayoutSink pipeline failed for " << epub << "\n" << out.str();
+  return out.str();
+}
+
+// The settings matrix: each Profile flexes a layout-affecting knob LayoutSink reads (font, line
+// compression, paragraph spacing, alignment, viewport, hyphenation, embedded CSS). LayoutSink must
+// stay byte-identical to the fused path under every one.
+std::vector<pipeline_harness::Profile> profileMatrix() {
+  using P = pipeline_harness::Profile;
+  std::vector<P> ps;
+  ps.push_back(P{});  // default
+  P bigFont;
+  bigFont.name = "bigFont";
+  bigFont.fontId = 3;
+  ps.push_back(bigFont);
+  P leftAlign;
+  leftAlign.name = "leftAlign";
+  leftAlign.paragraphAlignment = 1;  // Left (default 0 = Justify)
+  ps.push_back(leftAlign);
+  P spacing;
+  spacing.name = "spacing";
+  spacing.extraParagraphSpacing = true;
+  spacing.lineCompression = 1.2f;
+  ps.push_back(spacing);
+  P narrow;
+  narrow.name = "narrow";
+  narrow.viewportWidth = 300;
+  narrow.viewportHeight = 500;
+  ps.push_back(narrow);
+  P hyphen;
+  hyphen.name = "hyphen";
+  hyphen.hyphenationEnabled = true;
+  ps.push_back(hyphen);
+  P noEmbed;
+  noEmbed.name = "noEmbed";
+  noEmbed.embeddedStyle = false;
+  ps.push_back(noEmbed);
+  return ps;
+}
+
+// The WHOLE synthetic corpus × the settings matrix: LayoutSink must reproduce the fused page dump
+// byte-for-byte for every (book, profile). New corpus books are picked up automatically.
 std::vector<std::string> corpusBooks() {
   std::vector<std::string> names;
   for (const auto& entry : fs::directory_iterator(CORPUS_DIR)) {
@@ -146,9 +163,40 @@ std::vector<std::string> corpusBooks() {
   return names;
 }
 
-INSTANTIATE_TEST_SUITE_P(Corpus, LayoutSinkEquivalence, testing::ValuesIn(corpusBooks()),
-                         [](const testing::TestParamInfo<std::string>& info) {
-                           std::string n = info.param;
+struct BookProfile {
+  std::string book;
+  pipeline_harness::Profile profile;
+};
+
+std::vector<BookProfile> bookProfileMatrix() {
+  std::vector<BookProfile> out;
+  for (const auto& book : corpusBooks()) {
+    for (const auto& p : profileMatrix()) out.push_back({book, p});
+  }
+  return out;
+}
+
+class LayoutSinkEquivalence : public testing::TestWithParam<BookProfile> {};
+
+TEST_P(LayoutSinkEquivalence, PageDumpMatchesFused) {
+  const BookProfile& bp = GetParam();
+  const std::string tag = bp.book + "_" + bp.profile.name;
+  const std::string epub = std::string(CORPUS_DIR) + "/" + bp.book;
+  const std::string fused = fusedDump(epub, freshDir(tag + "_fused"), bp.profile);
+  const std::string sink = sinkDump(epub, freshDir(tag + "_sink"), bp.profile);
+  // On mismatch, dump both to $TEMP/layoutsink_diff for a side-by-side diff (opt-in).
+  if (fused != sink && std::getenv("DUMP_DIFF")) {
+    const auto base = fs::temp_directory_path() / "layoutsink_diff";
+    fs::create_directories(base);
+    std::ofstream(base / (tag + ".fused.txt")) << fused;
+    std::ofstream(base / (tag + ".sink.txt")) << sink;
+  }
+  EXPECT_EQ(fused, sink) << "LayoutSink diverged from the fused layout for " << tag;
+}
+
+INSTANTIATE_TEST_SUITE_P(Matrix, LayoutSinkEquivalence, testing::ValuesIn(bookProfileMatrix()),
+                         [](const testing::TestParamInfo<BookProfile>& info) {
+                           std::string n = info.param.book + "_" + info.param.profile.name;
                            for (char& c : n) {
                              if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
                            }

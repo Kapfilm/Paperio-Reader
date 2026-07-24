@@ -270,15 +270,15 @@ void LayoutSink::makePages() {
     currentPageNextY_ += blockStyle.paddingBottom;
   }
 
-  // Extra paragraph spacing (default). The <pre>-suppression the fused path applies is a
-  // walk concern (preUntilDepth); a compiled block carries no pre flag yet, so this always
-  // applies here — the text corpus has no <pre>, and pre handling folds in with a later flag.
-  if (extraParagraphSpacing_) {
+  // Extra paragraph spacing, suppressed inside <pre> (kPreformatted) so code/preformatted lines
+  // are single-spaced — matching the fused makePages gate on preUntilDepth (cpp:2733).
+  if (extraParagraphSpacing_ && !currentBlockPreformatted_) {
     currentPageNextY_ += lineHeight / 2;
   }
 }
 
 void LayoutSink::layoutTextBlock(Block&& block, const BlockStyle& blockStyle) {
+  currentBlockPreformatted_ = (block.flags & kPreformatted) != 0;
   currentTextBlock_.reset(new (std::nothrow) ParsedText(extraParagraphSpacing_, hyphenationEnabled_, blockStyle,
                                                         bionicReadingEnabled_));
   if (!currentTextBlock_) return;
@@ -378,7 +378,12 @@ void LayoutSink::placeBlockImage(const Block& block, const CssStyle& imgStyle) {
 }
 
 std::unique_ptr<ParsedText> LayoutSink::buildCellText(const TableCell& cell) const {
-  auto pt = std::unique_ptr<ParsedText>(new ParsedText(extraParagraphSpacing_, hyphenationEnabled_));
+  // Table cells are built with NO paragraph spacing and NO hyphenation, matching the fused
+  // BufferedTableCell (ChapterHtmlSlimParser.cpp:1077 `new ParsedText(false, false)`). Using the
+  // sink's profile flags here would give cells a first-line indent / hyphenation the grid + the
+  // paragraph fallback never apply.
+  auto pt = std::unique_ptr<ParsedText>(new ParsedText(/*extraParagraphSpacing=*/false,
+                                                       /*hyphenationEnabled=*/false));
   for (const Word& w : cell.words) {
     const char* text = &cell.text[w.textOff];
     const EpdFontFamily::Style fontStyle = spanToFontStyle(w.styleSpan);
@@ -394,17 +399,12 @@ void LayoutSink::placeTableAsParagraphs(const Block& block) {
   for (const TableRow& row : block.rows) {
     for (const TableCell& cell : row.cells) {
       if (cell.words.empty()) continue;
-      BlockStyle cellBlockStyle;
-      cellBlockStyle.textAlignDefined = true;
-      cellBlockStyle.alignment = (paragraphAlignment_ == static_cast<uint8_t>(CssTextAlign::None))
-                                     ? CssTextAlign::Justify
-                                     : static_cast<CssTextAlign>(paragraphAlignment_);
-      currentTextBlock_.reset(new (std::nothrow) ParsedText(extraParagraphSpacing_, hyphenationEnabled_,
-                                                            cellBlockStyle, bionicReadingEnabled_));
-      if (!currentTextBlock_) continue;
+      // The fused fallback (cpp:3041-3048) calls startNewTextBlock(cellBlockStyle) to open a block
+      // but then lays out cell.text — which keeps its OWN default BlockStyle (Justify, no indent),
+      // NOT cellBlockStyle. So the cell alignment is the ParsedText default here, not
+      // paragraphAlignment. wordsExtractedInBlock resets per cell (a fresh startNewTextBlock).
       wordsExtractedInBlock_ = 0;
       auto cellText = buildCellText(cell);
-      cellText->setBlockStyle(cellBlockStyle);
       cellText->layoutAndExtractLines(
           renderer_, fontId_, viewportWidth_,
           [this](const std::shared_ptr<TextBlock>& tb, const bool h, const bool s) {
@@ -547,6 +547,22 @@ void LayoutSink::placeTable(const Block& block) {
 }
 
 void LayoutSink::placeHr() {
+  // The fused <hr> handler calls makePages() first, which lays out the currentTextBlock — even
+  // when it is empty (e.g. the empty block between two consecutive <hr/>s). An empty block still
+  // advances Y by its margins + extra paragraph spacing. Reproduce that: if an empty-merge block
+  // is pending, materialize and lay it out (no words → just its spacing) before the rule.
+  if (hasPendingMerge_) {
+    currentBlockPreformatted_ = false;
+    currentTextBlock_.reset(new (std::nothrow) ParsedText(extraParagraphSpacing_, hyphenationEnabled_,
+                                                          pendingMergeStyle_, bionicReadingEnabled_));
+    hasPendingMerge_ = false;
+    pendingMergeFromBr_ = false;
+    if (currentTextBlock_) {
+      wordsExtractedInBlock_ = 0;
+      makePages();
+    }
+  }
+
   if (!currentPage_) {
     currentPage_.reset(new Page());
     currentPageNextY_ = 0;

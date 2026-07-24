@@ -164,6 +164,7 @@ class LayoutSink : public BlockSink {
   int completedPageCount_ = 0;
   int wordsExtractedInBlock_ = 0;
   bool layoutFailed_ = false;
+  bool currentBlockPreformatted_ = false;  // block is inside <pre> → suppress extra paragraph spacing
 
   // Float / deferred-image zone state.
   std::shared_ptr<PageImage> deferredPageImage_;

@@ -614,6 +614,11 @@ void ChapterHtmlSlimParser::stage1FlushBlock() {
   // pendingImageBlockStyle around images), so Stage-2 needs the same sequence to replay
   // those merges byte-identically. They carry no words, so they cost a few bytes each.
   stage1Block_->type = compiled::BlockType::Text;
+  // Inside <pre>, the fused makePages suppresses the extra inter-paragraph spacing (gated on
+  // preUntilDepth). Tag the block so Stage-2 does the same. This mirrors the layout-time gate:
+  // the block is flushed as the NEXT block opens, and <pre>'s own last line is flushed after
+  // </pre> resets preUntilDepth (so it correctly gets normal spacing, matching cpp:2733).
+  if (preUntilDepth != INT_MAX) stage1Block_->flags |= compiled::kPreformatted;
   const uint8_t headingLevel = stage1BlockHeadingLevel_;
   const std::string title = headingLevel > 0 ? stage1JoinWords(*stage1Block_) : std::string();
   stage1Sink_->onBlock(std::move(*stage1Block_), stage1BlockCssStyle_);
