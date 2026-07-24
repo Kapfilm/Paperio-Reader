@@ -1,7 +1,11 @@
-# Handover — Phase 3 step 5 (LayoutSink), commits 1-3 done, 4-6 remain
+# Handover — Phase 3 step 5 (LayoutSink) — COMPLETE; next is outer step 6 (unify)
 
-Pick this up to continue the LayoutSink work. Design: `parser-stage1-step5-design.md`. Master
-plan: `compiled-book-pipeline-plan.md` Phase 3. Branch: `feat-stage1-extraction`.
+Step 5 is **done**: LayoutSink reproduces the fused measure+paginate **byte-for-byte across the
+full 12-book corpus × a 7-profile settings matrix (84 cases)**. Full real suite 426/426 green;
+goldens unchanged throughout. Design: `parser-stage1-step5-design.md`. Master plan:
+`compiled-book-pipeline-plan.md` Phase 3. Branch: `feat-stage1-extraction`.
+
+Next work is the OUTER step 6 (unify) — see the last section.
 
 ## What step 5 is
 
@@ -45,7 +49,19 @@ ctest --test-dir build/test-msys -R "LayoutSink|MatchesGolden|ContentSink|Stage1
 test_png_images, test_jpeg_images, test_mixed_images, test_float_images, test_text_rendering (8/12).
 No regression: all goldens, ContentSink, Stage1Producer green throughout.
 
-## Remaining
+## Commits 4-6 — DONE (2026-07-24)
+
+- **5.4 tables**: extracted shared `compiled::packTableFragments` (`content/TableLayout.{h,cpp}`)
+  driven by a `TablePageContext` callback; both the fused parser and LayoutSink use it. Fixed
+  `onSpineEnd` to emit a cover-only page (no text block). `test_tables` byte-identical.
+- **5.5 footnotes + TOC page-breaks**: `onFootnote` buffered + assigned in addLineToPage; TOC-
+  boundary anchors transmitted as `kPageBreakBefore` (producer has `tocAnchors`); `<br>` text-
+  indent leak fixed. Full corpus byte-identical at default profile.
+- **5.6 settings matrix**: 7 profiles. Fixed table-cell `ParsedText(false,false)`, paragraph-
+  fallback default alignment, `<pre>` spacing via new `kPreformatted` flag (bit 7), consecutive-
+  `<hr/>` empty-block layout. 84/84 matrix cases byte-identical.
+
+## (historical) Remaining — now all complete
 
 ### Commit 4 — tables
 Port the table layout: `emitBufferedTable` / `emitTableAsFragments` / `emitTableAsParagraphs` /
