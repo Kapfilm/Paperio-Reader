@@ -229,6 +229,9 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
             writeString(out, c.imageAlt);
           }
         }
+      } else if (b.type == BlockType::Hr) {
+        // A horizontal rule carries no body: type + charOffset (already written) are enough.
+        // Stage-2 derives its centered geometry from the viewport at layout time.
       } else {
         writeString(out, b.entryPath);
         writePod(out, b.width);
@@ -330,6 +333,8 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
             if (!readString(in, c.imageAlt)) return false;
           }
         }
+      } else if (b.type == BlockType::Hr) {
+        // No body — the writer emitted only the header (type/charOffset).
       } else {
         if (!readString(in, b.entryPath)) return false;
         readPod(in, b.width);

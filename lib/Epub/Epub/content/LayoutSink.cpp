@@ -359,6 +359,25 @@ void LayoutSink::placeBlockImage(const Block& block, const CssStyle& imgStyle) {
   currentPageNextY_ += static_cast<int16_t>(spacingBottom);
 }
 
+void LayoutSink::placeHr() {
+  if (!currentPage_) {
+    currentPage_.reset(new Page());
+    currentPageNextY_ = 0;
+  }
+  const int lineHeight = static_cast<int>(renderer_.getLineHeight(fontId_) * lineCompression_ + 0.5f);
+  const int16_t marginV = static_cast<int16_t>(lineHeight / 2);
+  currentPageNextY_ += marginV;
+  if (currentPageNextY_ + 1 + marginV > viewportHeight_) {
+    emitPage(lastBodyChildByteOffset_);
+    currentPage_.reset(new Page());
+    currentPageNextY_ = 0;
+  }
+  const int16_t hrWidth = static_cast<int16_t>(viewportWidth_ / 2);
+  const int16_t hrX = static_cast<int16_t>(viewportWidth_ / 4);
+  currentPage_->elements.push_back(std::make_shared<PageHR>(hrX, currentPageNextY_, hrWidth));
+  currentPageNextY_ += 1 + marginV;
+}
+
 void LayoutSink::attachFloatImage(const Block& block, const CssStyle& imgStyle, BlockStyle& bs) {
   if (!currentPage_) currentPage_.reset(new (std::nothrow) Page());
 
@@ -410,6 +429,10 @@ void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
     // emits floats as fields on the following Text block, not as Image blocks — so every Image
     // block here is a centered block image.
     placeBlockImage(block, style);
+    return;
+  }
+  if (block.type == BlockType::Hr) {
+    placeHr();
     return;
   }
   if (block.type != BlockType::Text) {

@@ -650,6 +650,16 @@ void ChapterHtmlSlimParser::stage1EmitImageBlock(const std::string& entryPath, c
   stage1Sink_->onBlock(std::move(b), imgStyle);
 }
 
+void ChapterHtmlSlimParser::stage1EmitHrBlock() {
+  if (!stage1Sink_) return;
+  stage1FlushBlock();         // emit any pending text block first (document order)
+  stage1EmitPendingAnchor();  // an anchor introducing the rule points at it
+  compiled::Block b;
+  b.type = compiled::BlockType::Hr;
+  b.charOffset = stage1CharOffset_;
+  stage1Sink_->onBlock(std::move(b), CssStyle{});  // rule geometry is derived at layout time
+}
+
 void ChapterHtmlSlimParser::stage1EmitTableBlock(const BufferedTable& table) {
   if (!stage1Sink_) return;
   stage1FlushBlock();         // emit any pending text block first (document order)
@@ -1650,6 +1660,10 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     const int16_t hrX = static_cast<int16_t>(self->viewportWidth / 4);
     self->currentPage->elements.push_back(std::make_shared<PageHR>(hrX, self->currentPageNextY, hrWidth));
     self->currentPageNextY += 1 + marginV;
+    // Stage-1: emit the rule as a bare HR block (flushes any pending text first, preserving
+    // document order). Do this BEFORE opening the following empty block so the sink sees
+    // [ ...text..., HR, next-block ] in the same order the fused elements were produced.
+    self->stage1EmitHrBlock();
     BlockStyle emptyStyle;
     self->startNewTextBlock(emptyStyle);
   } else if (matches(name, UNDERLINE_TAGS, NUM_UNDERLINE_TAGS) ||

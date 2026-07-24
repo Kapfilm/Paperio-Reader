@@ -52,7 +52,7 @@ struct Word {
   uint8_t bidiLevel = 0;  // Unicode embedding level; 0 = LTR
 };
 
-enum class BlockType : uint8_t { Text = 0, Image = 1, Table = 2 };
+enum class BlockType : uint8_t { Text = 0, Image = 1, Table = 2, Hr = 3 };
 
 // One table cell: text runs (a mini text block) and/or a single cell image. Settings-
 // independent — Stage-2 reproduces today's grid-or-paragraph decision (which is

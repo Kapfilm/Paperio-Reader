@@ -405,6 +405,9 @@ class ChapterHtmlSlimParser final : public Print {
   // Flush any pending text, then emit a Table block reconstructed from the buffered table
   // (settings-independent rows/cells; Stage-2 reproduces grid-or-paragraph).
   void stage1EmitTableBlock(const BufferedTable& table);
+  // Flush any pending text, then emit a bare HR marker block. Stage-2 derives the centered
+  // rule geometry + surrounding half-line margins from the viewport at layout time.
+  void stage1EmitHrBlock();
   // Snap a completed block's effective font size (block multiplier, after uniform per-word
   // folding) to the size ladder: sets headingFontId to the chosen real font and reduces
   // fontSizeMultiplier to the residual. Applies the one-aux-font-per-section budget and is

@@ -109,6 +109,9 @@ class LayoutSink : public BlockSink {
   // helper, apply the pending-block spacing, page-break, and push a PageImage. Mirrors the
   // fused <img> block path (ChapterHtmlSlimParser.cpp block-image branch).
   void placeBlockImage(const Block& block, const CssStyle& imgStyle);
+  // Emit a horizontal rule (centered 25%->75%, half-line margins above/below), mirroring the
+  // fused <hr> handler (cpp:1630-1654).
+  void placeHr();
   // Allocate the next image cache path (imageBasePath + counter + ext), matching the fused walk.
   std::string nextImageCachePath(const std::string& entryPath);
   // Attach a block's inline float image (its inlineImage* fields) beside the paragraph text:
