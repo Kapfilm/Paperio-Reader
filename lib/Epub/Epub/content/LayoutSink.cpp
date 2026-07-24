@@ -137,6 +137,14 @@ int LayoutSink::addLineToPage(const std::shared_ptr<TextBlock>& line, const bool
   const bool isFirstLineOfBlock = (wordsExtractedInBlock_ == 0);
   wordsExtractedInBlock_ += line->wordCount();
 
+  // Assign any footnotes whose anchor word has now been laid out to the current page (cpp:2540).
+  auto footnoteIt = pendingFootnotes_.begin();
+  while (footnoteIt != pendingFootnotes_.end() && footnoteIt->first <= wordsExtractedInBlock_) {
+    currentPage_->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
+    ++footnoteIt;
+  }
+  pendingFootnotes_.erase(pendingFootnotes_.begin(), footnoteIt);
+
   // Apply horizontal left inset. For lines overlapping an active LEFT float zone, also shift
   // right by the zone width so text starts after the image (cpp:2580-2593). Right floats narrow
   // the line width (handled in widthForLine) but don't shift text.
@@ -242,6 +250,15 @@ void LayoutSink::makePages() {
             addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry));
       },
       /*includeLastLine=*/true, static_cast<int16_t>(currentPageNextY_), lineHeightForFloat);
+
+  // Fallback: transfer any remaining pending footnotes to the current page (cpp:2678-2682).
+  // Catches edge cases where a footnote's word index equals the exact block size.
+  if (!pendingFootnotes_.empty() && currentPage_) {
+    for (const auto& [idx, fn] : pendingFootnotes_) {
+      currentPage_->addFootnote(fn.number, fn.href);
+    }
+    pendingFootnotes_.clear();
+  }
 
   if (blockStyle.marginBottom > 0) {
     currentPageNextY_ += blockStyle.marginBottom;
@@ -594,6 +611,12 @@ void LayoutSink::attachFloatImage(const Block& block, const CssStyle& imgStyle, 
 // --- BlockSink overrides. ---
 
 void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
+  // A TOC-boundary (or CSS page-break-before) block starts a fresh page (fused forces this in
+  // startNewTextBlock when the pending anchor is a TOC anchor).
+  if ((block.flags & kPageBreakBefore) && currentPage_ && !currentPage_->elements.empty()) {
+    emitPage(lastBodyChildByteOffset_);
+  }
+
   if (block.type == BlockType::Image) {
     // A standalone (centered) block image. floatSide != 0 would be a float, but the producer
     // emits floats as fields on the following Text block, not as Image blocks — so every Image
@@ -685,7 +708,11 @@ void LayoutSink::onPageBreakLabel(const std::string& label) {
   pageBreakLabels_.emplace_back(static_cast<uint16_t>(completedPageCount_), label);
 }
 
-void LayoutSink::onFootnote(int /*wordIndex*/, const FootnoteEntry& /*entry*/) {}
+void LayoutSink::onFootnote(int wordIndex, const FootnoteEntry& entry) {
+  // Buffered until layout reaches this word position (addLineToPage), matching the fused
+  // pendingFootnotes machinery. wordIndex is relative to the block currently being built.
+  pendingFootnotes_.push_back({wordIndex, entry});
+}
 
 void LayoutSink::onSpineEnd() {
   // Flush the last accumulated text block (finalize() cpp:2493-2509).

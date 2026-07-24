@@ -1,14 +1,15 @@
 // Step 5 (docs/parser-stage1-step5-design.md): LayoutSink equivalence tests.
 //
 // Unit tests pin the BlockStyle reconstruction and the skeleton. The parametrized
-// PageDumpMatchesFused gate asserts LayoutSink's Page dump is byte-identical to the fused
-// path. Commit 2 covers the pure-text corpus subset; images/HR/tables/footnotes-bearing
-// books join the gate as those paths land (commits 3-5).
+// PageDumpMatchesFused gate asserts LayoutSink's Page dump is byte-identical to the fused path
+// over the WHOLE synthetic corpus (text, headings, images, floats, HR, tables, footnotes, covers)
+// at the default Profile. Commit 6 expands it across the settings-Profile matrix.
 
 #include <gtest/gtest.h>
 
 #include <GfxRenderer.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -133,13 +134,19 @@ TEST_P(LayoutSinkEquivalence, PageDumpMatchesFused) {
   EXPECT_EQ(fused, sink) << "LayoutSink diverged from the fused layout for " << book;
 }
 
-// Text + block-image + float-image corpus books. HR (test_text_rendering), tables (test_tables),
-// and footnote-bearing cover books (test_kerning_ligature, test_spine_toc_edges) join as their
-// paths land (commits 3d-5).
-INSTANTIATE_TEST_SUITE_P(TextCorpus, LayoutSinkEquivalence,
-                         testing::Values("test_headings.epub", "test_font_sizes.epub",
-                                         "test_br_section_break.epub", "test_png_images.epub",
-                                         "test_jpeg_images.epub", "test_mixed_images.epub", "test_float_images.epub", "test_text_rendering.epub", "test_tables.epub"),
+// The WHOLE synthetic corpus: LayoutSink must reproduce the fused page dump byte-for-byte for
+// every book (text, headings, images, floats, HR, tables, footnotes, covers). New corpus books
+// are picked up automatically.
+std::vector<std::string> corpusBooks() {
+  std::vector<std::string> names;
+  for (const auto& entry : fs::directory_iterator(CORPUS_DIR)) {
+    if (entry.path().extension() == ".epub") names.push_back(entry.path().filename().string());
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+INSTANTIATE_TEST_SUITE_P(Corpus, LayoutSinkEquivalence, testing::ValuesIn(corpusBooks()),
                          [](const testing::TestParamInfo<std::string>& info) {
                            std::string n = info.param;
                            for (char& c : n) {

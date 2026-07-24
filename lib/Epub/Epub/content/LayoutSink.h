@@ -27,6 +27,7 @@
 #include "BlockSink.h"
 #include "CompiledContent.h"
 #include "Epub/FontSizeLadder.h"
+#include "Epub/FootnoteEntry.h"
 #include "Epub/blocks/BlockStyle.h"
 #include "Epub/css/CssStyle.h"
 
@@ -35,7 +36,6 @@ class Page;
 class PageImage;
 class ParsedText;
 class TextBlock;
-struct FootnoteEntry;
 
 namespace compiled {
 
@@ -171,6 +171,12 @@ class LayoutSink : public BlockSink {
   int16_t activeFloatBottom_ = 0;
   int16_t activeFloatWidth_ = 0;
   bool activeFloatIsRight_ = false;
+
+  // Footnotes anchored to a word position in the block currently being laid out. onFootnote
+  // buffers them (it fires while the producer builds the block, before that block's onBlock);
+  // addLineToPage assigns each to the page once layout reaches its word index, with a makePages
+  // fallback for the tail — mirroring the fused pendingFootnotes machinery.
+  std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes_;
 
   // Side-output tables (pulled by the caller after onSpineEnd).
   std::vector<std::pair<std::string, uint16_t>> anchorData_;

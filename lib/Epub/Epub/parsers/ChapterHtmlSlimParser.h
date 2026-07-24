@@ -263,6 +263,7 @@ class ChapterHtmlSlimParser final : public Print {
   uint8_t stage1BlockHeadingLevel_ = 0;           // heading level (1-6) of the open block; 0 = not a heading
   bool stage1PendingFromBr_ = false;              // incoming block came from a <br> separator
   std::string stage1PendingAnchor_;               // element id awaiting the block it precedes
+  bool stage1PendingPageBreak_ = false;           // the stashed anchor is a TOC boundary → kPageBreakBefore
   // Deferred float image awaiting the paragraph it floats beside — attached to that block when
   // its first word arrives (mirrors the layout's pendingInlineImage_). Intrinsic dims.
   std::string stage1InlineImagePath_;

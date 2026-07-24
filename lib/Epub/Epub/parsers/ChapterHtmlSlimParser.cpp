@@ -718,6 +718,11 @@ void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
   stage1BlockHeadingLevel_ = headingLevel;
   if (headingLevel > 0) stage1Block_->flags |= compiled::kStartsChapter;
   if (fromBr) stage1Block_->flags |= compiled::kFromBrElement;
+  // A TOC-boundary anchor introducing this block forces a fresh page (fused emitPage above).
+  if (stage1PendingPageBreak_) {
+    stage1Block_->flags |= compiled::kPageBreakBefore;
+    stage1PendingPageBreak_ = false;
+  }
 }
 
 void ChapterHtmlSlimParser::stage1AddWord(const char* text, const EpdFontFamily::Style style, const uint8_t sizePct,
@@ -784,12 +789,18 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
       currentTextBlock->setBlockStyle(merged);
 
       if (!pendingAnchorId.empty()) {
-        if (std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
+        const bool tocBoundary = std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end();
+        if (tocBoundary) {
           if (currentPage && !currentPage->elements.empty()) {
             emitPage(lastBodyChildByteOffset);
           }
         }
-        if (stage1Sink_) stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
+        if (stage1Sink_) {
+          stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
+          // A TOC-boundary anchor forces a fresh page: transmit it as kPageBreakBefore on the
+          // block this anchor introduces, so Stage-2 (LayoutSink) reproduces the page break.
+          if (tocBoundary) stage1PendingPageBreak_ = true;
+        }
         anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
         pendingAnchorId.clear();
       }
@@ -813,15 +824,19 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   }
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
-  if (!pendingAnchorId.empty() &&
-      std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
+  const bool tocBoundary =
+      !pendingAnchorId.empty() && std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end();
+  if (tocBoundary) {
     if (currentPage && !currentPage->elements.empty()) {
       emitPage(lastBodyChildByteOffset);
     }
   }
   // Record deferred anchor after previous block is flushed (and any TOC page break)
   if (!pendingAnchorId.empty()) {
-    if (stage1Sink_) stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
+    if (stage1Sink_) {
+      stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
+      if (tocBoundary) stage1PendingPageBreak_ = true;  // -> kPageBreakBefore on the introduced block
+    }
     anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
     pendingAnchorId.clear();
   }
@@ -1590,6 +1605,14 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       // Span-based indents (poem stanza pattern) are applied directly to each block at span-open time.
       brStyle.fromBrElement = true;
       self->startNewTextBlock(brStyle);
+      // Stage-1: startNewTextBlock captured currentCssStyle (the enclosing <p>'s style, which may
+      // carry the paragraph's text-indent). The neutral brStyle above drops it, so drop it from
+      // the transmitted style too — otherwise the sink indents every <br> continuation line. A
+      // later span-margin (poem stanza) re-stamps textIndent on this block, which is correct.
+      if (self->stage1Sink_) {
+        self->stage1BlockCssStyle_.textIndent = CssLength{};
+        self->stage1BlockCssStyle_.defined.textIndent = 0;
+      }
     } else {
       self->currentCssStyle = cssStyle;
       auto blockStyle = userAlignmentBlockStyle;
