@@ -139,7 +139,7 @@ TEST_P(LayoutSinkEquivalence, PageDumpMatchesFused) {
 INSTANTIATE_TEST_SUITE_P(TextCorpus, LayoutSinkEquivalence,
                          testing::Values("test_headings.epub", "test_font_sizes.epub",
                                          "test_br_section_break.epub", "test_png_images.epub",
-                                         "test_jpeg_images.epub", "test_mixed_images.epub", "test_float_images.epub", "test_text_rendering.epub"),
+                                         "test_jpeg_images.epub", "test_mixed_images.epub", "test_float_images.epub", "test_text_rendering.epub", "test_tables.epub"),
                          [](const testing::TestParamInfo<std::string>& info) {
                            std::string n = info.param;
                            for (char& c : n) {

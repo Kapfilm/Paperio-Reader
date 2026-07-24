@@ -112,6 +112,13 @@ class LayoutSink : public BlockSink {
   // Emit a horizontal rule (centered 25%->75%, half-line margins above/below), mirroring the
   // fused <hr> handler (cpp:1630-1654).
   void placeHr();
+  // Lay out a Table block: choose grid vs paragraph fallback, wrap cells, pack fragments via the
+  // shared compiled::packTableFragments. Mirrors emitBufferedTable/emitTableAsFragments.
+  void placeTable(const Block& block);
+  // Paragraph fallback: each cell's words become a sequential paragraph (emitTableAsParagraphs).
+  void placeTableAsParagraphs(const Block& block);
+  // Build a wrapped ParsedText for a compiled table cell's words at the given wrap width.
+  std::unique_ptr<ParsedText> buildCellText(const TableCell& cell) const;
   // Allocate the next image cache path (imageBasePath + counter + ext), matching the fused walk.
   std::string nextImageCachePath(const std::string& entryPath);
   // Attach a block's inline float image (its inlineImage* fields) beside the paragraph text:

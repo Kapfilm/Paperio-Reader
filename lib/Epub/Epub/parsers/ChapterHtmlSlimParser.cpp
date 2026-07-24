@@ -16,6 +16,7 @@
 #include "../Page.h"
 #include "../content/BlockSink.h"
 #include "../content/ImageLayout.h"
+#include "../content/TableLayout.h"
 #include "../converters/ImageDecoderFactory.h"
 #include "../converters/ImageToFramebufferDecoder.h"
 #include "../htmlEntities.h"
@@ -2866,13 +2867,9 @@ void ChapterHtmlSlimParser::emitTableAsFragments(BufferedTable& table) {
   // A row whose single cell spans the full table width (colspan == maxCols) is treated as a
   // 1-column fragment so it renders full-width inline with the surrounding grid rather than
   // falling back to paragraph mode. Idea from uxjulia/CrossInk; rewritten for our layout model.
-  struct LayoutRow {
-    std::vector<TableCell> cells;
-    uint16_t height = 0;
-    bool isHeaderRow = false;
-    uint8_t renderCols = 0;  // 1 for full-width single-cell rows, else columnCount
-  };
-  std::vector<LayoutRow> layoutRows;
+  // The row type + fragment packing are shared with LayoutSink via compiled::TableLayout.
+  using compiled::TableLayoutRow;
+  std::vector<TableLayoutRow> layoutRows;
   layoutRows.reserve(table.rows.size());
 
   for (auto& bufRow : table.rows) {
@@ -2900,7 +2897,7 @@ void ChapterHtmlSlimParser::emitTableAsFragments(BufferedTable& table) {
     const uint16_t cellImageMaxWidth =
         (renderInnerWidth > 0) ? renderInnerWidth : static_cast<uint16_t>(MIN_COL_INNER_WIDTH);
 
-    LayoutRow lr;
+    TableLayoutRow lr;
     lr.isHeaderRow = bufRow.isHeaderRow;
     lr.renderCols = renderCols;
     lr.cells.reserve(renderCols);
@@ -2948,41 +2945,30 @@ void ChapterHtmlSlimParser::emitTableAsFragments(BufferedTable& table) {
     currentPageNextY = 0;
   }
 
-  // Greedily pack rows into fragments, page-breaking between fragments.
-  // Rows with a different renderCols than the pending fragment flush it first, since each
-  // PageTableFragment has a single fixed column count.
-  std::vector<TableRow> fragmentRows;
-  uint16_t fragmentHeight = 0;
-  uint8_t fragmentCols = 0;
-
-  auto emitFragment = [&]() {
-    if (fragmentRows.empty()) return;
-
-    // When bordered: outer drawRect covers top+bottom; inter-row separators (+1 per row) are already
-    // in fragmentHeight; add 1 for the bottom border. When borderless: fragmentHeight is exact.
-    const uint16_t fragTotalHeight =
-        hasBorder ? static_cast<uint16_t>(fragmentHeight + 1) : static_cast<uint16_t>(fragmentHeight);
-
-    if (currentPageNextY + fragTotalHeight > viewportHeight && currentPageNextY > 0) {
-      emitPage(lastBodyChildByteOffset);
+  // Greedy fragment packing + page-breaking is shared with LayoutSink (compiled::TableLayout).
+  // The parser implements the page context over its own page state; over-tall rows flatten to
+  // the parser's paragraph + block-image fallback.
+  struct FusedTableCtx final : compiled::TablePageContext {
+    ChapterHtmlSlimParser* self;
+    int currentY() const override { return self->currentPageNextY; }
+    void ensurePage() override {
+      if (!self->currentPage) {
+        self->currentPage.reset(new Page());
+        self->currentPageNextY = 0;
+      }
     }
-
-    currentPage->elements.push_back(
-        std::make_shared<PageTableFragment>(fragmentCols, totalWidth, fragTotalHeight, std::move(fragmentRows),
-                                            /*xPos=*/0, /*yPos=*/static_cast<int16_t>(currentPageNextY), hasBorder));
-    currentPageNextY += fragTotalHeight;
-    fragmentRows.clear();
-    fragmentHeight = 0;
-    fragmentCols = 0;
-  };
-
-  for (auto& lr : layoutRows) {
-    if (lr.height > viewportHeight) {
-      emitFragment();
+    void emitPageAndReset() override { self->emitPage(self->lastBodyChildByteOffset); }
+    void advanceY(int delta) override { self->currentPageNextY = static_cast<int16_t>(self->currentPageNextY + delta); }
+    void pushFragment(uint8_t cols, uint16_t tw, uint16_t th, std::vector<TableRow>&& rows, int16_t yPos,
+                      bool border) override {
+      self->currentPage->elements.push_back(
+          std::make_shared<PageTableFragment>(cols, tw, th, std::move(rows), /*xPos=*/0, yPos, border));
+    }
+    void onOversizeRow(const compiled::TableLayoutRow& lr) override {
       BufferedTable singleRowFallback;
       BufferedTableRow fbRow;
       fbRow.isHeaderRow = lr.isHeaderRow;
-      for (auto& cell : lr.cells) {
+      for (const auto& cell : lr.cells) {
         BufferedTableCell fbc;
         fbc.isHeader = cell.isHeader;
         fbc.text = std::unique_ptr<ParsedText>(new ParsedText(false, false));
@@ -2995,36 +2981,13 @@ void ChapterHtmlSlimParser::emitTableAsFragments(BufferedTable& table) {
         fbRow.cells.push_back(std::move(fbc));
       }
       singleRowFallback.rows.push_back(std::move(fbRow));
-      emitTableAsParagraphs(singleRowFallback);
-      // The paragraph fallback only carries text; re-emit any cell images as block images so
-      // they are not lost on an over-tall row.
-      for (auto& cell : lr.cells) placeImageBlockAsBlock(cell.image);
-      continue;
+      self->emitTableAsParagraphs(singleRowFallback);
+      // The paragraph fallback only carries text; re-emit any cell images as block images.
+      for (const auto& cell : lr.cells) self->placeImageBlockAsBlock(cell.image);
     }
-
-    // A change in column count requires a new fragment.
-    if (!fragmentRows.empty() && lr.renderCols != fragmentCols) {
-      emitFragment();
-    }
-
-    if (fragmentCols == 0) fragmentCols = lr.renderCols;
-
-    const uint16_t rowContrib = hasBorder ? static_cast<uint16_t>(lr.height + 1) : lr.height;
-
-    if (!fragmentRows.empty() && currentPageNextY + fragmentHeight + rowContrib > viewportHeight) {
-      emitFragment();
-      fragmentCols = lr.renderCols;
-    }
-
-    TableRow tr;
-    tr.isHeaderRow = lr.isHeaderRow;
-    tr.height = lr.height;
-    tr.cells = std::move(lr.cells);
-    fragmentRows.push_back(std::move(tr));
-    fragmentHeight += rowContrib;
-  }
-
-  emitFragment();
+  } ctx;
+  ctx.self = this;
+  compiled::packTableFragments(layoutRows, totalWidth, viewportHeight, hasBorder, ctx);
 }
 
 void ChapterHtmlSlimParser::emitTableAsParagraphs(BufferedTable& table) {

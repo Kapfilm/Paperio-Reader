@@ -9,6 +9,7 @@
 #include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
 #include "ImageLayout.h"
+#include "TableLayout.h"
 
 namespace compiled {
 namespace {
@@ -359,6 +360,175 @@ void LayoutSink::placeBlockImage(const Block& block, const CssStyle& imgStyle) {
   currentPageNextY_ += static_cast<int16_t>(spacingBottom);
 }
 
+std::unique_ptr<ParsedText> LayoutSink::buildCellText(const TableCell& cell) const {
+  auto pt = std::unique_ptr<ParsedText>(new ParsedText(extraParagraphSpacing_, hyphenationEnabled_));
+  for (const Word& w : cell.words) {
+    const char* text = &cell.text[w.textOff];
+    const EpdFontFamily::Style fontStyle = spanToFontStyle(w.styleSpan);
+    const bool attach = (w.styleSpan & kSpanAttachPrev) != 0;
+    pt->addWord(text, fontStyle, /*underline=*/false, attach, w.sizePct);
+  }
+  return pt;
+}
+
+// Paragraph fallback: each non-empty cell's text becomes a sequential paragraph laid out at full
+// viewport width (mirrors emitTableAsParagraphs cpp:3030-3051).
+void LayoutSink::placeTableAsParagraphs(const Block& block) {
+  for (const TableRow& row : block.rows) {
+    for (const TableCell& cell : row.cells) {
+      if (cell.words.empty()) continue;
+      BlockStyle cellBlockStyle;
+      cellBlockStyle.textAlignDefined = true;
+      cellBlockStyle.alignment = (paragraphAlignment_ == static_cast<uint8_t>(CssTextAlign::None))
+                                     ? CssTextAlign::Justify
+                                     : static_cast<CssTextAlign>(paragraphAlignment_);
+      currentTextBlock_.reset(new (std::nothrow) ParsedText(extraParagraphSpacing_, hyphenationEnabled_,
+                                                            cellBlockStyle, bionicReadingEnabled_));
+      if (!currentTextBlock_) continue;
+      wordsExtractedInBlock_ = 0;
+      auto cellText = buildCellText(cell);
+      cellText->setBlockStyle(cellBlockStyle);
+      cellText->layoutAndExtractLines(
+          renderer_, fontId_, viewportWidth_,
+          [this](const std::shared_ptr<TextBlock>& tb, const bool h, const bool s) {
+            return static_cast<ParsedText::LineProcessResult>(addLineToPage(tb, h, s));
+          });
+    }
+  }
+}
+
+// Grid table layout (mirrors emitTableAsFragments cpp:2839-3028). Wraps each cell, computes row
+// heights, then packs fragments via the shared helper. Cell images are NOT reproduced: the
+// producer does not transmit their intrinsic dims (stage1EmitTableBlock), and no corpus book uses
+// grid cell images. Falls back to paragraphs on the same conditions as the fused path.
+void LayoutSink::placeTable(const Block& block) {
+  if (block.rows.empty()) {
+    placeTableAsParagraphs(block);
+    return;
+  }
+  uint8_t columnCount = 0;
+  for (const TableRow& r : block.rows) columnCount = std::max(columnCount, static_cast<uint8_t>(r.cells.size()));
+  // colSpan-aware column count (fused uses table.maxCols); recompute from the max effective cols.
+  for (const TableRow& r : block.rows) {
+    uint8_t eff = 0;
+    for (const TableCell& c : r.cells) eff = static_cast<uint8_t>(eff + c.colSpan);
+    columnCount = std::max(columnCount, eff);
+  }
+  if (columnCount == 0 || columnCount > MAX_TABLE_COLS) {
+    placeTableAsParagraphs(block);
+    return;
+  }
+
+  const uint16_t totalWidth = viewportWidth_;
+  const uint16_t colWidth = totalWidth / columnCount;
+  const uint16_t innerColWidth =
+      (colWidth > 2 * TABLE_CELL_PADDING) ? static_cast<uint16_t>(colWidth - 2 * TABLE_CELL_PADDING) : 0;
+  if (innerColWidth < MIN_COL_INNER_WIDTH) {
+    placeTableAsParagraphs(block);
+    return;
+  }
+
+  const int lineHeight = static_cast<int>(renderer_.getLineHeight(fontId_) * lineCompression_ + 0.5f);
+  const bool hasBorder = block.hasBorder;
+
+  std::vector<TableLayoutRow> layoutRows;
+  layoutRows.reserve(block.rows.size());
+  bool needsParagraphFallback = false;
+
+  for (const TableRow& bufRow : block.rows) {
+    const bool isFullWidthSpan = bufRow.cells.size() == 1 && bufRow.cells[0].colSpan == columnCount;
+    const uint8_t renderCols = isFullWidthSpan ? 1 : columnCount;
+    const uint16_t renderColWidth = totalWidth / renderCols;
+    const uint16_t renderInnerWidth =
+        (renderColWidth > 2 * TABLE_CELL_PADDING) ? static_cast<uint16_t>(renderColWidth - 2 * TABLE_CELL_PADDING) : 0;
+
+    const bool hasMergedCell =
+        std::any_of(bufRow.cells.begin(), bufRow.cells.end(), [](const TableCell& c) { return c.colSpan != 1; });
+    if (hasMergedCell && !isFullWidthSpan) {
+      needsParagraphFallback = true;
+      break;
+    }
+
+    TableLayoutRow lr;
+    lr.isHeaderRow = bufRow.isHeaderRow;
+    lr.renderCols = renderCols;
+    lr.cells.reserve(renderCols);
+    uint16_t maxContentHeight = 0;
+
+    for (const TableCell& bufCell : bufRow.cells) {
+      ::TableCell cell;
+      cell.isHeader = bufCell.isHeader;
+      if (!bufCell.words.empty()) {
+        auto cellText = buildCellText(bufCell);
+        cellText->layoutAndExtractLines(renderer_, fontId_, renderInnerWidth,
+                                        [&cell](const std::shared_ptr<TextBlock>& tb, bool, bool) {
+                                          if (cell.lines.size() < MAX_CELL_LINES) cell.lines.push_back(tb);
+                                          return ParsedText::LineProcessResult::Accepted;
+                                        });
+      }
+      // Cell images intentionally not reproduced (see the method comment).
+      uint16_t contentHeight = static_cast<uint16_t>(cell.lines.size() * lineHeight);
+      if (contentHeight > maxContentHeight) maxContentHeight = contentHeight;
+      lr.cells.push_back(std::move(cell));
+    }
+    if (!isFullWidthSpan) {
+      while (lr.cells.size() < columnCount) lr.cells.emplace_back();
+    }
+    if (maxContentHeight == 0) maxContentHeight = static_cast<uint16_t>(lineHeight);
+    lr.height = static_cast<uint16_t>(maxContentHeight + 2 * TABLE_CELL_PADDING);
+    layoutRows.push_back(std::move(lr));
+  }
+
+  if (needsParagraphFallback) {
+    placeTableAsParagraphs(block);
+    return;
+  }
+
+  struct SinkTableCtx final : TablePageContext {
+    LayoutSink* self;
+    int currentY() const override { return self->currentPageNextY_; }
+    void ensurePage() override {
+      if (!self->currentPage_) {
+        self->currentPage_.reset(new Page());
+        self->currentPageNextY_ = 0;
+      }
+    }
+    void emitPageAndReset() override { self->emitPage(self->lastBodyChildByteOffset_); }
+    void advanceY(int delta) override { self->currentPageNextY_ = static_cast<int16_t>(self->currentPageNextY_ + delta); }
+    void pushFragment(uint8_t cols, uint16_t tw, uint16_t th, std::vector<::TableRow>&& rows, int16_t yPos,
+                      bool border) override {
+      self->currentPage_->elements.push_back(
+          std::make_shared<PageTableFragment>(cols, tw, th, std::move(rows), /*xPos=*/0, yPos, border));
+    }
+    void onOversizeRow(const TableLayoutRow& lr) override {
+      // Over-tall row → flatten to paragraphs. Rebuild a minimal compiled block from the wrapped
+      // lines' words and route through placeTableAsParagraphs (cell images are already dropped).
+      Block fb;
+      fb.type = BlockType::Table;
+      TableRow r;
+      r.isHeaderRow = lr.isHeaderRow;
+      for (const auto& c : lr.cells) {
+        TableCell cc;
+        cc.isHeader = c.isHeader;
+        for (const auto& line : c.lines) {
+          for (uint16_t i = 0; i < line->wordCount(); ++i) {
+            Word w;
+            w.textOff = static_cast<uint32_t>(cc.text.size());
+            cc.words.push_back(w);
+            cc.text.append(line->wordText(i));
+            cc.text.push_back('\0');
+          }
+        }
+        r.cells.push_back(std::move(cc));
+      }
+      fb.rows.push_back(std::move(r));
+      self->placeTableAsParagraphs(fb);
+    }
+  } ctx;
+  ctx.self = this;
+  packTableFragments(layoutRows, totalWidth, viewportHeight_, hasBorder, ctx);
+}
+
 void LayoutSink::placeHr() {
   if (!currentPage_) {
     currentPage_.reset(new Page());
@@ -435,8 +605,11 @@ void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
     placeHr();
     return;
   }
+  if (block.type == BlockType::Table) {
+    placeTable(block);
+    return;
+  }
   if (block.type != BlockType::Text) {
-    // Table blocks land in commit 4.
     return;
   }
 
@@ -515,15 +688,17 @@ void LayoutSink::onPageBreakLabel(const std::string& label) {
 void LayoutSink::onFootnote(int /*wordIndex*/, const FootnoteEntry& /*entry*/) {}
 
 void LayoutSink::onSpineEnd() {
-  // Flush the last accumulated block and emit the final page (finalize() cpp:2493-2509).
+  // Flush the last accumulated text block (finalize() cpp:2493-2509).
   if (currentTextBlock_) {
     makePages();
-    if (!layoutFailed_) {
-      const bool hasFinalPageContent = currentPage_ && !currentPage_->elements.empty();
-      if (hasFinalPageContent) {
-        emitPage(0u);
-      }
-    }
+    if (layoutFailed_) return;
+  }
+  // Emit the final page if it has content — independent of whether a text block is open. A spine
+  // whose only element is an image/table/HR (e.g. a cover page) has no currentTextBlock_ but still
+  // has a page to flush. (The fused parser always holds an initial empty block from setup(), so it
+  // never hit this; the sink only creates one when a Text block arrives.)
+  if (currentPage_ && !currentPage_->elements.empty()) {
+    emitPage(0u);
   }
 }
 
