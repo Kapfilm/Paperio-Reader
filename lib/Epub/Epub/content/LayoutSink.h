@@ -79,6 +79,7 @@ class LayoutSink : public BlockSink {
   void onChapter(uint8_t level, const std::string& title) override;
   void onPageBreakLabel(const std::string& label) override;
   void onFootnote(int wordIndex, const FootnoteEntry& entry) override;
+  void onXPathAdvance(uint16_t paragraphIndex, uint16_t listItemIndex, uint32_t bodyChildByteOffset) override;
   void onSpineEnd() override;
 
   // Side outputs the caller pulls today via the parser getters (getAnchors / etc.).

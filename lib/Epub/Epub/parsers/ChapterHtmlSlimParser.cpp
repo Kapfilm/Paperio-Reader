@@ -621,6 +621,10 @@ void ChapterHtmlSlimParser::stage1FlushBlock() {
   if (preUntilDepth != INT_MAX) stage1Block_->flags |= compiled::kPreformatted;
   const uint8_t headingLevel = stage1BlockHeadingLevel_;
   const std::string title = headingLevel > 0 ? stage1JoinWords(*stage1Block_) : std::string();
+  // Transmit the walk's current XPath counters so the sink's per-page LUT matches the fused one:
+  // any page break the sink takes while laying out THIS block uses these values (the same the
+  // fused emitPage would read, since the walk sets them before emitting the block).
+  stage1Sink_->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
   stage1Sink_->onBlock(std::move(*stage1Block_), stage1BlockCssStyle_);
   stage1Block_.reset();
   stage1BlockHeadingLevel_ = 0;
@@ -653,6 +657,7 @@ void ChapterHtmlSlimParser::stage1EmitImageBlock(const std::string& entryPath, c
   b.alt = alt;
   // Pass the image's resolved CSS (width/height) as the block style so Stage-2 reproduces the
   // display-dimension scaling; the intrinsic w/h ride on the block fields.
+  stage1Sink_->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
   stage1Sink_->onBlock(std::move(b), imgStyle);
 }
 
@@ -663,6 +668,7 @@ void ChapterHtmlSlimParser::stage1EmitHrBlock() {
   compiled::Block b;
   b.type = compiled::BlockType::Hr;
   b.charOffset = stage1CharOffset_;
+  stage1Sink_->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
   stage1Sink_->onBlock(std::move(b), CssStyle{});  // rule geometry is derived at layout time
 }
 
@@ -705,6 +711,7 @@ void ChapterHtmlSlimParser::stage1EmitTableBlock(const BufferedTable& table) {
     }
     b.rows.push_back(std::move(crow));
   }
+  stage1Sink_->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
   stage1Sink_->onBlock(std::move(b), CssStyle{});
 }
 

@@ -212,6 +212,12 @@ bool layoutViaSink(const std::string& epubPath, const std::string& cacheDir, con
     // text-corpus subset and handled when those paths are covered).
     out << "SPINE " << i << " href=" << epub->getSpineItem(i).href << " pages=" << pages.size()
         << " truncated=0 cssFallback=0\n";
+    // LUT invariant: exactly one paragraph-LUT entry per emitted page (Section enforces this hard
+    // check, cpp:1059). Emit a marker ONLY on violation — the fused dump never contains it, so any
+    // mismatch fails the equivalence EXPECT_EQ. Proves onXPathAdvance -> emitPage stays in lockstep.
+    if (sink.paragraphLutPerPage().size() != pages.size()) {
+      out << "  [LUT-INVARIANT-FAIL lut=" << sink.paragraphLutPerPage().size() << " pages=" << pages.size() << "]\n";
+    }
     for (uint16_t p = 0; p < pages.size(); ++p) {
       dumpOnePage(out, *pages[p], p, cacheDir);
     }

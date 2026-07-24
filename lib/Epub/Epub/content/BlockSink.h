@@ -53,6 +53,14 @@ struct BlockSink {
   // A footnote link anchored to a word in the block currently being built.
   virtual void onFootnote(int wordIndex, const FootnoteEntry& entry) = 0;
 
+  // The walk's current XPath counters (1-based <p> sibling index, running <li> count, and the
+  // byte offset of the most recent body-child element start), as of the block about to be emitted.
+  // LayoutSink records these into the per-page LUT its emitPage builds; ContentSink ignores them.
+  // Default no-op so non-layout sinks need not implement it. Settings-independent (pure XML), but
+  // the LUT that maps them to PAGES is settings-dependent, so it stays a sink concern.
+  virtual void onXPathAdvance(uint16_t /*paragraphIndex*/, uint16_t /*listItemIndex*/,
+                              uint32_t /*bodyChildByteOffset*/) {}
+
   // End of the spine document: flush any block still being accumulated.
   virtual void onSpineEnd() = 0;
 };

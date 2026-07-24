@@ -730,6 +730,13 @@ void LayoutSink::onFootnote(int wordIndex, const FootnoteEntry& entry) {
   pendingFootnotes_.push_back({wordIndex, entry});
 }
 
+void LayoutSink::onXPathAdvance(uint16_t paragraphIndex, uint16_t listItemIndex, uint32_t bodyChildByteOffset) {
+  // The walk's counters as of the block about to be laid out; emitPage records them into the LUT.
+  xpathParagraphIndex_ = paragraphIndex;
+  xpathListItemIndex_ = listItemIndex;
+  lastBodyChildByteOffset_ = bodyChildByteOffset;
+}
+
 void LayoutSink::onSpineEnd() {
   // Flush the last accumulated text block (finalize() cpp:2493-2509).
   if (currentTextBlock_) {

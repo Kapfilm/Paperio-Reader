@@ -91,6 +91,54 @@ TEST(LayoutSink, RecordsLabelsAndDropsEmpty) {
   EXPECT_EQ(sink.pageBreakLabels()[0].second, "iv");
 }
 
+// onXPathAdvance records the walk's current XPath counters; the NEXT emitPage writes them into the
+// per-page LUT. Drive a text block that overflows a tiny viewport so a mid-block emitPage fires,
+// then a final page at onSpineEnd — assert both LUT entries carry the transmitted values. This
+// pins the 6a plumbing (walk counters -> sink LUT) that the equivalence page-dump alone can't see.
+TEST(LayoutSink, XPathAdvanceFeedsPerPageLut) {
+  GfxRenderer renderer;
+  compiled::LayoutParams params;
+  params.fontId = 0;
+  params.viewportWidth = 200;
+  params.viewportHeight = 40;  // ~1 line tall (line height 24) so each block overflows to a new page
+
+  int pages = 0;
+  compiled::LayoutSink sink(renderer, params, [&](std::unique_ptr<Page>) { ++pages; });
+
+  auto makeTextBlock = [](const char* w1, const char* w2) {
+    compiled::Block b;
+    b.type = compiled::BlockType::Text;
+    for (const char* w : {w1, w2}) {
+      compiled::Word word;
+      word.textOff = static_cast<uint32_t>(b.text.size());
+      b.words.push_back(word);
+      b.text.append(w);
+      b.text.push_back('\0');
+    }
+    return b;
+  };
+
+  sink.onXPathAdvance(/*paragraphIndex=*/1, /*listItemIndex=*/0, /*bodyChildByteOffset=*/100);
+  sink.onBlock(makeTextBlock("alpha", "beta"), CssStyle{});
+  sink.onXPathAdvance(/*paragraphIndex=*/2, /*listItemIndex=*/3, /*bodyChildByteOffset=*/250);
+  sink.onBlock(makeTextBlock("gamma", "delta"), CssStyle{});
+  sink.onSpineEnd();
+
+  const auto& lut = sink.paragraphLutPerPage();
+  // The core invariant Section enforces: exactly one paragraph-LUT entry per emitted page.
+  ASSERT_EQ(lut.size(), static_cast<size_t>(pages));
+  ASSERT_GE(lut.size(), 2u);
+  // A mid-block emitPage (page overflow) records lastBodyChildByteOffset as set by the most recent
+  // onXPathAdvance. The 2nd block overflows while its counters (2/3/250) are current, so some page
+  // must carry them — proving the walk-counter -> sink-LUT plumbing works. (The final page comes
+  // from onSpineEnd's emitPage(0u), offset 0, matching the fused finalize path.)
+  bool sawSecondBlockCounters = false;
+  for (const auto& e : lut) {
+    if (e.xhtmlByteOffset == 250u && e.paragraphIndex == 2u && e.listItemIndex == 3u) sawSecondBlockCounters = true;
+  }
+  EXPECT_TRUE(sawSecondBlockCounters) << "no LUT entry carried the 2nd block's transmitted XPath counters";
+}
+
 // --- Equivalence gate: the LayoutSink page dump must match the fused path byte-for-byte. ---
 // Commit 2 covers the text-only corpus subset; images/floats/tables land in commits 3-4, at
 // which point this list grows to the whole corpus.
