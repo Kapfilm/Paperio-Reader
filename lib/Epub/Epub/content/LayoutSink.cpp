@@ -551,10 +551,17 @@ void LayoutSink::placeHr() {
   // when it is empty (e.g. the empty block between two consecutive <hr/>s). An empty block still
   // advances Y by its margins + extra paragraph spacing. Reproduce that: if an empty-merge block
   // is pending, materialize and lay it out (no words → just its spacing) before the rule.
+  bool carryBrGap = false;
   if (hasPendingMerge_) {
     currentBlockPreformatted_ = false;
     currentTextBlock_.reset(new (std::nothrow) ParsedText(extraParagraphSpacing_, hyphenationEnabled_,
                                                           pendingMergeStyle_, bionicReadingEnabled_));
+    // The fused makePages() does NOT clear the block's fromBrElement, so the empty <br> block the
+    // HR flushes stays fromBr; the fused startNewTextBlock(emptyStyle) after the rule then reads
+    // that flag and injects a SECOND br-gap into the post-HR block (ChapterHtmlSlimParser.cpp:1690
+    // makePages -> :1714 startNewTextBlock -> :788 brGapPending). Reproduce that by carrying the
+    // br-gap onto the block that follows the rule.
+    carryBrGap = pendingMergeFromBr_;
     hasPendingMerge_ = false;
     pendingMergeFromBr_ = false;
     if (currentTextBlock_) {
@@ -579,6 +586,17 @@ void LayoutSink::placeHr() {
   const int16_t hrX = static_cast<int16_t>(viewportWidth_ / 4);
   currentPage_->elements.push_back(std::make_shared<PageHR>(hrX, currentPageNextY_, hrWidth));
   currentPageNextY_ += 1 + marginV;
+
+  // Fused: after the rule, startNewTextBlock(emptyStyle) reuses the still-fromBr empty block and
+  // injects a br-gap into the following paragraph. Carry that forward as a pending fromBr merge so
+  // the next onBlock() adds the same 24px gap (the empty-block fold applies the gap when
+  // pendingMergeFromBr_). Neutral style — only the br-gap contribution matters here.
+  if (carryBrGap) {
+    pendingMergeStyle_ = BlockStyle{};
+    pendingMergeStyle_.fromBrElement = true;
+    pendingMergeFromBr_ = true;
+    hasPendingMerge_ = true;
+  }
 }
 
 void LayoutSink::attachFloatImage(const Block& block, const CssStyle& imgStyle, BlockStyle& bs) {
