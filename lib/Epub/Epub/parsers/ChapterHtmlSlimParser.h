@@ -309,18 +309,9 @@ class ChapterHtmlSlimParser final : public Print {
   void startNewTextBlock(const BlockStyle& blockStyle);
   bool flushPartWordBuffer();
   void makePages();
+  // Emit the settings-independent Table block to the producer. LayoutSink does the grid-vs-
+  // paragraph layout, cell wrapping, and PageTableFragment/fallback placement.
   void emitBufferedTable();
-  void emitTableAsFragments(BufferedTable& table);
-  void emitTableAsParagraphs(BufferedTable& table);
-  // Fallback path: emit each cell's image as a full-width block image below the table.
-  void emitCellImagesAsBlocks(BufferedTable& table);
-  // Resolve an image src to a sized ImageBlock (lazy-extracted from the EPUB), scaled to fit
-  // maxWidth/maxHeight. Returns nullptr when the image is unsupported or its dimensions
-  // cannot be resolved. Advances imageCounter to allocate a unique cache path.
-  std::shared_ptr<ImageBlock> buildCellImage(const std::string& src, const std::string& alt, uint16_t maxWidth,
-                                             uint16_t maxHeight);
-  // Place an already-built ImageBlock as a centered, full-width block element, page-breaking if needed.
-  void placeImageBlockAsBlock(const std::shared_ptr<ImageBlock>& image);
   // Emit currentPage to the consumer while keeping paragraphLutPerPage and completedPageCount
   // in lockstep. Every page break MUST go through this helper; open-coded completePageFn
   // calls risk desynchronising paragraphLutPerPage and failing the size check in Section.cpp.
