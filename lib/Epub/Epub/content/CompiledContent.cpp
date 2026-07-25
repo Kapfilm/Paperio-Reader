@@ -204,6 +204,11 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
       writePod(out, b.charOffset);
       if (b.type == BlockType::Text) {
         writeWords(out, b.words, b.text);
+        writePod(out, static_cast<uint32_t>(b.footnotePreviews.size()));
+        for (const PreviewRun& pr : b.footnotePreviews) {
+          writePod(out, pr.startWord);
+          writePod(out, pr.count);
+        }
         const bool hasInline = !b.inlineImageEntryPath.empty();
         writePod(out, static_cast<uint8_t>(hasInline));
         if (hasInline) {
@@ -296,6 +301,13 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
       readPod(in, b.charOffset);
       if (b.type == BlockType::Text) {
         if (!readWords(in, b.words, b.text)) return false;
+        uint32_t previewCount = 0;
+        readPod(in, previewCount);
+        b.footnotePreviews.resize(previewCount);
+        for (PreviewRun& pr : b.footnotePreviews) {
+          readPod(in, pr.startWord);
+          readPod(in, pr.count);
+        }
         uint8_t hasInline = 0;
         readPod(in, hasInline);
         if (hasInline) {

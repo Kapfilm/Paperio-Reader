@@ -138,6 +138,10 @@ bool compileContent(const std::string& epubPath, const std::string& cacheDir, co
     return false;
   }
   epub->loadImageManifest();
+  // Gather book-level footnote previews (footnotes.bin) so the inline-footnote-preview path is
+  // exercised in the content compile too, matching runAndDump/layoutViaSink. Without this the
+  // preview lookup is empty and no preview is ever injected.
+  FootnotePreviews::gather(*epub);
 
   for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
     sink.beginSpine();

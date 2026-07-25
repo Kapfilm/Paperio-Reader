@@ -106,6 +106,11 @@ class LayoutSink : public BlockSink {
   // Rebuild a ParsedText from a materialized text block, adding words through the same
   // ParsedText::addWord path the fused walk uses (and replaying the >96-word split).
   void layoutTextBlock(Block&& block, const BlockStyle& blockStyle);
+  // Abbreviate each inline footnote preview run in `block` to the viewport width, in place.
+  // Stage-1 stores the FULL preview text (settings-independent); this reproduces the fused
+  // walk's width-based abbreviation (viewport*2 px budget, trailing ellipsis) at layout time,
+  // where the font/viewport are known — keeping content.bin settings-independent.
+  void abbreviatePreviewRuns(Block& block) const;
   // Place a standalone (centered, full-width) block image: resolve display dims via the shared
   // helper, apply the pending-block spacing, page-break, and push a PageImage. Mirrors the
   // fused <img> block path (ChapterHtmlSlimParser.cpp block-image branch).

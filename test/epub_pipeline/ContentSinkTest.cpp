@@ -256,6 +256,48 @@ TEST(ContentSink, ProducesDeterministicContentBin) {
   EXPECT_FALSE(bytesA.empty());
 }
 
+// content.bin must be settings-INDEPENDENT: the same book compiled at two different render
+// profiles must yield identical block text. Inline footnote previews are the tricky case —
+// the preview text is injected into the paragraph, and its abbreviation MUST be deferred to
+// Stage-2 (which knows the viewport/font) rather than baked at compile time. If the walk
+// abbreviates using compile-time metrics, a narrow viewport truncates the preview differently
+// than a wide one and the two content.bins diverge. test_inline_footnotes has a deliberately
+// long note that overflows the narrow column.
+TEST(ContentSink, InlineFootnotePreviewTextIsSettingsIndependent) {
+  auto compileAt = [](const pipeline_harness::Profile& profile, const std::string& tag, ContentSink& sink) {
+    std::ostringstream log;
+    return pipeline_harness::compileContent(corpus("test_inline_footnotes.epub"), freshDir(tag), profile, sink, log);
+  };
+
+  pipeline_harness::Profile wide;  // default: viewportWidth 460
+  pipeline_harness::Profile narrow;
+  narrow.name = "narrow";
+  narrow.viewportWidth = 240;
+
+  ContentSink wideSink;
+  ContentSink narrowSink;
+  ASSERT_TRUE(compileAt(wide, "fn_wide", wideSink));
+  ASSERT_TRUE(compileAt(narrow, "fn_narrow", narrowSink));
+
+  // Concatenate every block's text (words are back-to-back NUL-terminated in Block::text).
+  auto allText = [](const ContentSink& sink) {
+    std::string out;
+    for (const auto& spine : sink.content().spines) {
+      for (const auto& b : spine.blocks) {
+        out.append(b.text.data(), b.text.size());
+      }
+    }
+    return out;
+  };
+
+  // Sanity: the fixture must actually exercise a preview (the '(' opener the walk injects).
+  const std::string wideText = allText(wideSink);
+  ASSERT_NE(wideText.find('('), std::string::npos) << "fixture did not inject any inline footnote preview";
+
+  EXPECT_EQ(wideText, allText(narrowSink))
+      << "inline footnote preview abbreviation leaked settings into content.bin — abbreviate in Stage-2, not the walk";
+}
+
 // An image-bearing book compiles image blocks into content.bin intact.
 TEST(ContentSink, CompilesImageBlocks) {
   ContentSink sink;

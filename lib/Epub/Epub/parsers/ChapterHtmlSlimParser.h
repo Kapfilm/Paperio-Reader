@@ -322,7 +322,6 @@ class ChapterHtmlSlimParser final : public Print {
   static void characterData(void* userData, const char* s, int len);
   static void defaultHandlerExpand(void* userData, const char* s, int len);
   static void endElement(void* userData, const char* name);
-  std::string abbreviateInlineFootnote(const char* text) const;
 
  public:
   explicit ChapterHtmlSlimParser(

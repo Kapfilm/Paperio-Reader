@@ -25,7 +25,8 @@
 namespace compiled {
 
 inline constexpr char kMagic[4] = {'W', 'B', 'C', '1'};
-inline constexpr uint8_t kVersion = 1;
+// v2 added Block::footnotePreviews (inline footnote preview runs; abbreviation deferred to Stage-2).
+inline constexpr uint8_t kVersion = 2;
 
 // Word::styleSpan bits. Bits 0-6 = inline font style (the EpdFontFamily::Style set,
 // remapped to a stable on-disk layout); bit 7 = word attaches to the previous word
@@ -53,6 +54,15 @@ struct Word {
 };
 
 enum class BlockType : uint8_t { Text = 0, Image = 1, Table = 2, Hr = 3 };
+
+// A run of words inside a Text block that make up an inline footnote preview ("(note text)").
+// The full preview text is stored settings-independently; Stage-2 abbreviates the run to the
+// viewport width at layout time (the abbreviation is font/viewport-dependent, so it must NOT be
+// baked into content.bin). startWord indexes into Block::words; count words follow.
+struct PreviewRun {
+  uint32_t startWord = 0;
+  uint32_t count = 0;
+};
 
 // One table cell: text runs (a mini text block) and/or a single cell image. Settings-
 // independent — Stage-2 reproduces today's grid-or-paragraph decision (which is
@@ -104,6 +114,10 @@ struct Block {
   // Text block:
   std::vector<Word> words;
   std::string text;  // words back-to-back, each NUL-terminated
+  // Inline footnote preview runs within this block (empty for the vast majority of blocks).
+  // The words themselves live in `words`/`text`; these ranges tell Stage-2 which runs to
+  // abbreviate to the viewport at layout time. See PreviewRun.
+  std::vector<PreviewRun> footnotePreviews;
   // Optional inline (float) image rendered beside this paragraph's text. Stage-2 places
   // it; Stage-1 just records the ref (empty entryPath = none). intrinsic dims, pre-probed.
   std::string inlineImageEntryPath;

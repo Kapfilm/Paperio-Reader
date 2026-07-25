@@ -159,31 +159,6 @@ const char* getAttribute(const char** atts, const char* attrName) {
   return nullptr;
 }
 
-std::string ChapterHtmlSlimParser::abbreviateInlineFootnote(const char* text) const {
-  if (!text || *text == '\0') return {};
-  const int maxAdvance = static_cast<int>(viewportWidth) * 2;
-  const int spaceAdvance = renderer.getSpaceWidth(fontId);
-  int usedAdvance = 0;
-  std::string result;
-  const char* cursor = text;
-  while (*cursor != '\0') {
-    while (*cursor == ' ') ++cursor;
-    if (*cursor == '\0') break;
-    const char* wordStart = cursor;
-    while (*cursor != '\0' && *cursor != ' ') ++cursor;
-    const std::string previewWord(wordStart, static_cast<size_t>(cursor - wordStart));
-    const int wordAdvance = renderer.getTextWidth(fontId, previewWord.c_str());
-    const int separatorAdvance = result.empty() ? 0 : spaceAdvance;
-    if (!result.empty() && usedAdvance + separatorAdvance + wordAdvance > maxAdvance) {
-      result += "...";
-      break;
-    }
-    if (!result.empty()) result += ' ';
-    result += previewWord;
-    usedAdvance += separatorAdvance + wordAdvance;
-  }
-  return result;
-}
 
 bool isInternalEpubLink(const char* href) {
   if (!href || href[0] == '\0') return false;
@@ -2103,7 +2078,11 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
       // cross-file ("../Text/notes.xhtml#n3", Calibre filepos anchors) — is a real note.
       std::string preview;
       if (self->inlineFootnotePreviews->find(self->currentFootnote.href, preview)) {
-        self->pendingInlineFootnotePreview = self->abbreviateInlineFootnote(preview.c_str());
+        // Store the FULL (gather-capped) preview text — the width-based abbreviation is
+        // settings-dependent (font + viewport) and must be deferred to Stage-2, so it is NOT
+        // baked here. The injected run is recorded as a PreviewRun on the Stage-1 block below,
+        // and LayoutSink abbreviates it at layout time (keeps content.bin settings-independent).
+        self->pendingInlineFootnotePreview = preview;
         if (!self->pendingInlineFootnotePreview.empty()) {
           LOG_DBG("EHP", "Expanded inline footnote: href=%s previewBytes=%u", self->currentFootnote.href,
                   static_cast<uint32_t>(self->pendingInlineFootnotePreview.size()));
@@ -2195,6 +2174,11 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
     preview += ")";
     self->pendingInlineFootnotePreview.clear();
 
+    // Record where this preview run starts in the Stage-1 block so Stage-2 can abbreviate it.
+    // The words are added by characterData below (which routes through stage1AddWord); the run
+    // spans [startWord, current word count) once the trailing word buffer is flushed.
+    const int previewStartWord = self->stage1BlockWordCount();
+
     const bool surroundingItalic = self->effectiveItalic;
     self->effectiveItalic = true;
     characterData(self, preview.c_str(), static_cast<int>(preview.size()));
@@ -2203,6 +2187,14 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
       return;
     }
     self->effectiveItalic = surroundingItalic;
+
+    // The full preview text is now in the Stage-1 block as full words. Mark the run for Stage-2
+    // abbreviation. (The fused currentTextBlock got the same words for the dead-for-output layout.)
+    const int previewEndWord = self->stage1BlockWordCount();
+    if (self->stage1Block_ && previewEndWord > previewStartWord) {
+      self->stage1Block_->footnotePreviews.push_back(
+          {static_cast<uint32_t>(previewStartWord), static_cast<uint32_t>(previewEndWord - previewStartWord)});
+    }
   }
 
   // Clear block style when leaving header or block elements
