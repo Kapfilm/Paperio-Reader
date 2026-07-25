@@ -97,12 +97,36 @@ The 3 excluded targets are Linux-only (`dlfcn.h`) — not a Windows coverage gap
 golden after an intentional change: `UPDATE_GOLDENS=1 build/test-msys/epub_pipeline/EpubPipelineTest.exe
 --gtest_filter="*MatchesGolden*<stem>*"` (writes into `test/epub_pipeline/goldens/`).
 
+## 6d re-scoped (audited 2026-07-25): NOT separable from 6e
+
+Auditing every walk-side `renderer`/em→px use showed 6d is not an independent task. The em→px
+conversions split into exactly two buckets:
+
+- **Bucket 1 — feed the dead-for-output fused `BlockStyle`** (die automatically with the 6e
+  layout-math delete, not separately): `startNewTextBlock` br-gap line height (~745),
+  `BlockStyle::fromCssStyle` emSize for images/headers/paragraphs (~1193/1404/1435), `<li>`
+  depth-indent px (~1520), poem span-indent px (~1769), `effectiveLineHeight` (~2452). For each,
+  the em-based `CssLength` that actually reaches `content.bin` is ALREADY transmitted alongside
+  (see the deliberate comments at the `<li>` and poem-span sites). **No settings-dependent px
+  leaks into `content.bin` from these.** They vanish when the fused `BlockStyle` is deleted.
+- **Bucket 2 — `abbreviateInlineFootnote` (cpp ~162-186)**: a REAL settings-dependent leak — it
+  truncates an inline-footnote preview using font/viewport metrics at compile time, and the
+  truncated words are fed back into `characterData` → `stage1Block_` → `content.bin`. BUT this
+  feature is **not exercised by any corpus test** (needs a book-level preview cache + footnote-
+  shaped links), so moving the abbreviation into Stage-2 would be an unguarded change. To fix it
+  safely: add a test EPUB that exercises inline footnote previews FIRST, then transmit the full
+  preview text to `content.bin` and abbreviate in `LayoutSink` with its own metrics.
+
+Done as the one standalone, test-gated cleanup (commit `99cb45ff`): removed the confirmed dead
+inline margin-left tracking (`StyleStackEntry::hasMarginLeft/marginLeftPx`,
+`effectiveInlineMarginLeft` — written, never read; superseded by the `textIndent` transmission).
+
 ## Remaining tasks (priority order)
 
-1. **6d** — sever the walk-side renderer em→px uses (small, self-contained). Line numbers have
-   shifted; grep the walk for `renderer.` em→px conversions.
-2. **6e** — the safe fused-layout-math deletion described above (pure hygiene; the ContentSink
-   compile path is the trap).
+1. **6e** — the safe fused-layout-math deletion described above (pure hygiene; the ContentSink
+   compile path is the trap). The Bucket-1 em→px uses fall out with it.
+2. **Footnote-preview settings leak** (Bucket 2) — add coverage first, then move abbreviation to
+   Stage-2. Independent of 6e; low urgency (feature works, just not settings-portable in the cache).
 3. Optional — the residual Moby +4px heading-spacing sink bug (deferred; cosmetic, real-book
    back-matter only). It is a plain LayoutSink bug now that the fused reference is gone.
 
