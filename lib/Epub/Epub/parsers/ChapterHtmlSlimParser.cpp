@@ -1412,14 +1412,20 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     if (!self->flushPartWordBuffer()) return;
   }
 
-  // CSS page-break-before: always — emit the current page before this block starts.
+  // CSS page-break-before: flag the NEXT opened block with kPageBreakBefore — reusing the
+  // pending-break path the TOC-boundary case already uses — so Stage-2 breaks before the same
+  // content. The break fires at element-open (possibly a wrapper div whose text lands in a child
+  // block). Settings-independent CSS property (real-book: Project Gutenberg's
+  // `h2 { page-break-before }`).
+  //
+  // Leading-page suppression: don't break when the page is still empty (avoids a blank leading
+  // page). LayoutSink::onBlock applies this on its own currentPage_, so the intent is transmitted
+  // whenever we would emit a fused page break. The fused emitPage() (which also pushes a LUT entry
+  // and keeps the fused page/float scratch coherent) stays guarded on the fused page being
+  // non-empty — an unconditional call desyncs paragraphLutPerPage from completedPageCount.
   if (cssStyle.pageBreakBefore &&
-      (matches(name, HEADER_TAGS, NUM_HEADER_TAGS) || matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS)) && self->currentPage &&
-      !self->currentPage->elements.empty()) {
-    // Stage-1: the fused break fires at element-open (possibly a wrapper div whose text lands in a
-    // child block). Flag the NEXT opened block with kPageBreakBefore — reusing the pending-break
-    // path the TOC-boundary case already uses — so the sink breaks before the same content.
-    // Settings-independent CSS property (real-book: Project Gutenberg's `h2 { page-break-before }`).
+      (matches(name, HEADER_TAGS, NUM_HEADER_TAGS) || matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS)) &&
+      self->currentPage && !self->currentPage->elements.empty()) {
     if (self->effectiveSink()) self->stage1PendingPageBreak_ = true;
     self->emitPage(self->lastBodyChildByteOffset);
   }
@@ -2088,8 +2094,11 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
   if (self->insideFootnoteLink && self->depth == self->footnoteLinkDepth) {
     if (self->currentFootnote.number[0] != '\0' && self->currentFootnote.href[0] != '\0') {
       FootnoteEntry entry = self->currentFootnote;
-      int wordIndex =
-          self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
+      // Word index of the footnote anchor within the current block. On the producer side every
+      // word of the block is buffered in stage1Block_ (nothing is laid out mid-block), so the
+      // accumulated word count is the direct equivalent of the fused
+      // wordsExtractedInBlock + currentTextBlock->size().
+      int wordIndex = self->stage1BlockWordCount();
       self->pendingFootnotes.push_back({wordIndex, entry});
       // Stage-1: anchor the footnote to the current block at the same word position.
       if (auto* sink = self->effectiveSink()) sink->onFootnote(wordIndex, entry);

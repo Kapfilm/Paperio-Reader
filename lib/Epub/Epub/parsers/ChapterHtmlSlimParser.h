@@ -419,6 +419,11 @@ class ChapterHtmlSlimParser final : public Print {
   // Flush any pending text, then emit a bare HR marker block. Stage-2 derives the centered
   // rule geometry + surrounding half-line margins from the viewport at layout time.
   void stage1EmitHrBlock();
+  // Producer-side substitutes for the walk's currentTextBlock queries, so the walk no longer
+  // depends on the fused layout block. "Empty" == no words accumulated in the open transcript
+  // block; the count == words emitted to Stage-1 for the current block so far (footnote anchor).
+  bool stage1BlockIsEmpty() const { return !stage1Block_ || stage1Block_->words.empty(); }
+  int stage1BlockWordCount() const { return stage1Block_ ? static_cast<int>(stage1Block_->words.size()) : 0; }
   // Snap a completed block's effective font size (block multiplier, after uniform per-word
   // folding) to the size ladder: sets headingFontId to the chosen real font and reduces
   // fontSizeMultiplier to the residual. Applies the one-aux-font-per-section budget and is
