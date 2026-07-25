@@ -263,6 +263,10 @@ class ChapterHtmlSlimParser final : public Print {
   // builds), never both: see effectiveSink(). Its emitPage routes pages through completePageFn and
   // its getters back the parser's getAnchors()/getPageBreakLabels()/getParagraphLutPerPage().
   std::unique_ptr<compiled::LayoutSink> layoutSink_;
+  // Rebuilt by getParagraphLutPerPage() from the internal sink's LayoutLutEntry vector, so the
+  // getter can return the parser's ParagraphLutEntry type (field-identical) without changing
+  // Section.cpp's reader. Mutable: the getter is const.
+  mutable std::vector<ParagraphLutEntry> lutAdapter_;
   // The sink the producer emits to this build: the external content sink if attached, else the
   // internal layout sink. Null only before setup() constructs the internal sink.
   compiled::BlockSink* effectiveSink() const;
@@ -381,9 +385,14 @@ class ChapterHtmlSlimParser final : public Print {
 
   ParsedText::LineProcessResult addLineToPage(std::shared_ptr<TextBlock> line, bool lineEndsWithHyphenatedWord,
                                               bool suppressHyphenationRetry);
-  const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
-  const std::vector<std::pair<uint16_t, std::string>>& getPageBreakLabels() const { return pageBreakLabels; }
-  const std::vector<ParagraphLutEntry>& getParagraphLutPerPage() const { return paragraphLutPerPage; }
+  // Step 6 unify: when the internal LayoutSink drives output, these proxy its tables (the fused
+  // anchorData/pageBreakLabels/paragraphLutPerPage become unread fused scratch). Otherwise (external
+  // ContentSink compile) they return the fused tables. Defined out-of-line where LayoutSink is
+  // complete. getParagraphLutPerPage rebuilds lutAdapter_ from the sink's LayoutLutEntry vector
+  // (field-identical to ParagraphLutEntry, distinct type).
+  const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const;
+  const std::vector<std::pair<uint16_t, std::string>>& getPageBreakLabels() const;
+  const std::vector<ParagraphLutEntry>& getParagraphLutPerPage() const;
 
   // Supplies printed-page labels from NCX <pageList> for this chapter. `anchors` maps
   // HTML id -> label; an entry with an empty id applies to the first page of this file.

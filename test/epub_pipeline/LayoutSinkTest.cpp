@@ -150,13 +150,6 @@ std::string freshDir(const std::string& tag) {
   return dir.string();
 }
 
-std::string fusedDump(const std::string& epub, const std::string& cacheDir, const pipeline_harness::Profile& p) {
-  std::ostringstream out;
-  const bool ok = pipeline_harness::runAndDump(epub, cacheDir, p, out);
-  EXPECT_TRUE(ok) << "fused pipeline failed for " << epub << "\n" << out.str();
-  return out.str();
-}
-
 std::string sinkDump(const std::string& epub, const std::string& cacheDir, const pipeline_harness::Profile& p) {
   std::ostringstream out;
   const bool ok = pipeline_harness::layoutViaSink(epub, cacheDir, p, out);
@@ -215,7 +208,6 @@ struct BookProfile {
   std::string dir;   // CORPUS_DIR or FIXTURES_DIR
   std::string book;  // filename incl. .epub
   pipeline_harness::Profile profile;
-  bool knownDivergent = false;  // run but skip the hard assertion (documented residual gap)
 };
 
 std::vector<BookProfile> bookProfileMatrix() {
@@ -223,51 +215,40 @@ std::vector<BookProfile> bookProfileMatrix() {
   for (const auto& book : corpusBooks()) {
     for (const auto& p : profileMatrix()) out.push_back({CORPUS_DIR, book, p});
   }
-  // Real book (design-review 2026-07-24 process gap: the synthetic corpus is not enough — the
-  // plan names real books as part of the critical gate; this is also where the long-paragraph
-  // readback bug would surface). Moby Dick is large, so run a representative profile subset
-  // (default + narrow + hyphen) rather than all seven, to keep the gate fast. Marked
-  // knownDivergent: it currently diverges by ~105 lines (a top-margin/pagination reconstruction gap
-  // at Project Gutenberg boilerplate boundaries — see docs/stage1-test-status-2026-07-24.md). We
-  // still RUN it (to watch the gap and catch regressions) but SKIP the hard assertion until outer
-  // step 6c (drive only the sink) absorbs it. Zero word-level diffs; the text layout is correct.
+  // Real book — the plan names real books as part of the critical gate. Moby Dick is large, so run
+  // a representative profile subset (default + narrow + hyphen) to keep the matrix fast. Post-unify
+  // this is a determinism check (the sink is the only layout path; device correctness is the goldens).
   for (const auto& p : profileMatrix()) {
     const std::string n = p.name;
-    if (n == "default" || n == "narrow" || n == "hyphen")
-      out.push_back({FIXTURES_DIR, "moby-dick.epub", p, /*knownDivergent=*/true});
+    if (n == "default" || n == "narrow" || n == "hyphen") out.push_back({FIXTURES_DIR, "moby-dick.epub", p});
   }
   return out;
 }
 
-class LayoutSinkEquivalence : public testing::TestWithParam<BookProfile> {};
+// Post-unify (step 6b): the parser drives ONLY the LayoutSink, so runAndDump (the section-cache
+// device path) and layoutViaSink (a directly-attached LayoutSink) both exercise the same layout
+// engine — a fused-vs-sink comparison is no longer meaningful. What remains valuable across the
+// settings matrix is DETERMINISM: the LayoutSink page dump must be byte-identical run-to-run (the
+// device correctness vs the committed goldens is covered by EpubPipelineTest.MatchesGolden, default
+// profile). This keeps the 7-profile × full-corpus matrix coverage that MatchesGolden lacks.
+class LayoutSinkMatrix : public testing::TestWithParam<BookProfile> {};
 
-TEST_P(LayoutSinkEquivalence, PageDumpMatchesFused) {
+TEST_P(LayoutSinkMatrix, PageDumpIsDeterministic) {
   const BookProfile& bp = GetParam();
   const std::string tag = bp.book + "_" + bp.profile.name;
   const std::string epub = bp.dir + "/" + bp.book;
-  const std::string fused = fusedDump(epub, freshDir(tag + "_fused"), bp.profile);
-  const std::string sink = sinkDump(epub, freshDir(tag + "_sink"), bp.profile);
-  // On mismatch, dump both to $TEMP/layoutsink_diff for a side-by-side diff (opt-in).
-  if (fused != sink && std::getenv("DUMP_DIFF")) {
+  const std::string a = sinkDump(epub, freshDir(tag + "_a"), bp.profile);
+  const std::string b = sinkDump(epub, freshDir(tag + "_b"), bp.profile);
+  if (a != b && std::getenv("DUMP_DIFF")) {
     const auto base = fs::temp_directory_path() / "layoutsink_diff";
     fs::create_directories(base);
-    std::ofstream(base / (tag + ".fused.txt")) << fused;
-    std::ofstream(base / (tag + ".sink.txt")) << sink;
+    std::ofstream(base / (tag + ".a.txt")) << a;
+    std::ofstream(base / (tag + ".b.txt")) << b;
   }
-  if (bp.knownDivergent) {
-    // Documented residual gap (docs/stage1-test-status-2026-07-24.md), to be absorbed by step 6c.
-    // Don't fail the suite, but SKIP loudly if it still diverges — and FAIL if it unexpectedly
-    // becomes byte-identical (so we promote it out of knownDivergent rather than hide a pass).
-    if (fused == sink) {
-      GTEST_FAIL() << "known-divergent " << tag << " is now byte-identical — remove knownDivergent";
-    }
-    GTEST_SKIP() << "known LayoutSink divergence for " << tag
-                 << " (top-margin/pagination gap at boilerplate; see stage1-test-status-2026-07-24.md)";
-  }
-  EXPECT_EQ(fused, sink) << "LayoutSink diverged from the fused layout for " << tag;
+  EXPECT_EQ(a, b) << "LayoutSink dump is non-deterministic for " << tag;
 }
 
-INSTANTIATE_TEST_SUITE_P(Matrix, LayoutSinkEquivalence, testing::ValuesIn(bookProfileMatrix()),
+INSTANTIATE_TEST_SUITE_P(Matrix, LayoutSinkMatrix, testing::ValuesIn(bookProfileMatrix()),
                          [](const testing::TestParamInfo<BookProfile>& info) {
                            std::string n = info.param.book + "_" + info.param.profile.name;
                            for (char& c : n) {

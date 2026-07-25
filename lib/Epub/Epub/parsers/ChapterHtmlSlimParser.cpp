@@ -471,7 +471,11 @@ bool ChapterHtmlSlimParser::flushPartWordBuffer() {
 // currentPage to a fresh Page and zeroes currentPageNextY so the caller can keep building.
 void ChapterHtmlSlimParser::emitPage(uint32_t xhtmlByteOffset) {
   paragraphLutPerPage.push_back({xhtmlByteOffset, xpathParagraphIndex, xpathListItemIndex});
-  completePageFn(std::move(currentPage));
+  // Step 6 unify: when the internal LayoutSink drives output it calls completePageFn itself, so the
+  // fused emitPage must NOT also emit (double-emit). Only emit here when no internal sink exists —
+  // i.e. an external ContentSink compile, where the fused path still produces the section pages.
+  // The rest of this body keeps the fused layout's page/float scratch coherent either way.
+  if (!layoutSink_) completePageFn(std::move(currentPage));
   completedPageCount++;
   currentPage.reset(new (std::nothrow) Page());
   currentPageNextY = 0;
@@ -498,7 +502,7 @@ void ChapterHtmlSlimParser::recordPageBreakLabel(const std::string& label) {
   pageBreakLabels.emplace_back(static_cast<uint16_t>(completedPageCount), label);
   // Stage-1: the label is position-anchored (like anchors, at block granularity); the
   // sink records it against its current block count and Stage-2 maps it to a page.
-  if (stage1Sink_) stage1Sink_->onPageBreakLabel(label);
+  if (auto* sink = effectiveSink()) sink->onPageBreakLabel(label);
 }
 
 void ChapterHtmlSlimParser::setExternalPageBreakAnchors(std::vector<std::pair<std::string, std::string>> anchors) {
@@ -609,7 +613,8 @@ static std::string stage1JoinWords(const compiled::Block& b) {
 }
 
 void ChapterHtmlSlimParser::stage1FlushBlock() {
-  if (!stage1Sink_ || !stage1Block_) return;
+  compiled::BlockSink* sink = effectiveSink();
+  if (!sink || !stage1Block_) return;
   // Empty blocks are emitted too: they are the wrapper/spacer/<br> transcript. The fused
   // layout derives real spacing from them (empty-block margin merge, <br> gap injection,
   // pendingImageBlockStyle around images), so Stage-2 needs the same sequence to replay
@@ -625,27 +630,29 @@ void ChapterHtmlSlimParser::stage1FlushBlock() {
   // Transmit the walk's current XPath counters so the sink's per-page LUT matches the fused one:
   // any page break the sink takes while laying out THIS block uses these values (the same the
   // fused emitPage would read, since the walk sets them before emitting the block).
-  stage1Sink_->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
-  stage1Sink_->onBlock(std::move(*stage1Block_), stage1BlockCssStyle_);
+  sink->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
+  sink->onBlock(std::move(*stage1Block_), stage1BlockCssStyle_);
   stage1Block_.reset();
   stage1BlockHeadingLevel_ = 0;
   // A heading block is a chapter/heading boundary: report it against the block just emitted.
-  if (headingLevel > 0) stage1Sink_->onChapter(headingLevel, title);
+  if (headingLevel > 0) sink->onChapter(headingLevel, title);
 }
 
 // Emit a stashed anchor id. Call AFTER any prior block has been flushed, so the sink's
 // block count equals the index of the block this anchor introduces (block granularity,
 // charOffsetInBlock 0 — microreader's para_idx model; mid-block precision is a later refinement).
 void ChapterHtmlSlimParser::stage1EmitPendingAnchor() {
-  if (!stage1Sink_ || stage1PendingAnchor_.empty()) return;
-  stage1Sink_->onAnchor(stage1PendingAnchor_);
+  compiled::BlockSink* sink = effectiveSink();
+  if (!sink || stage1PendingAnchor_.empty()) return;
+  sink->onAnchor(stage1PendingAnchor_);
   stage1PendingAnchor_.clear();
 }
 
 void ChapterHtmlSlimParser::stage1EmitImageBlock(const std::string& entryPath, const int16_t width,
                                                  const int16_t height, const uint8_t floatSide,
                                                  const std::string& alt, const CssStyle& imgStyle) {
-  if (!stage1Sink_) return;
+  compiled::BlockSink* sink = effectiveSink();
+  if (!sink) return;
   stage1FlushBlock();         // emit any pending text block first (document order)
   stage1EmitPendingAnchor();  // an anchor introducing this image points at it
   compiled::Block b;
@@ -658,23 +665,25 @@ void ChapterHtmlSlimParser::stage1EmitImageBlock(const std::string& entryPath, c
   b.alt = alt;
   // Pass the image's resolved CSS (width/height) as the block style so Stage-2 reproduces the
   // display-dimension scaling; the intrinsic w/h ride on the block fields.
-  stage1Sink_->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
-  stage1Sink_->onBlock(std::move(b), imgStyle);
+  sink->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
+  sink->onBlock(std::move(b), imgStyle);
 }
 
 void ChapterHtmlSlimParser::stage1EmitHrBlock() {
-  if (!stage1Sink_) return;
+  compiled::BlockSink* sink = effectiveSink();
+  if (!sink) return;
   stage1FlushBlock();         // emit any pending text block first (document order)
   stage1EmitPendingAnchor();  // an anchor introducing the rule points at it
   compiled::Block b;
   b.type = compiled::BlockType::Hr;
   b.charOffset = stage1CharOffset_;
-  stage1Sink_->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
-  stage1Sink_->onBlock(std::move(b), CssStyle{});  // rule geometry is derived at layout time
+  sink->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
+  sink->onBlock(std::move(b), CssStyle{});  // rule geometry is derived at layout time
 }
 
 void ChapterHtmlSlimParser::stage1EmitTableBlock(const BufferedTable& table) {
-  if (!stage1Sink_) return;
+  compiled::BlockSink* sink = effectiveSink();
+  if (!sink) return;
   stage1FlushBlock();         // emit any pending text block first (document order)
   stage1EmitPendingAnchor();  // an anchor introducing the table points at it
   compiled::Block b;
@@ -712,12 +721,12 @@ void ChapterHtmlSlimParser::stage1EmitTableBlock(const BufferedTable& table) {
     }
     b.rows.push_back(std::move(crow));
   }
-  stage1Sink_->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
-  stage1Sink_->onBlock(std::move(b), CssStyle{});
+  sink->onXPathAdvance(xpathParagraphIndex, xpathListItemIndex, lastBodyChildByteOffset);
+  sink->onBlock(std::move(b), CssStyle{});
 }
 
 void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
-  if (!stage1Sink_) return;
+  if (!effectiveSink()) return;
   stage1FlushBlock();         // hand off the previous block (even an empty wrapper — transcript)
   stage1EmitPendingAnchor();  // the anchor introduces the block we are about to open
   stage1Block_.reset(new (std::nothrow) compiled::Block());
@@ -740,7 +749,7 @@ void ChapterHtmlSlimParser::stage1OpenBlock(const CssStyle& style) {
 
 void ChapterHtmlSlimParser::stage1AddWord(const char* text, const EpdFontFamily::Style style, const uint8_t sizePct,
                                           const bool attachToPrevious) {
-  if (!stage1Sink_) return;
+  if (!effectiveSink()) return;
   if (!stage1Block_) {
     // Words can reach the (still existing, empty) layout block without a new block-element
     // open — e.g. bare text directly after an image emit closed the accumulator. Reopen so
@@ -808,7 +817,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
             emitPage(lastBodyChildByteOffset);
           }
         }
-        if (stage1Sink_) {
+        if (effectiveSink()) {
           stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
           // A TOC-boundary anchor forces a fresh page: transmit it as kPageBreakBefore on the
           // block this anchor introduces, so Stage-2 (LayoutSink) reproduces the page break.
@@ -846,7 +855,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   }
   // Record deferred anchor after previous block is flushed (and any TOC page break)
   if (!pendingAnchorId.empty()) {
-    if (stage1Sink_) {
+    if (effectiveSink()) {
       stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
       if (tocBoundary) stage1PendingPageBreak_ = true;  // -> kPageBreakBefore on the introduced block
     }
@@ -1298,7 +1307,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                   self->pendingInlineImage_.active = true;
                   // Stage-1: defer the same float image, with INTRINSIC dims (Stage-2 rescales),
                   // to attach to the paragraph that gets the first following word.
-                  if (self->stage1Sink_) {
+                  if (self->effectiveSink()) {
                     self->stage1InlineImagePath_ = resolvedPath;
                     self->stage1InlineImageAlt_ = alt;
                     self->stage1InlineImageW_ = static_cast<int16_t>(dims.width);
@@ -1552,7 +1561,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     // child block). Flag the NEXT opened block with kPageBreakBefore — reusing the pending-break
     // path the TOC-boundary case already uses — so the sink breaks before the same content.
     // Settings-independent CSS property (real-book: Project Gutenberg's `h2 { page-break-before }`).
-    if (self->stage1Sink_) self->stage1PendingPageBreak_ = true;
+    if (self->effectiveSink()) self->stage1PendingPageBreak_ = true;
     self->emitPage(self->lastBodyChildByteOffset);
   }
 
@@ -1627,7 +1636,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       // carry the paragraph's text-indent). The neutral brStyle above drops it, so drop it from
       // the transmitted style too — otherwise the sink indents every <br> continuation line. A
       // later span-margin (poem stanza) re-stamps textIndent on this block, which is correct.
-      if (self->stage1Sink_) {
+      if (self->effectiveSink()) {
         self->stage1BlockCssStyle_.textIndent = CssLength{};
         self->stage1BlockCssStyle_.defined.textIndent = 0;
       }
@@ -1925,7 +1934,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
           // px depends on font size + viewport, which would make content.bin settings-dependent).
           // The sink re-resolves em->px with its own emSize, so the result is byte-identical while
           // content.bin stays settings-independent (compiled-content-format.md: px stays Stage-2).
-          if (self->stage1Sink_) {
+          if (self->effectiveSink()) {
             self->stage1BlockCssStyle_.textIndent = cssStyle.marginLeft;
             self->stage1BlockCssStyle_.defined.textIndent = 1;
           }
@@ -2244,7 +2253,7 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
           self->wordsExtractedInBlock + (self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : 0);
       self->pendingFootnotes.push_back({wordIndex, entry});
       // Stage-1: anchor the footnote to the current block at the same word position.
-      if (self->stage1Sink_) self->stage1Sink_->onFootnote(wordIndex, entry);
+      if (auto* sink = self->effectiveSink()) sink->onFootnote(wordIndex, entry);
     }
     if (self->inlineFootnotePreviews && self->currentFootnote.href[0] != '\0') {
       // Membership in the book-level preview cache is the gate: the gatherer only
@@ -2390,6 +2399,26 @@ compiled::BlockSink* ChapterHtmlSlimParser::effectiveSink() const {
   return stage1Sink_ ? stage1Sink_ : static_cast<compiled::BlockSink*>(layoutSink_.get());
 }
 
+// Getter proxies (step 6 unify). When the internal LayoutSink drove output, return its tables; the
+// fused anchorData/pageBreakLabels/paragraphLutPerPage are then unread scratch. When an external
+// ContentSink compiled (no internal sink), fall back to the fused tables.
+const std::vector<std::pair<std::string, uint16_t>>& ChapterHtmlSlimParser::getAnchors() const {
+  return layoutSink_ ? layoutSink_->anchors() : anchorData;
+}
+const std::vector<std::pair<uint16_t, std::string>>& ChapterHtmlSlimParser::getPageBreakLabels() const {
+  return layoutSink_ ? layoutSink_->pageBreakLabels() : pageBreakLabels;
+}
+const std::vector<ChapterHtmlSlimParser::ParagraphLutEntry>& ChapterHtmlSlimParser::getParagraphLutPerPage() const {
+  if (!layoutSink_) return paragraphLutPerPage;
+  // Adapt the sink's field-identical LayoutLutEntry vector to the parser's ParagraphLutEntry type.
+  lutAdapter_.clear();
+  lutAdapter_.reserve(layoutSink_->paragraphLutPerPage().size());
+  for (const auto& e : layoutSink_->paragraphLutPerPage()) {
+    lutAdapter_.push_back({e.xhtmlByteOffset, e.paragraphIndex, e.listItemIndex});
+  }
+  return lutAdapter_;
+}
+
 bool ChapterHtmlSlimParser::setup(const size_t totalInflatedSize) {
   // Construct the internal layout sink from the parser's settings members BEFORE the first
   // startNewTextBlock (which drives the producer). Skipped when an external ContentSink is attached
@@ -2525,7 +2554,7 @@ bool ChapterHtmlSlimParser::finalize() {
   // Stage-1: hand off the final accumulated block (no subsequent stage1OpenBlock will)
   // and signal end-of-spine so the sink can flush any trailing state.
   stage1FlushBlock();
-  if (stage1Sink_) stage1Sink_->onSpineEnd();
+  if (auto* sink = effectiveSink()) sink->onSpineEnd();
 
   // Process last page if there is still text. Done unconditionally so that a partial
   // success scenario still flushes whatever pages were produced.
