@@ -267,7 +267,6 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   effectiveSup = false;
   effectiveSub = false;
   effectiveSmallCaps = currentCssStyle.hasSmallCaps() && currentCssStyle.smallCaps;
-  effectiveInlineMarginLeft = 0;
   // Inline font-size composes multiplicatively through the stack (em is relative to
   // the parent element); the block's own font-size lives in BlockStyle, so 100 here
   // means "the block size". Tracked in integer percent to match the per-word channel.
@@ -297,9 +296,6 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
     }
     if (entry.hasSmallCaps) {
       effectiveSmallCaps = entry.smallCaps;
-    }
-    if (entry.hasMarginLeft) {
-      effectiveInlineMarginLeft = entry.marginLeftPx;
     }
     if (entry.hasFontSize) {
       sizePct = sizePct * entry.fontSizePct / 100;
@@ -1767,8 +1763,6 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
         // Applied immediately to the current block because the span closes before the
         // trailing <br>, so the indent must be on the block that receives the text.
         const int16_t marginPx = cssStyle.marginLeft.toPixelsInt16(emSize, static_cast<float>(self->viewportWidth));
-        entry.hasMarginLeft = true;
-        entry.marginLeftPx = marginPx;
         if (marginPx > 0 && self->currentTextBlock) {
           BlockStyle updatedStyle = self->currentTextBlock->getBlockStyle();
           updatedStyle.textIndent = marginPx;

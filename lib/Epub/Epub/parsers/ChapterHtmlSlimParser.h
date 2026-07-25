@@ -124,8 +124,6 @@ class ChapterHtmlSlimParser final : public Print {
     bool hasSup = false, sup = false;
     bool hasSub = false, sub = false;
     bool hasSmallCaps = false, smallCaps = false;
-    bool hasMarginLeft = false;
-    int16_t marginLeftPx = 0;  // margin-left in pixels, for span-level poem indents
     // Inline font-size as a percent of the PARENT element's size (em semantics).
     // Nested entries compose multiplicatively in updateEffectiveInlineStyle().
     bool hasFontSize = false;
@@ -140,7 +138,6 @@ class ChapterHtmlSlimParser final : public Print {
   bool effectiveSup = false;
   bool effectiveSub = false;
   bool effectiveSmallCaps = false;
-  int16_t effectiveInlineMarginLeft = 0;  // accumulated margin-left from inline span stack
   // Composed inline font-size percent (relative to the block font size) for the
   // words currently being flushed. 100 outside sized spans; clamped to the
   // ParsedText per-word range so it always fits the uint8_t word-size channel.
