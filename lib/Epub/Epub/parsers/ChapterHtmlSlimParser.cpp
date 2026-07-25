@@ -1294,35 +1294,31 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                 //   attachPendingFloatImage() splits anything taller than the remaining page into
                 //   a continuation tile on the next page; capping at viewportHeight keeps that
                 //   single-continuation split correct (tileB never exceeds one page).
+                // The float-vs-block decision is settings-dependent (uses the display dims), so the
+                // walk still makes it here; it determines the block TYPE the producer emits. The
+                // actual float placement lives in LayoutSink::attachFloatImage.
                 const bool isInlineCandidate = self->floatDepth_ > 0 && displayWidth <= self->viewportWidth / 2 &&
                                                displayHeight <= self->viewportHeight;
                 if (isInlineCandidate) {
-                  self->pendingInlineImage_.cachedPath = std::move(cachedImagePath);
-                  self->pendingInlineImage_.epubEntryPath = resolvedPath;
-                  self->pendingInlineImage_.width = static_cast<int16_t>(displayWidth);
-                  self->pendingInlineImage_.height = static_cast<int16_t>(displayHeight);
-                  self->pendingInlineImage_.alt = alt;
-                  self->pendingInlineImage_.isRight =
-                      (self->floatDepth_ > 0) && self->floatOpenSides_[self->floatDepth_ - 1];
-                  self->pendingInlineImage_.active = true;
-                  // Stage-1: defer the same float image, with INTRINSIC dims (Stage-2 rescales),
-                  // to attach to the paragraph that gets the first following word.
-                  if (self->effectiveSink()) {
-                    self->stage1InlineImagePath_ = resolvedPath;
-                    self->stage1InlineImageAlt_ = alt;
-                    self->stage1InlineImageW_ = static_cast<int16_t>(dims.width);
-                    self->stage1InlineImageH_ = static_cast<int16_t>(dims.height);
-                    self->stage1InlineImageSide_ = self->pendingInlineImage_.isRight ? 2 : 1;
-                    self->stage1InlineImagePending_ = true;
-                  }
+                  // Stage-1: defer the float image (INTRINSIC dims — Stage-2 rescales) to attach to
+                  // the paragraph that gets the first following word.
+                  const bool isRight = (self->floatDepth_ > 0) && self->floatOpenSides_[self->floatDepth_ - 1];
+                  self->stage1InlineImagePath_ = resolvedPath;
+                  self->stage1InlineImageAlt_ = alt;
+                  self->stage1InlineImageW_ = static_cast<int16_t>(dims.width);
+                  self->stage1InlineImageH_ = static_cast<int16_t>(dims.height);
+                  self->stage1InlineImageSide_ = isRight ? 2 : 1;
+                  self->stage1InlineImagePending_ = true;
                   LOG_DBG("EHP", "Inline image deferred: w=%d h=%d", displayWidth, displayHeight);
                   // Don't flush the current text block — let it continue into the next paragraph.
                   self->depth += 1;
                   return;
                 }
 
-                // Block image path (existing behaviour) — flush text before placing image
-                // Flush any pending text block so it appears before the image
+                // Block image path — flush any pending text so the image follows it in document
+                // order, then emit the image as a standalone block with its INTRINSIC dims + CSS.
+                // LayoutSink::placeBlockImage does the fit-to-viewport scaling, spacing, page-break
+                // and PageImage placement (floatSide 0 = a centered block image, not a float).
                 if (self->partWordBufferIndex > 0) {
                   if (!self->flushPartWordBuffer()) return;
                 }
@@ -1330,90 +1326,11 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                   const BlockStyle parentBlockStyle = self->currentTextBlock->getBlockStyle();
                   self->startNewTextBlock(parentBlockStyle);
                 }
-
-                // If the current text block is still empty, it may carry accumulated parent
-                // block spacing (e.g. div/figure/h1 wrappers). Apply that spacing around the
-                // image itself so it doesn't leak into the next text paragraph.
-                BlockStyle pendingImageBlockStyle;
-                if (self->currentTextBlock && self->currentTextBlock->isEmpty()) {
-                  pendingImageBlockStyle = self->currentTextBlock->getBlockStyle();
-                }
-
-                const int imageSpacingTop = std::max(0, static_cast<int>(pendingImageBlockStyle.marginTop)) +
-                                            std::max(0, static_cast<int>(pendingImageBlockStyle.paddingTop));
-                const int imageSpacingBottom = std::max(0, static_cast<int>(pendingImageBlockStyle.marginBottom)) +
-                                               std::max(0, static_cast<int>(pendingImageBlockStyle.paddingBottom));
-                const int totalImageHeightWithSpacing = imageSpacingTop + displayHeight + imageSpacingBottom;
-
-                LOG_DBG("EHP",
-                        "Image layout prep: src=%s dims=%dx%d display=%dx%d y=%d spacing(top=%d,bottom=%d,total=%d)",
-                        src.c_str(), dims.width, dims.height, displayWidth, displayHeight, self->currentPageNextY,
-                        imageSpacingTop, imageSpacingBottom, totalImageHeightWithSpacing);
-
-                // Create page for image - only break if image won't fit remaining space
-                if (self->currentPage && !self->currentPage->elements.empty() &&
-                    (self->currentPageNextY + totalImageHeightWithSpacing > self->viewportHeight)) {
-                  LOG_DBG("EHP", "Image page break: currentY=%d needed=%d viewportH=%d", self->currentPageNextY,
-                          totalImageHeightWithSpacing, self->viewportHeight);
-                  self->emitPage(self->lastBodyChildByteOffset);
-                  if (!self->currentPage) {
-                    LOG_ERR("EHP", "Failed to create new page");
-                    return;
-                  }
-                } else if (!self->currentPage) {
-                  self->currentPage.reset(new Page());
-                  if (!self->currentPage) {
-                    LOG_ERR("EHP", "Failed to create initial page");
-                    return;
-                  }
-                  self->currentPageNextY = 0;
-                }
-
-                self->currentPageNextY += imageSpacingTop;
-
-                // Create ImageBlock with lazy-extraction source info.
-                // The SD file at cachedImagePath does not exist yet — it will be extracted
-                // from the EPUB at first render time by ImageBlock::ensureExtracted().
-                auto imageBlock = std::make_shared<ImageBlock>(cachedImagePath, displayWidth, displayHeight, alt,
-                                                               self->epub->getPath(), resolvedPath);
-                if (!imageBlock) {
-                  LOG_ERR("EHP", "Failed to create ImageBlock");
-                  return;
-                }
-                int xPos = (self->viewportWidth - displayWidth) / 2;
-                auto pageImage = std::make_shared<PageImage>(imageBlock, xPos, self->currentPageNextY);
-                if (!pageImage) {
-                  LOG_ERR("EHP", "Failed to create PageImage");
-                  return;
-                }
-                self->currentPage->elements.push_back(pageImage);
-                self->currentPageNextY += displayHeight;
-                self->currentPageNextY += imageSpacingBottom;
-                // Stage-1: emit the image as a standalone block with its INTRINSIC dims
-                // (Stage-2 rescales); floatSide 0 = a centered block image, not a float.
                 self->stage1EmitImageBlock(resolvedPath, static_cast<int16_t>(dims.width),
                                            static_cast<int16_t>(dims.height), 0, alt, imgStyle);
-
-                LOG_DBG("EHP", "Image placed: x=%d y=%d w=%d h=%d nextY=%d", xPos, pageImage->yPos, displayWidth,
-                        displayHeight, self->currentPageNextY);
-
-                // Reset empty pending block style after consuming spacing around the image.
-                // This prevents figure/header wrapper margins from being applied again to the
-                // next paragraph block.
-                if (self->currentTextBlock && self->currentTextBlock->isEmpty()) {
-                  BlockStyle resetStyle;
-                  resetStyle.textAlignDefined = true;
-                  const auto align = (self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
-                                         ? CssTextAlign::Justify
-                                         : static_cast<CssTextAlign>(self->paragraphAlignment);
-                  resetStyle.alignment = align;
-                  self->currentTextBlock->setBlockStyle(resetStyle);
-                  LOG_DBG("EHP", "Image spacing consumed; pending empty block style reset for following text");
-                }
-
                 self->depth += 1;
                 return;
-              }  // layout geometry block
+              }  // dims-resolved block
             } else {
               LOG_ERR("EHP", "Failed to read image dimensions from ZIP: %s", resolvedPath.c_str());
             }
@@ -1694,28 +1611,8 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     if (self->partWordBufferIndex > 0) {
       if (!self->flushPartWordBuffer()) return;
     }
-    self->makePages();
-    if (!self->currentPage) {
-      self->currentPage.reset(new Page());
-      self->currentPageNextY = 0;
-    }
-    const int lineHeight = static_cast<int>(self->renderer.getLineHeight(self->fontId) * self->lineCompression + 0.5f);
-    const int16_t marginV = static_cast<int16_t>(lineHeight / 2);
-    self->currentPageNextY += marginV;
-    if (self->currentPageNextY + 1 + marginV > self->viewportHeight) {
-      self->emitPage(self->lastBodyChildByteOffset);
-      self->currentPage.reset(new Page());
-      self->currentPageNextY = 0;
-    }
-    // Render the rule centered at 50% width (25%→75%) rather than edge-to-edge, matching
-    // the conventional reader default. Books rarely set hr width in their own CSS.
-    const int16_t hrWidth = static_cast<int16_t>(self->viewportWidth / 2);
-    const int16_t hrX = static_cast<int16_t>(self->viewportWidth / 4);
-    self->currentPage->elements.push_back(std::make_shared<PageHR>(hrX, self->currentPageNextY, hrWidth));
-    self->currentPageNextY += 1 + marginV;
-    // Stage-1: emit the rule as a bare HR block (flushes any pending text first, preserving
-    // document order). Do this BEFORE opening the following empty block so the sink sees
-    // [ ...text..., HR, next-block ] in the same order the fused elements were produced.
+    // Emit the rule as a bare HR block (flushes any pending text first, preserving document order),
+    // then open the following empty block. LayoutSink::placeHr draws the centered rule + margins.
     self->stage1EmitHrBlock();
     BlockStyle emptyStyle;
     self->startNewTextBlock(emptyStyle);
