@@ -1857,12 +1857,14 @@ void ChapterHtmlSlimParser::characterData(void* userData, const char* s, const i
           if (!self->flushPartWordBuffer()) return;
         }
         // Blank line: the current block is empty, but we still need to emit a visible
-        // empty line.  Add a single space so the block is non-empty and makePages()
-        // will produce a line of the correct height instead of reusing the empty block.
-        if (self->currentTextBlock->isEmpty()) {
-          self->currentTextBlock->addWord(" ", EpdFontFamily::REGULAR);
-          self->stage1AddWord(" ", EpdFontFamily::REGULAR, ParsedText::DEFAULT_WORD_SIZE_PCT, false);
-        }
+        // empty line.  Add a single space so the block is non-empty and Stage-2 will
+        // produce a line of the correct height instead of reusing the empty block.
+        // A trailing space closes every <pre> source line. The fused layout lays out (and empties)
+        // currentTextBlock on every startNewTextBlock, so at each newline its block is already
+        // empty and its isEmpty() guard always fired — i.e. the space was added on EVERY newline,
+        // not only blank ones. Reproduce that unconditionally on the Stage-1 side (the flushed line
+        // words already sit in stage1Block_; the space just terminates the line).
+        self->stage1AddWord(" ", EpdFontFamily::REGULAR, ParsedText::DEFAULT_WORD_SIZE_PCT, false);
         self->startNewTextBlock(self->currentTextBlock->getBlockStyle());
         self->nextWordContinues = false;
         continue;
