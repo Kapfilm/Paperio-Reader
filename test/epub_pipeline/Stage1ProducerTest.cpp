@@ -143,8 +143,9 @@ std::vector<std::string> producerWords(const CapturingSink& sink) {
   return out;
 }
 
-// The layout's word sequence for a spine, read back from the built section cache (cache
-// hit — the build already ran in compileSpine with the same cacheDir + default profile).
+// The layout's word sequence for a spine, read from a section cache built via the LayoutSink
+// (no external stage1 sink attached — post-unify that is the ONLY layout path). cacheDir must be
+// fresh; we build then read back.
 std::vector<std::string> layoutWords(const std::string& epubName, int spineIndex, const std::string& cacheDir) {
   std::vector<std::string> out;
   GfxRenderer renderer;
@@ -152,6 +153,8 @@ std::vector<std::string> layoutWords(const std::string& epubName, int spineIndex
   EXPECT_TRUE(epub->load(true));
   epub->loadImageManifest();
   Section section(epub, spineIndex, renderer);
+  // Build via the internal LayoutSink (no setStage1Sink), then read back.
+  if (!section.createSectionFile(0, 1.0f, false, 0, 300, 400, false, true, false, false, 0, {}, true, {})) return out;
   if (!section.loadSectionFile(0, 1.0f, false, 0, 300, 400, false, true, false, false, 0)) return out;
   for (uint16_t p = 0; p < section.pageCount; ++p) {
     section.currentPage = p;
@@ -328,7 +331,10 @@ TEST(Stage1Producer, TextMatchesLayoutWords) {
     const std::string cacheDir = freshCacheDir(std::string("eqv_") + c.book + "_" + c.href);
     CapturingSink sink;
     compileSpine(c.book, spine, cacheDir, sink);
-    EXPECT_EQ(producerWords(sink), layoutWords(c.book, spine, cacheDir))
+    // layoutWords builds its own LayoutSink-backed section in a separate fresh dir (post-unify the
+    // sink is the only layout path; the producer stream that fed `sink` also feeds that section).
+    const std::string layoutDir = freshCacheDir(std::string("eqv_layout_") + c.book + "_" + c.href);
+    EXPECT_EQ(producerWords(sink), layoutWords(c.book, spine, layoutDir))
         << "producer vs layout word mismatch: " << c.book << " " << c.href;
   }
 }

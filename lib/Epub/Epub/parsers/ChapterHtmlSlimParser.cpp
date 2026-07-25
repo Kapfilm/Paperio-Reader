@@ -394,72 +394,14 @@ bool ChapterHtmlSlimParser::flushPartWordBuffer() {
     fontStyle = static_cast<EpdFontFamily::Style>(fontStyle | EpdFontFamily::SMALL_CAPS);
   }
 
-  // flush the buffer — route to table cell text when inside a <td>/<th>
+  // flush the buffer — route to table cell text when inside a <td>/<th> (the buffered table the
+  // producer serializes), otherwise emit the word to the producer. Layout (word measurement, the
+  // >96-word mid-block split, float wrapping) is LayoutSink's job now.
   partWordBuffer[partWordBufferIndex] = '\0';
   if (currentTableCell) {
     currentTableCell->text->addWord(partWordBuffer, fontStyle, false, nextWordContinues, effectiveSizePct);
-  } else if (currentTextBlock) {
-    // If a float image is pending and the block is still empty, attach it now so the
-    // first word (and all subsequent words) are laid out beside the image.
-    // This handles <p><img style="float:left"/>text...</p>: pendingInlineImage_ is set
-    // while the block is empty, but no startNewTextBlock() fires before the first word.
-    if (pendingInlineImage_.active && currentTextBlock->isEmpty()) {
-      attachPendingFloatImage(currentTextBlock->getBlockStyle());
-    }
-    currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, effectiveSizePct);
+  } else {
     stage1AddWord(partWordBuffer, fontStyle, effectiveSizePct, nextWordContinues);
-
-    if (currentTextBlock->size() > 96) {
-      if (!ensureHeapForTextLayout("long-block split")) {
-        partWordBufferIndex = 0;
-        nextWordContinues = false;
-        return false;
-      }
-      LOG_DBG("EHP", "Text block too long, splitting into multiple pages");
-      auto& splitBlockStyle = currentTextBlock->getBlockStyle();
-      // First layout of this block happens here, so resolve its font now; the later
-      // makePages() call for the remainder is a no-op via fontResolved. Per-word sizes
-      // are NOT folded mid-block: more words with the same span size may still stream
-      // in after this flush, and folding now would double-scale them.
-      resolveBlockFont(splitBlockStyle);
-
-      // A long paragraph (>96 words) beside a tall float lays out here, bypassing
-      // makePages(). Inject the active float so it keeps wrapping in this mid-block
-      // flush too — otherwise its first chunk renders full-width over the image.
-      const bool splitIsOriginating = static_cast<bool>(deferredPageImage_);
-      if (!splitIsOriginating && activeFloatBottom_ > 0 && currentPageNextY < activeFloatBottom_ &&
-          splitBlockStyle.floatZoneCount == 0) {
-        auto& z = splitBlockStyle.floatZones[splitBlockStyle.floatZoneCount++];
-        z.top = activeFloatTop_;  // absolute image coordinates (no re-anchor below)
-        z.bottom = activeFloatBottom_;
-        z.width = activeFloatWidth_;
-        z.isRight = activeFloatIsRight_;
-      }
-
-      const int horizontalInset = splitBlockStyle.totalHorizontalInset();
-      const uint16_t effectiveWidth =
-          (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
-      const int splitLineHeight = (splitBlockStyle.floatZoneCount > 0) ? effectiveLineHeight(splitBlockStyle) : 0;
-      // Re-anchor only the originating block's zone to the first line; injected
-      // zones already carry absolute image coordinates and must not be moved.
-      if (splitIsOriginating && splitBlockStyle.floatZoneCount > 0) {
-        for (int zi = 0; zi < splitBlockStyle.floatZoneCount; ++zi) {
-          const int imgH = splitBlockStyle.floatZones[zi].bottom - splitBlockStyle.floatZones[zi].top;
-          splitBlockStyle.floatZones[zi].top = static_cast<int16_t>(currentPageNextY);
-          splitBlockStyle.floatZones[zi].bottom = static_cast<int16_t>(currentPageNextY + imgH);
-        }
-      }
-      currentTextBlock->layoutAndExtractLines(
-          renderer, fontId, effectiveWidth,
-          [this](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
-                 const bool suppressHyphenationRetry) {
-            return addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry);
-          },
-          false, static_cast<int16_t>(currentPageNextY), splitLineHeight);
-      // emitPage() clears floatZoneCount mid-layout when the page overflows — that's
-      // intentional: lines on the continuation page should not be narrowed for an
-      // image that lives on the previous page.
-    }
   }
   partWordBufferIndex = 0;
   nextWordContinues = false;
@@ -2705,25 +2647,9 @@ static constexpr size_t MIN_FREE_HEAP_FOR_TABLE = 20 * 1024;
 
 void ChapterHtmlSlimParser::emitBufferedTable() {
   if (!currentTable) return;
-
-  // Stage-1: emit the settings-independent Table block once, up front, regardless of which
-  // layout path (grid / paragraph fallback) runs below. The fallback's per-cell
-  // startNewTextBlock calls open only empty stage1 accumulators (cell words never flow
-  // through stage1AddWord), which are dropped — so no double emission.
+  // Emit the settings-independent Table block. LayoutSink::placeTable reproduces the grid-vs-
+  // paragraph decision (font-dependent) and PageTableFragment / fallback placement.
   stage1EmitTableBlock(*currentTable);
-
-  if (currentTable->unsupported || currentTable->rows.empty()) {
-    LOG_DBG("EHP", "Table unsupported or empty — falling back to paragraph mode");
-    emitTableAsParagraphs(*currentTable);
-    emitCellImagesAsBlocks(*currentTable);
-  } else if (ESP.getFreeHeap() < MIN_FREE_HEAP_FOR_TABLE) {
-    LOG_ERR("EHP", "Low heap (%u), falling back to paragraph mode for table", ESP.getFreeHeap());
-    emitTableAsParagraphs(*currentTable);
-    emitCellImagesAsBlocks(*currentTable);
-  } else {
-    // Fragment path places cell images inside the grid; no separate block-image emit.
-    emitTableAsFragments(*currentTable);
-  }
 }
 
 std::shared_ptr<ImageBlock> ChapterHtmlSlimParser::buildCellImage(const std::string& src, const std::string& alt,
