@@ -22,8 +22,7 @@
 #include "../css/CssParser.h"
 #include "../css/CssStyle.h"
 
-class Page;
-class PageImage;  // forward declaration — Page.h included in .cpp
+class Page;  // completePageFn signature only; full type not needed here
 class GfxRenderer;
 class Epub;
 namespace compiled {
@@ -53,47 +52,21 @@ class ChapterHtmlSlimParser final : public Print {
   int partWordBufferIndex = 0;
   bool nextWordContinues = false;  // true when next flushed word attaches to previous (inline element boundary)
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
-  std::unique_ptr<Page> currentPage = nullptr;
-  int16_t currentPageNextY = 0;
-  int16_t lastBlockMarginBottom = 0;  // tracks previous block's marginBottom for CSS margin collapsing
 
-  // Inline image beside paragraph text (CSS float context)
-  // Fixed-size arrays — no heap allocation. Float nesting > 4 is pathological in practice.
+  // Inline image beside paragraph text (CSS float context). The walk uses the float nesting to
+  // decide the block TYPE it emits (inline float vs centered block); the actual float placement
+  // lives in LayoutSink. Fixed-size arrays — no heap. Float nesting > 4 is pathological.
   static constexpr int kMaxFloatDepth = 4;
   int floatDepth_ = 0;
   int floatOpenDepths_[kMaxFloatDepth] = {};  // parser depth at which each float was opened
   bool floatOpenSides_[kMaxFloatDepth] = {};  // true = right float, false = left float
-  struct PendingInlineImage {
-    std::string cachedPath;
-    std::string epubEntryPath;  // entry path within the EPUB zip
-    int16_t width = 0;
-    int16_t height = 0;
-    std::string alt;
-    bool active = false;
-    bool isRight = false;  // true when float: right
-    // epubFilePath is not stored — epub->getPath() is read at ImageBlock construction time
-    // to avoid a redundant heap copy of a constant string.
-  };
-  PendingInlineImage pendingInlineImage_;         // active=true when a float-context image is deferred
-  std::shared_ptr<PageImage> deferredPageImage_;  // the PageImage whose yPos needs updating
-
-  // Active float occupying the current page. A floated image never crosses a page
-  // boundary (attachPendingFloatImage page-breaks first if it would not fit), so the
-  // float lives entirely within one page. While currentPageNextY is above
-  // activeFloatBottom_, makePages() injects this zone into every text block so the
-  // caption AND the following paragraphs wrap beside the image — not just the one
-  // block the image was attached to. Cleared once layout passes activeFloatBottom_
-  // or on a page break. activeFloatBottom_ == 0 means no active float.
-  int16_t activeFloatTop_ = 0;
-  int16_t activeFloatBottom_ = 0;
-  int16_t activeFloatWidth_ = 0;  // image width + gap
-  bool activeFloatIsRight_ = false;
   int fontId;
   // Default heading multipliers (index 0=h1, 1=h2, 2=h3) applied when a heading has no
-  // explicit CSS font-size; resolveBlockFont() then snaps them to the size ladder.
+  // explicit CSS font-size; the multiplier is transmitted to Stage-1 and Stage-2 (LayoutSink)
+  // snaps it to the size ladder.
   static constexpr float kHeadingMultiplier[3] = {1.6f, 1.4f, 1.2f};
-  // Sibling-size ladder of the body font (see FontSizeLadder). resolveBlockFont() snaps a
-  // block's effective font size to the nearest real font on it; empty = scale-only fallback.
+  // Sibling-size ladder of the body font (see FontSizeLadder), forwarded to LayoutSink, which
+  // snaps a block's effective font size to the nearest real font on it; empty = scale-only.
   FontSizeLadder fontSizeLadder_;
   // One non-body font per section: body regular/bold/italic plus one auxiliary regular is
   // exactly the FontDecompressor's four page slots. The first block to resolve off-body
@@ -217,8 +190,8 @@ class ChapterHtmlSlimParser final : public Print {
   };
   std::vector<ParagraphLutEntry> paragraphLutPerPage;  // deep LUT: one entry per page
 
-  // Active parser for streaming. Stored as a member so page-break sites (addLineToPage,
-  // image breaks) can call saxParser_.byteOffset() without threading the parser through
+  // Active parser for streaming. Stored as a member so walk sites can call
+  // saxParser_.byteOffset() without threading the parser through
   // every call site.
   SaxParser saxParser_;
 
@@ -241,8 +214,6 @@ class ChapterHtmlSlimParser final : public Print {
   // encodes "this link points at a real note", so no epub:type/same-file checks here.
   FootnotePreviews::Lookup* inlineFootnotePreviews = nullptr;
   std::string pendingInlineFootnotePreview;
-  std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
-  int wordsExtractedInBlock = 0;
   bool bionicReadingEnabled = false;
   bool layoutFailed = false;
 
@@ -275,8 +246,8 @@ class ChapterHtmlSlimParser final : public Print {
   bool stage1PendingFromBr_ = false;              // incoming block came from a <br> separator
   std::string stage1PendingAnchor_;               // element id awaiting the block it precedes
   bool stage1PendingPageBreak_ = false;           // the stashed anchor is a TOC boundary → kPageBreakBefore
-  // Deferred float image awaiting the paragraph it floats beside — attached to that block when
-  // its first word arrives (mirrors the layout's pendingInlineImage_). Intrinsic dims.
+  // Deferred float image awaiting the paragraph it floats beside — recorded on the Stage-1 block
+  // when its first word arrives; LayoutSink places it. Intrinsic dims.
   std::string stage1InlineImagePath_;
   std::string stage1InlineImageAlt_;
   int16_t stage1InlineImageW_ = 0;
@@ -302,21 +273,12 @@ class ChapterHtmlSlimParser final : public Print {
   // Apply kSupSubDefaultSizePct when the entry resolves to sup/sub. Call BEFORE
   // applyCssFontSizeToEntry so publisher CSS (e.g. `.sup { font-size: 0.7em }`) wins.
   static void applySupSubDefaultSize(StyleStackEntry& entry);
-  bool ensureHeapForTextLayout(const char* phase);
   void startNewTextBlock(const BlockStyle& blockStyle);
   bool flushPartWordBuffer();
-  void makePages();
   // Emit the settings-independent Table block to the producer. LayoutSink does the grid-vs-
   // paragraph layout, cell wrapping, and PageTableFragment/fallback placement.
   void emitBufferedTable();
-  // Emit currentPage to the consumer while keeping paragraphLutPerPage and completedPageCount
-  // in lockstep. Every page break MUST go through this helper; open-coded completePageFn
-  // calls risk desynchronising paragraphLutPerPage and failing the size check in Section.cpp.
-  void emitPage(uint32_t xhtmlByteOffset);
   void recordPageBreakLabel(const std::string& label);
-  // Attach the pending inline float image to `bs` and place it on the current page.
-  // Clears pendingInlineImage_ on return.  No-op if pendingInlineImage_ is not active.
-  void attachPendingFloatImage(BlockStyle& bs);
   // XML callbacks
   static void startElement(void* userData, const char* name, const char** atts);
   static void characterData(void* userData, const char* s, int len);
@@ -370,8 +332,6 @@ class ChapterHtmlSlimParser final : public Print {
   size_t write(uint8_t) override;
   size_t write(const uint8_t* buffer, size_t size) override;
 
-  ParsedText::LineProcessResult addLineToPage(std::shared_ptr<TextBlock> line, bool lineEndsWithHyphenatedWord,
-                                              bool suppressHyphenationRetry);
   // Step 6 unify: when the internal LayoutSink drives output, these proxy its tables (the fused
   // anchorData/pageBreakLabels/paragraphLutPerPage become unread fused scratch). Otherwise (external
   // ContentSink compile) they return the fused tables. Defined out-of-line where LayoutSink is
@@ -420,16 +380,4 @@ class ChapterHtmlSlimParser final : public Print {
   // block; the count == words emitted to Stage-1 for the current block so far (footnote anchor).
   bool stage1BlockIsEmpty() const { return !stage1Block_ || stage1Block_->words.empty(); }
   int stage1BlockWordCount() const { return stage1Block_ ? static_cast<int>(stage1Block_->words.size()) : 0; }
-  // Snap a completed block's effective font size (block multiplier, after uniform per-word
-  // folding) to the size ladder: sets headingFontId to the chosen real font and reduces
-  // fontSizeMultiplier to the residual. Applies the one-aux-font-per-section budget and is
-  // idempotent via bs.fontResolved. Must run before the block's first layout so measured
-  // widths, line heights and rendering all use the same (fontId, scale) pair.
-  void resolveBlockFont(BlockStyle& bs);
-  // Effective fontId for a block: its heading font when set, else the body fontId.
-  int effectiveFontId(const BlockStyle& bs) const { return bs.headingFontId != 0 ? bs.headingFontId : fontId; }
-  // Line height for a block, honoring the taller heading font (residual multiplier on top)
-  // or the body-font scale path. Centralizes the layout-time sizing. Defined in the .cpp
-  // because it dereferences GfxRenderer, which is only forward-declared here.
-  int effectiveLineHeight(const BlockStyle& bs) const;
 };

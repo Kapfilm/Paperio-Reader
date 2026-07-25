@@ -13,7 +13,6 @@
 #include <cctype>
 
 #include "../../Epub.h"
-#include "../Page.h"
 #include "../content/BlockSink.h"
 #include "../content/ImageLayout.h"
 #include "../content/LayoutSink.h"
@@ -50,27 +49,6 @@ constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
 // Image extraction is now deferred to render time (ImageBlock::ensureExtracted).
 // No heap guard needed at parse time — only a ZIP header read (~4 KB buffer on stack in
 // getDimensionsFromZipEntry) happens during createSectionFile.
-
-#ifndef EHP_TEXT_LAYOUT_SOFT_MIN_FREE_HEAP
-#define EHP_TEXT_LAYOUT_SOFT_MIN_FREE_HEAP (18 * 1024)
-#endif
-
-#ifndef EHP_TEXT_LAYOUT_SOFT_MIN_MAX_ALLOC
-#define EHP_TEXT_LAYOUT_SOFT_MIN_MAX_ALLOC (12 * 1024)
-#endif
-
-#ifndef EHP_TEXT_LAYOUT_HARD_MIN_FREE_HEAP
-#define EHP_TEXT_LAYOUT_HARD_MIN_FREE_HEAP (9 * 1024)
-#endif
-
-#ifndef EHP_TEXT_LAYOUT_HARD_MIN_MAX_ALLOC
-#define EHP_TEXT_LAYOUT_HARD_MIN_MAX_ALLOC (6 * 1024)
-#endif
-
-constexpr size_t MIN_FREE_HEAP_FOR_TEXT_LAYOUT = EHP_TEXT_LAYOUT_SOFT_MIN_FREE_HEAP;
-constexpr size_t MIN_MAX_ALLOC_FOR_TEXT_LAYOUT = EHP_TEXT_LAYOUT_SOFT_MIN_MAX_ALLOC;
-constexpr size_t MIN_FREE_HEAP_FOR_TEXT_LAYOUT_HARD = EHP_TEXT_LAYOUT_HARD_MIN_FREE_HEAP;
-constexpr size_t MIN_MAX_ALLOC_FOR_TEXT_LAYOUT_HARD = EHP_TEXT_LAYOUT_HARD_MIN_MAX_ALLOC;
 
 const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote", "pre"};
 constexpr int NUM_BLOCK_TAGS = sizeof(BLOCK_TAGS) / sizeof(BLOCK_TAGS[0]);
@@ -186,27 +164,6 @@ bool isTableStructuralTag(const char* name) {
   return strcmp(name, "table") == 0 || strcmp(name, "tr") == 0 || strcmp(name, "td") == 0 || strcmp(name, "th") == 0;
 }
 
-std::string buildTextBlockPreview(const std::shared_ptr<TextBlock>& line, const size_t maxLen = 120) {
-  if (!line) {
-    return {};
-  }
-
-  std::string preview;
-  const uint16_t wordCount = line->wordCount();
-  for (uint16_t i = 0; i < wordCount; ++i) {
-    if (i > 0) {
-      preview.push_back(' ');
-    }
-    preview += line->wordText(i);
-    if (preview.size() >= maxLen) {
-      preview.resize(maxLen);
-      preview += "...";
-      break;
-    }
-  }
-  return preview;
-}
-
 // Calibre sometimes injects empty <p style="margin:0; border:0; height:0">...</p>
 // spacers inside running prose. Keep them as paragraph boundaries, but ignore
 // their inner text payload (usually NBSP) to avoid no-break-space glue artifacts.
@@ -301,33 +258,6 @@ void ChapterHtmlSlimParser::applySupSubDefaultSize(StyleStackEntry& entry) {
   }
 }
 
-bool ChapterHtmlSlimParser::ensureHeapForTextLayout(const char* phase) {
-  if (streamFailed) {
-    return false;
-  }
-
-  const uint32_t freeHeap = ESP.getFreeHeap();
-  const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
-  if (freeHeap >= MIN_FREE_HEAP_FOR_TEXT_LAYOUT && maxAllocHeap >= MIN_MAX_ALLOC_FOR_TEXT_LAYOUT) {
-    return true;
-  }
-
-  // Soft low-memory zone: keep parsing in degraded mode and only hard-abort when
-  // both free and contiguous heap fall to critical levels.
-  if (freeHeap >= MIN_FREE_HEAP_FOR_TEXT_LAYOUT_HARD && maxAllocHeap >= MIN_MAX_ALLOC_FOR_TEXT_LAYOUT_HARD) {
-    lowMemoryImageFallback = true;
-    LOG_DBG("EHP", "Low heap (%u free, %u max alloc) before %s; continuing in degraded mode", freeHeap, maxAllocHeap,
-            phase);
-    return true;
-  }
-
-  LOG_ERR("EHP", "Low heap (%u free, %u max alloc), aborting parse before %s", freeHeap, maxAllocHeap, phase);
-  streamFailed = true;
-  layoutFailed = true;
-  saxParser_.stop();
-  return false;
-}
-
 // flush the contents of partWordBuffer to currentTextBlock
 bool ChapterHtmlSlimParser::flushPartWordBuffer() {
   if (streamFailed) {
@@ -379,32 +309,6 @@ bool ChapterHtmlSlimParser::flushPartWordBuffer() {
   return true;
 }
 
-// Emit the current page, keeping paragraphLutPerPage and completedPageCount in lockstep.
-// Callers must ensure currentPage is non-null and carries content; the helper resets
-// currentPage to a fresh Page and zeroes currentPageNextY so the caller can keep building.
-void ChapterHtmlSlimParser::emitPage(uint32_t xhtmlByteOffset) {
-  paragraphLutPerPage.push_back({xhtmlByteOffset, xpathParagraphIndex, xpathListItemIndex});
-  // Step 6 unify: when the internal LayoutSink drives output it calls completePageFn itself, so the
-  // fused emitPage must NOT also emit (double-emit). Only emit here when no internal sink exists —
-  // i.e. an external ContentSink compile, where the fused path still produces the section pages.
-  // The rest of this body keeps the fused layout's page/float scratch coherent either way.
-  if (!layoutSink_) completePageFn(std::move(currentPage));
-  completedPageCount++;
-  currentPage.reset(new (std::nothrow) Page());
-  currentPageNextY = 0;
-  lastBlockMarginBottom = 0;
-  deferredPageImage_.reset();  // the deferred yPos update is moot on a fresh page
-
-  // A floated image never crosses a page boundary, so any active float ended on the
-  // page we just emitted. Clear it and drop stale float zones from the block that
-  // continues onto the new page, so its lines are not indented for a prior image.
-  activeFloatTop_ = 0;
-  activeFloatBottom_ = 0;
-  if (currentTextBlock) {
-    currentTextBlock->getBlockStyle().floatZoneCount = 0;
-  }
-}
-
 void ChapterHtmlSlimParser::recordPageBreakLabel(const std::string& label) {
   if (label.empty()) {
     return;
@@ -435,54 +339,6 @@ void ChapterHtmlSlimParser::setExternalPageBreakAnchors(std::vector<std::pair<st
   }
 }
 
-void ChapterHtmlSlimParser::attachPendingFloatImage(BlockStyle& bs) {
-  if (!pendingInlineImage_.active) return;
-  if (!currentPage) currentPage.reset(new (std::nothrow) Page());
-
-  const int16_t imgH = pendingInlineImage_.height;
-  const int16_t imgW = pendingInlineImage_.width;
-  const bool imgIsRight = pendingInlineImage_.isRight;
-
-  // A floated image is never split across a page boundary. If it would not fit in the
-  // space left on this page, break first so it floats at the top of a fresh page —
-  // its height is capped at one viewport by the float gate, so a fresh page always
-  // has room. This avoids the fragile cross-page tile/continuation path entirely and
-  // lets the whole image (with text wrapping beside it) live on a single page.
-  if (imgH > static_cast<int16_t>(viewportHeight - currentPageNextY) && currentPage && !currentPage->elements.empty()) {
-    emitPage(lastBodyChildByteOffset);  // resets currentPage + currentPageNextY=0, clears stale float state
-  }
-
-  const int16_t imgX = imgIsRight ? static_cast<int16_t>(viewportWidth - imgW) : 0;
-  const int16_t top = static_cast<int16_t>(currentPageNextY);
-
-  auto fullImageBlock =
-      std::make_shared<ImageBlock>(pendingInlineImage_.cachedPath, imgW, imgH, pendingInlineImage_.alt, epub->getPath(),
-                                   pendingInlineImage_.epubEntryPath);
-  deferredPageImage_ = std::make_shared<PageImage>(fullImageBlock, imgX, top);
-  currentPage->elements.push_back(deferredPageImage_);
-
-  // Attach the float zone to the originating block (the caption/first paragraph).
-  // makePages() re-anchors it to the first line and then propagates it to every
-  // following block that overlaps the image, via the active-float state below.
-  if (bs.floatZoneCount < BlockStyle::kMaxFloatZones) {
-    auto& z = bs.floatZones[bs.floatZoneCount++];
-    z.top = top;
-    z.bottom = static_cast<int16_t>(top + imgH);
-    z.width = static_cast<int16_t>(imgW + 4);
-    z.isRight = imgIsRight;
-  }
-  // Provisional active-float extent; makePages() finalises top/bottom once the
-  // originating block's first line (and thus the image top) is positioned.
-  activeFloatTop_ = top;
-  activeFloatBottom_ = static_cast<int16_t>(top + imgH);
-  activeFloatWidth_ = static_cast<int16_t>(imgW + 4);
-  activeFloatIsRight_ = imgIsRight;
-
-  pendingInlineImage_.active = false;
-  pendingInlineImage_.cachedPath.clear();
-  pendingInlineImage_.epubEntryPath.clear();
-  pendingInlineImage_.alt.clear();
-}
 
 // start a new text block if needed
 // --- Stage-1 producer tap ---------------------------------------------------
@@ -697,10 +553,6 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // Stage-1: remember whether the incoming block is a <br> separator; consumed by the
   // open below (either path) so the transcript block carries kFromBrElement.
   stage1PendingFromBr_ = blockStyle.fromBrElement;
-  // Base style for the new block — normally the incoming blockStyle, but when falling
-  // through from the empty-block merge path (see below) we use the merged style so that
-  // accumulated parent-element margins are preserved for the inline-image paragraph.
-  const BlockStyle* effectiveBase = &blockStyle;
   if (currentTextBlock) {
     // already have a text block running and it is empty - just reuse it
     if (currentTextBlock->isEmpty()) {
@@ -725,11 +577,6 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
 
       if (!pendingAnchorId.empty()) {
         const bool tocBoundary = std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end();
-        if (tocBoundary) {
-          if (currentPage && !currentPage->elements.empty()) {
-            emitPage(lastBodyChildByteOffset);
-          }
-        }
         if (effectiveSink()) {
           stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
           // A TOC-boundary anchor forces a fresh page: transmit it as kPageBreakBefore on the
@@ -739,34 +586,17 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
         anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
         pendingAnchorId.clear();
       }
-      wordsExtractedInBlock = 0;
-      // If an inline image is waiting, fall through to place it now rather than
-      // returning early — otherwise the image skips empty wrapper blocks and
-      // attaches to the *second* paragraph instead of the first.
-      if (!pendingInlineImage_.active) {
-        // Stage-1: the layout reuses its empty block, but the transcript emits the wrapper
-        // block (with its own style) and opens a fresh one for this element — Stage-2
-        // replays the same empty-into-next margin merge the layout does here.
-        stage1OpenBlock(currentCssStyle);
-        return;
-      }
-      // Fall through: use the merged style as the base so parent-element margins
-      // (accumulated into this empty block) are carried into the new paragraph.
-      effectiveBase = &currentTextBlock->getBlockStyle();
+      // Stage-1: the transcript emits the wrapper block (with its own style) and opens a fresh
+      // one for this element — Stage-2 replays the same empty-into-next margin merge.
+      stage1OpenBlock(currentCssStyle);
+      return;
     }
-
-    if (!currentTextBlock->isEmpty()) makePages();
   }
-  // If the pending anchor is a TOC chapter boundary, force a page break after the previous
-  // block is flushed so the chapter starts on a fresh page.
+  // If the pending anchor is a TOC chapter boundary, transmit a page break so Stage-2 starts the
+  // chapter on a fresh page.
   const bool tocBoundary =
       !pendingAnchorId.empty() && std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end();
-  if (tocBoundary) {
-    if (currentPage && !currentPage->elements.empty()) {
-      emitPage(lastBodyChildByteOffset);
-    }
-  }
-  // Record deferred anchor after previous block is flushed (and any TOC page break)
+  // Record deferred anchor after the previous block is flushed.
   if (!pendingAnchorId.empty()) {
     if (effectiveSink()) {
       stage1PendingAnchor_ = pendingAnchorId;  // Stage-1: stash before the move
@@ -775,13 +605,10 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
     anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
     pendingAnchorId.clear();
   }
-  // Apply pending inline image: attach float zone and place image on current page.
-  // The image's actual yPos will be fixed in addLineToPage once the baseline is known.
-  BlockStyle blockStyleWithIndent = *effectiveBase;
-  attachPendingFloatImage(blockStyleWithIndent);
-  currentTextBlock.reset(new (std::nothrow) ParsedText(extraParagraphSpacing, hyphenationEnabled, blockStyleWithIndent,
-                                                       bionicReadingEnabled));
-  wordsExtractedInBlock = 0;
+  // Reset the walk's current text block to a fresh accumulator for this element. It is no longer
+  // laid out here (Stage-2 owns layout); the walk still reads its style/emptiness/word count.
+  currentTextBlock.reset(
+      new (std::nothrow) ParsedText(extraParagraphSpacing, hyphenationEnabled, blockStyle, bionicReadingEnabled));
   // Stage-1: open a matching compiled block, carrying the block's pre-px CssStyle
   // (currentCssStyle was set to this block's resolved style just before the call).
   stage1OpenBlock(currentCssStyle);
@@ -948,9 +775,6 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     // Flush any pending text before starting the table
     if (self->partWordBufferIndex > 0) {
       if (!self->flushPartWordBuffer()) return;
-    }
-    if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
-      self->makePages();
     }
     self->currentTable = std::unique_ptr<BufferedTable>(new BufferedTable());
     self->currentTable->depth = 1;
@@ -1387,21 +1211,12 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   // pending-break path the TOC-boundary case already uses — so Stage-2 breaks before the same
   // content. The break fires at element-open (possibly a wrapper div whose text lands in a child
   // block). Settings-independent CSS property (real-book: Project Gutenberg's
-  // `h2 { page-break-before }`).
-  //
-  // Leading-page suppression (don't emit a blank leading page) lives in Stage-2:
-  // LayoutSink::onBlock gates kPageBreakBefore on its OWN currentPage_ being non-empty. So the
-  // walk transmits the break intent UNCONDITIONALLY whenever CSS asks for it — no dependency on
-  // the fused currentPage. The fused emitPage() (which pushes a LUT entry and keeps the fused
-  // page/float scratch coherent) stays guarded on the fused page being non-empty: an unconditional
-  // call desyncs paragraphLutPerPage from completedPageCount (SEGFAULT on Moby). The fused path is
-  // dead-for-output and goes away entirely in 6e-5.
+  // `h2 { page-break-before }`). Leading-page suppression (don't emit a blank leading page) lives
+  // in Stage-2: LayoutSink::onBlock gates kPageBreakBefore on its own currentPage_ being non-empty,
+  // so the walk transmits the intent unconditionally.
   if (cssStyle.pageBreakBefore &&
       (matches(name, HEADER_TAGS, NUM_HEADER_TAGS) || matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS))) {
     if (self->effectiveSink()) self->stage1PendingPageBreak_ = true;
-    if (self->currentPage && !self->currentPage->elements.empty()) {
-      self->emitPage(self->lastBodyChildByteOffset);
-    }
   }
 
   if (matches(name, HEADER_TAGS, NUM_HEADER_TAGS)) {
@@ -2073,8 +1888,8 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
       // accumulated word count is the direct equivalent of the fused
       // wordsExtractedInBlock + currentTextBlock->size().
       int wordIndex = self->stage1BlockWordCount();
-      self->pendingFootnotes.push_back({wordIndex, entry});
-      // Stage-1: anchor the footnote to the current block at the same word position.
+      // Stage-1: anchor the footnote to the current block at the same word position (LayoutSink
+      // buffers it in its own pendingFootnotes_ until the anchor word is laid out).
       if (auto* sink = self->effectiveSink()) sink->onFootnote(wordIndex, entry);
     }
     if (self->inlineFootnotePreviews && self->currentFootnote.href[0] != '\0') {
@@ -2395,251 +2210,18 @@ bool ChapterHtmlSlimParser::finalize() {
   stage1FlushBlock();
   if (auto* sink = effectiveSink()) sink->onSpineEnd();
 
-  // Process last page if there is still text. Done unconditionally so that a partial
-  // success scenario still flushes whatever pages were produced.
+  // Final walk cleanup. The Stage-1 handoff (stage1FlushBlock + onSpineEnd) already happened above;
+  // here we only record a trailing anchor (kept for the external-ContentSink getAnchors() fallback)
+  // and release the walk's last text block.
   if (currentTextBlock) {
-    makePages();
-    if (!layoutFailed) {
-      const bool hasFinalPageContent = currentPage && !currentPage->elements.empty();
-      if (!pendingAnchorId.empty()) {
-        uint16_t anchorPage = static_cast<uint16_t>(completedPageCount);
-        // Avoid mapping trailing anchors to a non-existent blank page when the
-        // chapter ended exactly on a page boundary.
-        if (!hasFinalPageContent && completedPageCount > 0) {
-          anchorPage = static_cast<uint16_t>(completedPageCount - 1);
-        }
-        anchorData.push_back({std::move(pendingAnchorId), anchorPage});
-        pendingAnchorId.clear();
-      }
-      if (hasFinalPageContent) {
-        emitPage(0u);  // post-parse: no byte offset available
-      }
+    if (!layoutFailed && !pendingAnchorId.empty()) {
+      anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
+      pendingAnchorId.clear();
     }
-    currentPage.reset();
     currentTextBlock.reset();
   }
 
   return success;
-}
-
-void ChapterHtmlSlimParser::resolveBlockFont(BlockStyle& bs) {
-  if (bs.fontResolved) return;
-  bs.fontResolved = true;
-  if (bs.headingFontId != 0 || bs.fontSizeMultiplier == 1.0f) return;
-  const FontSizeLadder::Resolved r = fontSizeLadder_.resolve(bs.fontSizeMultiplier * 100.0f);
-  if (r.fontId == 0) {
-    // Nearest rung is the body font (or the ladder is empty, e.g. SD fonts):
-    // keep the pure-scale path — identical to the legacy behavior.
-    bs.fontSizeMultiplier = r.residual;
-    return;
-  }
-  if (auxFontId_ == 0) auxFontId_ = r.fontId;
-  if (r.fontId != auxFontId_) return;  // aux budget already claimed by another size — scale fallback
-  bs.headingFontId = r.fontId;
-  bs.fontSizeMultiplier = r.residual;
-}
-
-int ChapterHtmlSlimParser::effectiveLineHeight(const BlockStyle& bs) const {
-  return static_cast<int>(renderer.getLineHeight(effectiveFontId(bs)) * lineCompression * bs.fontSizeMultiplier + 0.5f);
-}
-
-ParsedText::LineProcessResult ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line,
-                                                                   const bool lineEndsWithHyphenatedWord,
-                                                                   const bool suppressHyphenationRetry) {
-  // Lines carrying inline-sized words advance by the tallest word on the line
-  // (microreader semantics); uniform lines keep the block line height exactly.
-  int lineHeight = effectiveLineHeight(line->getBlockStyle());
-  const uint8_t maxPct = line->maxSizePct();
-  if (maxPct != 100) {
-    lineHeight = lineHeight * maxPct / 100;
-  }
-
-  if (!currentPage) {
-    currentPage.reset(new Page());
-    currentPageNextY = 0;
-  }
-
-  if (currentPageNextY + lineHeight > viewportHeight) {
-    emitPage(lastBodyChildByteOffset);
-  }
-
-  const bool noRoomForAnotherLine =
-      currentPageNextY + lineHeight <= viewportHeight && currentPageNextY + (lineHeight * 2) > viewportHeight;
-  if (lineEndsWithHyphenatedWord && !suppressHyphenationRetry && noRoomForAnotherLine) {
-    const std::string linePreview = buildTextBlockPreview(line);
-    LOG_DBG("EHP", "Requesting line rerender without hyphenation to avoid page-break split word: %s",
-            linePreview.c_str());
-    return ParsedText::LineProcessResult::RetryWithoutHyphenation;
-  }
-
-  // Capture first-line flag before incrementing wordsExtractedInBlock.
-  const bool isFirstLineOfBlock = (wordsExtractedInBlock == 0);
-
-  // Track cumulative words to assign footnotes to the page containing their anchor
-  wordsExtractedInBlock += line->wordCount();
-  auto footnoteIt = pendingFootnotes.begin();
-  while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
-    currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
-    ++footnoteIt;
-  }
-  pendingFootnotes.erase(pendingFootnotes.begin(), footnoteIt);
-
-  // Apply horizontal left inset (margin + padding) as x position offset.
-  // For lines that overlap an active left float zone, also shift right by the zone
-  // width so text starts after the image rather than overlapping it.
-  // Right-floated zones narrow the line width (handled in widthForLine) but don't shift text left.
-  int16_t xOffset = line->getBlockStyle().leftInset();
-  {
-    const auto& bs = line->getBlockStyle();
-    for (int zi = 0; zi < bs.floatZoneCount; ++zi) {
-      const auto& z = bs.floatZones[zi];
-      if (!z.isRight && currentPageNextY < z.bottom && currentPageNextY + lineHeight > z.top) {
-        xOffset = static_cast<int16_t>(xOffset + z.width);
-      }
-    }
-  }
-  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
-
-  // On the first line of a block with a deferred inline image, fix the image's
-  // yPos so its top aligns with the glyph top of the first text line.
-  // PageLine y and image y both use the same coordinate: the line's top edge.
-  // Float zones were already pre-corrected in makePages() to the same value.
-  if (isFirstLineOfBlock && deferredPageImage_) {
-    deferredPageImage_->yPos = static_cast<int16_t>(currentPageNextY);
-    deferredPageImage_.reset();
-  }
-
-  currentPageNextY += lineHeight;
-  return ParsedText::LineProcessResult::Accepted;
-}
-
-void ChapterHtmlSlimParser::makePages() {
-  if (layoutFailed) {
-    currentTextBlock.reset();
-    return;
-  }
-
-  if (!currentTextBlock) {
-    LOG_ERR("EHP", "!! No text block to make pages for !!");
-    return;
-  }
-
-  if (!currentPage) {
-    currentPage.reset(new Page());
-    currentPageNextY = 0;
-  }
-
-  // Snap the block to the size ladder before any metric below is computed. Uniform
-  // per-word sizes (a span wrapping the whole paragraph) fold into the block multiplier
-  // first so they benefit too; continuations skip the fold — their first chunk already
-  // laid out with the resolved style, and resolveBlockFont is a no-op on them anyway.
-  if (!currentTextBlock->isContinuation()) {
-    currentTextBlock->foldUniformWordSizes();
-  }
-  resolveBlockFont(currentTextBlock->getBlockStyle());
-
-  const BlockStyle& blockStyle = currentTextBlock->getBlockStyle();
-  const int lineHeight = effectiveLineHeight(blockStyle);
-
-  // Apply top spacing before the paragraph — skip for continuation fragments
-  // (words left over after an intermediate flush): the top margin was already
-  // applied before the first set of lines from this logical paragraph.
-  if (!currentTextBlock->isContinuation()) {
-    if (blockStyle.marginTop > 0) {
-      // CSS margin collapsing: gap between adjacent blocks = max(prevMarginBottom, thisMarginTop).
-      // lastBlockMarginBottom was already added after the previous block; subtract the overlap.
-      const int16_t collapse = std::min(lastBlockMarginBottom, blockStyle.marginTop);
-      currentPageNextY += static_cast<int16_t>(blockStyle.marginTop - collapse);
-    }
-    if (blockStyle.paddingTop > 0) {
-      currentPageNextY += blockStyle.paddingTop;
-    }
-  }
-  lastBlockMarginBottom = 0;
-
-  // Calculate effective width accounting for horizontal margins/padding
-  const int horizontalInset = blockStyle.totalHorizontalInset();
-  const uint16_t effectiveWidth =
-      (horizontalInset < viewportWidth) ? static_cast<uint16_t>(viewportWidth - horizontalInset) : viewportWidth;
-
-  if (!ensureHeapForTextLayout("paragraph layout")) {
-    layoutFailed = true;
-    currentTextBlock.reset();
-    return;
-  }
-
-  // Active-float propagation. A tall floated image spans several text blocks (its
-  // caption plus the following paragraphs). The image is attached to the first of
-  // those blocks; here we re-inject the same zone into every later block that still
-  // overlaps the image vertically, so they all wrap beside it — then drop it once
-  // layout has passed the image bottom.
-  const bool isOriginatingBlock = static_cast<bool>(deferredPageImage_);
-  if (activeFloatBottom_ > 0 && currentPageNextY >= activeFloatBottom_) {
-    activeFloatBottom_ = 0;  // layout has moved past the image; float no longer applies
-  }
-  if (!isOriginatingBlock && activeFloatBottom_ > 0 && currentPageNextY < activeFloatBottom_ &&
-      currentTextBlock->getBlockStyle().floatZoneCount == 0) {
-    BlockStyle& mbs = currentTextBlock->getBlockStyle();
-    auto& z = mbs.floatZones[mbs.floatZoneCount++];
-    z.top = activeFloatTop_;  // absolute (already-anchored) image coordinates
-    z.bottom = activeFloatBottom_;
-    z.width = activeFloatWidth_;
-    z.isRight = activeFloatIsRight_;
-  }
-
-  // Pre-correct float zone coordinates before line-breaking so widthForLine
-  // and the xOffset check in addLineToPage use the same y values. Only the
-  // originating block re-anchors (its zone, and the image, snap to the first
-  // line top); injected zones already carry absolute image coordinates.
-  const int lineHeightForFloat = (blockStyle.floatZoneCount > 0) ? effectiveLineHeight(blockStyle) : 0;
-  if (isOriginatingBlock && blockStyle.floatZoneCount > 0) {
-    auto& mbs = currentTextBlock->getBlockStyle();
-    for (int zi = 0; zi < mbs.floatZoneCount; ++zi) {
-      const int imgH = mbs.floatZones[zi].bottom - mbs.floatZones[zi].top;
-      mbs.floatZones[zi].top = static_cast<int16_t>(currentPageNextY);
-      mbs.floatZones[zi].bottom = static_cast<int16_t>(currentPageNextY + imgH);
-    }
-    // Finalise the active-float extent so following blocks reference the image's
-    // real on-page position (after this block's top margin).
-    activeFloatTop_ = static_cast<int16_t>(currentPageNextY);
-    activeFloatBottom_ = static_cast<int16_t>(currentPageNextY + (mbs.floatZones[0].bottom - mbs.floatZones[0].top));
-  }
-  currentTextBlock->layoutAndExtractLines(
-      renderer, fontId, effectiveWidth,
-      [this](const std::shared_ptr<TextBlock>& textBlock, const bool lineEndsWithHyphenatedWord,
-             const bool suppressHyphenationRetry) {
-        return addLineToPage(textBlock, lineEndsWithHyphenatedWord, suppressHyphenationRetry);
-      },
-      /*includeLastLine=*/true, static_cast<int16_t>(currentPageNextY), lineHeightForFloat);
-
-  // Fallback: transfer any remaining pending footnotes to current page.
-  // Normally addLineToPage handles this via word-index tracking, but this catches
-  // edge cases where a footnote's word index equals the exact block size.
-  if (!pendingFootnotes.empty() && currentPage) {
-    for (const auto& [idx, fn] : pendingFootnotes) {
-      currentPage->addFootnote(fn.number, fn.href);
-    }
-    pendingFootnotes.clear();
-  }
-
-  // Apply bottom spacing after the paragraph (stored in pixels)
-  if (blockStyle.marginBottom > 0) {
-    currentPageNextY += blockStyle.marginBottom;
-    lastBlockMarginBottom = blockStyle.marginBottom;
-  } else {
-    lastBlockMarginBottom = 0;
-  }
-  if (blockStyle.paddingBottom > 0) {
-    currentPageNextY += blockStyle.paddingBottom;
-  }
-
-  // Extra paragraph spacing if enabled (default behavior).
-  // Suppressed between lines within a <pre> block so code/preformatted text is not
-  // double-spaced; the last line of the block is flushed after </pre> is closed and
-  // preUntilDepth has already been reset, so it still receives normal paragraph spacing.
-  if (extraParagraphSpacing && preUntilDepth == INT_MAX) {
-    currentPageNextY += lineHeight / 2;
-  }
 }
 
 // Guard: minimum free heap before attempting table layout (cell wrapping allocates TextBlock vectors)
