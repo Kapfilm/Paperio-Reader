@@ -58,19 +58,26 @@ page-break commit), cutting the default-profile diff from **608 → ~105 lines**
 - Empty-block alignment reset (Moby's `<p class="toc">CONTENTS</p>` centered vs justified) — FIXED.
 - CSS `page-break-before: always` on `<h2>` not transmitted (most of the 608) — FIXED.
 
-**Remaining divergence (~105 lines, 2 of 29 spines):** spine 1 and spine 28 each diverge by one
-page. Root cause localized but NOT fixed: a **top-margin / pagination reconstruction difference at
-Project Gutenberg boilerplate boundaries**. Concretely, in spine 28 the fused path ends a page at
-the "…redistribution." line and pushes `START: FULL LICENSE` onto a fresh page, while the sink fits
-`START` on the same page (y=696). Verified NOT to be a `page-break-before` (the `#pg-footer` /
-`#project-gutenberg-license` divs carry no such CSS at that point). It is consistent with the sink
-applying **less top margin** to that block than the fused path, so one extra line fits per page and
-the page count drifts (15→14 pages in spine 28, 32→31 in spine 1). Spine 1 shows the same signature
-(a `mult=0.950` centered block starting a page 24 px higher in the sink than the fused).
+**Update 2026-07-25 — the 24px bug is FIXED; a smaller 4px gap remains.** A full vertical-space flow
+analysis root-caused the dominant divergence as an **`<hr>` + `<br>`-gap double-injection**: the fused
+`<hr>` handler flushes the empty `<br>` block with `makePages()` (which does NOT clear its
+`fromBrElement`), then `startNewTextBlock(emptyStyle)` re-reads that flag and injects a SECOND br-gap
+(one lineHeight = 24 px) into the block after the rule. `LayoutSink::placeHr` cleared
+`pendingMergeFromBr_`, injecting the gap once. Fixed (commit "carry the <br>-gap past an <hr>"):
+`placeHr` now re-establishes a pending fromBr merge after the rule. **Moby default diff: 105 → 85.**
 
-This remaining bug is in the same class the model agent bounded: a fused layout mutation the producer
-does not transmit / the sink does not reconstruct. It is localized (2 spines, one margin/pagination
-behavior) and does not affect the synthetic corpus or the device (fused) path.
+**Remaining (~85 lines): a separate +4 px heading-spacing gap.** After a scaled heading (mult=1.400,
+e.g. Moby's "EXTRACTS." front-matter), the following body paragraph sits 4 px lower in the fused than
+the sink. Instrumentation confirmed the body block itself has identical margins/collapse
+(`mTop=4 mBot=4 lastMBot=4`) in both paths — so the 4 px originates elsewhere in the heading→body
+transition (heading marginBottom, or an intervening empty/wrapper block), not yet pinned to the exact
+block (the divergent block's first words did not match the probes tried). Small, cosmetic, front-
+matter only; zero word-level diffs. Deferred to step 6c (which deletes the fused reference) or a
+follow-up.
+
+Both remaining/​fixed issues are the class the model agent bounded: fused layout mutations invisible
+to the producer that the sink must reconstruct. They do not affect the synthetic corpus (84/84) or
+the shipping device (fused) path.
 
 ## Interpretation
 
