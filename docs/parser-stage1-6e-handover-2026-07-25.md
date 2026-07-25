@@ -121,14 +121,38 @@ Done as the one standalone, test-gated cleanup (commit `99cb45ff`): removed the 
 inline margin-left tracking (`StyleStackEntry::hasMarginLeft/marginLeftPx`,
 `effectiveInlineMarginLeft` — written, never read; superseded by the `textIndent` transmission).
 
-## Remaining tasks (priority order)
+## 6e DONE (2026-07-25): the fused inline-layout engine is deleted
 
-1. **6e** — the safe fused-layout-math deletion described above (pure hygiene; the ContentSink
-   compile path is the trap). The Bucket-1 em→px uses fall out with it.
-2. Optional — the residual Moby +4px heading-spacing sink bug (deferred; cosmetic, real-book
-   back-matter only). It is a plain LayoutSink bug now that the fused reference is gone.
+Completed as a verify-heavy migration + deletion (commits `397d30c7`, `1fb6f151`, `1514dd1e`),
+each gated on the goldens staying byte-identical:
 
-(The Bucket-2 footnote-preview settings leak is FIXED — commit `d561d552`.)
+- **6e-1** (`397d30c7`): the `<pre>` newline spacer no longer reads `currentTextBlock->isEmpty()`.
+  Instrumentation showed that guard was ALWAYS true inside `<pre>` (the fused block is laid out and
+  emptied every `startNewTextBlock`), so the spacer is added unconditionally per newline.
+- **6e-3** (`1fb6f151`): CSS `page-break-before` transmits `stage1PendingPageBreak_` unconditionally
+  (LayoutSink applies leading-page suppression on its own page). The TOC-boundary transmission was
+  already decoupled.
+- **6e-5** (`1514dd1e`): deleted `makePages`/`addLineToPage`/`emitPage`/`attachPendingFloatImage`/
+  `resolveBlockFont`/`effectiveLineHeight`/`effectiveFontId`/`ensureHeapForTextLayout`/
+  `buildTextBlockPreview` and every member that only fed them (`currentPage`, `currentPageNextY`,
+  `lastBlockMarginBottom`, `PendingInlineImage`/`pendingInlineImage_`, `deferredPageImage_`, the
+  `activeFloat*` set, `pendingFootnotes`, `wordsExtractedInBlock`, the heap-guard constants).
+  **-470 lines.** `currentTextBlock` stays as lightweight walk bookkeeping (constructed + style
+  merge, never laid out). Kept inert (external-ContentSink getter fallbacks): `completedPageCount`,
+  `anchorData`, `pageBreakLabels`, `paragraphLutPerPage`.
+
+The green light was an empirical probe: making `makePages()` a no-op kept all 442 tests
+byte-identical, proving the fused layout produced nothing consumed on either path.
+
+## Remaining (optional)
+
+1. The residual Moby +4px heading-spacing sink bug (deferred; cosmetic, real-book back-matter
+   only) — a plain LayoutSink bug now that the fused reference is gone.
+2. The `lowMemoryImageFallback` member is now inert (its only setter, `ensureHeapForTextLayout`,
+   was deleted; still read at the image path but always false). The low-memory image fallback no
+   longer triggers at parse time — a separable follow-up if that degraded-mode path is still wanted.
+
+(The Bucket-2 footnote-preview settings leak is FIXED — commit `d561d552`. 6d folded into 6e.)
 
 ## Cross-refs
 
