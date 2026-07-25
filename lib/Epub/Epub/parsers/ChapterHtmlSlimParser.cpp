@@ -16,6 +16,7 @@
 #include "../Page.h"
 #include "../content/BlockSink.h"
 #include "../content/ImageLayout.h"
+#include "../content/LayoutSink.h"
 #include "../content/TableLayout.h"
 #include "../converters/ImageDecoderFactory.h"
 #include "../converters/ImageToFramebufferDecoder.h"
@@ -2382,7 +2383,34 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
 
 ChapterHtmlSlimParser::~ChapterHtmlSlimParser() = default;
 
+compiled::BlockSink* ChapterHtmlSlimParser::effectiveSink() const {
+  // A ContentSink compile (external stage1Sink_) is content-only and does not need pages, so it
+  // REPLACES the internal layout sink for that build; otherwise the internal layout sink drives the
+  // section-cache/device path. Never both — one sink at a time, no fan-out.
+  return stage1Sink_ ? stage1Sink_ : static_cast<compiled::BlockSink*>(layoutSink_.get());
+}
+
 bool ChapterHtmlSlimParser::setup(const size_t totalInflatedSize) {
+  // Construct the internal layout sink from the parser's settings members BEFORE the first
+  // startNewTextBlock (which drives the producer). Skipped when an external ContentSink is attached
+  // — that build is content-only and needs no pages. (Step 6 unify; see effectiveSink().)
+  if (!stage1Sink_) {
+    compiled::LayoutParams lp;
+    lp.fontId = fontId;
+    lp.lineCompression = lineCompression;
+    lp.extraParagraphSpacing = extraParagraphSpacing;
+    lp.paragraphAlignment = paragraphAlignment;
+    lp.viewportWidth = viewportWidth;
+    lp.viewportHeight = viewportHeight;
+    lp.hyphenationEnabled = hyphenationEnabled;
+    lp.bionicReadingEnabled = bionicReadingEnabled;
+    lp.embeddedStyle = embeddedStyle;
+    lp.fontSizeLadder = fontSizeLadder_;  // set by Section before setup()
+    lp.imageBasePath = imageBasePath;
+    lp.epubFilePath = epub ? epub->getPath() : std::string();
+    layoutSink_ = std::make_unique<compiled::LayoutSink>(renderer, std::move(lp), completePageFn);
+  }
+
   auto paragraphAlignmentBlockStyle = BlockStyle();
   paragraphAlignmentBlockStyle.textAlignDefined = true;
   // Resolve None sentinel to Justify for initial block (no CSS context yet)

@@ -28,6 +28,7 @@ class GfxRenderer;
 class Epub;
 namespace compiled {
 struct BlockSink;
+class LayoutSink;
 }  // namespace compiled
 
 #define MAX_WORD_SIZE 200
@@ -256,6 +257,15 @@ class ChapterHtmlSlimParser final : public Print {
   // (stage1OpenBlock flushes the prior one; finalize() flushes the last). Text is stored raw
   // Unicode in logical order so RTL shaping/reordering stays a Stage-2 concern.
   compiled::BlockSink* stage1Sink_ = nullptr;
+  // Step 6 (unify): the parser's own layout consumer. Constructed in setup() from the parser's
+  // settings members. The producer drives EITHER the external stage1Sink_ (a ContentSink compiling
+  // content.bin — content-only, no pages) OR this internal layout sink (device + section-cache
+  // builds), never both: see effectiveSink(). Its emitPage routes pages through completePageFn and
+  // its getters back the parser's getAnchors()/getPageBreakLabels()/getParagraphLutPerPage().
+  std::unique_ptr<compiled::LayoutSink> layoutSink_;
+  // The sink the producer emits to this build: the external content sink if attached, else the
+  // internal layout sink. Null only before setup() constructs the internal sink.
+  compiled::BlockSink* effectiveSink() const;
   std::unique_ptr<compiled::Block> stage1Block_;  // current accumulator (null when closed)
   CssStyle stage1BlockCssStyle_;                  // the block's pre-px style, captured at open
   uint32_t stage1CharOffset_ = 0;                 // running codepoint offset within the spine

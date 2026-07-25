@@ -23,6 +23,7 @@
 #include "Epub/css/CssParser.h"
 #include "FootnotePreviews.h"
 #include "Page.h"
+#include "content/LayoutSink.h"  // complete type for the parser's unique_ptr<LayoutSink> member
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 
