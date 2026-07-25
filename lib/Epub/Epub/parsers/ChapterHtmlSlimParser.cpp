@@ -1389,16 +1389,19 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   // block). Settings-independent CSS property (real-book: Project Gutenberg's
   // `h2 { page-break-before }`).
   //
-  // Leading-page suppression: don't break when the page is still empty (avoids a blank leading
-  // page). LayoutSink::onBlock applies this on its own currentPage_, so the intent is transmitted
-  // whenever we would emit a fused page break. The fused emitPage() (which also pushes a LUT entry
-  // and keeps the fused page/float scratch coherent) stays guarded on the fused page being
-  // non-empty — an unconditional call desyncs paragraphLutPerPage from completedPageCount.
+  // Leading-page suppression (don't emit a blank leading page) lives in Stage-2:
+  // LayoutSink::onBlock gates kPageBreakBefore on its OWN currentPage_ being non-empty. So the
+  // walk transmits the break intent UNCONDITIONALLY whenever CSS asks for it — no dependency on
+  // the fused currentPage. The fused emitPage() (which pushes a LUT entry and keeps the fused
+  // page/float scratch coherent) stays guarded on the fused page being non-empty: an unconditional
+  // call desyncs paragraphLutPerPage from completedPageCount (SEGFAULT on Moby). The fused path is
+  // dead-for-output and goes away entirely in 6e-5.
   if (cssStyle.pageBreakBefore &&
-      (matches(name, HEADER_TAGS, NUM_HEADER_TAGS) || matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS)) &&
-      self->currentPage && !self->currentPage->elements.empty()) {
+      (matches(name, HEADER_TAGS, NUM_HEADER_TAGS) || matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS))) {
     if (self->effectiveSink()) self->stage1PendingPageBreak_ = true;
-    self->emitPage(self->lastBodyChildByteOffset);
+    if (self->currentPage && !self->currentPage->elements.empty()) {
+      self->emitPage(self->lastBodyChildByteOffset);
+    }
   }
 
   if (matches(name, HEADER_TAGS, NUM_HEADER_TAGS)) {
