@@ -136,6 +136,76 @@ TEST(ContentSink, RoundTripsThroughContentBin) {
   }
 }
 
+// WBC1 v3 completed the Stage-1 artifact: footnotes, xpath counters, and page-break labels must
+// be captured by ContentSink AND survive the content.bin round-trip. test_inline_footnotes has
+// three noteref links, so its blocks carry footnote refs.
+TEST(ContentSink, RoundTripsFootnotesXPathAndLabels) {
+  const std::string cacheDir = freshDir("v3_roundtrip");
+  ContentSink sink;
+  std::ostringstream log;
+  ASSERT_TRUE(pipeline_harness::compileContent(corpus("test_inline_footnotes.epub"), cacheDir,
+                                               pipeline_harness::Profile{}, sink, log));
+  const CompiledContent& built = sink.content();
+
+  // Count footnotes captured across the whole book — the fixture has 3 noteref links.
+  auto countFootnotes = [](const CompiledContent& c) {
+    size_t n = 0;
+    for (const auto& s : c.spines)
+      for (const auto& b : s.blocks) n += b.footnotes.size();
+    return n;
+  };
+  auto countXPath = [](const CompiledContent& c) {
+    size_t n = 0;
+    for (const auto& s : c.spines)
+      for (const auto& b : s.blocks) n += b.hasXPath ? 1 : 0;
+    return n;
+  };
+  ASSERT_EQ(countFootnotes(built), 3u) << "the fixture's three noteref links must be captured";
+  EXPECT_GT(countXPath(built), 0u) << "the walk emits xpath advances";
+
+  const std::string binPath = cacheDir + "/content.bin";
+  FsFile out;
+  ASSERT_TRUE(out.openForWrite(binPath));
+  ASSERT_TRUE(compiled::writeContentBin(out, built));
+  out.close();
+
+  CompiledContent rb;
+  FsFile in;
+  ASSERT_TRUE(in.openForRead(binPath));
+  ASSERT_TRUE(compiled::readContentBin(in, rb));
+  in.close();
+
+  ASSERT_EQ(rb.spines.size(), built.spines.size());
+  EXPECT_EQ(countFootnotes(rb), countFootnotes(built));
+  EXPECT_EQ(countXPath(rb), countXPath(built));
+  for (size_t si = 0; si < built.spines.size(); ++si) {
+    const auto& a = built.spines[si];
+    const auto& b = rb.spines[si];
+    ASSERT_EQ(a.blocks.size(), b.blocks.size());
+    ASSERT_EQ(a.pageBreakLabels.size(), b.pageBreakLabels.size()) << "spine " << si << " labels";
+    for (size_t li = 0; li < a.pageBreakLabels.size(); ++li) {
+      EXPECT_EQ(a.pageBreakLabels[li].label, b.pageBreakLabels[li].label);
+      EXPECT_EQ(a.pageBreakLabels[li].blockIndex, b.pageBreakLabels[li].blockIndex);
+    }
+    for (size_t bi = 0; bi < a.blocks.size(); ++bi) {
+      const auto& fa = a.blocks[bi].footnotes;
+      const auto& fb = b.blocks[bi].footnotes;
+      ASSERT_EQ(fa.size(), fb.size()) << "spine " << si << " block " << bi << " footnote count";
+      for (size_t fi = 0; fi < fa.size(); ++fi) {
+        EXPECT_EQ(fa[fi].wordIndex, fb[fi].wordIndex);
+        EXPECT_STREQ(fa[fi].entry.number, fb[fi].entry.number);
+        EXPECT_STREQ(fa[fi].entry.href, fb[fi].entry.href);
+      }
+      EXPECT_EQ(a.blocks[bi].hasXPath, b.blocks[bi].hasXPath);
+      if (a.blocks[bi].hasXPath) {
+        EXPECT_EQ(a.blocks[bi].xpath.paragraphIndex, b.blocks[bi].xpath.paragraphIndex);
+        EXPECT_EQ(a.blocks[bi].xpath.listItemIndex, b.blocks[bi].xpath.listItemIndex);
+        EXPECT_EQ(a.blocks[bi].xpath.bodyChildByteOffset, b.blocks[bi].xpath.bodyChildByteOffset);
+      }
+    }
+  }
+}
+
 // A block over the 8 KB cap splits into continuation records that reconstruct the
 // original word sequence, with the continuation flag on every record after the first.
 TEST(ContentSink, SplitsOversizedTextBlockAtWrite) {

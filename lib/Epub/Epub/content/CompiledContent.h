@@ -20,13 +20,17 @@
 #include <string>
 #include <vector>
 
+#include "Epub/FootnoteEntry.h"
 #include "Epub/css/CssStyle.h"
 
 namespace compiled {
 
 inline constexpr char kMagic[4] = {'W', 'B', 'C', '1'};
 // v2 added Block::footnotePreviews (inline footnote preview runs; abbreviation deferred to Stage-2).
-inline constexpr uint8_t kVersion = 2;
+// v3 completes the Stage-1 artifact so a content.bin read-back reproduces the layout byte-identically:
+// Block::footnotes (per-block footnote anchors), Block::xpath (LUT counters), and a per-spine
+// page-break label table — the pieces ContentSink previously dropped.
+inline constexpr uint8_t kVersion = 3;
 
 // Word::styleSpan bits. Bits 0-6 = inline font style (the EpdFontFamily::Style set,
 // remapped to a stable on-disk layout); bit 7 = word attaches to the previous word
@@ -62,6 +66,21 @@ enum class BlockType : uint8_t { Text = 0, Image = 1, Table = 2, Hr = 3 };
 struct PreviewRun {
   uint32_t startWord = 0;
   uint32_t count = 0;
+};
+
+// A footnote link anchored to a word position within a Text block. Stage-2 (LayoutSink) buffers it
+// and assigns it to the page that lays out word `wordIndex`, exactly as the walk's onFootnote did.
+struct FootnoteRef {
+  uint32_t wordIndex = 0;  // word offset within the block (== stage1BlockWordCount at emit time)
+  FootnoteEntry entry;
+};
+
+// The walk's XPath counters as of a block, needed to rebuild the per-page paragraph LUT (progress /
+// xpath navigation) when Stage-2 replays from content.bin. Settings-independent (pure XML position).
+struct XPathCounters {
+  uint16_t paragraphIndex = 0;
+  uint16_t listItemIndex = 0;
+  uint32_t bodyChildByteOffset = 0;
 };
 
 // One table cell: text runs (a mini text block) and/or a single cell image. Settings-
@@ -118,6 +137,13 @@ struct Block {
   // The words themselves live in `words`/`text`; these ranges tell Stage-2 which runs to
   // abbreviate to the viewport at layout time. See PreviewRun.
   std::vector<PreviewRun> footnotePreviews;
+  // Footnote links anchored to words in this block (empty for most blocks). Replayed as
+  // onFootnote(wordIndex, entry) so Stage-2 assigns each to the page laying out its anchor word.
+  std::vector<FootnoteRef> footnotes;
+  // The walk's XPath counters as of this block's emit (onXPathAdvance). hasXPath=false when the
+  // walk emitted no advance before this block (Stage-2 then carries the previous counters forward).
+  bool hasXPath = false;
+  XPathCounters xpath;
   // Optional inline (float) image rendered beside this paragraph's text. Stage-2 places
   // it; Stage-1 just records the ref (empty entryPath = none). intrinsic dims, pre-probed.
   std::string inlineImageEntryPath;
@@ -155,10 +181,18 @@ struct Chapter {
   std::string title;
 };
 
+// A printed-page label (EPUB pagebreak marker / NCX pageList) anchored to a block position.
+// Stage-2 replays onPageBreakLabel at the block boundary so the label lands on the right page.
+struct PageBreakLabel {
+  std::string label;
+  uint32_t blockIndex = 0;  // block index within the spine at which the label occurs
+};
+
 // Per-spine content, in document order.
 struct SpineContent {
   std::vector<Block> blocks;
   std::vector<Anchor> anchors;
+  std::vector<PageBreakLabel> pageBreakLabels;
   uint32_t firstCharOffset = 0;  // absolute char offset of the spine's first char (progress)
 };
 

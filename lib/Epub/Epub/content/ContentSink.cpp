@@ -45,6 +45,12 @@ void ContentSink::appendTextSplit(Block&& block) {
     spine.blocks.push_back(std::move(block));
     return;
   }
+  // Footnotes/xpath ride with the split below; take them off the source block so the moved-out
+  // per-run records own their share (footnotes distributed by word index, xpath on the first run).
+  std::vector<FootnoteRef> srcFootnotes = std::move(block.footnotes);
+  block.footnotes.clear();
+  const bool srcHasXPath = block.hasXPath;
+  const XPathCounters srcXPath = block.xpath;
 
   // Split the word list into runs that each serialize within the cap. Every word carries
   // its own text (NUL-terminated back-to-back), so a run's text is a contiguous slice of
@@ -106,6 +112,18 @@ void ContentSink::appendTextSplit(Block&& block) {
       runCodepoints += countCodepoints(wordPtr);
     }
 
+    // XPath counters describe the block start — carry them on the first run only.
+    if (first && srcHasXPath) {
+      rec.hasXPath = true;
+      rec.xpath = srcXPath;
+    }
+    // Footnotes anchored to a word in [wordStart, wordEnd) belong to this run; rebase wordIndex.
+    for (const FootnoteRef& fn : srcFootnotes) {
+      if (fn.wordIndex >= wordStart && fn.wordIndex < wordEnd) {
+        rec.footnotes.push_back({static_cast<uint32_t>(fn.wordIndex - wordStart), fn.entry});
+      }
+    }
+
     spine.blocks.push_back(std::move(rec));
     runCharOffset += runCodepoints;
     wordStart = wordEnd;
@@ -120,6 +138,15 @@ void ContentSink::onBlock(Block&& block, const CssStyle& style) {
   // Intern the block's resolved style (image/table blocks pass CssStyle{} — an empty style
   // still interns to a valid pool id, shared across all such blocks).
   block.styleId = internStyle(content_, style);
+
+  // Attach footnotes/xpath accumulated during this block's build (before onBlock flushed it).
+  block.footnotes = std::move(pendingFootnotes_);
+  pendingFootnotes_.clear();
+  if (pendingXPath_) {
+    block.hasXPath = true;
+    block.xpath = pendingXPathCounters_;
+    pendingXPath_ = false;
+  }
 
   if (!spineHasBlock_) {
     spine.firstCharOffset = block.charOffset;
@@ -153,15 +180,31 @@ void ContentSink::onChapter(uint8_t level, const std::string& title) {
 
 void ContentSink::onPageBreakLabel(const std::string& label) {
   if (!spineOpen_) beginSpine();
-  const SpineContent& spine = content_.spines.back();
-  labels_.push_back(PageLabel{label, static_cast<uint16_t>(content_.spines.size() - 1),
-                              static_cast<uint32_t>(spine.blocks.size())});
+  SpineContent& spine = content_.spines.back();
+  const uint32_t blockIndex = static_cast<uint32_t>(spine.blocks.size());
+  // Serialized per-spine label table (WBC1 v3) so Stage-2 can replay onPageBreakLabel.
+  spine.pageBreakLabels.push_back(PageBreakLabel{label, blockIndex});
+  // Legacy in-memory view kept for the dump tool / callers that read labels() directly.
+  labels_.push_back(PageLabel{label, static_cast<uint16_t>(content_.spines.size() - 1), blockIndex});
 }
 
-void ContentSink::onFootnote(int /*wordIndex*/, const FootnoteEntry& /*entry*/) {
-  // Deferred: footnotes get a dedicated content.bin scan in master-plan Phase 3 step 4.
+void ContentSink::onFootnote(int wordIndex, const FootnoteEntry& entry) {
+  // Buffered until the block being built is flushed (onBlock), then attached to it. Stage-2
+  // replays these as onFootnote(wordIndex, entry) so each lands on the page of its anchor word.
+  pendingFootnotes_.push_back({static_cast<uint32_t>(wordIndex), entry});
 }
 
-void ContentSink::onSpineEnd() { spineOpen_ = false; }
+void ContentSink::onXPathAdvance(uint16_t paragraphIndex, uint16_t listItemIndex, uint32_t bodyChildByteOffset) {
+  pendingXPath_ = true;
+  pendingXPathCounters_ = {paragraphIndex, listItemIndex, bodyChildByteOffset};
+}
+
+void ContentSink::onSpineEnd() {
+  spineOpen_ = false;
+  // Any footnote/xpath not consumed by an onBlock is dropped intentionally: they only matter
+  // attached to a block, and the producer always flushes the owning block before spine end.
+  pendingFootnotes_.clear();
+  pendingXPath_ = false;
+}
 
 }  // namespace compiled

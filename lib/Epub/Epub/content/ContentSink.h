@@ -64,6 +64,7 @@ class ContentSink : public BlockSink {
   void onChapter(uint8_t level, const std::string& title) override;
   void onPageBreakLabel(const std::string& label) override;
   void onFootnote(int wordIndex, const FootnoteEntry& entry) override;
+  void onXPathAdvance(uint16_t paragraphIndex, uint16_t listItemIndex, uint32_t bodyChildByteOffset) override;
   void onSpineEnd() override;
 
   const CompiledContent& content() const { return content_; }
@@ -76,6 +77,11 @@ class ContentSink : public BlockSink {
 
   CompiledContent content_;
   std::vector<PageLabel> labels_;
+  // Footnotes/xpath arrive DURING a block's build (onFootnote/onXPathAdvance), before onBlock
+  // flushes it. Buffer them and attach to the next onBlock.
+  std::vector<FootnoteRef> pendingFootnotes_;
+  bool pendingXPath_ = false;
+  XPathCounters pendingXPathCounters_;
   bool spineOpen_ = false;
   bool spineHasBlock_ = false;  // firstCharOffset captured from the first block
 };

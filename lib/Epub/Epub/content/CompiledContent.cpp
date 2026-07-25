@@ -244,12 +244,31 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
         writePod(out, b.floatSide);
         writeString(out, b.alt);
       }
+      // Shared per-block tail (any type): footnote anchors + optional XPath counters. Kept out of
+      // the type branches so image/hr/table blocks can also carry an XPath advance.
+      writePod(out, static_cast<uint32_t>(b.footnotes.size()));
+      for (const FootnoteRef& fn : b.footnotes) {
+        writePod(out, fn.wordIndex);
+        out.write(reinterpret_cast<const uint8_t*>(fn.entry.number), FOOTNOTE_NUMBER_LEN);
+        out.write(reinterpret_cast<const uint8_t*>(fn.entry.href), FOOTNOTE_HREF_LEN);
+      }
+      writePod(out, static_cast<uint8_t>(b.hasXPath));
+      if (b.hasXPath) {
+        writePod(out, b.xpath.paragraphIndex);
+        writePod(out, b.xpath.listItemIndex);
+        writePod(out, b.xpath.bodyChildByteOffset);
+      }
     }
     writePod(out, static_cast<uint32_t>(spine.anchors.size()));
     for (const Anchor& a : spine.anchors) {
       writeString(out, a.id);
       writePod(out, a.blockIndex);
       writePod(out, a.charOffsetInBlock);
+    }
+    writePod(out, static_cast<uint32_t>(spine.pageBreakLabels.size()));
+    for (const PageBreakLabel& pl : spine.pageBreakLabels) {
+      writeString(out, pl.label);
+      writePod(out, pl.blockIndex);
     }
   }
 
@@ -359,6 +378,24 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
         // version check should have caught this; this is defense in depth against a bad file).
         return false;
       }
+      // Shared per-block tail: footnote anchors + optional XPath counters (mirror of the writer).
+      uint32_t footnoteCount = 0;
+      readPod(in, footnoteCount);
+      b.footnotes.resize(footnoteCount);
+      for (FootnoteRef& fn : b.footnotes) {
+        readPod(in, fn.wordIndex);
+        if (in.read(reinterpret_cast<uint8_t*>(fn.entry.number), FOOTNOTE_NUMBER_LEN) != FOOTNOTE_NUMBER_LEN)
+          return false;
+        if (in.read(reinterpret_cast<uint8_t*>(fn.entry.href), FOOTNOTE_HREF_LEN) != FOOTNOTE_HREF_LEN) return false;
+      }
+      uint8_t hasXPath = 0;
+      readPod(in, hasXPath);
+      b.hasXPath = hasXPath != 0;
+      if (b.hasXPath) {
+        readPod(in, b.xpath.paragraphIndex);
+        readPod(in, b.xpath.listItemIndex);
+        readPod(in, b.xpath.bodyChildByteOffset);
+      }
     }
     uint32_t anchorCount = 0;
     readPod(in, anchorCount);
@@ -368,6 +405,13 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
       if (!readString(in, a.id)) return false;
       readPod(in, a.blockIndex);
       readPod(in, a.charOffsetInBlock);
+    }
+    uint32_t labelCount = 0;
+    readPod(in, labelCount);
+    spine.pageBreakLabels.resize(labelCount);
+    for (PageBreakLabel& pl : spine.pageBreakLabels) {
+      if (!readString(in, pl.label)) return false;
+      readPod(in, pl.blockIndex);
     }
   }
 
