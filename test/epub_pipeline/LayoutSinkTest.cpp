@@ -372,6 +372,55 @@ INSTANTIATE_TEST_SUITE_P(Matrix, SettingsIndependenceMatrix, testing::ValuesIn(i
                            return n;
                          });
 
+// Increment-D GATE: the device read-back build (Section::buildSectionFromContentBin) must produce a
+// section-cache file BYTE-IDENTICAL to the normal parse build (createSectionFile). This proves that
+// wiring content.bin into the shipping Section path changes nothing observable — the exact same
+// cache, just built from records instead of re-parsing. Covers text/headings/images/tables/footnote
+// fixtures + a real book, across a couple of profiles.
+struct SectionEqCase {
+  std::string dir;
+  std::string book;
+  int spineIndex;
+  pipeline_harness::Profile profile;
+  std::string name;
+};
+
+std::vector<SectionEqCase> sectionEqCases() {
+  pipeline_harness::Profile deflt;  // default 460
+  pipeline_harness::Profile narrow;
+  narrow.name = "narrow";
+  narrow.viewportWidth = 240;
+  std::vector<SectionEqCase> out;
+  for (const char* book : {"test_headings.epub", "test_text_rendering.epub", "test_tables.epub",
+                           "test_inline_footnotes.epub", "test_png_images.epub"}) {
+    out.push_back({CORPUS_DIR, book, 0, deflt, std::string(book) + "_s0_default"});
+    out.push_back({CORPUS_DIR, book, 0, narrow, std::string(book) + "_s0_narrow"});
+  }
+  // A real book, a couple of spines (incl. one with real prose).
+  out.push_back({FIXTURES_DIR, "moby-dick.epub", 0, deflt, "moby_s0_default"});
+  out.push_back({FIXTURES_DIR, "moby-dick.epub", 3, deflt, "moby_s3_default"});
+  return out;
+}
+
+class SectionEquivalenceMatrix : public testing::TestWithParam<SectionEqCase> {};
+
+TEST_P(SectionEquivalenceMatrix, ReadBackSectionEqualsParse) {
+  const SectionEqCase& c = GetParam();
+  const std::string epub = c.dir + "/" + c.book;
+  std::ostringstream diag;
+  const bool eq =
+      pipeline_harness::sectionEquivalence(epub, freshDir(c.name), c.spineIndex, c.profile, diag);
+  EXPECT_TRUE(eq) << "read-back section cache differs from parse for " << c.name << "\n" << diag.str();
+}
+
+INSTANTIATE_TEST_SUITE_P(Matrix, SectionEquivalenceMatrix, testing::ValuesIn(sectionEqCases()),
+                         [](const testing::TestParamInfo<SectionEqCase>& info) {
+                           std::string n = info.param.name;
+                           for (char& ch : n)
+                             if (!std::isalnum(static_cast<unsigned char>(ch))) ch = '_';
+                           return n;
+                         });
+
 // The Phase-3 SPEED gate: a settings change today re-runs the full pipeline (ZIP/inflate/Expat/CSS
 // + layout) = layoutViaSink. With a persisted content.bin it re-runs only the Stage-2 layout =
 // replayFromContentBin (read records + paginate). The plan targets >=3x faster relayout. We assert

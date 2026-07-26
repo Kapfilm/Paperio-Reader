@@ -55,6 +55,14 @@ bool runAndDump(const std::string& epubPath, const std::string& cacheDir, const 
 bool compileContent(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
                     compiled::ContentSink& sink, std::ostream& out);
 
+// Increment-D gate: for spine `spineIndex`, build the section-cache file TWO ways — (1) the normal
+// parse (createSectionFile), (2) the content.bin read-back (buildSectionFromContentBin) — and return
+// true iff the two section files are BYTE-IDENTICAL. This proves the device read-back path produces
+// exactly today's cache. content.bin is compiled into the book's cache dir first. `out` collects
+// diagnostics. Returns false (with a message) on any build failure OR a byte diff.
+bool sectionEquivalence(const std::string& epubPath, const std::string& cacheDir, int spineIndex,
+                        const Profile& profile, std::ostream& out);
+
 // Step 5 equivalence driver: build every spine of `epubPath` driving a compiled::LayoutSink
 // (attached via Section::setStage1Sink) instead of reading the fused section cache, and dump
 // the LayoutSink's Page stream in the SAME canonical format as runAndDump. Diffing the two

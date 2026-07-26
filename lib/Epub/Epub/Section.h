@@ -161,6 +161,15 @@ class Section {
                          const std::function<void(int)>& progressFn, bool skipEviction,
                          const FontSizeLadder& fontSizeLadder);
 
+  // Build this spine's section cache from a persisted content.bin (Stage-2 read-back), skipping
+  // ZIP/XML/CSS — the settings-change fast path (plan v2 / docs/stage1-incr-D-design). Opens
+  // <cachePath>/content.bin, verifies the ZIP fingerprint + that this spine is present, drives a
+  // compiled::LayoutSink from the streaming reader (replaySpine) with pages streamed to disk via
+  // onPageComplete, and writes the SAME section file the parse would (writeSectionTail). Returns
+  // false (caller falls back to createSectionFile) when content.bin is absent/stale/missing this
+  // spine, or on any build error. Run-to-completion (not sliced) for now. Behind EPUB_STAGE1.
+  bool buildSectionFromContentBin(const BuildParams& params, bool skipEviction);
+
   // Incremental section-cache build. Advances the build by at most ~budgetMs of work
   // (budgetMs == 0 means no budget: run to a terminal state in one call) and returns More
   // when work remains. The caller invokes it repeatedly (typically from idle time) until

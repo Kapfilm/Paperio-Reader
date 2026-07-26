@@ -23,7 +23,9 @@
 #include "Epub/css/CssParser.h"
 #include "FootnotePreviews.h"
 #include "Page.h"
-#include "content/LayoutSink.h"  // complete type for the parser's unique_ptr<LayoutSink> member
+#include "content/BlockStreamReader.h"  // content.bin read-back (Stage-2 replay)
+#include "content/LayoutSink.h"         // complete type for the parser's unique_ptr<LayoutSink> member
+#include "content/Stage1Config.h"       // EPUB_STAGE1 gate
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 
@@ -1173,6 +1175,101 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
         continue;
     }
   }
+}
+
+bool Section::buildSectionFromContentBin(const BuildParams& p, const bool skipEviction) {
+#if !EPUB_STAGE1
+  (void)p;
+  (void)skipEviction;
+  return false;
+#else
+  const uint32_t t0 = millis();
+  // Content.bin must exist and match the book on disk.
+  const std::string binPath = epub->getCachePath() + "/content.bin";
+  FsFile binFile;
+  if (!Storage.openFileForRead("SCT", binPath, binFile)) return false;
+  compiled::BlockStreamReader reader;
+  if (!reader.open(binFile)) {
+    LOG_INF("SCT", "content.bin present but unreadable/stale for spine %d; falling back to parse", spineIndex);
+    return false;
+  }
+  uint64_t bookFp = 0;
+  if (reader.fingerprint() != 0 && epub->zipContentFingerprint(&bookFp) && bookFp != reader.fingerprint()) {
+    LOG_INF("SCT", "content.bin fingerprint mismatch for spine %d; falling back to parse", spineIndex);
+    return false;
+  }
+  if (static_cast<uint32_t>(spineIndex) >= reader.spineCount()) return false;  // spine not compiled yet
+
+  if (!skipEviction) evictOldVariants();
+
+  const uint32_t propertyHash = calculatePropertyHash(
+      p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment, p.viewportWidth, p.viewportHeight,
+      p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled, p.inlineFootnotePreviews, p.imageRendering);
+  filePath = getSectionFilePath(propertyHash);
+  { const auto sectionsDir = epub->getCachePath() + "/sections"; Storage.mkdir(sectionsDir.c_str()); }
+
+  file.close();
+  pageCount = 0;
+  this->lut.clear();
+  if (!Storage.openFileForWrite("SCT", filePath, file)) return false;
+  writeSectionFileHeader(p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment, p.viewportWidth,
+                         p.viewportHeight, p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled,
+                         p.imageRendering);
+
+  // Chapters (small, book-level) for the replay's onChapter cross-reference.
+  std::vector<compiled::Chapter> chapters;
+  reader.readChapters(chapters);
+
+  // Drive a LayoutSink from the streaming reader; pages stream to the section file via onPageComplete
+  // (identical to the parser's completePageFn), so RAM stays ~one page + one block.
+  std::vector<uint32_t> lut;
+  compiled::LayoutParams lp;
+  lp.fontId = p.fontId;
+  lp.lineCompression = p.lineCompression;
+  lp.extraParagraphSpacing = p.extraParagraphSpacing;
+  lp.paragraphAlignment = p.paragraphAlignment;
+  lp.viewportWidth = p.viewportWidth;
+  lp.viewportHeight = p.viewportHeight;
+  lp.hyphenationEnabled = p.hyphenationEnabled;
+  lp.bionicReadingEnabled = p.bionicReadingEnabled;
+  lp.embeddedStyle = p.embeddedStyle;
+  lp.fontSizeLadder = p.fontSizeLadder;
+  lp.imageBasePath = getImageBasePath(propertyHash);
+  lp.epubFilePath = epub->getPath();
+  Hyphenator::setPreferredLanguage(epub->getLanguage());
+
+  bool replayOk = false;
+  {
+    compiled::LayoutSink sink(renderer, std::move(lp),
+                              [this, &lut](std::unique_ptr<Page> page) { lut.emplace_back(onPageComplete(std::move(page))); });
+    replayOk = compiled::replaySpine(reader, static_cast<uint32_t>(spineIndex), chapters, sink);
+    if (replayOk) {
+      // Write the section tail from the LayoutSink getters (same shapes as the parser's).
+      const auto& anchors = sink.anchors();
+      if (!writeSectionTail(lut, anchors, sink.pageBreakLabels(), sink.paragraphLutPerPage(),
+                            static_cast<uint16_t>(pageCount), /*parseComplete=*/true)) {
+        return false;  // writeSectionTail closed+removed the file
+      }
+      buildTocBoundaries(anchors);
+      this->pageBreakLabels.clear();
+      for (const auto& e : sink.pageBreakLabels()) this->pageBreakLabels.emplace_back(e.first, e.second);
+    }
+  }
+  if (!replayOk) {
+    LOG_ERR("SCT", "content.bin replay failed for spine %d; removing partial + falling back", spineIndex);
+    file.close();
+    Storage.remove(filePath.c_str());
+    return false;
+  }
+
+  file.close();
+  if (!Storage.openFileForRead("SCT", filePath, file)) return false;
+  truncatedCache = false;
+  this->lut = std::move(lut);
+  LOG_INF("SCT", "buildSectionFromContentBin spine=%d done: %ums pages=%u (read-back, no parse)", spineIndex,
+          millis() - t0, pageCount);
+  return true;
+#endif
 }
 
 bool Section::heapAllowsEmbeddedStyle(const size_t cssRuleCount) {

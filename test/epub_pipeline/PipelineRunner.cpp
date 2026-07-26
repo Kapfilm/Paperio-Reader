@@ -3,6 +3,7 @@
 #include <GfxRenderer.h>
 
 #include <chrono>
+#include <filesystem>
 #include <iomanip>
 #include <memory>
 #include <regex>
@@ -268,6 +269,157 @@ bool compileToContentBin(const std::string& epubPath, const std::string& cacheDi
     return false;
   }
   w.close();
+  return true;
+}
+
+namespace {
+namespace fs = std::filesystem;
+
+// Byte-compare two files in bounded chunks (never loads either whole into RAM — the section file for
+// a 570 KB spine can be large, and this is a test, but there is no reason to balloon). Returns 0 if
+// identical, else the 1-based offset of the first differing byte, or a negative code on I/O error
+// (-1 open, -2 size mismatch).
+long firstDiffOffset(const std::string& a, const std::string& b) {
+  FILE* fa = fopen(a.c_str(), "rb");
+  FILE* fb = fopen(b.c_str(), "rb");
+  if (!fa || !fb) { if (fa) fclose(fa); if (fb) fclose(fb); return -1; }
+  constexpr size_t kChunk = 4096;
+  uint8_t ba[kChunk], bb[kChunk];
+  long offset = 0;
+  long result = 0;
+  for (;;) {
+    const size_t na = fread(ba, 1, kChunk, fa);
+    const size_t nb = fread(bb, 1, kChunk, fb);
+    if (na != nb) { result = -2; break; }  // size mismatch
+    if (na == 0) break;                     // both EOF, equal so far
+    for (size_t i = 0; i < na; ++i) {
+      if (ba[i] != bb[i]) { result = offset + static_cast<long>(i) + 1; goto done; }
+    }
+    offset += static_cast<long>(na);
+  }
+done:
+  fclose(fa);
+  fclose(fb);
+  return result;
+}
+
+long fileSizeOf(const std::string& path) {
+  std::error_code ec;
+  const auto n = fs::file_size(path, ec);
+  return ec ? -1 : static_cast<long>(n);
+}
+
+// The book's per-book cache dir (Epub: cacheDir + "/epub_<hash-of-path>"), where content.bin and
+// sections/ live — matching what buildSectionFromContentBin reads.
+std::string bookCacheDir(const std::string& cacheDir, const std::string& epubPath) {
+  return cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(epubPath));
+}
+
+// Find the single section file for `spineIndex` in the book's sections/ dir (name embeds the
+// settings-derived propertyHash, which the harness does not compute).
+std::string findSectionFile(const std::string& bookDir, int spineIndex) {
+  const auto dir = fs::path(bookDir) / "sections";
+  const std::string prefix = std::to_string(spineIndex) + "_";
+  if (fs::exists(dir)) {
+    for (const auto& e : fs::directory_iterator(dir)) {
+      const std::string name = e.path().filename().string();
+      if (name.rfind(prefix, 0) == 0 && e.path().extension() == ".bin" && name.find("html_") == std::string::npos)
+        return e.path().string();
+    }
+  }
+  return {};
+}
+}  // namespace
+
+bool sectionEquivalence(const std::string& epubPath, const std::string& cacheDir, int spineIndex,
+                        const Profile& profile, std::ostream& out) {
+  const std::string bookDir = bookCacheDir(cacheDir, epubPath);
+
+  // (1) Normal parse build of the spine → capture the section file bytes.
+  GfxRenderer renderer;
+  auto epub = std::make_shared<Epub>(epubPath, cacheDir);
+  if (!epub->load(true)) { out << "ERROR load failed\n"; return false; }
+  epub->loadImageManifest();
+  FootnotePreviews::gather(*epub);
+  {
+    Section section(epub, spineIndex, renderer);
+    if (!section.createSectionFile(profile.fontId, profile.lineCompression, profile.extraParagraphSpacing,
+                                   profile.paragraphAlignment, profile.viewportWidth, profile.viewportHeight,
+                                   profile.hyphenationEnabled, profile.embeddedStyle, profile.bionicReadingEnabled,
+                                   profile.inlineFootnotePreviews, profile.imageRendering, {}, /*skipEviction=*/true, {})) {
+      out << "ERROR parse build failed\n";
+      return false;
+    }
+  }
+  const std::string sectionPath = findSectionFile(bookDir, spineIndex);
+  if (sectionPath.empty()) { out << "ERROR parse section file not found\n"; return false; }
+  // Copy the parse output aside — the read-back build overwrites the same path. std::filesystem::copy
+  // streams; no whole-file buffering.
+  const std::string parseCopy = bookDir + "/parse_section.bin";
+  {
+    std::error_code ec;
+    fs::copy_file(sectionPath, parseCopy, fs::copy_options::overwrite_existing, ec);
+    if (ec) { out << "ERROR could not copy parse section file: " << ec.message() << "\n"; return false; }
+  }
+
+  // (2) Compile content.bin into the BOOK cache dir (where buildSectionFromContentBin reads it).
+  {
+    compiled::ContentSink sink;
+    for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
+      sink.beginSpine();
+      Section s(epub, i, renderer);
+      s.setStage1Sink(&sink);
+      if (!s.createSectionFile(profile.fontId, profile.lineCompression, profile.extraParagraphSpacing,
+                               profile.paragraphAlignment, profile.viewportWidth, profile.viewportHeight,
+                               profile.hyphenationEnabled, profile.embeddedStyle, profile.bionicReadingEnabled,
+                               profile.inlineFootnotePreviews, profile.imageRendering, {}, /*skipEviction=*/true, {})) {
+        out << "SPINE " << i << " ERROR content compile failed\n";
+        return false;
+      }
+    }
+    uint64_t fp = 0;
+    if (epub->zipContentFingerprint(&fp)) sink.content().sourceFingerprint = fp;
+    FsFile w;
+    if (!w.openForWrite(bookDir + "/content.bin") || !compiled::writeContentBin(w, sink.content())) {
+      out << "ERROR content.bin write failed\n";
+      return false;
+    }
+    w.close();
+  }
+
+  // (3) Read-back build of the spine (overwrites the same section file path).
+  {
+    Section::BuildParams bp;
+    bp.fontId = profile.fontId;
+    bp.lineCompression = profile.lineCompression;
+    bp.extraParagraphSpacing = profile.extraParagraphSpacing;
+    bp.paragraphAlignment = profile.paragraphAlignment;
+    bp.viewportWidth = profile.viewportWidth;
+    bp.viewportHeight = profile.viewportHeight;
+    bp.hyphenationEnabled = profile.hyphenationEnabled;
+    bp.embeddedStyle = profile.embeddedStyle;
+    bp.bionicReadingEnabled = profile.bionicReadingEnabled;
+    bp.inlineFootnotePreviews = profile.inlineFootnotePreviews;
+    bp.imageRendering = profile.imageRendering;
+    Section section(epub, spineIndex, renderer);
+    if (!section.buildSectionFromContentBin(bp, /*skipEviction=*/true)) {
+      out << "ERROR read-back build failed (buildSectionFromContentBin returned false)\n";
+      return false;
+    }
+  }
+  // (4) Chunked byte-diff (neither file loaded whole).
+  const long parseSize = fileSizeOf(parseCopy);
+  const long readbackSize = fileSizeOf(sectionPath);
+  const long diff = firstDiffOffset(parseCopy, sectionPath);
+  if (diff == -1) { out << "ERROR could not open section files for diff\n"; return false; }
+  if (diff == -2 || parseSize != readbackSize) {
+    out << "DIFF section file SIZE: parse=" << parseSize << " readback=" << readbackSize << "\n";
+    return false;
+  }
+  if (diff > 0) {
+    out << "DIFF section file at byte offset " << (diff - 1) << " (parse size=" << parseSize << ")\n";
+    return false;
+  }
   return true;
 }
 
