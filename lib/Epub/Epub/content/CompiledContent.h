@@ -30,7 +30,9 @@ inline constexpr char kMagic[4] = {'W', 'B', 'C', '1'};
 // v3 completes the Stage-1 artifact so a content.bin read-back reproduces the layout byte-identically:
 // Block::footnotes (per-block footnote anchors), Block::xpath (LUT counters), and a per-spine
 // page-break label table — the pieces ContentSink previously dropped.
-inline constexpr uint8_t kVersion = 3;
+// v4 adds the source book's ZIP content fingerprint to the header, so a reader can reject a
+// content.bin that does not match the book on disk (stale cache → recompile).
+inline constexpr uint8_t kVersion = 4;
 
 // Word::styleSpan bits. Bits 0-6 = inline font style (the EpdFontFamily::Style set,
 // remapped to a stable on-disk layout); bit 7 = word attaches to the previous word
@@ -198,6 +200,9 @@ struct SpineContent {
 
 // A whole book's compiled content.
 struct CompiledContent {
+  // Source book's ZIP content fingerprint (Epub::zipFingerprint). 0 = unset (older/anonymous
+  // compiles). A reader compares this to the book on disk and treats a mismatch as a stale cache.
+  uint64_t sourceFingerprint = 0;
   std::vector<CssStyle> stylePool;  // deduped block styles; blocks reference by index
   std::vector<SpineContent> spines;
   std::vector<Chapter> chapters;

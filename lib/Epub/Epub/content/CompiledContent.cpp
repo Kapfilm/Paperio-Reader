@@ -189,6 +189,7 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
   if (!out) return false;
   out.write(reinterpret_cast<const uint8_t*>(kMagic), 4);
   writePod(out, kVersion);
+  writePod(out, content.sourceFingerprint);  // v4: source book's ZIP content fingerprint
 
   writePod(out, static_cast<uint32_t>(content.stylePool.size()));
   for (const CssStyle& s : content.stylePool) writeStyle(out, s);
@@ -286,6 +287,8 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
   if (!in) return false;
   content.stylePool.clear();
   content.spines.clear();
+  content.chapters.clear();
+  content.sourceFingerprint = 0;
 
   char magic[4] = {};
   if (in.read(reinterpret_cast<uint8_t*>(magic), 4) != 4) return false;
@@ -295,6 +298,7 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
   uint8_t version = 0;
   readPod(in, version);
   if (version != kVersion) return false;
+  readPod(in, content.sourceFingerprint);  // v4
 
   uint32_t styleCount = 0;
   readPod(in, styleCount);

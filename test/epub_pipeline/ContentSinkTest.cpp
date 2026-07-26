@@ -206,6 +206,28 @@ TEST(ContentSink, RoundTripsFootnotesXPathAndLabels) {
   }
 }
 
+// WBC1 v4 stores the source book's ZIP content fingerprint in the header; it must round-trip and a
+// reader must be able to detect a mismatch (stale cache).
+TEST(ContentSink, RoundTripsSourceFingerprint) {
+  const std::string cacheDir = freshDir("fp_roundtrip");
+  ContentSink sink;
+  ASSERT_TRUE(compile("test_headings.epub", cacheDir, sink));
+  sink.content().sourceFingerprint = 0xDEADBEEFCAFEF00Dull;
+
+  const std::string binPath = cacheDir + "/content.bin";
+  FsFile out;
+  ASSERT_TRUE(out.openForWrite(binPath));
+  ASSERT_TRUE(compiled::writeContentBin(out, sink.content()));
+  out.close();
+
+  CompiledContent rb;
+  FsFile in;
+  ASSERT_TRUE(in.openForRead(binPath));
+  ASSERT_TRUE(compiled::readContentBin(in, rb));
+  in.close();
+  EXPECT_EQ(rb.sourceFingerprint, 0xDEADBEEFCAFEF00Dull) << "fingerprint must survive the round-trip";
+}
+
 // A block over the 8 KB cap splits into continuation records that reconstruct the
 // original word sequence, with the continuation flag on every record after the first.
 TEST(ContentSink, SplitsOversizedTextBlockAtWrite) {

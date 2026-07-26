@@ -257,6 +257,10 @@ bool compileToContentBin(const std::string& epubPath, const std::string& cacheDi
       return false;
     }
   }
+  // Stamp the source book's ZIP content fingerprint so a reader can reject a stale content.bin.
+  uint64_t fp = 0;
+  if (epub->zipContentFingerprint(&fp)) contentSink.content().sourceFingerprint = fp;
+
   FsFile w;
   if (!w.openForWrite(cacheDir + "/content.bin") || !compiled::writeContentBin(w, contentSink.content())) {
     out << "ERROR content.bin write failed\n";
@@ -286,6 +290,14 @@ bool replayFromContentBin(const std::string& epubPath, const std::string& cacheD
       return false;
     }
     r.close();
+  }
+  // Reject a content.bin that does not match the book on disk (stale cache → the device path would
+  // recompile). A 0 stored fingerprint means "unset" (anonymous compile) — skip the check then.
+  uint64_t bookFp = 0;
+  if (content.sourceFingerprint != 0 && epub->zipContentFingerprint(&bookFp) &&
+      bookFp != content.sourceFingerprint) {
+    out << "ERROR content.bin fingerprint mismatch (stale cache)\n";
+    return false;
   }
 
   // Replay the read-back CompiledContent through a LayoutSink — NO ZIP/XML/CSS.

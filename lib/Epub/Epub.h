@@ -91,6 +91,11 @@ class Epub {
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false);
 
+  // Public accessor for the ZIP content fingerprint (Phase 1), for keying settings-independent
+  // artifacts like content.bin. Computed once and cached; false when the archive is unreadable
+  // (callers then skip fingerprint-based invalidation). Thin wrapper over computeZipFingerprint.
+  bool zipContentFingerprint(uint64_t* out) const { return computeZipFingerprint(out); }
+
   // True when opening the book will trigger the (multi-second) first-open index
   // build inside load(): the spine/TOC cache (book.bin) or the compiled CSS rules
   // cache is missing. Cheap (only file-existence checks) so callers can decide
