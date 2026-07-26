@@ -2525,13 +2525,46 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
   // CSS-fallback rebuild). Background-C owns the responsive, build-while-you-read case; here we
   // just build to completion. A resumed partial build continues via the same stepSectionBuild
   // state inside createSectionFile.
-  const auto runCreate = [&]() {
+  const auto runParse = [&]() {
     return section->createSectionFile(
         buildParams.fontId, buildParams.lineCompression, buildParams.extraParagraphSpacing,
         buildParams.paragraphAlignment, buildParams.viewportWidth, buildParams.viewportHeight,
         buildParams.hyphenationEnabled, buildParams.embeddedStyle, buildParams.bionicReadingEnabled,
         buildParams.inlineFootnotePreviews, buildParams.imageRendering, nullptr,
         /*skipEviction=*/false, buildParams.fontSizeLadder);
+  };
+
+  // Stage-2 read-back fast path (docs/stage1-incr-D-design): if a whole-book content.bin exists and
+  // covers this spine with a matching ZIP fingerprint, replay it (skip ZIP/XML/CSS). On the first
+  // miss, compile the whole book to content.bin ONCE, then replay. Any failure falls back to the
+  // ordinary parse (runParse), so the parse path is bit-for-bit unchanged when the flag is off.
+  const auto runCreate = [&]() -> bool {
+#if EPUB_STAGE1
+    // Per-spine read-back is strictly cheaper than the parse the in-place gate already sanctioned
+    // (no ZIP inflate / Expat / CSS parse — same LayoutSink Stage-2 as the parser's back half), so
+    // it is safe on both the in-place and released paths.
+    if (section->buildSectionFromContentBin(buildParams, /*skipEviction=*/false)) {
+      LOG_INF("ERS", "Section served from content.bin (Stage-2 read-back)");
+      return true;
+    }
+    // The one-time whole-book compile re-walks EVERY spine (ZIP/XML/CSS), so it carries the same
+    // peak RAM as a normal blocking parse and MUST run with the secondary buffer released — never
+    // in place. On the in-place path we skip it and fall through to runParse; the compile happens
+    // on the released retry (or the next released build) instead.
+    if (released && !contentBinCompileAttempted_) {
+      contentBinCompileAttempted_ = true;
+      const uint32_t compileStart = millis();
+      const bool compiled = Section::compileBookToContentBin(epub, renderer, buildParams);
+      LOG_INF("ERS", "compileBookToContentBin returned %d in %ums (free=%lu)", compiled ? 1 : 0,
+              millis() - compileStart, esp_get_free_heap_size());
+      checkHeapIntegrity("after_compileBookToContentBin");
+      if (compiled && section->buildSectionFromContentBin(buildParams, /*skipEviction=*/false)) {
+        LOG_INF("ERS", "Section served from freshly compiled content.bin");
+        return true;
+      }
+    }
+#endif
+    return runParse();
   };
 
   const uint32_t createStart = millis();

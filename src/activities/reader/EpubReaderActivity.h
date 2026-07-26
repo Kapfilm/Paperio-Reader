@@ -12,6 +12,7 @@
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
+#include <Epub/content/Stage1Config.h>  // EPUB_STAGE1 (content.bin read-back gate)
 
 #include <atomic>
 
@@ -372,6 +373,15 @@ class EpubReaderActivity final : public Activity {
   // the release solves, not a parse failure, so it must not collapse to the blocking path
   // (which indexes the whole section before showing anything). -1 = no such latch.
   int forceReleasedBuildSpine_ = -1;
+#if EPUB_STAGE1
+  // One-shot latch for the whole-book Stage-1 compile (compileBookToContentBin). We attempt the
+  // content.bin read-back (buildSectionFromContentBin) on every blocking section build; on the
+  // first miss we compile the whole book once, then never re-walk on subsequent misses even if the
+  // compile failed (a book that fails once will keep failing — retrying every page would be a
+  // pathological per-page full-book walk). Reset only by re-opening the book. See
+  // docs/stage1-incr-D-design.
+  bool contentBinCompileAttempted_ = false;
+#endif
   // Debug-only Background A glyph for the status-bar overlay. The transient flags
   // (pendingPreRender / preRenderedPage.ready) are cleared at the top of render()
   // before the status bar is drawn, so the overlay could never sample a non-idle
