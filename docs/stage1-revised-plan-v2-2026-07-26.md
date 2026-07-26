@@ -319,8 +319,26 @@ The 1,732-spine swarm. Confirms the model: per-spine build is bounded regardless
 **What this makes the Incr-D target concrete:** content.bin read-back must reproduce these section
 caches (byte-identical, host-gated) and cut the **per-spine ~570–640 ms PARSE** portion to the
 Stage-2-only replay (no ZIP/inflate/Expat/CSS) — the ≥3× relayout win, while keeping the per-spine
-arena ≤ the ~12–17 KB seen here (no `failedAlloc`, Min Free ≥ ~8 KB). Still pending: Small Gods'
-570 KB single spine numbers (the memory stress case).
+arena ≤ the ~12–17 KB seen here (no `failedAlloc`, Min Free ≥ ~8 KB).
+
+### MASTER BASELINE — Small Gods (device, flag off, captured 2026-07-26)
+
+The 570 KB SINGLE-SPINE stress case (memory). Confirms the streaming model on the hardest input:
+- **First-open indexing** (2 spines): **279 ms** — trivial (vs King's Avatar's 7,514 ms; indexing
+  scales with spine COUNT, not size).
+- **The 570 KB spine build** (`spine=1`, `inflatedSize=583991`): the 570 KB is inflated to an SD
+  **temp file** (`extracted 583991 bytes to temp`, `free=55408`) — **never resident in RAM**, exactly
+  as modeled. Pages stream to disk mid-build via `onPageComplete` (`Page 0,10,20,30,40,50,60,70…
+  processed`), NOT accumulated; the build is background-sliced (`buildPct 2→14…`).
+- **Memory during the giant build stays bounded**: free `55,408 → 40,560 B`, largest-contiguous
+  `40,948 → 28,660 B`, **Min Free 7,824 B**, **no `failedAlloc`**. Same envelope as any spine.
+- spine 0 (799 B, 1 page): total **621 ms**, arena **highWater 11,724 B**.
+
+**Decisive confirmation:** the 570 KB single spine builds fine at ~bounded memory (Min Free 7,824 B,
+contig floor ~28 KB) because master streams it (temp file + page-to-disk). This is EXACTLY the
+property v2's block-streaming content.bin must preserve — and exactly what v1's whole-spine
+materialization (~1.8 MB for this spine) would have destroyed. Incr-D's read-back path must keep
+this bound: never materialize the spine, stream pages out, arena ≤ ~12–17 KB.
 
 ## Status
 
