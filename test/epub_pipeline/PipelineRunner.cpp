@@ -232,10 +232,9 @@ bool layoutViaSink(const std::string& epubPath, const std::string& cacheDir, con
   return true;
 }
 
-bool layoutViaContentBin(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+bool compileToContentBin(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
                          std::ostream& out) {
   GfxRenderer renderer;
-
   auto epub = std::make_shared<Epub>(epubPath, cacheDir);
   if (!epub->load(true)) {
     out << "ERROR load failed\n";
@@ -244,7 +243,6 @@ bool layoutViaContentBin(const std::string& epubPath, const std::string& cacheDi
   epub->loadImageManifest();
   FootnotePreviews::gather(*epub);
 
-  // STAGE 1: compile the whole book into a ContentSink, serialize to content.bin, read it back.
   compiled::ContentSink contentSink;
   for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
     contentSink.beginSpine();
@@ -259,27 +257,38 @@ bool layoutViaContentBin(const std::string& epubPath, const std::string& cacheDi
       return false;
     }
   }
-  const std::string binPath = cacheDir + "/content.bin";
-  {
-    FsFile w;
-    if (!w.openForWrite(binPath) || !compiled::writeContentBin(w, contentSink.content())) {
-      out << "ERROR content.bin write failed\n";
-      return false;
-    }
-    w.close();
+  FsFile w;
+  if (!w.openForWrite(cacheDir + "/content.bin") || !compiled::writeContentBin(w, contentSink.content())) {
+    out << "ERROR content.bin write failed\n";
+    return false;
   }
+  w.close();
+  return true;
+}
+
+bool replayFromContentBin(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+                          std::ostream& out) {
+  GfxRenderer renderer;
+  // The epub is opened only for image paths / title / spine hrefs — NO createSectionFile (no
+  // ZIP/XML/CSS walk). This is the settings-change fast path being measured.
+  auto epub = std::make_shared<Epub>(epubPath, cacheDir);
+  if (!epub->load(true)) {
+    out << "ERROR load failed\n";
+    return false;
+  }
+  epub->loadImageManifest();
+
   compiled::CompiledContent content;
   {
     FsFile r;
-    if (!r.openForRead(binPath) || !compiled::readContentBin(r, content)) {
+    if (!r.openForRead(cacheDir + "/content.bin") || !compiled::readContentBin(r, content)) {
       out << "ERROR content.bin read failed\n";
       return false;
     }
     r.close();
   }
 
-  // STAGE 2: replay the read-back CompiledContent through a LayoutSink — NO ZIP/XML/CSS. The dump
-  // must be byte-identical to layoutViaSink (which parses). This is the settings-change fast path.
+  // Replay the read-back CompiledContent through a LayoutSink — NO ZIP/XML/CSS.
   out << "BOOK title=" << epub->getTitle() << " lang=" << epub->getLanguage() << " spine=" << epub->getSpineItemsCount()
       << " toc=" << epub->getTocItemsCount() << " reliableToc=" << (epub->hasReliableToc() ? 1 : 0) << "\n";
 
@@ -374,6 +383,18 @@ bool layoutViaContentBin(const std::string& epubPath, const std::string& cacheDi
     }
   }
   return true;
+}
+
+bool layoutViaContentBin(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+                         std::ostream& out) {
+  // Full round-trip: Stage-1 compile+serialize, then Stage-2 read-back+layout. The dump comes
+  // from the replay stage (STAGE 1 dumps nothing), so it equals a direct parse+layout.
+  std::ostringstream compileLog;
+  if (!compileToContentBin(epubPath, cacheDir, profile, compileLog)) {
+    out << compileLog.str();
+    return false;
+  }
+  return replayFromContentBin(epubPath, cacheDir, profile, out);
 }
 
 }  // namespace pipeline_harness

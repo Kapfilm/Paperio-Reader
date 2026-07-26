@@ -10,6 +10,7 @@
 #include <GfxRenderer.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -293,5 +294,53 @@ INSTANTIATE_TEST_SUITE_P(Matrix, ContentBinReplayMatrix, testing::ValuesIn(bookP
                            }
                            return n;
                          });
+
+// The Phase-3 SPEED gate: a settings change today re-runs the full pipeline (ZIP/inflate/Expat/CSS
+// + layout) = layoutViaSink. With a persisted content.bin it re-runs only the Stage-2 layout =
+// replayFromContentBin (read records + paginate). The plan targets >=3x faster relayout. We assert
+// a conservative >=2x on the host (deterministic stubs make measurement noisy at small sizes; the
+// device win is larger — real ZIP/XML/CSS cost dwarfs the host stubs) and PRINT the ratio so the
+// baseline doc can record the real number. Uses Moby Dick (largest corpus book).
+TEST(ContentBinSpeed, RelayoutIsFasterThanFullCompile) {
+  const std::string epub = std::string(FIXTURES_DIR) + "/moby-dick.epub";
+  pipeline_harness::Profile prof;  // default profile
+
+  auto median = [](std::vector<double> v) {
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
+  };
+  const int kReps = 3;
+
+  // FULL pipeline: parse + layout (what a settings change costs without content.bin).
+  std::vector<double> fullMs;
+  for (int r = 0; r < kReps; ++r) {
+    std::ostringstream sink;
+    const auto t0 = std::chrono::steady_clock::now();
+    ASSERT_TRUE(pipeline_harness::layoutViaSink(epub, freshDir("speed_full_" + std::to_string(r)), prof, sink));
+    fullMs.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+  }
+
+  // Compile content.bin ONCE (the one-time Stage-1 cost, not on the settings-change path), then
+  // time only the read-back + Stage-2 layout.
+  const std::string binDir = freshDir("speed_bin");
+  {
+    std::ostringstream sink;
+    ASSERT_TRUE(pipeline_harness::compileToContentBin(epub, binDir, prof, sink));
+  }
+  std::vector<double> replayMs;
+  for (int r = 0; r < kReps; ++r) {
+    std::ostringstream sink;
+    const auto t0 = std::chrono::steady_clock::now();
+    ASSERT_TRUE(pipeline_harness::replayFromContentBin(epub, binDir, prof, sink));
+    replayMs.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+  }
+
+  const double full = median(fullMs);
+  const double replay = median(replayMs);
+  const double ratio = full / replay;
+  std::cout << "[ SPEED    ] Moby full(parse+layout)=" << full << "ms  replay(content.bin)=" << replay
+            << "ms  speedup=" << ratio << "x\n";
+  EXPECT_GT(ratio, 2.0) << "content.bin relayout should be >=2x faster than a full re-parse+layout";
+}
 
 }  // namespace

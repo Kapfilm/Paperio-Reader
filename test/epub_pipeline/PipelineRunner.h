@@ -69,6 +69,17 @@ bool layoutViaSink(const std::string& epubPath, const std::string& cacheDir, con
 bool layoutViaContentBin(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
                          std::ostream& out);
 
+// Speed-gate split of layoutViaContentBin, so a benchmark can time the two stages independently:
+//   compileToContentBin  = the FULL Stage-1 work (ZIP + inflate + Expat + CSS + walk) + serialize.
+//   replayFromContentBin = the settings-change FAST PATH: read content.bin + Stage-2 layout only.
+// A settings change today re-runs compileToContentBin's work; with content.bin it re-runs only
+// replayFromContentBin. The ratio is the Phase-3 ">=3x faster relayout" gate. `out` is the dump
+// (discardable for timing). Both return false on failure (logged to out).
+bool compileToContentBin(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+                         std::ostream& out);
+bool replayFromContentBin(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+                          std::ostream& out);
+
 // Dump one already-built page in the canonical PAGE/LINE/IMG/TABLE/HR/FN format (shared by
 // runAndDump and layoutViaSink so both sides of the equivalence diff format identically).
 void dumpOnePage(std::ostream& out, const Page& page, uint16_t pageIndex, const std::string& cacheDir);
