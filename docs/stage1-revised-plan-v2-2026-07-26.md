@@ -298,6 +298,30 @@ ms, settings-change re-paginate ms, and the per-spine `arena highWater` + `Min F
 Small Gods' 570 KB spine build and while paging King's Avatar. This turns every "≤ baseline" above
 into a concrete number and confirms the modeled ~40–50 KB against reality.
 
+### MASTER BASELINE — King's Avatar (device, flag off, captured 2026-07-26)
+
+The 1,732-spine swarm. Confirms the model: per-spine build is bounded regardless of spine count.
+- **First-open indexing** (one-time, builds book.bin over 1,732 spines): **7,514 ms** (OPF 2,620 +
+  TOC 2,691 + book.bin 2,201). This is the ZIP/OPF/NCX index, NOT content.bin — untouched by this
+  work; noted for context.
+- **Per-spine `createSectionFile` (the relayout target — what content.bin's read-back replaces):**
+  - spine 0 (799 B, 1 page): total **1,022 ms** (setup 59 / parse 610 / finalize 20), arena
+    **highWater 12,076 B**, failedAlloc 0.
+  - spine 1 (1,378 B, 1 page): total **675 ms** (parse 569), highWater **12,668 B**.
+  - spine 2 (5,698 B, 4 pages): total **1,364 ms** (parse 634), highWater **16,988 B**.
+- **Memory (whole session): Min Free 7,980–8,020 B; free heap 34–67 KB; largest-contiguous
+  29–53 KB.** Build arena `cap=52,272` = the BORROWED secondary framebuffer (Background-C). The
+  ~12–17 KB per-spine arena highWater matches the modeled ~tens-of-KB bound and does NOT grow with
+  the 1,732 spines. failedAlloc 0 throughout.
+- **First page rendered:** spine 0 1,552 ms (incl. cover JPEG decode ~210 ms + first-render setup),
+  spine 1 483 ms, spine 2 593 ms.
+
+**What this makes the Incr-D target concrete:** content.bin read-back must reproduce these section
+caches (byte-identical, host-gated) and cut the **per-spine ~570–640 ms PARSE** portion to the
+Stage-2-only replay (no ZIP/inflate/Expat/CSS) — the ≥3× relayout win, while keeping the per-spine
+arena ≤ the ~12–17 KB seen here (no `failedAlloc`, Min Free ≥ ~8 KB). Still pending: Small Gods'
+570 KB single spine numbers (the memory stress case).
+
 ## Status
 
 Plan v2 (amended with the device-test slice). Supersedes v1. Validated against Small Gods (~1.8 MB
