@@ -194,6 +194,15 @@ constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 #ifndef RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES
 #define RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES (16 * 1024)
 #endif
+// Stage-1 content.bin read-back (buildSectionFromContentBin) runs to completion, not sliced, so a
+// huge spine would freeze the loop for seconds. Only short-circuit Background-C's sliced parse with
+// a read-back when the spine's inflated size is below this cap; larger spines keep the responsive
+// sliced parse (Stage-1 slicing is a later step). The vast majority of spines (chapters are a few
+// KB) fall well under this — the ~584 KB single-file books (Small Gods) are the exception the cap
+// excludes. Only consulted when EPUB_STAGE1 is set.
+#ifndef STAGE1_READBACK_MAX_INFLATED_BYTES
+#define STAGE1_READBACK_MAX_INFLATED_BYTES (64 * 1024)
+#endif
 
 constexpr uint8_t TRUNCATED_SECTION_HINT_RENDER_COUNT = 2;
 constexpr const char* TRUNCATED_SECTION_HINT_LINE_1 = "Chapter may be truncated (low memory).";
@@ -2713,11 +2722,37 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
     // wastes). A lookup failure leaves 0 = unknown -> static floors only, the old behaviour.
     size_t inflatedSize = 0;
     epub->getSpineItemInflatedSize(currentSpineIndex, &inflatedSize);
-    const SectionBuildMode mode = (resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
+
+    // Stage-2 read-back fast path (docs/stage1-incr-D-design). Before choosing a build mode, try to
+    // replay this spine from a whole-book content.bin (skip ZIP/XML/CSS entirely). This runs to
+    // completion — not sliced like Background-C — so it is gated to small spines
+    // (STAGE1_READBACK_MAX_INFLATED_BYTES); a large single-file spine keeps the responsive sliced
+    // parse below. On success we bypass the whole build machinery and fall through to the shared
+    // resolveInto/render tail, exactly like a cache hit. A miss (no content.bin, stale fingerprint,
+    // spine not yet compiled, or any error) leaves the section untouched and drops into the normal
+    // build. The one-time whole-book compile that CREATES content.bin lives on the released blocking
+    // path (compileSectionCache); it is deliberately not triggered here, so the first reads of a book
+    // parse normally and read-back only kicks in once some spine has fallen to the blocking builder.
+    bool servedFromContentBin = false;
+#if EPUB_STAGE1
+    if (!resumeBackgroundBuild && !cssFallbackRebuild && inflatedSize > 0 &&
+        inflatedSize <= STAGE1_READBACK_MAX_INFLATED_BYTES &&
+        section->buildSectionFromContentBin(makeSectionBuildParams(), /*skipEviction=*/false)) {
+      servedFromContentBin = true;
+      readerPhase_ = ReaderPhase::READING;
+      LOG_INF("ERS", "Section spine=%d served from content.bin (Stage-2 read-back, inflated=%lu)", currentSpineIndex,
+              static_cast<unsigned long>(inflatedSize));
+    }
+#endif
+
+    // When the read-back served the section, force both sub-blocks off (incremental + blocking) so
+    // control falls straight through to the shared resolveInto/render tail, exactly like a cache hit.
+    const SectionBuildMode mode = servedFromContentBin ? SectionBuildMode::Blocking
+                                  : (resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
                                       ? chooseSectionBuildMode(embeddedStyle, inflatedSize)
                                       : SectionBuildMode::Blocking;
-    const bool incremental = mode != SectionBuildMode::Blocking;
-    bool runBlocking = !incremental;
+    const bool incremental = !servedFromContentBin && mode != SectionBuildMode::Blocking;
+    bool runBlocking = !servedFromContentBin && !incremental;
 
     // Single grep-able marker for the build mode actually taken for this spine — pairs with the
     // heapAllowsInPlaceBuild line above to explain every section-entry build decision from the log.
