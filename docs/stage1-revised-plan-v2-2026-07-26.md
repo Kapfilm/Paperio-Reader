@@ -302,5 +302,20 @@ into a concrete number and confirms the modeled ~40–50 KB against reality.
 
 Plan v2 (amended with the device-test slice). Supersedes v1. Validated against Small Gods (~1.8 MB
 if whole-spine → v1 fails) and King's Avatar (1,732 spines); master opens both, confirming the
-streaming bound. Next code step: **Increment A** (`ContentBinWriter` + spine index, format v5),
-host-gated on peak-RAM + corrupt-write.
+streaming bound.
+
+**Implemented + host-gated (host suite 552/552 green):**
+- Shared `BlockSerialization` (writeBlock/readBlock/splitTextBlock) — `7c64c8fb`.
+- **Incr A+B**: streaming `ContentBinWriter` + `BlockStreamReader`, format v5 (streamable +
+  random-access, back-patched header/spine-index/aux offsets), corrupt/unfinished/truncated
+  rejected — `edc60252`.
+- **Incr B integration**: `replayFromContentBin` drives LayoutSink from the streaming reader, one
+  logical block at a time; `ContentBinReplayMatrix` byte-identical 94/94 incl. Moby — `cee030a5`.
+- **Incr C**: settings-independence gate (compile@A vs replay@B == direct@B) 10/10 incl. Moby —
+  `3c06e270`.
+
+**Remaining: Incr D** — wire content.bin into the shipping `Section` build behind `EPUB_STAGE1`
+(Option 2: first open unchanged; lazy background write via a ContentBinWriter attached through
+`setStage1Sink`; read-back fast path via BlockStreamReader → LayoutSink → section cache on revisit /
+settings change). Host gate: section cache byte-identical flag on/off. This is the device-testable
+piece; A–C are the host-proven engine. Then flash + measure per the table above.
