@@ -236,8 +236,71 @@ nothing ever holds more than one block/one page, exactly as today.
    even at bounded peak bytes this can fragment. Device gate 6; consider a small block-sized arena
    the writer/reader reuse (bump-reset per block) to avoid churn.
 
+## Path to a real device test (the amendment)
+
+A device test requires Increment D (content.bin actually wired into the `Section` build). A/B/C are
+host-only prerequisites. The **minimal device-testable slice** is: streaming write + streaming read
++ Option-2 wiring behind a flag. Implement bottom-up, each host-gated, then flash.
+
+### Implementation order (each a small commit, host-gated before the next)
+
+1. **Incr A — `ContentBinWriter`** (`lib/Epub/Epub/content/`): `beginSpine()` / `onBlock(Block&&)`
+   serializes THIS block to the open file and drops it / `onSpineEnd()` writes the spine's small
+   anchor+label sections and records the spine's file offset / `finish()` writes the style pool +
+   spine-offset index + back-patches the header (magic, v5, fingerprint, spineCount). Reuse the
+   existing per-block serialize code from `writeContentBin` (factor a `writeBlock(FsFile&, Block&)`
+   both share) and the 8 KB `appendTextSplit`. Keep whole-book `writeContentBin` as a thin adapter
+   for existing tests. **Gate:** a book written block-streaming reads back (whole) equal to today's
+   model; host peak-RAM assertion (resident block bytes ≤ O(one block)); truncated-file read fails
+   cleanly.
+
+2. **Incr B — `BlockStreamReader`**: opens content.bin, reads header + spine-offset index into RAM
+   (≤~8 KB), `openSpine(i)` seeks, `nextLogicalBlock() -> Block` reads one base block + merges its
+   trailing `kContinuation` records (incremental, bounded to one logical block), returns it. EOF at
+   spine end. Rework `replayFromContentBin` to drive it. **Gate:** `ContentBinReplayMatrix`
+   byte-identical via the streaming reader (94/94); host peak-RAM assertion (≤ O(one logical block +
+   index)); first-block ordering assertion (page 1 emitted after reading only the first K blocks).
+
+3. **Incr C — settings-independence gate**: compile content.bin at viewport A, replay at viewport B,
+   assert == direct-compile at B. Catches settings-dependent data in content.bin. (No production
+   code; a test.)
+
+4. **Incr D — wire Option 2 into `Section` behind `EPUB_STAGE1`** (the device-testable piece):
+   - First open of a spine: UNCHANGED (`stage1Sink_` null → internal `LayoutSink`, direct
+     walk→pages→section cache). Page 1 exactly as fast as master.
+   - After the reader is served, a background, 1 KB-sliced pass walks the spine again driving a
+     `ContentBinWriter`, appending that spine's records to `content.bin` (guarded by the ZIP
+     fingerprint; skip if the spine's records already present). Scheduled like Background-B.
+   - On a warm open / settings change of a spine whose records are present + fingerprint-valid:
+     `BlockStreamReader` → `LayoutSink` → section cache, SKIPPING the parser (no ZIP/XML/CSS). This
+     is the ~8–9× fast path, now on device.
+   - **Gate (host):** the section cache produced via the read-back path is byte-identical to the
+     direct path (a new `SectionEquivalence` test that builds a spine both ways and diffs the
+     serialized section file). **Gate (device):** the measurements below.
+
+### Device measurement plan (the point of the exercise)
+
+Flash `[env:default]` with `-DEPUB_STAGE1=1`. Test books: **Small Gods** (570 KB single spine) and
+**King's Avatar** (1,732 spines). Capture from the serial log, vs. a **master baseline** (same books,
+same device, flag off):
+
+| Metric | Where in the log | Pass criterion |
+|---|---|---|
+| Cold open (first page) ms | reader open → first `requestUpdate` | ≤ master baseline + 10% (Option 2 should be ~equal) |
+| Warm open (records present) ms | reopen → first page | ≤ master |
+| Settings-change relayout ms | font/margin change → re-paginated | **≥3× faster** than master's re-parse |
+| Peak: free + largest-contiguous heap | `createSectionFile ... arena: cap/highWater/failedAlloc`, `Min Free`/heap checkpoints | no `failedAlloc`; free/contig ≥ master (must NOT regress the 380 KB budget) |
+| content.bin size | file size on SD | book + content.bin + section cache ≤ 1.5× source EPUB |
+| Fragmentation | largest-contiguous across the full King's Avatar page-through | no downward drift vs master |
+
+**Master baseline needed** (from the user's device, flag off, same two books): cold/warm first-page
+ms, settings-change re-paginate ms, and the per-spine `arena highWater` + `Min Free` low-water — for
+Small Gods' 570 KB spine build and while paging King's Avatar. This turns every "≤ baseline" above
+into a concrete number and confirms the modeled ~40–50 KB against reality.
+
 ## Status
 
-Plan v2. Supersedes v1's per-spine+Tee shape with block-streaming + Option-2 lazy write. Next code
-step: Increment A (streaming ContentBinWriter + spine index, format v5), host-gated on the peak-RAM
-and corrupt-write gates. No code changed yet.
+Plan v2 (amended with the device-test slice). Supersedes v1. Validated against Small Gods (~1.8 MB
+if whole-spine → v1 fails) and King's Avatar (1,732 spines); master opens both, confirming the
+streaming bound. Next code step: **Increment A** (`ContentBinWriter` + spine index, format v5),
+host-gated on peak-RAM + corrupt-write.
