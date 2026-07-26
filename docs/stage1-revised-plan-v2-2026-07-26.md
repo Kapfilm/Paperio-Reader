@@ -28,12 +28,21 @@ inflated single spine** with **4,097 blocks / 91,851 words / ~400 KB text**.
 - **v2 (block stream + per-spine-on-first-visit)** = **~current + ~one block + ~7 KB** (pool+index),
   and the 1,732-spine book costs **nothing up front** (only visited spines are compiled). Bounded.
 
-**Conclusion: v2 holds on both real extremes; v1 fails on Small Gods outright.** Caveat: these are
-*modeled* peaks from measured block/word counts + the verified current-path streaming behavior —
-the exact device peak (heap fragmentation, allocator headers, CSS-resolver working set on a
-4,097-block spine) still needs a device run to confirm, which is why v2's gates include a host
-peak-RAM assertion and a device fragmentation gate. But the ORDER-OF-MAGNITUDE verdict is
-unambiguous: whole-spine materialization is ~1.8 MB on a real book; block-streaming stays ~tens of KB.
+**EMPIRICAL CONFIRMATION: the master branch (current streaming path) opens BOTH books today.** That
+is the proof, not just the model: the 570 KB single spine and the 1,732-spine swarm both work now on
+device at the streaming peak (~40–50 KB), because master never materializes a spine. This makes the
+verdict concrete rather than modeled:
+- **v1 (whole-spine materialize) would REGRESS books that currently work** — Small Gods needs ~1.8 MB
+  for its one spine, which cannot allocate on 380 KB. A plan that breaks a book master handles is a
+  non-starter.
+- **v2's job is to PRESERVE the master property** (per-block streaming, book-size-independent) while
+  adding the persisted relayout cache — not to trade it away.
+
+Caveat: the v2 *added* peak (~one block + pool + index) is modeled from measured block/word counts;
+the exact device delta (fragmentation, allocator headers, CSS-resolver working set on a 4,097-block
+spine) still needs a device run — covered by v2's host peak-RAM assertion + device fragmentation
+gate. But the order of magnitude is unambiguous: whole-spine = ~1.8 MB (fails); block-stream = tens
+of KB (matches master).
 
 ## The measured reality (numbers, not assertions)
 
