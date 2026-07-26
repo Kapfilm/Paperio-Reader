@@ -157,6 +157,13 @@ std::string sinkDump(const std::string& epub, const std::string& cacheDir, const
   return out.str();
 }
 
+std::string contentBinDump(const std::string& epub, const std::string& cacheDir, const pipeline_harness::Profile& p) {
+  std::ostringstream out;
+  const bool ok = pipeline_harness::layoutViaContentBin(epub, cacheDir, p, out);
+  EXPECT_TRUE(ok) << "content.bin replay pipeline failed for " << epub << "\n" << out.str();
+  return out.str();
+}
+
 // The settings matrix: each Profile flexes a layout-affecting knob LayoutSink reads (font, line
 // compression, paragraph spacing, alignment, viewport, hyphenation, embedded CSS). LayoutSink must
 // stay byte-identical to the fused path under every one.
@@ -249,6 +256,36 @@ TEST_P(LayoutSinkMatrix, PageDumpIsDeterministic) {
 }
 
 INSTANTIATE_TEST_SUITE_P(Matrix, LayoutSinkMatrix, testing::ValuesIn(bookProfileMatrix()),
+                         [](const testing::TestParamInfo<BookProfile>& info) {
+                           std::string n = info.param.book + "_" + info.param.profile.name;
+                           for (char& c : n) {
+                             if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
+                           }
+                           return n;
+                         });
+
+// The content.bin READ-BACK gate (#1): a Stage-2 relayout replayed from a serialized+reloaded
+// content.bin must be byte-identical to a direct parse+layout. This proves the settings-change fast
+// path (no ZIP/XML/CSS) reproduces the layout exactly, across the full corpus × settings matrix —
+// including footnotes (Moby, test_inline_footnotes), the piece WBC1 v3 added.
+class ContentBinReplayMatrix : public testing::TestWithParam<BookProfile> {};
+
+TEST_P(ContentBinReplayMatrix, ReplayMatchesDirectLayout) {
+  const BookProfile& bp = GetParam();
+  const std::string tag = bp.book + "_" + bp.profile.name;
+  const std::string epub = bp.dir + "/" + bp.book;
+  const std::string direct = sinkDump(epub, freshDir(tag + "_direct"), bp.profile);
+  const std::string replay = contentBinDump(epub, freshDir(tag + "_replay"), bp.profile);
+  if (direct != replay && std::getenv("DUMP_DIFF")) {
+    const auto base = fs::temp_directory_path() / "contentbin_diff";
+    fs::create_directories(base);
+    std::ofstream(base / (tag + ".direct.txt")) << direct;
+    std::ofstream(base / (tag + ".replay.txt")) << replay;
+  }
+  EXPECT_EQ(direct, replay) << "content.bin read-back diverges from direct layout for " << tag;
+}
+
+INSTANTIATE_TEST_SUITE_P(Matrix, ContentBinReplayMatrix, testing::ValuesIn(bookProfileMatrix()),
                          [](const testing::TestParamInfo<BookProfile>& info) {
                            std::string n = info.param.book + "_" + info.param.profile.name;
                            for (char& c : n) {

@@ -61,6 +61,14 @@ bool compileContent(const std::string& epubPath, const std::string& cacheDir, co
 // dumps is the byte-identical gate. Returns false on any pipeline failure (already-logged).
 bool layoutViaSink(const std::string& epubPath, const std::string& cacheDir, const Profile& profile, std::ostream& out);
 
+// #1 (content.bin persistence) driver: Stage-1 compile `epubPath` into a ContentSink, serialize to
+// content.bin, read it BACK, then replay the CompiledContent through a LayoutSink (reconstructing
+// the walk's BlockSink call order) and dump the pages in the SAME format as runAndDump/layoutViaSink.
+// Diffing against layoutViaSink is the read-back byte-identical gate: it proves a settings-change
+// relayout from content.bin (no ZIP/XML/CSS) reproduces the layout exactly. Returns false on failure.
+bool layoutViaContentBin(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+                         std::ostream& out);
+
 // Dump one already-built page in the canonical PAGE/LINE/IMG/TABLE/HR/FN format (shared by
 // runAndDump and layoutViaSink so both sides of the equivalence diff format identically).
 void dumpOnePage(std::ostream& out, const Page& page, uint16_t pageIndex, const std::string& cacheDir);

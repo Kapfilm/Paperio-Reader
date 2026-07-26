@@ -11,6 +11,9 @@
 #include "Epub/FootnotePreviews.h"
 #include "Epub/Page.h"
 #include "Epub/Section.h"
+#include "Epub/content/CompiledContent.h"
+#include "Epub/content/ContentSink.h"
+#include "Epub/content/LayoutSink.h"
 
 namespace pipeline_harness {
 namespace {
@@ -219,6 +222,150 @@ bool layoutViaSink(const std::string& epubPath, const std::string& cacheDir, con
     // LUT invariant: exactly one paragraph-LUT entry per emitted page (Section enforces this hard
     // check, cpp:1059). Emit a marker ONLY on violation — the fused dump never contains it, so any
     // mismatch fails the equivalence EXPECT_EQ. Proves onXPathAdvance -> emitPage stays in lockstep.
+    if (sink.paragraphLutPerPage().size() != pages.size()) {
+      out << "  [LUT-INVARIANT-FAIL lut=" << sink.paragraphLutPerPage().size() << " pages=" << pages.size() << "]\n";
+    }
+    for (uint16_t p = 0; p < pages.size(); ++p) {
+      dumpOnePage(out, *pages[p], p, cacheDir);
+    }
+  }
+  return true;
+}
+
+bool layoutViaContentBin(const std::string& epubPath, const std::string& cacheDir, const Profile& profile,
+                         std::ostream& out) {
+  GfxRenderer renderer;
+
+  auto epub = std::make_shared<Epub>(epubPath, cacheDir);
+  if (!epub->load(true)) {
+    out << "ERROR load failed\n";
+    return false;
+  }
+  epub->loadImageManifest();
+  FootnotePreviews::gather(*epub);
+
+  // STAGE 1: compile the whole book into a ContentSink, serialize to content.bin, read it back.
+  compiled::ContentSink contentSink;
+  for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
+    contentSink.beginSpine();
+    Section section(epub, i, renderer);
+    section.setStage1Sink(&contentSink);
+    if (!section.createSectionFile(profile.fontId, profile.lineCompression, profile.extraParagraphSpacing,
+                                   profile.paragraphAlignment, profile.viewportWidth, profile.viewportHeight,
+                                   profile.hyphenationEnabled, profile.embeddedStyle, profile.bionicReadingEnabled,
+                                   profile.inlineFootnotePreviews, profile.imageRendering, {}, /*skipEviction=*/true,
+                                   {})) {
+      out << "SPINE " << i << " ERROR stage-1 build failed\n";
+      return false;
+    }
+  }
+  const std::string binPath = cacheDir + "/content.bin";
+  {
+    FsFile w;
+    if (!w.openForWrite(binPath) || !compiled::writeContentBin(w, contentSink.content())) {
+      out << "ERROR content.bin write failed\n";
+      return false;
+    }
+    w.close();
+  }
+  compiled::CompiledContent content;
+  {
+    FsFile r;
+    if (!r.openForRead(binPath) || !compiled::readContentBin(r, content)) {
+      out << "ERROR content.bin read failed\n";
+      return false;
+    }
+    r.close();
+  }
+
+  // STAGE 2: replay the read-back CompiledContent through a LayoutSink — NO ZIP/XML/CSS. The dump
+  // must be byte-identical to layoutViaSink (which parses). This is the settings-change fast path.
+  out << "BOOK title=" << epub->getTitle() << " lang=" << epub->getLanguage() << " spine=" << epub->getSpineItemsCount()
+      << " toc=" << epub->getTocItemsCount() << " reliableToc=" << (epub->hasReliableToc() ? 1 : 0) << "\n";
+
+  compiled::LayoutParams params;
+  params.fontId = profile.fontId;
+  params.lineCompression = profile.lineCompression;
+  params.extraParagraphSpacing = profile.extraParagraphSpacing;
+  params.paragraphAlignment = profile.paragraphAlignment;
+  params.viewportWidth = profile.viewportWidth;
+  params.viewportHeight = profile.viewportHeight;
+  params.hyphenationEnabled = profile.hyphenationEnabled;
+  params.bionicReadingEnabled = profile.bionicReadingEnabled;
+  params.embeddedStyle = profile.embeddedStyle;
+  params.epubFilePath = epub->getPath();
+
+  for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
+    std::vector<std::unique_ptr<Page>> pages;
+    params.imageBasePath = epub->getCachePath() + "/img_" + std::to_string(i) + "_00000000_";
+    compiled::LayoutSink sink(renderer, params,
+                              [&pages](std::unique_ptr<Page> page) { pages.push_back(std::move(page)); });
+
+    const compiled::SpineContent& spine =
+        (static_cast<size_t>(i) < content.spines.size()) ? content.spines[i] : compiled::SpineContent{};
+
+    // Coalesce 8 KB split records back into logical blocks. The ContentSink writer splits an
+    // oversized TEXT block into kContinuation records (a read-time memory bound); the direct
+    // layout path (layoutViaSink) never splits — it gets ONE onBlock per logical block and does
+    // its OWN >96-word intermediate flush inside a single ParsedText. To match byte-for-byte,
+    // Stage-2 must reassemble the logical block before laying it out. We rebuild a mapping from
+    // the ORIGINAL (pre-split) block index — the one anchors/labels/footnotes/xpath reference — to
+    // the coalesced block, un-rebasing continuation footnote word indices back to the whole block.
+    struct LogicalBlock {
+      compiled::Block block;      // the merged block (first record + appended continuations)
+      uint32_t firstRecordIndex;  // index in spine.blocks of this logical block's first record
+    };
+    std::vector<LogicalBlock> logical;
+    for (uint32_t bi = 0; bi < spine.blocks.size(); ++bi) {
+      const compiled::Block& rec = spine.blocks[bi];
+      const bool isCont = (rec.flags & compiled::kContinuation) != 0 && rec.type == compiled::BlockType::Text;
+      if (isCont && !logical.empty()) {
+        compiled::Block& merged = logical.back().block;
+        const uint32_t wordBase = static_cast<uint32_t>(merged.words.size());
+        const uint32_t textBase = static_cast<uint32_t>(merged.text.size());
+        for (compiled::Word w : rec.words) {
+          w.textOff += textBase;
+          merged.words.push_back(w);
+        }
+        merged.text += rec.text;
+        for (compiled::FootnoteRef fn : rec.footnotes) {
+          fn.wordIndex += wordBase;
+          merged.footnotes.push_back(fn);
+        }
+        // preview runs on a continuation record (rare) shift by the word base too.
+        for (compiled::PreviewRun pr : rec.footnotePreviews) {
+          pr.startWord += wordBase;
+          merged.footnotePreviews.push_back(pr);
+        }
+      } else {
+        logical.push_back({rec, bi});
+      }
+    }
+
+    // Reconstruct the walk's BlockSink call order per logical block. anchors/labels/footnotes/xpath
+    // fire BEFORE onBlock (accumulated during the block's build); chapters fire AFTER onBlock.
+    for (const LogicalBlock& lb : logical) {
+      const uint32_t bi = lb.firstRecordIndex;
+      for (const auto& a : spine.anchors)
+        if (a.blockIndex == bi) sink.onAnchor(a.id);
+      for (const auto& pl : spine.pageBreakLabels)
+        if (pl.blockIndex == bi) sink.onPageBreakLabel(pl.label);
+      for (const auto& fn : lb.block.footnotes) sink.onFootnote(static_cast<int>(fn.wordIndex), fn.entry);
+      if (lb.block.hasXPath)
+        sink.onXPathAdvance(lb.block.xpath.paragraphIndex, lb.block.xpath.listItemIndex,
+                            lb.block.xpath.bodyChildByteOffset);
+      compiled::Block copy = lb.block;  // LayoutSink takes ownership; keep `content` intact
+      static const CssStyle kEmptyStyle{};
+      const CssStyle& style =
+          (lb.block.styleId < content.stylePool.size()) ? content.stylePool[lb.block.styleId] : kEmptyStyle;
+      sink.onBlock(std::move(copy), style);
+      for (const auto& ch : content.chapters)
+        if (ch.spineIndex == static_cast<uint16_t>(i) && ch.blockIndex == bi) sink.onChapter(ch.level, ch.title);
+    }
+    sink.onSpineEnd();
+
+    out << "SPINE " << i << " href=" << epub->getSpineItem(i).href << " pages=" << pages.size()
+        << " truncated=0 cssFallback=0\n";
     if (sink.paragraphLutPerPage().size() != pages.size()) {
       out << "  [LUT-INVARIANT-FAIL lut=" << sink.paragraphLutPerPage().size() << " pages=" << pages.size() << "]\n";
     }
