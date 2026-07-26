@@ -37,6 +37,20 @@ class Section {
                               bool embeddedStyle, bool bionicReadingEnabled, uint8_t imageRendering);
   uint32_t onPageComplete(std::unique_ptr<Page> page);
 
+  // Write the section-file TAIL (page-offset LUT + anchor→page map + printed-page-label map +
+  // per-page paragraph LUT) and patch the header (parseComplete + pageCount + section offsets).
+  // Shared by the parse finalize (getters from ChapterHtmlSlimParser) and the content.bin read-back
+  // build (getters from compiled::LayoutSink) — both getter sets are field-identical, so this keeps
+  // the two section files byte-identical by construction. On any I/O failure it closes+removes the
+  // file and returns false. Templated on the paragraph-LUT entry type (ParagraphLutEntry vs
+  // LayoutLutEntry: same fields xhtmlByteOffset/paragraphIndex/listItemIndex). Defined in the .cpp
+  // via explicit instantiation for both entry types.
+  template <typename LutEntry>
+  bool writeSectionTail(const std::vector<uint32_t>& lut,
+                        const std::vector<std::pair<std::string, uint16_t>>& anchors,
+                        const std::vector<std::pair<uint16_t, std::string>>& pageBreakLabelsIn,
+                        const std::vector<LutEntry>& paragraphLut, uint16_t pageCountIn, bool parseComplete);
+
   struct TocBoundary {
     int tocIndex = 0;
     uint16_t startPage = 0;

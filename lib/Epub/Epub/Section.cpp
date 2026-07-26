@@ -972,6 +972,82 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
   return BuildPhaseResult::Ok;
 }
 
+template <typename LutEntry>
+bool Section::writeSectionTail(const std::vector<uint32_t>& lut,
+                               const std::vector<std::pair<std::string, uint16_t>>& anchors,
+                               const std::vector<std::pair<uint16_t, std::string>>& pageBreakLabelsIn,
+                               const std::vector<LutEntry>& paragraphLut, uint16_t pageCountIn, bool parseComplete) {
+  const auto fail = [&](const char* msg) {
+    LOG_ERR("SCT", "%s", msg);
+    file.close();
+    Storage.remove(filePath.c_str());
+    return false;
+  };
+
+  // Page-offset LUT. 0 = a failed onPageComplete; 0xFFFFFFFF = a broken handle — neither may reach
+  // the file, where it would only surface later as a failed seek at page-load time.
+  const uint32_t lutOffset = file.position();
+  for (const uint32_t& pos : lut) {
+    if (pos == 0 || pos == UINT32_MAX) return fail("Failed to write LUT due to invalid page positions");
+    serialization::writePod(file, pos);
+  }
+
+  // Anchor → page map (TOC + footnote targets).
+  const uint32_t anchorMapOffset = file.position();
+  serialization::writePod(file, static_cast<uint16_t>(anchors.size()));
+  for (const auto& [anchor, page] : anchors) {
+    serialization::writeString(file, anchor);
+    serialization::writePod(file, page);
+  }
+
+  // Printed-page label map (EPUB pagebreak markers).
+  const uint32_t pageBreakMapOffset = file.position();
+  serialization::writePod(file, static_cast<uint16_t>(pageBreakLabelsIn.size()));
+  for (const auto& [page, label] : pageBreakLabelsIn) {
+    serialization::writePod(file, page);
+    serialization::writeString(file, label);
+  }
+
+  // Per-page paragraph LUT: {xhtmlByteOffset(u32), paragraphIndex(u16), listItemIndex(u16)}.
+  const uint32_t paragraphLutOffset = file.position();
+  if (paragraphLut.size() != static_cast<size_t>(pageCountIn)) {
+    return fail("Paragraph LUT size mismatch vs pageCount");
+  }
+  serialization::writePod(file, static_cast<uint16_t>(paragraphLut.size()));
+  for (const auto& entry : paragraphLut) {
+    serialization::writePod(file, entry.xhtmlByteOffset);
+    serialization::writePod(file, entry.paragraphIndex);
+    serialization::writePod(file, entry.listItemIndex);
+  }
+
+  // Patch the header with final parseComplete/pageCount + section offsets.
+  const size_t headerPatchStart = header::kParseComplete;
+  if (!file.seek(headerPatchStart)) return fail("Failed to seek to section header patch offset");
+  serialization::writePod(file, parseComplete);
+  serialization::writePod(file, pageCountIn);
+  serialization::writePod(file, lutOffset);
+  serialization::writePod(file, anchorMapOffset);
+  serialization::writePod(file, pageBreakMapOffset);
+  serialization::writePod(file, paragraphLutOffset);
+  file.flush();
+
+  const size_t expectedEnd = headerPatchStart + sizeof(parseComplete) + sizeof(pageCountIn) + sizeof(lutOffset) +
+                             sizeof(anchorMapOffset) + sizeof(pageBreakMapOffset) + sizeof(paragraphLutOffset);
+  if (file.position() != expectedEnd) return fail("Section header patch write failed");
+  return true;
+}
+
+// Explicit instantiations: the parse finalize uses ChapterHtmlSlimParser::ParagraphLutEntry; the
+// content.bin read-back build uses compiled::LayoutLutEntry. Both have xhtmlByteOffset /
+// paragraphIndex / listItemIndex.
+template bool Section::writeSectionTail<ChapterHtmlSlimParser::ParagraphLutEntry>(
+    const std::vector<uint32_t>&, const std::vector<std::pair<std::string, uint16_t>>&,
+    const std::vector<std::pair<uint16_t, std::string>>&,
+    const std::vector<ChapterHtmlSlimParser::ParagraphLutEntry>&, uint16_t, bool);
+template bool Section::writeSectionTail<compiled::LayoutLutEntry>(
+    const std::vector<uint32_t>&, const std::vector<std::pair<std::string, uint16_t>>&,
+    const std::vector<std::pair<uint16_t, std::string>>&, const std::vector<compiled::LayoutLutEntry>&, uint16_t, bool);
+
 Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   ChapterHtmlSlimParser& visitor = *st.visitor;
   const bool parseComplete = st.streamOk && st.finalizeOk && st.parserStreamOk;
@@ -1014,88 +1090,11 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   }
   const uint32_t fileSize = static_cast<uint32_t>(st.inflatedSize);
 
-  const uint32_t lutOffset = file.position();
-  bool hasFailedLutRecords = false;
-  // Write LUT. 0 marks a failed onPageComplete; 0xFFFFFFFF is what FsFile::position()
-  // degenerates to on a broken handle — neither must ever reach the cache file, where
-  // it would only surface later as a failed seek at page-load time.
-  for (const uint32_t& pos : st.lut) {
-    if (pos == 0 || pos == UINT32_MAX) {
-      hasFailedLutRecords = true;
-      break;
-    }
-    serialization::writePod(file, pos);
-  }
-
-  if (hasFailedLutRecords) {
-    LOG_ERR("SCT", "Failed to write LUT due to invalid page positions");
-    file.close();
-    Storage.remove(filePath.c_str());
-    return BuildPhaseResult::Failed;
-  }
-
-  // Write anchor-to-page map for fragment navigation (TOC + footnote targets)
-  const uint32_t anchorMapOffset = file.position();
+  // The section-file tail + header patch — shared with the content.bin read-back build.
   const auto& anchors = visitor.getAnchors();
-  serialization::writePod(file, static_cast<uint16_t>(anchors.size()));
-  for (const auto& [anchor, page] : anchors) {
-    serialization::writeString(file, anchor);
-    serialization::writePod(file, page);
-  }
-
-  // Write printed page label map for EPUB pagebreak markers.
-  const uint32_t pageBreakMapOffset = file.position();
-  const auto& pageBreakLabelsLocal = visitor.getPageBreakLabels();
-  serialization::writePod(file, static_cast<uint16_t>(pageBreakLabelsLocal.size()));
-  for (const auto& [page, label] : pageBreakLabelsLocal) {
-    serialization::writePod(file, page);
-    serialization::writeString(file, label);
-  }
-
-  // Write per-page paragraph LUT: count + array of {xhtmlByteOffset(u32), paragraphIndex(u16)}.
-  // The byte offset lets findXPathForParagraph seek near the target paragraph without scanning
-  // from the beginning of the XHTML file, reducing SD reads on large chapters.
-  const uint32_t paragraphLutOffset = file.position();
-  const auto& paragraphLut = visitor.getParagraphLutPerPage();
-  if (paragraphLut.size() != static_cast<size_t>(pageCount)) {
-    LOG_ERR("SCT", "Paragraph LUT size mismatch: lut=%u pageCount=%u", static_cast<uint32_t>(paragraphLut.size()),
-            static_cast<uint32_t>(pageCount));
-    file.close();
-    Storage.remove(filePath.c_str());
-    return BuildPhaseResult::Failed;
-  }
-  serialization::writePod(file, static_cast<uint16_t>(paragraphLut.size()));
-  for (const auto& entry : paragraphLut) {
-    serialization::writePod(file, entry.xhtmlByteOffset);
-    serialization::writePod(file, entry.paragraphIndex);
-    serialization::writePod(file, entry.listItemIndex);
-  }
-
-  // Patch header with final parseComplete/pageCount and offsets.
-  const size_t headerPatchStart = header::kParseComplete;
-  if (!file.seek(headerPatchStart)) {
-    LOG_ERR("SCT", "Failed to seek to section header patch offset %u", header::kParseComplete);
-    file.close();
-    Storage.remove(filePath.c_str());
-    return BuildPhaseResult::Failed;
-  }
-  serialization::writePod(file, parseComplete);
-  serialization::writePod(file, pageCount);
-  serialization::writePod(file, lutOffset);
-  serialization::writePod(file, anchorMapOffset);
-  serialization::writePod(file, pageBreakMapOffset);
-  serialization::writePod(file, paragraphLutOffset);
-  file.flush();
-
-  const size_t expectedHeaderPatchEnd = headerPatchStart + sizeof(parseComplete) + sizeof(pageCount) +
-                                        sizeof(lutOffset) + sizeof(anchorMapOffset) + sizeof(pageBreakMapOffset) +
-                                        sizeof(paragraphLutOffset);
-  if (file.position() != expectedHeaderPatchEnd) {
-    LOG_ERR("SCT", "Section header patch write failed: wrote %u bytes at offset %u",
-            static_cast<unsigned>(file.position() - headerPatchStart), static_cast<unsigned>(headerPatchStart));
-    file.close();
-    Storage.remove(filePath.c_str());
-    return BuildPhaseResult::Failed;
+  if (!writeSectionTail(st.lut, anchors, visitor.getPageBreakLabels(), visitor.getParagraphLutPerPage(),
+                        static_cast<uint16_t>(pageCount), parseComplete)) {
+    return BuildPhaseResult::Failed;  // writeSectionTail already closed+removed the file
   }
 
   if (st.cssParser) {
