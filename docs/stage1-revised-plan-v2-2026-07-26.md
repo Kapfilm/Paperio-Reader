@@ -5,6 +5,36 @@ Supersedes `stage1-revised-plan-2026-07-26.md`. Grounded in a measured memory mo
 ("per-spine writer + IBlockSource sliding window + Tee") is **not bounded enough** and the Tee
 carries avoidable correctness risk. This version fixes both.
 
+## Validation against two real stress books (measured 2026-07-26)
+
+Two real EPUBs, one per hard reality, analyzed directly (block/word counts from the actual XHTML):
+
+**(a) Pratchett — Small Gods: the giant single spine.** 2 spine items, but ONE is a **570 KB
+inflated single spine** with **4,097 blocks / 91,851 words / ~400 KB text**.
+- **v1 (materialize one spine)** = `4097·152 + 8·91851 + (409385+91851)` = **~1.77 MB resident** =
+  **4.8× the entire 380 KB RAM → hard allocation failure; the book cannot open.** This alone
+  disqualifies v1 (and any whole-spine approach) on a *real, shipping* book.
+- **Current path** = the 570 KB never enters RAM (inflated to an SD temp file, fed 1 KB at a time,
+  pages streamed to disk) → **~50 KB resident**, same as any spine.
+- **v2 (block stream)** = one block at a time; avg block here is ~22 words, worst fat block a few KB
+  → **~current + ~5–8 KB**. Bounded. Opens fine.
+
+**(b) King's Avatar — the spine swarm.** **1,732 spine items**, 24 MB total inflated, median ~14 KB
+/ max ~29 KB per spine (~151 blocks / ~3,860 words for a median spine).
+- **v1 (per-spine, one median spine)** = **~74 KB resident** — already over the current ~40–50 KB
+  whole-build peak, on a *median* spine, and pure waste vs. streaming.
+- **Per-spine content.bin FILES** would be **1,732 tiny SD files** (FAT/dir overhead, slow
+  enumeration) — v2 uses ONE content.bin + a **1,732×u32 = 6.8 KB** offset index (trivial, resident).
+- **v2 (block stream + per-spine-on-first-visit)** = **~current + ~one block + ~7 KB** (pool+index),
+  and the 1,732-spine book costs **nothing up front** (only visited spines are compiled). Bounded.
+
+**Conclusion: v2 holds on both real extremes; v1 fails on Small Gods outright.** Caveat: these are
+*modeled* peaks from measured block/word counts + the verified current-path streaming behavior —
+the exact device peak (heap fragmentation, allocator headers, CSS-resolver working set on a
+4,097-block spine) still needs a device run to confirm, which is why v2's gates include a host
+peak-RAM assertion and a device fragmentation gate. But the ORDER-OF-MAGNITUDE verdict is
+unambiguous: whole-spine materialization is ~1.8 MB on a real book; block-streaming stays ~tens of KB.
+
 ## The measured reality (numbers, not assertions)
 
 Sizes on ESP32-C3 (32-bit; vector hdr 12 B, string 12 B inline + heap when >15 chars):
