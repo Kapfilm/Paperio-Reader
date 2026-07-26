@@ -111,5 +111,26 @@ they exist, closing the loop).
 
 ## Status
 
-Design only — no code yet. Next: implement increment 1 (WBC1 fingerprint field) behind the flag,
-host-gated. Device validation deferred (needs hardware).
+- **Increment 1 DONE** (`ea9f7979`): WBC1 v4 stores the source ZIP content fingerprint; `Epub`
+  gained a public `zipContentFingerprint()`; the harness stamps it on compile and rejects a
+  mismatch on replay. Host suite 539/539; synthetic replay matrix still byte-identical.
+- **Increments 2–4 NOT started** (checkpointed here): they modify `Section::createSectionFile`
+  (write `content.bin`; add the read-back fast path) — the shipping build path. Deferred because
+  they need device validation (cold/warm open ms, background-build slicing under the real budget,
+  SD write cost) that the host-only environment cannot provide.
+
+### Next session / on hardware — pick up at increment 2
+
+1. **Incr 2 (write, additive)**: behind `-DEPUB_STAGE1`, attach a `ContentSink` during the build and
+   write `<cachePath>/content.bin` (stamped via `Epub::zipContentFingerprint`). Keep the LayoutSink
+   page production unchanged (transitional fan-out or a separate compile) so nothing regresses.
+   Host gate: section cache byte-identical flag-on vs flag-off; content.bin fingerprint valid.
+2. **Incr 3 (read-back fast path)**: in `runBuildSetup`/`runBuildParse`, if a fingerprint-valid
+   `content.bin` exists, replay it through the LayoutSink and SKIP the parser (reuse the exact logic
+   in `PipelineRunner::replayFromContentBin`, incl. the kContinuation coalescing). Host gate: section
+   cache byte-identical to the direct path. Device gate: the ~8–9× win realized on a settings change.
+2. **Incr 4**: retire the book-keyed HTML cache once content.bin covers it (Phase 3 step 6); measure
+   storage vs the ≤1.5×-source budget.
+
+The harness `compileToContentBin`/`replayFromContentBin` are the reference implementations — factor
+the Section wiring to share that logic so device and host stay in lockstep.
