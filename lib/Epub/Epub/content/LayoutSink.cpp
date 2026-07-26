@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "BlockStreamReader.h"
 #include "Epub/Page.h"
 #include "Epub/ParsedText.h"
 #include "Epub/blocks/ImageBlock.h"
@@ -860,6 +861,35 @@ void LayoutSink::onSpineEnd() {
   if (currentPage_ && !currentPage_->elements.empty()) {
     emitPage(0u);
   }
+}
+
+bool replaySpine(BlockStreamReader& reader, uint32_t spineIndex, const std::vector<Chapter>& chapters,
+                 LayoutSink& sink) {
+  if (!reader.openSpine(spineIndex)) return false;
+  const auto& anchors = reader.spineAnchors();  // keyed by first-record index of a logical block
+  const auto& labels = reader.spineLabels();
+
+  Block lb;
+  while (reader.nextLogicalBlock(lb)) {
+    const uint32_t bi = reader.currentFirstRecordIndex();
+    // anchors/labels/footnotes/xpath fire BEFORE onBlock (accumulated during the block's build);
+    // chapters fire AFTER onBlock. Read lb's fields before the move into onBlock.
+    for (const auto& a : anchors)
+      if (a.blockIndex == bi) sink.onAnchor(a.id);
+    for (const auto& pl : labels)
+      if (pl.blockIndex == bi) sink.onPageBreakLabel(pl.label);
+    for (const auto& fn : lb.footnotes) sink.onFootnote(static_cast<int>(fn.wordIndex), fn.entry);
+    if (lb.hasXPath) sink.onXPathAdvance(lb.xpath.paragraphIndex, lb.xpath.listItemIndex, lb.xpath.bodyChildByteOffset);
+    static const CssStyle kEmptyStyle{};
+    const CssStyle& style = (lb.styleId < reader.stylePool().size()) ? reader.stylePool()[lb.styleId] : kEmptyStyle;
+    sink.onBlock(std::move(lb), style);
+    for (const auto& ch : chapters)
+      if (ch.spineIndex == static_cast<uint16_t>(spineIndex) && ch.blockIndex == bi)
+        sink.onChapter(ch.level, ch.title);
+  }
+  if (!reader.ok()) return false;
+  sink.onSpineEnd();
+  return true;
 }
 
 }  // namespace compiled

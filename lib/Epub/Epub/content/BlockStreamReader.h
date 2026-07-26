@@ -31,6 +31,8 @@
 
 namespace compiled {
 
+class LayoutSink;  // fwd — replaySpine drives one; defined in LayoutSink.h
+
 class BlockStreamReader {
  public:
   BlockStreamReader() = default;
@@ -105,5 +107,14 @@ class BlockStreamReader {
   bool haveLookahead_ = false;
   Block lookahead_;
 };
+
+// Replay spine `spineIndex` of an OPEN BlockStreamReader through `sink`, reproducing the walk's
+// BlockSink call order (anchors/labels/footnotes/xpath before onBlock, chapters after) so the
+// LayoutSink produces the same pages a live parse would. Streams one logical block at a time — no
+// spine materialized. `chapters` is the book-level chapter table (small; read once via
+// reader.readChapters). Returns false on any read error (check reader.ok()). Shared by the host
+// harness (replayFromContentBin) and the device Section read-back build so they never drift.
+bool replaySpine(BlockStreamReader& reader, uint32_t spineIndex, const std::vector<Chapter>& chapters,
+                 LayoutSink& sink);
 
 }  // namespace compiled

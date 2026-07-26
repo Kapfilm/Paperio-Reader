@@ -321,7 +321,6 @@ bool replayFromContentBin(const std::string& epubPath, const std::string& cacheD
   params.embeddedStyle = profile.embeddedStyle;
   params.epubFilePath = epub->getPath();
 
-  const auto& stylePool = reader.stylePool();
   for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
     std::vector<std::unique_ptr<Page>> pages;
     params.imageBasePath = epub->getCachePath() + "/img_" + std::to_string(i) + "_00000000_";
@@ -329,35 +328,14 @@ bool replayFromContentBin(const std::string& epubPath, const std::string& cacheD
                               [&pages](std::unique_ptr<Page> page) { pages.push_back(std::move(page)); });
 
     if (static_cast<uint32_t>(i) < reader.spineCount()) {
-      if (!reader.openSpine(static_cast<uint32_t>(i))) {
-        out << "SPINE " << i << " ERROR openSpine failed\n";
+      // The shared per-spine replay driver (also used by the device Section read-back build).
+      if (!compiled::replaySpine(reader, static_cast<uint32_t>(i), chapters, sink)) {
+        out << "SPINE " << i << " ERROR block stream replay failed\n";
         return false;
       }
-      const auto& anchors = reader.spineAnchors();  // keyed by first-record index of a logical block
-      const auto& labels = reader.spineLabels();
-
-      compiled::Block lb;
-      while (reader.nextLogicalBlock(lb)) {
-        const uint32_t bi = reader.currentFirstRecordIndex();
-        // anchors/labels/footnotes/xpath fire BEFORE onBlock; chapters AFTER.
-        for (const auto& a : anchors)
-          if (a.blockIndex == bi) sink.onAnchor(a.id);
-        for (const auto& pl : labels)
-          if (pl.blockIndex == bi) sink.onPageBreakLabel(pl.label);
-        for (const auto& fn : lb.footnotes) sink.onFootnote(static_cast<int>(fn.wordIndex), fn.entry);
-        if (lb.hasXPath) sink.onXPathAdvance(lb.xpath.paragraphIndex, lb.xpath.listItemIndex, lb.xpath.bodyChildByteOffset);
-        static const CssStyle kEmptyStyle{};
-        const CssStyle& style = (lb.styleId < stylePool.size()) ? stylePool[lb.styleId] : kEmptyStyle;
-        sink.onBlock(std::move(lb), style);
-        for (const auto& ch : chapters)
-          if (ch.spineIndex == static_cast<uint16_t>(i) && ch.blockIndex == bi) sink.onChapter(ch.level, ch.title);
-      }
-      if (!reader.ok()) {
-        out << "SPINE " << i << " ERROR block stream read failed\n";
-        return false;
-      }
+    } else {
+      sink.onSpineEnd();  // no records for this spine
     }
-    sink.onSpineEnd();
 
     out << "SPINE " << i << " href=" << epub->getSpineItem(i).href << " pages=" << pages.size()
         << " truncated=0 cssFallback=0\n";
