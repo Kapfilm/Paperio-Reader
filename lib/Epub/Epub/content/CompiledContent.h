@@ -8,11 +8,10 @@
 // reads this and produces the per-settings section caches, so a font/margin change
 // never re-runs ZIP/XML/CSS.
 //
-// This header + CompiledContent.cpp are sub-step 2a: the in-memory model and the
-// content.bin writer/reader with a host round-trip test. The rendererless Stage-1
-// pass that *fills* this model (from ChapterHtmlSlimParser) and the anchor/chapter/
-// char-offset tables land in later sub-steps; header flags are reserved for them.
-// Nothing here is wired into a build yet (guarded by EPUB_STAGE1 at the call sites).
+// This header + CompiledContent.cpp define the in-memory model and the content.bin writer/reader
+// (with a host round-trip test). ContentSink fills the model from the walk; LayoutSink lays it out.
+// content.bin is produced/consumed by the host harness today; wiring it into the device Section
+// build is a pending step (see docs/parser-stage1-content-bin-device-wiring-design-2026-07-26.md).
 
 #include <HalStorage.h>  // FsFile
 
@@ -113,14 +112,13 @@ enum BlockFlags : uint8_t {
   kDirectionShift = 3,
   kDirectionMask = 0b11 << 3,
   // This (empty) block came from a <br> section separator: Stage-2 injects a blank
-  // line's worth of top margin when merging it into the following paragraph, exactly
-  // as the fused parser's empty-block-reuse path does.
+  // line's worth of top margin when merging it into the following paragraph.
   kFromBrElement = 1 << 5,
   // Continuation of the previous TEXT block, produced by the writer's 8 KB
   // split-at-write; Stage-2 treats the run as one logical paragraph.
   kContinuation = 1 << 6,
-  // Block is inside a <pre> element: Stage-2 suppresses the extra inter-paragraph spacing
-  // (the fused path gates it on preUntilDepth), so preformatted lines are single-spaced.
+  // Block is inside a <pre> element: Stage-2 suppresses the extra inter-paragraph spacing,
+  // so preformatted lines are single-spaced.
   kPreformatted = 1 << 7,
 };
 

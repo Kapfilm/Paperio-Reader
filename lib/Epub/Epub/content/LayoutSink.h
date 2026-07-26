@@ -1,21 +1,17 @@
 #pragma once
-// LayoutSink — the Stage-2 (measure+paginate) consumer of the walk's BlockSink stream
-// (Phase 3 step 5 of docs/compiled-book-pipeline-plan.md; design in
-// docs/parser-stage1-step5-design.md and stage1-extraction-design.md).
+// LayoutSink — the Stage-2 (measure + paginate) consumer of the walk's BlockSink stream
+// (docs/compiled-book-pipeline-plan.md Phase 3; design in docs/parser-stage1-step5-design.md).
 //
-// Given the walk's onBlock(Block&&, CssStyle&) stream, LayoutSink reproduces the SAME
-// sequence of Page objects the fused ChapterHtmlSlimParser layout produces via its
-// completePageFn — byte-identical, across the settings matrix. It owns all the
-// settings-dependent layout state the fused parser holds (currentTextBlock, currentPage,
-// float state, anchor/label/LUT tables) and holds a GfxRenderer& for measurement.
+// Given the block stream onBlock(Block&&, CssStyle&) / onAnchor / onChapter / onFootnote /
+// onPageBreakLabel / onXPathAdvance / onSpineEnd, LayoutSink produces the sequence of Page objects
+// for a spine (delivered via completePageFn) and the anchor / page-label / paragraph-LUT tables.
+// It owns all the settings-dependent layout state (current text block, current page, float state,
+// margin-merge state) and holds a GfxRenderer& for word measurement.
 //
-// Step 5 is ADDITIVE: LayoutSink is a SECOND, parallel consumer. The fused layout path in
-// ChapterHtmlSlimParser is untouched and keeps shipping. The equivalence test diffs
-// LayoutSink's page dump against the fused goldens. The actual unify — removing the fused
-// inline layout and driving only sinks, extracting HtmlWalkCore — is step 6.
-//
-// Compiles unconditionally but is inert on device: nothing on the shipping path constructs
-// a LayoutSink (exactly like ContentSink). Only the host equivalence test / driver drive it.
+// This is the SOLE layout path: the parser's XHTML walk drives a LayoutSink directly on the
+// device/section-cache build, and the content.bin replay drives one from persisted records
+// (test/epub_pipeline). The stream is settings-independent; all pixel/position resolution is
+// LayoutSink's job, so a font/margin/hyphenation/bionic change re-runs only Stage-2.
 
 #include <cstdint>
 #include <functional>
@@ -39,8 +35,8 @@ class TextBlock;
 
 namespace compiled {
 
-// The settings-dependent inputs the fused parser takes as ctor args. Bundled so the sink's
-// layout math matches the fused path exactly (same font, viewport, spacing, alignment).
+// The settings-dependent layout inputs (font, viewport, spacing, alignment, hyphenation, bionic,
+// embedded-CSS honoring, size ladder, image/epub paths). Bundled as the sink's ctor args.
 struct LayoutParams {
   int fontId = 0;
   float lineCompression = 1.0f;
@@ -59,8 +55,9 @@ struct LayoutParams {
   std::string epubFilePath;  // for ImageBlock lazy extraction (epub->getPath())
 };
 
-// Per-page XPath LUT entry — mirrors ChapterHtmlSlimParser::ParagraphLutEntry so the
-// equivalence test can compare the two tables directly.
+// Per-page XPath LUT entry: the walk's paragraph/list-item counters + body-child byte offset at
+// each page break, for reading-progress and xpath navigation. Field-compatible with
+// ChapterHtmlSlimParser::ParagraphLutEntry (the getter adapts between them).
 struct LayoutLutEntry {
   uint32_t xhtmlByteOffset = 0;
   uint16_t paragraphIndex = 0;
@@ -104,32 +101,29 @@ class LayoutSink : public BlockSink {
   // font-size multiplier is already folded into `style` by the producer (settings-independent).
   BlockStyle buildBlockStyle(const CssStyle& style, bool isHeading) const;
   // Rebuild a ParsedText from a materialized text block, adding words through the same
-  // ParsedText::addWord path the fused walk uses (and replaying the >96-word split).
+  // ParsedText::addWord path, replaying the >96-word mid-block flush.
   void layoutTextBlock(Block&& block, const BlockStyle& blockStyle);
   // Abbreviate each inline footnote preview run in `block` to the viewport width, in place.
-  // Stage-1 stores the FULL preview text (settings-independent); this reproduces the fused
-  // walk's width-based abbreviation (viewport*2 px budget, trailing ellipsis) at layout time,
-  // where the font/viewport are known — keeping content.bin settings-independent.
+  // Stage-1 stores the FULL preview text (settings-independent); the width-based abbreviation
+  // (viewport*2 px budget, trailing ellipsis) is font/viewport-dependent so it happens here.
   void abbreviatePreviewRuns(Block& block) const;
   // Place a standalone (centered, full-width) block image: resolve display dims via the shared
-  // helper, apply the pending-block spacing, page-break, and push a PageImage. Mirrors the
-  // fused <img> block path (ChapterHtmlSlimParser.cpp block-image branch).
+  // helper, apply the pending-block spacing, page-break, and push a PageImage.
   void placeBlockImage(const Block& block, const CssStyle& imgStyle);
-  // Emit a horizontal rule (centered 25%->75%, half-line margins above/below), mirroring the
-  // fused <hr> handler (cpp:1630-1654).
+  // Emit a horizontal rule (centered 25%->75%, half-line margins above/below).
   void placeHr();
   // Lay out a Table block: choose grid vs paragraph fallback, wrap cells, pack fragments via the
-  // shared compiled::packTableFragments. Mirrors emitBufferedTable/emitTableAsFragments.
+  // shared compiled::packTableFragments.
   void placeTable(const Block& block);
-  // Paragraph fallback: each cell's words become a sequential paragraph (emitTableAsParagraphs).
+  // Paragraph fallback: each cell's words become a sequential paragraph.
   void placeTableAsParagraphs(const Block& block);
   // Build a wrapped ParsedText for a compiled table cell's words at the given wrap width.
   std::unique_ptr<ParsedText> buildCellText(const TableCell& cell) const;
-  // Allocate the next image cache path (imageBasePath + counter + ext), matching the fused walk.
+  // Allocate the next image cache path (imageBasePath + counter + ext).
   std::string nextImageCachePath(const std::string& entryPath);
   // Attach a block's inline float image (its inlineImage* fields) beside the paragraph text:
   // page-break if it won't fit, push a deferred PageImage, set the block's float zone and the
-  // active-float state. Mirrors attachPendingFloatImage (cpp:518-566).
+  // active-float state.
   void attachFloatImage(const Block& block, const CssStyle& imgStyle, BlockStyle& bs);
 
   GfxRenderer& renderer_;
@@ -148,20 +142,19 @@ class LayoutSink : public BlockSink {
   FontSizeLadder fontSizeLadder_;
   const std::string imageBasePath_;
   const std::string epubFilePath_;
-  int imageCounter_ = 0;  // per-spine image counter, mirrors the parser's imageCounter
+  int imageCounter_ = 0;  // per-spine image counter
 
-  // Empty-block merge reconstruction. The producer emits empty wrapper / <br> blocks as a
-  // 1:1 transcript; the fused path merges their styles into the following paragraph (reusing
-  // its empty currentTextBlock). We instead hold the accumulated merged style across empty
-  // blocks and fold it into the next non-empty block's style — replaying the same margins.
+  // Empty-block merge (CSS margin collapsing across wrapper elements). The producer emits empty
+  // wrapper / <br> blocks as a 1:1 transcript; we hold the accumulated merged style across a run
+  // of empty blocks and fold it into the next non-empty block's style, collapsing their margins.
   bool hasPendingMerge_ = false;
   BlockStyle pendingMergeStyle_;
   bool pendingMergeFromBr_ = false;
-  // Alignment context a <br> block inherits (fused: the current block's alignment at <br>).
+  // Alignment context a following <br> block inherits (the current block's alignment at the <br>).
   CssTextAlign lastBlockAlignment_ = CssTextAlign::Justify;
   bool lastBlockAlignmentDefined_ = false;
 
-  // Layout state (moved from ChapterHtmlSlimParser — see the design doc's state table).
+  // Layout state.
   std::unique_ptr<ParsedText> currentTextBlock_;
   std::unique_ptr<Page> currentPage_;
   int16_t currentPageNextY_ = 0;
@@ -180,9 +173,8 @@ class LayoutSink : public BlockSink {
   bool activeFloatIsRight_ = false;
 
   // Footnotes anchored to a word position in the block currently being laid out. onFootnote
-  // buffers them (it fires while the producer builds the block, before that block's onBlock);
-  // addLineToPage assigns each to the page once layout reaches its word index, with a makePages
-  // fallback for the tail — mirroring the fused pendingFootnotes machinery.
+  // buffers them (it fires while the block is built, before that block's onBlock); addLineToPage
+  // assigns each to the page once layout reaches its word index, with a makePages tail fallback.
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes_;
 
   // Side-output tables (pulled by the caller after onSpineEnd).
@@ -191,7 +183,7 @@ class LayoutSink : public BlockSink {
   std::vector<std::pair<uint16_t, std::string>> pageBreakLabels_;
   std::vector<LayoutLutEntry> paragraphLutPerPage_;
 
-  // XPath indices at page-break time (fed by onChapter/onBlock in later commits).
+  // XPath counters at page-break time (fed by onXPathAdvance), recorded into the per-page LUT.
   uint16_t xpathParagraphIndex_ = 0;
   uint16_t xpathListItemIndex_ = 0;
   uint32_t lastBodyChildByteOffset_ = 0;

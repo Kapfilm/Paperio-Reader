@@ -4,8 +4,8 @@
 
 namespace compiled {
 
-// Extracted verbatim from ChapterHtmlSlimParser::emitTableAsFragments' packing loop
-// (cpp:2951-3027). Keep in lockstep with that method until step 6 removes the fused copy.
+// Greedily pack pre-wrapped table rows into PageTableFragments, page-breaking between rows so a
+// fragment never overflows the viewport (over-tall single rows fall back via ctx.onOversizeRow).
 void packTableFragments(const std::vector<TableLayoutRow>& rows, const uint16_t totalWidth,
                         const uint16_t viewportHeight, const bool hasBorder, TablePageContext& ctx) {
   ctx.ensurePage();

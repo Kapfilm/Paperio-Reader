@@ -2,8 +2,8 @@
 
 namespace compiled {
 
-// Extracted verbatim from ChapterHtmlSlimParser.cpp's <img> block-image sizing (the branches
-// formerly at cpp:1225-1299). Keep in lockstep with that path until step 6 removes the copy.
+// Resolve an image's on-page display size from its intrinsic dims + CSS width/height, clamped to
+// the container/viewport while preserving aspect ratio. See ImageLayout.h for the branch rules.
 ImageDisplaySize computeImageDisplaySize(const int intrinsicW, const int intrinsicH, const CssStyle& imgStyle,
                                          const int viewportWidth, const int viewportHeight, const int containerWidth,
                                          const float emSize) {

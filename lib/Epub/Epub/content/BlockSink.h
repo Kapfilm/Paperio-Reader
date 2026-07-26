@@ -1,20 +1,20 @@
 #pragma once
 // Coarse push seam between the settings-independent XHTML walk and its consumers
-// (Phase 3 step 2c; design in docs/stage1-extraction-design.md). One handoff per
-// SEMANTIC block — a fully-built compiled::Block — mirroring microreader's
-// whole-Paragraph ParagraphSink. Two implementations:
-//   - LayoutSink   (unflagged): onBlock() runs resolveBlockFont + makePages, i.e.
-//                  today's measure+paginate, byte-identical to the fused path.
-//   - ContentSink  (behind EPUB_STAGE1): onBlock() interns the style and streams the
-//                  block (split-at-write) into content.bin.
-// The walk core NEVER touches GfxRenderer; all pixel/position resolution is the
-// sink's job. Block boundaries here are semantic (paragraph), not page-fit: the
-// >96-word mid-flush split and the 8 KB serialization split live inside the
-// respective sinks, not in the seam.
+// (design in docs/stage1-extraction-design.md). One handoff per SEMANTIC block — a
+// fully-built compiled::Block. Two implementations:
+//   - LayoutSink  — Stage-2: onBlock() measures + paginates into Pages.
+//   - ContentSink — Stage-1 persist: interns the style and streams the block
+//                   (split-at-write) into content.bin.
+// The walk NEVER touches GfxRenderer; all pixel/position resolution is the sink's
+// job. Block boundaries here are semantic (paragraph), not page-fit: the >96-word
+// mid-flush split and the 8 KB serialization split live inside the respective
+// sinks, not in the seam.
 //
-// This is the push side. The pull side (IBlockSource, random-access with a sliding-
-// window cache over content.bin) lands with the later Stage-2-reads-content.bin
-// step; see docs/stage1-extraction-design.md "Pull seam".
+// This is the PUSH side (live walk → sink). A PULL side (IBlockSource: random-access
+// over a persisted content.bin, so Stage-2 reads records without the live walk and
+// without holding the whole book in RAM) is DESIGNED but NOT YET IMPLEMENTED — see
+// docs/stage1-reassessment-2026-07-26.md, which makes it a prerequisite for the
+// device wiring.
 
 #include <cstdint>
 #include <string>

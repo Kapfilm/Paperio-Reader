@@ -1,12 +1,10 @@
 #pragma once
-// Shared image display-dimension computation (Phase 3 step 5, docs/parser-stage1-step5-design.md).
+// Shared image display-dimension computation (docs/parser-stage1-step5-design.md).
 //
-// The fused <img> path and LayoutSink both need to turn an image's INTRINSIC dimensions into
-// on-page DISPLAY dimensions, honoring CSS width/height and clamping to the container/viewport
-// while preserving aspect ratio. That math is settings-dependent (viewport, container inset,
-// em size), so it is NOT baked into content.bin — it is Stage-2 layout. Extracting it here lets
-// the fused parser and LayoutSink share ONE implementation instead of two copies drifting apart;
-// it is also the natural seam for the step-6 unify.
+// Turns an image's INTRINSIC dimensions into on-page DISPLAY dimensions, honoring CSS width/height
+// and clamping to the container/viewport while preserving aspect ratio. That math is
+// settings-dependent (viewport, container inset, em size), so it is NOT baked into content.bin — it
+// is Stage-2 layout. Both LayoutSink's block-image and float-image paths call it.
 //
 // Pure function: no walk/layout state, no GfxRenderer. Inputs are the intrinsic dims, the image's
 // resolved CSS (width/height only — the rest is ignored), and the current viewport/container/em.
@@ -22,8 +20,7 @@ struct ImageDisplaySize {
   int height = 0;
 };
 
-// Resolve an image's on-page display size. Mirrors the fused parser's <img> sizing
-// (ChapterHtmlSlimParser.cpp block-image path) byte-for-byte:
+// Resolve an image's on-page display size:
 //   - both CSS width+height: resolve both, clamp to container/viewport preserving ratio;
 //   - CSS height only: derive width from aspect ratio, clamp;
 //   - CSS width only: derive height from aspect ratio, clamp;

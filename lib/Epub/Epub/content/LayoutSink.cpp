@@ -49,9 +49,7 @@ LayoutSink::LayoutSink(GfxRenderer& renderer, LayoutParams params,
 
 LayoutSink::~LayoutSink() = default;
 
-// --- Layout helpers, copied verbatim from ChapterHtmlSlimParser (renderer-local). ---
-// These reproduce the fused path's font/line-height/page-emit math exactly; keep them in
-// lockstep with the parser until step 6 removes the fused originals.
+// --- Layout helpers: font resolution, line-height, page emission. ---
 
 void LayoutSink::resolveBlockFont(BlockStyle& bs) {
   if (bs.fontResolved) return;
@@ -95,12 +93,12 @@ void LayoutSink::emitPage(uint32_t xhtmlByteOffset) {
 
 BlockStyle LayoutSink::buildBlockStyle(const CssStyle& style, const bool isHeading) const {
   const float emSize = static_cast<float>(renderer_.getFontAscenderSize(fontId_));
-  // Headings default to Center (cpp:1582); blocks default to paragraphAlignment (cpp:1563).
+  // Headings default to Center; other blocks default to the user's paragraphAlignment.
   const CssTextAlign defaultAlign = isHeading ? CssTextAlign::Center : static_cast<CssTextAlign>(paragraphAlignment_);
   BlockStyle bs = BlockStyle::fromCssStyle(style, emSize, defaultAlign, viewportWidth_);
-  if (isHeading) bs.textAlignDefined = true;  // cpp:1583
-  // Publisher text-align overrides the default when embeddedStyle and the user left alignment
-  // at None (cpp:1584-1586 for headings, cpp:1644-1648 for blocks — identical condition).
+  if (isHeading) bs.textAlignDefined = true;
+  // Publisher text-align overrides the default when embedded CSS is honored and the user left
+  // alignment at None (same condition for headings and blocks).
   if (embeddedStyle_ && style.hasTextAlign() &&
       paragraphAlignment_ == static_cast<uint8_t>(CssTextAlign::None)) {
     bs.alignment = style.textAlign;
@@ -109,8 +107,9 @@ BlockStyle LayoutSink::buildBlockStyle(const CssStyle& style, const bool isHeadi
   return bs;
 }
 
-// Port of ChapterHtmlSlimParser::addLineToPage (cpp:2539). Image/float branches land in
-// commit 3; the text-line placement + page-break + footnote assignment are complete here.
+// Place one laid-out line on the current page: advance the y cursor, break to a new page when the
+// line would overflow, shift the line right past any active left-float zone, and assign to this
+// page any footnotes whose anchor word has now been laid out.
 int LayoutSink::addLineToPage(const std::shared_ptr<TextBlock>& line, const bool lineEndsWithHyphenatedWord,
                               const bool suppressHyphenationRetry) {
   int lineHeight = effectiveLineHeight(line->getBlockStyle());
@@ -137,7 +136,7 @@ int LayoutSink::addLineToPage(const std::shared_ptr<TextBlock>& line, const bool
   const bool isFirstLineOfBlock = (wordsExtractedInBlock_ == 0);
   wordsExtractedInBlock_ += line->wordCount();
 
-  // Assign any footnotes whose anchor word has now been laid out to the current page (cpp:2540).
+  // Assign any footnotes whose anchor word has now been laid out to the current page.
   auto footnoteIt = pendingFootnotes_.begin();
   while (footnoteIt != pendingFootnotes_.end() && footnoteIt->first <= wordsExtractedInBlock_) {
     currentPage_->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
@@ -146,8 +145,8 @@ int LayoutSink::addLineToPage(const std::shared_ptr<TextBlock>& line, const bool
   pendingFootnotes_.erase(pendingFootnotes_.begin(), footnoteIt);
 
   // Apply horizontal left inset. For lines overlapping an active LEFT float zone, also shift
-  // right by the zone width so text starts after the image (cpp:2580-2593). Right floats narrow
-  // the line width (handled in widthForLine) but don't shift text.
+  // right by the zone width so text starts after the image. Right floats narrow the line width
+  // (handled in widthForLine) but don't shift text.
   int16_t xOffset = line->getBlockStyle().leftInset();
   {
     const auto& bs = line->getBlockStyle();
@@ -161,7 +160,7 @@ int LayoutSink::addLineToPage(const std::shared_ptr<TextBlock>& line, const bool
   currentPage_->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY_));
 
   // On the first line of a block with a deferred inline float image, fix the image's yPos to the
-  // line top (cpp:2596-2603).
+  // line top.
   if (isFirstLineOfBlock && deferredPageImage_) {
     deferredPageImage_->yPos = static_cast<int16_t>(currentPageNextY_);
     deferredPageImage_.reset();
@@ -171,9 +170,9 @@ int LayoutSink::addLineToPage(const std::shared_ptr<TextBlock>& line, const bool
   return static_cast<int>(ParsedText::LineProcessResult::Accepted);
 }
 
-// Port of ChapterHtmlSlimParser::makePages (cpp:2609), text path. Active-float propagation
-// (cpp:2664-2699) lands in commit 3; everything else — font resolve, margin collapse,
-// effective width, layout, bottom spacing — is reproduced here.
+// Lay out the current text block into lines and place them: font resolution, CSS margin collapse
+// with the previous block, effective width from insets, active-float zone propagation across
+// blocks the float spans, line breaking (via addLineToPage), and bottom spacing.
 void LayoutSink::makePages() {
   if (layoutFailed_) {
     currentTextBlock_.reset();
@@ -209,9 +208,9 @@ void LayoutSink::makePages() {
   const uint16_t effectiveWidth =
       (horizontalInset < viewportWidth_) ? static_cast<uint16_t>(viewportWidth_ - horizontalInset) : viewportWidth_;
 
-  // Active-float propagation (cpp:2664-2699). A tall float spans several blocks: it is attached
-  // to the first (originating) block; here we re-inject the same zone into every later block that
-  // still overlaps it vertically, then drop it once layout passes the image bottom.
+  // Active-float propagation. A tall float spans several blocks: it is attached to the first
+  // (originating) block; here we re-inject the same zone into every later block that still overlaps
+  // it vertically, then drop it once layout passes the image bottom.
   const bool isOriginatingBlock = static_cast<bool>(deferredPageImage_);
   if (activeFloatBottom_ > 0 && currentPageNextY_ >= activeFloatBottom_) {
     activeFloatBottom_ = 0;  // layout has moved past the image
@@ -227,9 +226,8 @@ void LayoutSink::makePages() {
   }
 
   // Pre-correct float zone coordinates before line-breaking so widthForLine and the xOffset
-  // check in addLineToPage use the same y values (cpp:2683-2699). Only the originating block
-  // re-anchors its zone (and the image) to the first line top; injected zones already carry
-  // absolute image coordinates.
+  // check in addLineToPage use the same y values. Only the originating block re-anchors its zone
+  // (and the image) to the first line top; injected zones already carry absolute image coordinates.
   const int lineHeightForFloat = (blockStyle.floatZoneCount > 0) ? effectiveLineHeight(blockStyle) : 0;
   if (isOriginatingBlock && blockStyle.floatZoneCount > 0) {
     BlockStyle& mbs = currentTextBlock_->getBlockStyle();
@@ -251,8 +249,8 @@ void LayoutSink::makePages() {
       },
       /*includeLastLine=*/true, static_cast<int16_t>(currentPageNextY_), lineHeightForFloat);
 
-  // Fallback: transfer any remaining pending footnotes to the current page (cpp:2678-2682).
-  // Catches edge cases where a footnote's word index equals the exact block size.
+  // Fallback: transfer any remaining pending footnotes to the current page. Catches edge cases
+  // where a footnote's word index equals the exact block size.
   if (!pendingFootnotes_.empty() && currentPage_) {
     for (const auto& [idx, fn] : pendingFootnotes_) {
       currentPage_->addFootnote(fn.number, fn.href);
@@ -271,16 +269,17 @@ void LayoutSink::makePages() {
   }
 
   // Extra paragraph spacing, suppressed inside <pre> (kPreformatted) so code/preformatted lines
-  // are single-spaced — matching the fused makePages gate on preUntilDepth (cpp:2733).
+  // are single-spaced.
   if (extraParagraphSpacing_ && !currentBlockPreformatted_) {
     currentPageNextY_ += lineHeight / 2;
   }
 }
 
-// Port of the fused ChapterHtmlSlimParser::abbreviateInlineFootnote, now applied at layout time.
-// Given the note words of a preview run, returns how many to KEEP within the viewport*2 px budget
-// (whole words; the caller appends an ellipsis when some were dropped). Measures bare note words
-// (no surrounding parens) exactly as the fused walk did, so the result is byte-identical.
+// Abbreviate each inline footnote preview run to the viewport width, at layout time (Stage-1
+// stores the FULL preview text; the width budget is font/viewport-dependent so it belongs here).
+// For each run, keep whole note words within a viewport*2 px budget and append an ellipsis when
+// some were dropped. Measures BARE note words (parens stripped) so the budget is computed on the
+// note text itself, then re-fuses the parens onto the kept boundary words.
 void LayoutSink::abbreviatePreviewRuns(Block& block) const {
   if (block.footnotePreviews.empty()) return;
 
@@ -311,9 +310,9 @@ void LayoutSink::abbreviatePreviewRuns(Block& block) const {
       continue;
     }
 
-    // Abbreviate this run. Words are the tokenization of " (" + note + ")": the '(' is fused onto
-    // the first note word and ')' onto the last. Reconstruct the bare note words to measure exactly
-    // as the fused walk did, then re-emit " (" kept... "…)" (or "...)" without ellipsis if all fit).
+    // A preview run is stored as the tokenization of " (" + note + ")": the '(' is joined onto the
+    // first note word and ')' onto the last. Reconstruct the bare note words to measure, then
+    // re-emit " (" kept... "…)" (or "...)" without ellipsis if all fit).
     const PreviewRun& run = block.footnotePreviews[runIdx];
     const size_t first = run.startWord;
     const size_t last = run.startWord + run.count - 1;
@@ -322,7 +321,7 @@ void LayoutSink::abbreviatePreviewRuns(Block& block) const {
     size_t keptCount = 0;  // number of run words kept (before any ellipsis)
     for (size_t k = 0; k < run.count; ++k) {
       std::string tok(&block.text[block.words[first + k].textOff]);
-      // Strip the fused parens to recover the bare note word the fused measurement used.
+      // Strip the joined parens to recover the bare note word for measurement.
       if (k == 0 && !tok.empty() && tok.front() == '(') tok.erase(tok.begin());
       if (k == run.count - 1 && !tok.empty() && tok.back() == ')') tok.pop_back();
       const int wordAdvance = renderer_.getTextWidth(fontId_, tok.c_str());
@@ -331,15 +330,15 @@ void LayoutSink::abbreviatePreviewRuns(Block& block) const {
       usedAdvance += separatorAdvance + wordAdvance;
       ++keptCount;
     }
-    if (keptCount == 0) keptCount = 1;  // always keep at least the first word (matches fused)
+    if (keptCount == 0) keptCount = 1;  // always keep at least the first word
 
-    // Re-emit the kept run words, re-fusing '(' on the first and the closing ')'/'...)' on the last
-    // kept word so the token stream matches the fused walk's " (" + abbrev + ")".
+    // Re-emit the kept run words, re-joining '(' on the first and the closing ')'/'...)' on the last
+    // kept word, so the emitted tokens are again " (" + abbrev + ")".
     for (size_t k = 0; k < keptCount; ++k) {
       std::string tok(&block.text[block.words[first + k].textOff]);
       if (k == keptCount - 1 && last != first + k) {
         // Truncated: the original last word (which carried the closing ')') was dropped. Rebuild
-        // the closer on this last kept word as the fused walk did ("word" + "..." + ")").
+        // the closer on this last kept word: "word" + "..." + ")".
         if (!tok.empty() && tok.back() == ')') tok.pop_back();  // defensive
         tok += "...)";
       }
@@ -364,15 +363,15 @@ void LayoutSink::layoutTextBlock(Block&& block, const BlockStyle& blockStyle) {
   wordsExtractedInBlock_ = 0;
 
   // A float image rides on this Text block: attach it before layout so its zone is present when
-  // the first line breaks (fused attaches on the first word, cpp:403-405). The image's own CSS
-  // is not transmitted for floats — the intrinsic dims + default sizing suffice (the float gate
-  // already capped size), so pass an empty style to the shared helper.
+  // the first line breaks. The image's own CSS is not transmitted for floats — the intrinsic dims
+  // + default sizing suffice (the float gate already capped size), so pass an empty style.
   if (!block.inlineImageEntryPath.empty()) {
     attachFloatImage(block, CssStyle{}, currentTextBlock_->getBlockStyle());
   }
 
-  // Add words through the same ParsedText::addWord path the fused walk uses, replaying the
-  // >96-word mid-block split (flushPartWordBuffer cpp:409-459) so page breaks land identically.
+  // Add words through ParsedText::addWord, flushing an intermediate line-break pass every >96 words
+  // (a mid-block memory bound) so page breaks land at the same word positions regardless of how the
+  // block was serialized (a block split into 8 KB records is coalesced before it reaches here).
   for (const Word& w : block.words) {
     const char* text = &block.text[w.textOff];
     const EpdFontFamily::Style fontStyle = spanToFontStyle(w.styleSpan);
@@ -406,10 +405,9 @@ std::string LayoutSink::nextImageCachePath(const std::string& entryPath) {
   return imageBasePath_ + std::to_string(imageCounter_++) + ext;
 }
 
-// Port of the fused <img> block-image path (ChapterHtmlSlimParser.cpp block branch). The pending
-// empty-block style (figure/div/h1 wrapper margins) becomes the image's surrounding spacing —
-// this is the LayoutSink analogue of the fused pendingImageBlockStyle, sourced from the pending
-// merge accumulated by onBlock.
+// A standalone (centered, full-width) block image. The pending empty-block style (figure/div/h1
+// wrapper margins accumulated by onBlock's empty-block merge) becomes the image's surrounding
+// spacing.
 void LayoutSink::placeBlockImage(const Block& block, const CssStyle& imgStyle) {
   // Container width for CSS sizing = viewport minus the pending block's horizontal inset.
   int containerWidth = viewportWidth_;
@@ -422,7 +420,7 @@ void LayoutSink::placeBlockImage(const Block& block, const CssStyle& imgStyle) {
       computeImageDisplaySize(block.width, block.height, imgStyle, viewportWidth_, viewportHeight_, containerWidth,
                               emSize);
 
-  // Spacing from the pending empty-block wrapper style (fused cpp:1289-1298).
+  // Spacing from the pending empty-block wrapper style.
   int spacingTop = 0;
   int spacingBottom = 0;
   if (hasPendingMerge_) {
@@ -431,8 +429,8 @@ void LayoutSink::placeBlockImage(const Block& block, const CssStyle& imgStyle) {
     spacingBottom = std::max(0, static_cast<int>(pendingMergeStyle_.marginBottom)) +
                     std::max(0, static_cast<int>(pendingMergeStyle_.paddingBottom));
   }
-  // The pending wrapper spacing is consumed around the image; it must not leak into the next
-  // paragraph (fused resets the empty block after the image).
+  // The pending wrapper spacing is consumed around the image; clear it so it does not leak into
+  // the next paragraph.
   hasPendingMerge_ = false;
   pendingMergeFromBr_ = false;
 
@@ -457,10 +455,9 @@ void LayoutSink::placeBlockImage(const Block& block, const CssStyle& imgStyle) {
 }
 
 std::unique_ptr<ParsedText> LayoutSink::buildCellText(const TableCell& cell) const {
-  // Table cells are built with NO paragraph spacing and NO hyphenation, matching the fused
-  // BufferedTableCell (ChapterHtmlSlimParser.cpp:1077 `new ParsedText(false, false)`). Using the
-  // sink's profile flags here would give cells a first-line indent / hyphenation the grid + the
-  // paragraph fallback never apply.
+  // Table cells are built with NO paragraph spacing and NO hyphenation. Using the sink's profile
+  // flags here would give cells a first-line indent / hyphenation the grid and the paragraph
+  // fallback never apply.
   auto pt = std::unique_ptr<ParsedText>(new ParsedText(/*extraParagraphSpacing=*/false,
                                                        /*hyphenationEnabled=*/false));
   for (const Word& w : cell.words) {
@@ -473,15 +470,14 @@ std::unique_ptr<ParsedText> LayoutSink::buildCellText(const TableCell& cell) con
 }
 
 // Paragraph fallback: each non-empty cell's text becomes a sequential paragraph laid out at full
-// viewport width (mirrors emitTableAsParagraphs cpp:3030-3051).
+// viewport width.
 void LayoutSink::placeTableAsParagraphs(const Block& block) {
   for (const TableRow& row : block.rows) {
     for (const TableCell& cell : row.cells) {
       if (cell.words.empty()) continue;
-      // The fused fallback (cpp:3041-3048) calls startNewTextBlock(cellBlockStyle) to open a block
-      // but then lays out cell.text — which keeps its OWN default BlockStyle (Justify, no indent),
-      // NOT cellBlockStyle. So the cell alignment is the ParsedText default here, not
-      // paragraphAlignment. wordsExtractedInBlock resets per cell (a fresh startNewTextBlock).
+      // Each cell paragraph keeps the ParsedText default BlockStyle (Justify, no indent), NOT
+      // paragraphAlignment — the fallback opens a block per cell but lays out the cell's own text.
+      // wordsExtractedInBlock resets per cell.
       wordsExtractedInBlock_ = 0;
       auto cellText = buildCellText(cell);
       cellText->layoutAndExtractLines(
@@ -493,10 +489,10 @@ void LayoutSink::placeTableAsParagraphs(const Block& block) {
   }
 }
 
-// Grid table layout (mirrors emitTableAsFragments cpp:2839-3028). Wraps each cell, computes row
-// heights, then packs fragments via the shared helper. Cell images are NOT reproduced: the
-// producer does not transmit their intrinsic dims (stage1EmitTableBlock), and no corpus book uses
-// grid cell images. Falls back to paragraphs on the same conditions as the fused path.
+// Grid table layout. Wraps each cell, computes row heights, then packs fragments via the shared
+// helper. Cell images are NOT reproduced: the producer does not transmit their intrinsic dims, and
+// no corpus book uses grid cell images. Falls back to paragraphs when the grid can't be built
+// (too-narrow columns, merged non-full-width cells, over-tall rows).
 void LayoutSink::placeTable(const Block& block) {
   if (block.rows.empty()) {
     placeTableAsParagraphs(block);
@@ -504,7 +500,7 @@ void LayoutSink::placeTable(const Block& block) {
   }
   uint8_t columnCount = 0;
   for (const TableRow& r : block.rows) columnCount = std::max(columnCount, static_cast<uint8_t>(r.cells.size()));
-  // colSpan-aware column count (fused uses table.maxCols); recompute from the max effective cols.
+  // colSpan-aware column count: the max effective columns across rows.
   for (const TableRow& r : block.rows) {
     uint8_t eff = 0;
     for (const TableCell& c : r.cells) eff = static_cast<uint8_t>(eff + c.colSpan);
@@ -626,20 +622,17 @@ void LayoutSink::placeTable(const Block& block) {
 }
 
 void LayoutSink::placeHr() {
-  // The fused <hr> handler calls makePages() first, which lays out the currentTextBlock — even
-  // when it is empty (e.g. the empty block between two consecutive <hr/>s). An empty block still
-  // advances Y by its margins + extra paragraph spacing. Reproduce that: if an empty-merge block
-  // is pending, materialize and lay it out (no words → just its spacing) before the rule.
+  // A pending empty-merge block before the rule still advances Y by its margins + extra paragraph
+  // spacing (e.g. the empty block between two consecutive <hr/>s). Materialize and lay it out (no
+  // words → just its spacing) before the rule.
   bool carryBrGap = false;
   if (hasPendingMerge_) {
     currentBlockPreformatted_ = false;
     currentTextBlock_.reset(new (std::nothrow) ParsedText(extraParagraphSpacing_, hyphenationEnabled_,
                                                           pendingMergeStyle_, bionicReadingEnabled_));
-    // The fused makePages() does NOT clear the block's fromBrElement, so the empty <br> block the
-    // HR flushes stays fromBr; the fused startNewTextBlock(emptyStyle) after the rule then reads
-    // that flag and injects a SECOND br-gap into the post-HR block (ChapterHtmlSlimParser.cpp:1690
-    // makePages -> :1714 startNewTextBlock -> :788 brGapPending). Reproduce that by carrying the
-    // br-gap onto the block that follows the rule.
+    // Laying out the empty block above does NOT clear its fromBrElement flag, so when the empty
+    // <br> block preceded the HR, a br-gap is owed to the block that FOLLOWS the rule as well as
+    // the one before it. Carry the br-gap forward onto the post-HR block.
     carryBrGap = pendingMergeFromBr_;
     hasPendingMerge_ = false;
     pendingMergeFromBr_ = false;
@@ -666,10 +659,9 @@ void LayoutSink::placeHr() {
   currentPage_->elements.push_back(std::make_shared<PageHR>(hrX, currentPageNextY_, hrWidth));
   currentPageNextY_ += 1 + marginV;
 
-  // Fused: after the rule, startNewTextBlock(emptyStyle) reuses the still-fromBr empty block and
-  // injects a br-gap into the following paragraph. Carry that forward as a pending fromBr merge so
-  // the next onBlock() adds the same 24px gap (the empty-block fold applies the gap when
-  // pendingMergeFromBr_). Neutral style — only the br-gap contribution matters here.
+  // Carry the owed br-gap forward as a pending fromBr merge, so the next onBlock() adds a blank
+  // line's worth of top margin to the following paragraph (the empty-block fold applies the gap
+  // when pendingMergeFromBr_). Neutral style — only the br-gap contribution matters here.
   if (carryBrGap) {
     pendingMergeStyle_ = BlockStyle{};
     pendingMergeStyle_.fromBrElement = true;
@@ -681,8 +673,8 @@ void LayoutSink::placeHr() {
 void LayoutSink::attachFloatImage(const Block& block, const CssStyle& imgStyle, BlockStyle& bs) {
   if (!currentPage_) currentPage_.reset(new (std::nothrow) Page());
 
-  // The producer transmits INTRINSIC dims; recompute the display dims exactly as the fused
-  // isInlineCandidate gate did (via the shared helper) before using them as the float size.
+  // The producer transmits INTRINSIC dims; recompute the display dims via the shared helper (the
+  // same computation the walk's float-candidate gate used) before using them as the float size.
   int containerWidth = viewportWidth_;
   const int inset = bs.totalHorizontalInset();
   if (inset > 0 && inset < viewportWidth_) containerWidth = viewportWidth_ - inset;
@@ -693,7 +685,7 @@ void LayoutSink::attachFloatImage(const Block& block, const CssStyle& imgStyle, 
   const int16_t imgW = static_cast<int16_t>(ds.width);
   const bool imgIsRight = (block.inlineImageSide == 2);
 
-  // A float never crosses a page boundary: break first if it would not fit (cpp:532-534).
+  // A float never crosses a page boundary: break first if it would not fit.
   if (imgH > static_cast<int16_t>(viewportHeight_ - currentPageNextY_) && currentPage_ &&
       !currentPage_->elements.empty()) {
     emitPage(lastBodyChildByteOffset_);
@@ -724,8 +716,8 @@ void LayoutSink::attachFloatImage(const Block& block, const CssStyle& imgStyle, 
 // --- BlockSink overrides. ---
 
 void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
-  // A TOC-boundary (or CSS page-break-before) block starts a fresh page (fused forces this in
-  // startNewTextBlock when the pending anchor is a TOC anchor).
+  // A TOC-boundary (or CSS page-break-before) block starts a fresh page — but never a blank leading
+  // page, so only break when the current page already has content.
   if ((block.flags & kPageBreakBefore) && currentPage_ && !currentPage_->elements.empty()) {
     emitPage(lastBodyChildByteOffset_);
   }
@@ -752,20 +744,20 @@ void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
   const bool isHeading = (block.flags & kStartsChapter) != 0;
   const bool fromBr = (block.flags & kFromBrElement) != 0;
 
-  // The alignment CONTEXT a <br> inherits is the fused parser's *current block* alignment at the
-  // <br> (cpp:1633) — which, when an empty block is being reused, is that empty block's alignment
-  // AFTER the endElement reset (see below). Model it as the live merge context: the pending empty
-  // chain's alignment if one is open, else the last laid-out block's. NOT lastBlockAlignment_
-  // alone, which ignores intervening (reset) empty blocks and wrongly carried a heading's Center
-  // across the chain (Moby Dick <p class="toc"> regression).
+  // A <br> block inherits the alignment CONTEXT of the currently-open block at the <br> — which,
+  // when an empty block is being reused, is that empty block's alignment AFTER the empty-block reset
+  // (see below). Model it as the live merge context: the pending empty chain's alignment if one is
+  // open, else the last laid-out block's. NOT lastBlockAlignment_ alone, which ignores intervening
+  // (reset) empty blocks and wrongly carried a heading's Center across the chain (a Moby Dick
+  // <p class="toc"> regression this fixed).
   const CssTextAlign contextAlign = hasPendingMerge_ ? pendingMergeStyle_.alignment : lastBlockAlignment_;
   const bool contextAlignDefined = hasPendingMerge_ ? pendingMergeStyle_.textAlignDefined : lastBlockAlignmentDefined_;
 
   BlockStyle blockStyle;
   if (fromBr) {
-    // EVERY <br> block gets a NEUTRAL layout style (fused cpp:1639-1642): only the current
-    // alignment context, never the element's CSS margins — those would over-space and (for an
-    // empty <br>) mis-place the injected line-gap. This holds whether the block stays empty (a
+    // EVERY <br> block gets a NEUTRAL layout style: only the current alignment context, never the
+    // element's CSS margins — those would over-space and (for an empty <br>) mis-place the injected
+    // line-gap. This holds whether the block stays empty (a
     // section separator) or later receives text (an inline <br>, or a poem line). The one CSS
     // property a <br> block DOES carry is a span-level text-indent (poem stanza pattern): it is
     // applied to the open <br> block after brStyle, so the producer transmits it via textIndent.
@@ -781,18 +773,17 @@ void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
     blockStyle = buildBlockStyle(style, isHeading);
   }
 
-  // Empty wrapper / <br> transcript block: don't lay it out. Accumulate its style into a
-  // pending merge that folds into the next non-empty block, reproducing the fused path's
-  // empty-currentTextBlock reuse (startNewTextBlock cpp:752-796).
+  // Empty wrapper / <br> transcript block: don't lay it out. Accumulate its style into a pending
+  // merge that folds into the next non-empty block — CSS margin collapsing across empty wrapper
+  // elements (e.g. <div style="margin:2em"><h1>…</h1></div>).
   if (block.words.empty()) {
-    // Reproduce the fused endElement empty-block ALIGNMENT RESET (cpp:2365-2377, issue #1026): on
-    // closing a header/block tag that stayed empty, the fused path clears the block's alignment so
-    // a centered empty heading does not bleed its (Center, textAlignDefined=true) alignment through
-    // the empty-block-reuse chain into the next paragraph. The reset fires for every empty block
-    // EXCEPT a <br> (which preserves alignment for text in the same container, cpp:2370). This
-    // reset alignment also becomes the context a following <br> inherits (above) — matching the
-    // fused <br> reading the just-reset current block. Alignment only; margins/padding accumulate
-    // through the merge untouched. The producer can't transmit this (a tag-close layout mutation).
+    // Empty-block ALIGNMENT RESET (issue #1026): on closing a header/block tag that stayed empty,
+    // clear the block's alignment so a centered empty heading does not bleed its (Center,
+    // textAlignDefined=true) alignment through the empty-block-merge chain into the next paragraph.
+    // The reset fires for every empty block EXCEPT a <br> (which preserves alignment for text in the
+    // same container). This reset alignment also becomes the context a following <br> inherits
+    // (above). Alignment only; margins/padding accumulate through the merge untouched. Done here (a
+    // tag-close layout mutation) because the producer can't transmit it.
     if (!blockStyle.fromBrElement) {
       blockStyle.textAlignDefined = false;
       blockStyle.alignment = (paragraphAlignment_ == static_cast<uint8_t>(CssTextAlign::None))
@@ -800,7 +791,7 @@ void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
                                  : static_cast<CssTextAlign>(paragraphAlignment_);
     }
     if (hasPendingMerge_) {
-      // Chain of consecutive empty blocks: combine styles as the fused reuse path does.
+      // Chain of consecutive empty blocks: combine their styles into the running merge.
       BlockStyle incoming = blockStyle;
       if (pendingMergeFromBr_) {
         const int16_t lh = static_cast<int16_t>(renderer_.getLineHeight(fontId_) * lineCompression_ + 0.5f);
@@ -827,8 +818,8 @@ void LayoutSink::onBlock(Block&& block, const CssStyle& style) {
     pendingMergeFromBr_ = false;
   }
 
-  // Track the alignment context for a subsequent <br> block (fused reads it from the current
-  // block at the <br>). Captured from the final merged style actually laid out.
+  // Track the alignment context for a subsequent <br> block (which reads it from the current
+  // block). Captured from the final merged style actually laid out.
   lastBlockAlignment_ = blockStyle.alignment;
   lastBlockAlignmentDefined_ = blockStyle.textAlignDefined;
 
@@ -845,8 +836,8 @@ void LayoutSink::onPageBreakLabel(const std::string& label) {
 }
 
 void LayoutSink::onFootnote(int wordIndex, const FootnoteEntry& entry) {
-  // Buffered until layout reaches this word position (addLineToPage), matching the fused
-  // pendingFootnotes machinery. wordIndex is relative to the block currently being built.
+  // Buffered until layout reaches this word position (assigned in addLineToPage). wordIndex is
+  // relative to the block currently being built.
   pendingFootnotes_.push_back({wordIndex, entry});
 }
 
@@ -858,15 +849,14 @@ void LayoutSink::onXPathAdvance(uint16_t paragraphIndex, uint16_t listItemIndex,
 }
 
 void LayoutSink::onSpineEnd() {
-  // Flush the last accumulated text block (finalize() cpp:2493-2509).
+  // Flush the last accumulated text block.
   if (currentTextBlock_) {
     makePages();
     if (layoutFailed_) return;
   }
   // Emit the final page if it has content — independent of whether a text block is open. A spine
   // whose only element is an image/table/HR (e.g. a cover page) has no currentTextBlock_ but still
-  // has a page to flush. (The fused parser always holds an initial empty block from setup(), so it
-  // never hit this; the sink only creates one when a Text block arrives.)
+  // has a page to flush (the sink only creates a text block when a Text block arrives).
   if (currentPage_ && !currentPage_->elements.empty()) {
     emitPage(0u);
   }
