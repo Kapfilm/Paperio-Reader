@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <process.h>  // _getpid - per-process temp isolation under parallel ctest
 #include <memory>
 #include <string>
 #include <vector>
@@ -94,7 +95,7 @@ std::string joinWords(const compiled::Block& b) {
 }
 
 std::string freshCacheDir(const std::string& tag) {
-  const auto dir = fs::temp_directory_path() / "stage1_producer_test" / tag;
+  const auto dir = fs::temp_directory_path() / ("stage1_producer_test_" + std::to_string(_getpid())) / tag;
   fs::remove_all(dir);
   fs::create_directories(dir);
   return dir.string();

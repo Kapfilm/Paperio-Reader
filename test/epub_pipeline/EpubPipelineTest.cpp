@@ -14,14 +14,21 @@
 #include <sstream>
 #include <string>
 
+#include <process.h>  // _getpid — per-process temp isolation under parallel ctest
+
 #include "PipelineRunner.h"
 
 namespace fs = std::filesystem;
 
 namespace {
 
+// Per-PROCESS temp root: gtest_discover_tests runs each test in its own process, ctest runs them in
+// parallel, and they build overlapping corpus books. Scoping every cache dir under the PID keeps
+// parallel processes from ever touching the same path (freshCacheDir's remove_all would otherwise
+// race a sibling process's build).
 std::string freshCacheDir(const std::string& tag) {
-  const auto dir = fs::temp_directory_path() / "epub_pipeline_test" / tag;
+  const auto dir =
+      fs::temp_directory_path() / ("epub_pipeline_test_" + std::to_string(_getpid())) / tag;
   fs::remove_all(dir);
   fs::create_directories(dir);
   return dir.string();

@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include <process.h>  // _getpid — per-process temp isolation under parallel ctest
+
 #include "Epub/Page.h"
 #include "Epub/blocks/BlockStyle.h"
 #include "Epub/content/LayoutSink.h"
@@ -145,7 +147,9 @@ TEST(LayoutSink, XPathAdvanceFeedsPerPageLut) {
 // which point this list grows to the whole corpus.
 
 std::string freshDir(const std::string& tag) {
-  const auto dir = fs::temp_directory_path() / "layoutsink_test" / tag;
+  // Per-process temp root (see freshCacheDir in EpubPipelineTest): parallel ctest processes must not
+  // share a cache dir, or one process's remove_all races another's build.
+  const auto dir = fs::temp_directory_path() / ("layoutsink_test_" + std::to_string(_getpid())) / tag;
   fs::remove_all(dir);
   fs::create_directories(dir);
   return dir.string();

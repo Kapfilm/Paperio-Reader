@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <process.h>  // _getpid - per-process temp isolation under parallel ctest
 #include <sstream>
 #include <string>
 #include <vector>
@@ -28,7 +29,7 @@ using compiled::ContentBinWriter;
 using compiled::ContentSink;
 
 std::string freshDir(const std::string& tag) {
-  const auto dir = fs::temp_directory_path() / "content_bin_stream" / tag;
+  const auto dir = fs::temp_directory_path() / ("content_bin_stream_" + std::to_string(_getpid())) / tag;
   fs::remove_all(dir);
   fs::create_directories(dir);
   return dir.string();
