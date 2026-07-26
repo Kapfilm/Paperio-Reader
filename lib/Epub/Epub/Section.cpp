@@ -24,6 +24,7 @@
 #include "FootnotePreviews.h"
 #include "Page.h"
 #include "content/BlockStreamReader.h"  // content.bin read-back (Stage-2 replay)
+#include "content/ContentBinWriter.h"   // content.bin write (Stage-1 persist)
 #include "content/LayoutSink.h"         // complete type for the parser's unique_ptr<LayoutSink> member
 #include "content/Stage1Config.h"       // EPUB_STAGE1 gate
 #include "hyphenation/Hyphenator.h"
@@ -1268,6 +1269,61 @@ bool Section::buildSectionFromContentBin(const BuildParams& p, const bool skipEv
   this->lut = std::move(lut);
   LOG_INF("SCT", "buildSectionFromContentBin spine=%d done: %ums pages=%u (read-back, no parse)", spineIndex,
           millis() - t0, pageCount);
+  return true;
+#endif
+}
+
+bool Section::compileBookToContentBin(const std::shared_ptr<Epub>& epub, GfxRenderer& renderer,
+                                      const BuildParams& params) {
+#if !EPUB_STAGE1
+  (void)epub;
+  (void)renderer;
+  (void)params;
+  return false;
+#else
+  const uint32_t t0 = millis();
+  const int spineCount = epub->getSpineItemsCount();
+  const std::string binPath = epub->getCachePath() + "/content.bin";
+  { const auto sectionsDir = epub->getCachePath(); Storage.mkdir(sectionsDir.c_str()); }
+
+  uint64_t fingerprint = 0;
+  epub->zipContentFingerprint(&fingerprint);
+
+  FsFile binFile;
+  if (!Storage.openFileForWrite("SCT", binPath, binFile)) {
+    LOG_ERR("SCT", "compileBookToContentBin: cannot open %s for write", binPath.c_str());
+    return false;
+  }
+  compiled::ContentBinWriter writer;
+  if (!writer.begin(binFile, static_cast<uint32_t>(spineCount), fingerprint)) {
+    binFile.close();
+    Storage.remove(binPath.c_str());
+    return false;
+  }
+
+  bool ok = true;
+  for (int i = 0; i < spineCount && ok; ++i) {
+    writer.beginSpine();
+    Section section(epub, i, renderer);
+    section.setStage1Sink(&writer);  // content-only compile: parser drives the writer, no pages
+    // Run-to-completion (budgetMs=0). skipEviction: we are not touching the section variant cache.
+    if (!section.createSectionFile(params.fontId, params.lineCompression, params.extraParagraphSpacing,
+                                   params.paragraphAlignment, params.viewportWidth, params.viewportHeight,
+                                   params.hyphenationEnabled, params.embeddedStyle, params.bionicReadingEnabled,
+                                   params.inlineFootnotePreviews, params.imageRendering, {}, /*skipEviction=*/true,
+                                   params.fontSizeLadder)) {
+      LOG_ERR("SCT", "compileBookToContentBin: spine %d compile failed", i);
+      ok = false;
+    }
+  }
+  ok = ok && writer.finish();
+  binFile.close();
+  if (!ok) {
+    Storage.remove(binPath.c_str());
+    return false;
+  }
+  LOG_INF("SCT", "compileBookToContentBin: %d spines -> content.bin in %ums (free=%lu)", spineCount, millis() - t0,
+          esp_get_free_heap_size());
   return true;
 #endif
 }

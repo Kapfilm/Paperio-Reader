@@ -362,45 +362,27 @@ bool sectionEquivalence(const std::string& epubPath, const std::string& cacheDir
     if (ec) { out << "ERROR could not copy parse section file: " << ec.message() << "\n"; return false; }
   }
 
-  // (2) Compile content.bin into the BOOK cache dir (where buildSectionFromContentBin reads it).
-  {
-    compiled::ContentSink sink;
-    for (int i = 0; i < epub->getSpineItemsCount(); ++i) {
-      sink.beginSpine();
-      Section s(epub, i, renderer);
-      s.setStage1Sink(&sink);
-      if (!s.createSectionFile(profile.fontId, profile.lineCompression, profile.extraParagraphSpacing,
-                               profile.paragraphAlignment, profile.viewportWidth, profile.viewportHeight,
-                               profile.hyphenationEnabled, profile.embeddedStyle, profile.bionicReadingEnabled,
-                               profile.inlineFootnotePreviews, profile.imageRendering, {}, /*skipEviction=*/true, {})) {
-        out << "SPINE " << i << " ERROR content compile failed\n";
-        return false;
-      }
-    }
-    uint64_t fp = 0;
-    if (epub->zipContentFingerprint(&fp)) sink.content().sourceFingerprint = fp;
-    FsFile w;
-    if (!w.openForWrite(bookDir + "/content.bin") || !compiled::writeContentBin(w, sink.content())) {
-      out << "ERROR content.bin write failed\n";
-      return false;
-    }
-    w.close();
+  // (2) Compile content.bin via the DEVICE writer (Section::compileBookToContentBin, streaming
+  // ContentBinWriter) into the book cache dir — so this gate exercises the exact device write path.
+  Section::BuildParams bp;
+  bp.fontId = profile.fontId;
+  bp.lineCompression = profile.lineCompression;
+  bp.extraParagraphSpacing = profile.extraParagraphSpacing;
+  bp.paragraphAlignment = profile.paragraphAlignment;
+  bp.viewportWidth = profile.viewportWidth;
+  bp.viewportHeight = profile.viewportHeight;
+  bp.hyphenationEnabled = profile.hyphenationEnabled;
+  bp.embeddedStyle = profile.embeddedStyle;
+  bp.bionicReadingEnabled = profile.bionicReadingEnabled;
+  bp.inlineFootnotePreviews = profile.inlineFootnotePreviews;
+  bp.imageRendering = profile.imageRendering;
+  if (!Section::compileBookToContentBin(epub, renderer, bp)) {
+    out << "ERROR compileBookToContentBin failed\n";
+    return false;
   }
 
-  // (3) Read-back build of the spine (overwrites the same section file path).
+  // (3) Read-back build of the spine (overwrites the same section file path). Reuses `bp` from (2).
   {
-    Section::BuildParams bp;
-    bp.fontId = profile.fontId;
-    bp.lineCompression = profile.lineCompression;
-    bp.extraParagraphSpacing = profile.extraParagraphSpacing;
-    bp.paragraphAlignment = profile.paragraphAlignment;
-    bp.viewportWidth = profile.viewportWidth;
-    bp.viewportHeight = profile.viewportHeight;
-    bp.hyphenationEnabled = profile.hyphenationEnabled;
-    bp.embeddedStyle = profile.embeddedStyle;
-    bp.bionicReadingEnabled = profile.bionicReadingEnabled;
-    bp.inlineFootnotePreviews = profile.inlineFootnotePreviews;
-    bp.imageRendering = profile.imageRendering;
     Section section(epub, spineIndex, renderer);
     if (!section.buildSectionFromContentBin(bp, /*skipEviction=*/true)) {
       out << "ERROR read-back build failed (buildSectionFromContentBin returned false)\n";

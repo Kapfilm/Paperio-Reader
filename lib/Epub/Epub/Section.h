@@ -170,6 +170,14 @@ class Section {
   // spine, or on any build error. Run-to-completion (not sliced) for now. Behind EPUB_STAGE1.
   bool buildSectionFromContentBin(const BuildParams& params, bool skipEviction);
 
+  // Compile the WHOLE book to <cachePath>/content.bin in one pass: walk every spine once with a
+  // streaming compiled::ContentBinWriter attached (content-only, no pages), so a later
+  // buildSectionFromContentBin can serve any spine. One-time (like book.bin); the walk streams so
+  // RAM stays ~one block. `renderer` is needed to construct the per-spine parser. Returns false on
+  // any error. Behind EPUB_STAGE1. (Per-spine-on-first-visit + background-lazy write are follow-ups.)
+  static bool compileBookToContentBin(const std::shared_ptr<Epub>& epub, GfxRenderer& renderer,
+                                      const BuildParams& params);
+
   // Incremental section-cache build. Advances the build by at most ~budgetMs of work
   // (budgetMs == 0 means no budget: run to a terminal state in one call) and returns More
   // when work remains. The caller invokes it repeatedly (typically from idle time) until
