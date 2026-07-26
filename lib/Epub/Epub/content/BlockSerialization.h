@@ -8,11 +8,22 @@
 // charOffset + the type-specific body + the shared footnote/xpath tail. No spine framing — the
 // caller owns spine headers, anchor/label sections, style pool, index, and chapters.
 
+#include <functional>
+
 #include <HalStorage.h>  // FsFile
 
 #include "CompiledContent.h"
 
 namespace compiled {
+
+// A TEXT block whose serialized body would exceed the 8 KB record cap (or the MAX_STRING_LENGTH text
+// cap) is split into continuation records at WRITE time — a read-time memory bound (microreader
+// MrbConverter rationale). `emit` is called for each resulting record in order: the first keeps the
+// block's flags + inline image + xpath; the rest are flagged kContinuation. Footnotes are
+// distributed to the run containing their anchor word (wordIndex rebased per run). A block with ≤1
+// word or already within the cap is emitted whole (one `emit` call). Shared by the whole-book
+// ContentSink and the streaming ContentBinWriter so the on-disk split is identical.
+void splitTextBlock(Block&& block, const std::function<void(Block&&)>& emit);
 
 // Serialize one Block record (all fields; type-dispatched body + shared tail). Returns false on I/O
 // error. Mirrors readBlock exactly.

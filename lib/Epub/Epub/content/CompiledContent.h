@@ -31,7 +31,17 @@ inline constexpr char kMagic[4] = {'W', 'B', 'C', '1'};
 // page-break label table — the pieces ContentSink previously dropped.
 // v4 adds the source book's ZIP content fingerprint to the header, so a reader can reject a
 // content.bin that does not match the book on disk (stale cache → recompile).
-inline constexpr uint8_t kVersion = 4;
+// v5 makes the file STREAMABLE + RANDOM-ACCESS: a fixed header with back-patched section offsets
+// (style pool, spine-offset index, chapters) so ContentBinWriter can append one block at a time and
+// BlockStreamReader can seek to any spine and read one block at a time — neither ever holds a whole
+// spine (let alone the whole book) in RAM. See docs/stage1-revised-plan-v2-2026-07-26.md.
+inline constexpr uint8_t kVersion = 5;
+
+// v5 fixed header: magic(4) + version(1) + fingerprint(8) + spineCount(4) + stylePoolOffset(4) +
+// spineIndexOffset(4) + chaptersOffset(4). The three offsets and spineCount are 0 until finish()
+// back-patches them. A reader validates magic+version, reads the offsets, loads the (small) style
+// pool + spine-offset index up front, then streams blocks per spine.
+inline constexpr uint32_t kHeaderSize = 4 + 1 + 8 + 4 + 4 + 4 + 4;  // = 29 bytes
 
 // Word::styleSpan bits. Bits 0-6 = inline font style (the EpdFontFamily::Style set,
 // remapped to a stable on-disk layout); bit 7 = word attaches to the previous word
@@ -210,9 +220,10 @@ struct CompiledContent {
 // fields + the explicit-set flags). Two blocks that resolve to equal styles share a pool id.
 bool styleEquals(const CssStyle& a, const CssStyle& b);
 
-// Return the pool id for `style`, appending it to `content.stylePool` if not already
-// present (dedup by value). Linear scan — the distinct-style set per book is small
-// (tens), and blocks vastly outnumber styles.
+// Return the pool id for `style`, appending it if not already present (dedup by value). Linear
+// scan — the distinct-style set per book is small (tens), and blocks vastly outnumber styles. The
+// pool overload lets the streaming writer intern into a standalone pool (no whole CompiledContent).
+uint16_t internStyle(std::vector<CssStyle>& pool, const CssStyle& style);
 uint16_t internStyle(CompiledContent& content, const CssStyle& style);
 
 // Serialize/deserialize the WBC1 container. Return false on I/O error or a

@@ -1,5 +1,6 @@
 #include "BlockSerialization.h"
 
+#include "ContentSink.h"  // kMaxSerializedBody (the 8 KB record cap)
 #include "Epub/FootnoteEntry.h"
 #include "Serialization.h"
 
@@ -10,6 +11,22 @@ using serialization::readPod;
 using serialization::readString;
 using serialization::writePod;
 using serialization::writeString;
+
+// Serialized size of one word record (textOff u32 + styleSpan u8 + sizePct u8 + bidiLevel u8) and
+// the fixed per-TEXT-record overhead — used to bound a run against the 8 KB record cap.
+constexpr size_t kWordRecordBytes = sizeof(uint32_t) + 3 * sizeof(uint8_t);
+constexpr size_t kTextRecordOverhead =
+    sizeof(uint8_t) + sizeof(uint16_t) + sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
+    sizeof(uint8_t);
+
+// Codepoints (non-continuation bytes) in a NUL-terminated word — for continuation-record charOffset.
+uint32_t countCodepoints(const char* s) {
+  uint32_t n = 0;
+  for (const char* p = s; *p != '\0'; ++p) {
+    if ((static_cast<uint8_t>(*p) & 0xC0) != 0x80) ++n;
+  }
+  return n;
+}
 
 void writeLength(FsFile& f, const CssLength& len) {
   writePod(f, len.value);
@@ -183,6 +200,83 @@ uint32_t packDefined(const CssPropertyFlags& d) {
   set(d.cssFloat);
   set(d.smallCaps);
   return b;
+}
+
+void splitTextBlock(Block&& block, const std::function<void(Block&&)>& emit) {
+  // Whole-block serialized size of the word run + text (the part the cap governs).
+  const size_t bodyBytes = kTextRecordOverhead + block.words.size() * kWordRecordBytes + block.text.size();
+  if (block.words.size() <= 1 || bodyBytes <= kMaxSerializedBody) {
+    emit(std::move(block));
+    return;
+  }
+  // Footnotes/xpath ride with the split: take them off the source block so per-run records own their
+  // share (footnotes distributed by word index, xpath on the first run).
+  std::vector<FootnoteRef> srcFootnotes = std::move(block.footnotes);
+  block.footnotes.clear();
+  const bool srcHasXPath = block.hasXPath;
+  const XPathCounters srcXPath = block.xpath;
+  const std::string& srcText = block.text;
+  const std::vector<Word>& srcWords = block.words;
+
+  size_t wordStart = 0;
+  uint32_t runCharOffset = block.charOffset;  // book-absolute; advances per emitted run
+  bool first = true;
+  while (wordStart < srcWords.size()) {
+    size_t used = kTextRecordOverhead;
+    size_t runTextBytes = 0;  // must fit serialization::MAX_STRING_LENGTH (readString caps it)
+    size_t wordEnd = wordStart;
+    while (wordEnd < srcWords.size()) {
+      const size_t textOff = srcWords[wordEnd].textOff;
+      const size_t textEnd = srcText.find('\0', textOff);
+      const size_t wordBytes = (textEnd == std::string::npos ? srcText.size() : textEnd + 1) - textOff;
+      const size_t add = kWordRecordBytes + wordBytes;
+      // Two independent caps, each with an always-take-one-word floor so an oversized word still
+      // progresses: the serialized-body cap (read-time alloc bound) AND the text-bytes cap.
+      if (wordEnd != wordStart &&
+          (used + add > kMaxSerializedBody || runTextBytes + wordBytes > serialization::MAX_STRING_LENGTH)) {
+        break;
+      }
+      used += add;
+      runTextBytes += wordBytes;
+      ++wordEnd;
+    }
+
+    Block rec;
+    rec.type = BlockType::Text;
+    rec.styleId = block.styleId;
+    rec.charOffset = runCharOffset;
+    rec.flags = first ? block.flags : static_cast<uint8_t>(block.flags | kContinuation);
+    if (first) {
+      rec.inlineImageEntryPath = block.inlineImageEntryPath;
+      rec.inlineImageWidth = block.inlineImageWidth;
+      rec.inlineImageHeight = block.inlineImageHeight;
+      rec.inlineImageSide = block.inlineImageSide;
+      rec.inlineImageAlt = block.inlineImageAlt;
+    }
+    uint32_t runCodepoints = 0;
+    for (size_t i = wordStart; i < wordEnd; ++i) {
+      const char* wordPtr = &srcText[srcWords[i].textOff];
+      Word w = srcWords[i];
+      w.textOff = static_cast<uint32_t>(rec.text.size());
+      rec.words.push_back(w);
+      rec.text.append(wordPtr);
+      rec.text.push_back('\0');
+      runCodepoints += countCodepoints(wordPtr);
+    }
+    if (first && srcHasXPath) {
+      rec.hasXPath = true;
+      rec.xpath = srcXPath;
+    }
+    for (const FootnoteRef& fn : srcFootnotes) {
+      if (fn.wordIndex >= wordStart && fn.wordIndex < wordEnd) {
+        rec.footnotes.push_back({static_cast<uint32_t>(fn.wordIndex - wordStart), fn.entry});
+      }
+    }
+    emit(std::move(rec));
+    runCharOffset += runCodepoints;
+    wordStart = wordEnd;
+    first = false;
+  }
 }
 
 bool writeBlock(FsFile& out, const Block& b) {

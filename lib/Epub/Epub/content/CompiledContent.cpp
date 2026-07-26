@@ -3,6 +3,7 @@
 #include <HalStorage.h>
 
 #include "BlockSerialization.h"
+#include "BlockStreamReader.h"
 #include "Serialization.h"
 
 namespace compiled {
@@ -13,63 +14,73 @@ using serialization::writePod;
 
 }  // namespace
 
+// Whole-book v5 writer. Produces the SAME on-disk layout as the streaming ContentBinWriter (header
+// with back-patched section offsets → per-spine block streams → style pool → spine index →
+// chapters), but from an already-materialized CompiledContent (test/tooling convenience). Blocks are
+// written AS-IS (their existing styleId + already-split kContinuation records), so it faithfully
+// round-trips whatever the caller built.
 bool writeContentBin(FsFile& out, const CompiledContent& content) {
   if (!out) return false;
-  out.write(reinterpret_cast<const uint8_t*>(kMagic), 4);
-  writePod(out, kVersion);
-  writePod(out, content.sourceFingerprint);  // v4: source book's ZIP content fingerprint
+  const auto writeHeader = [&](uint32_t spineCount, uint32_t stylePoolOff, uint32_t spineIndexOff,
+                               uint32_t chaptersOff) {
+    out.write(reinterpret_cast<const uint8_t*>(kMagic), 4);
+    writePod(out, kVersion);
+    writePod(out, content.sourceFingerprint);
+    writePod(out, spineCount);
+    writePod(out, stylePoolOff);
+    writePod(out, spineIndexOff);
+    writePod(out, chaptersOff);
+  };
+  writeHeader(static_cast<uint32_t>(content.spines.size()), 0, 0, 0);  // placeholder
 
-  // Body uses the shared per-block/aux serializers (BlockSerialization.cpp) so the whole-book form
-  // and the streaming ContentBinWriter emit identical block records.
-  writeStylePool(out, content.stylePool);
-  writePod(out, static_cast<uint32_t>(content.spines.size()));
+  std::vector<uint32_t> spineOffsets;
+  spineOffsets.reserve(content.spines.size());
   for (const SpineContent& spine : content.spines) {
+    spineOffsets.push_back(static_cast<uint32_t>(out.position()));
     writePod(out, spine.firstCharOffset);
     writePod(out, static_cast<uint32_t>(spine.blocks.size()));
     for (const Block& b : spine.blocks) writeBlock(out, b);
     writeAnchors(out, spine.anchors);
     writeLabels(out, spine.pageBreakLabels);
   }
+  const uint32_t stylePoolOff = static_cast<uint32_t>(out.position());
+  writeStylePool(out, content.stylePool);
+  const uint32_t spineIndexOff = static_cast<uint32_t>(out.position());
+  writePod(out, static_cast<uint32_t>(spineOffsets.size()));
+  for (uint32_t off : spineOffsets) writePod(out, off);
+  const uint32_t chaptersOff = static_cast<uint32_t>(out.position());
   writeChapters(out, content.chapters);
+
+  if (!out.seekSet(0)) return false;
+  writeHeader(static_cast<uint32_t>(content.spines.size()), stylePoolOff, spineIndexOff, chaptersOff);
   return static_cast<bool>(out);
 }
 
 bool readContentBin(FsFile& in, CompiledContent& content) {
-  if (!in) return false;
   content.stylePool.clear();
   content.spines.clear();
   content.chapters.clear();
   content.sourceFingerprint = 0;
 
-  char magic[4] = {};
-  if (in.read(reinterpret_cast<uint8_t*>(magic), 4) != 4) return false;
-  for (int i = 0; i < 4; ++i) {
-    if (magic[i] != kMagic[i]) return false;
-  }
-  uint8_t version = 0;
-  readPod(in, version);
-  if (version != kVersion) return false;
-  readPod(in, content.sourceFingerprint);  // v4
+  BlockStreamReader r;
+  if (!r.open(in)) return false;
+  content.sourceFingerprint = r.fingerprint();
+  content.stylePool = r.stylePool();
 
-  if (!readStylePool(in, content.stylePool)) return false;
-
-  uint32_t spineCount = 0;
-  readPod(in, spineCount);
+  const uint32_t spineCount = r.spineCount();
   content.spines.resize(spineCount);
   for (uint32_t si = 0; si < spineCount; ++si) {
     SpineContent& spine = content.spines[si];
-    readPod(in, spine.firstCharOffset);
-    uint32_t blockCount = 0;
-    readPod(in, blockCount);
-    spine.blocks.resize(blockCount);
-    for (uint32_t bi = 0; bi < blockCount; ++bi) {
-      if (!readBlock(in, spine.blocks[bi])) return false;
-    }
-    if (!readAnchors(in, spine.anchors)) return false;
-    if (!readLabels(in, spine.pageBreakLabels)) return false;
+    if (!r.openSpine(si)) return false;
+    spine.firstCharOffset = r.spineFirstCharOffset();
+    // Whole-book read keeps the RAW on-disk records (kContinuation splits stored as-is), so read
+    // records directly rather than the merged logical blocks.
+    Block b;
+    while (r.nextRawRecord(b)) spine.blocks.push_back(std::move(b));
+    if (!r.ok()) return false;
+    if (!r.readSpineAux(spine.anchors, spine.pageBreakLabels)) return false;
   }
-
-  return readChapters(in, content.chapters);
+  return r.readChapters(content.chapters);
 }
 
 bool styleEquals(const CssStyle& a, const CssStyle& b) {
@@ -90,12 +101,16 @@ bool styleEquals(const CssStyle& a, const CssStyle& b) {
          lenEq(a.imageWidth, b.imageWidth) && definedEq(a.defined, b.defined);
 }
 
-uint16_t internStyle(CompiledContent& content, const CssStyle& style) {
-  for (size_t i = 0; i < content.stylePool.size(); ++i) {
-    if (styleEquals(content.stylePool[i], style)) return static_cast<uint16_t>(i);
+uint16_t internStyle(std::vector<CssStyle>& pool, const CssStyle& style) {
+  for (size_t i = 0; i < pool.size(); ++i) {
+    if (styleEquals(pool[i], style)) return static_cast<uint16_t>(i);
   }
-  content.stylePool.push_back(style);
-  return static_cast<uint16_t>(content.stylePool.size() - 1);
+  pool.push_back(style);
+  return static_cast<uint16_t>(pool.size() - 1);
+}
+
+uint16_t internStyle(CompiledContent& content, const CssStyle& style) {
+  return internStyle(content.stylePool, style);
 }
 
 }  // namespace compiled
