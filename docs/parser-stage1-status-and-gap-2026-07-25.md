@@ -4,7 +4,25 @@ Branch: `feat-stage1-extraction`. This document reconciles what the Stage-1 work
 delivered against the objectives in `docs/compiled-book-pipeline-plan.md` (Phase 3), records the
 load-bearing gap, and specifies the next action (persist + read `content.bin` on the device path).
 
-## Where we are — honest status
+## UPDATE 2026-07-26 — payoff now PROVEN end-to-end; only device wiring remains
+
+Since this doc was written, the format+proof gaps below were closed:
+- **WBC1 completed** to a full Stage-1 artifact: footnotes + xpath LUT + page-break labels (v3,
+  `02e1f430`), then the source ZIP fingerprint for stale-cache rejection (v4, `ea9f7979`).
+- **Read-back replay proven byte-identical**: `ContentBinReplayMatrix` — content.bin → LayoutSink
+  reproduces a direct parse+layout across 94 cases (full corpus × 7 profiles + Moby, incl.
+  footnotes). `5f4f4661`.
+- **≥3× speed gate MET and measured**: ~**8–9×** on Moby (full parse+layout ~1.6s → content.bin
+  replay ~0.18s). `9010b087`, baseline `docs/pipeline-baseline-2026-07-26.md`.
+- **Device-wiring designed**: `docs/parser-stage1-content-bin-device-wiring-design-2026-07-26.md`
+  (two-pass, ZIP-fingerprint key, flag-gated 4-increment rollout). Increment 1 (v4 fingerprint) DONE.
+
+**Remaining**: increments 2–4 of the device wiring — touch `Section::createSectionFile` to write
+`content.bin` and add the read-back fast path. Shipping-path change; needs device validation (cold/
+warm open ms, background-build slicing, SD cost) that the host-only environment cannot provide.
+Full host suite 539/539 green.
+
+## Where we are — honest status (as of 2026-07-25, superseded above for the format/proof items)
 
 The two-stage split now **exists in code and is proven correct**, but the migration's user-facing
 payoff is **not yet delivered**.
