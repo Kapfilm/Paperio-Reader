@@ -47,10 +47,22 @@ class BlockStreamReader {
   // Load the (small, book-level) chapter table on demand.
   bool readChapters(std::vector<Chapter>& out);
 
-  // Position at spine i's block stream. Reads the spine header (firstCharOffset + blockCount).
-  // Returns false on I/O error or i out of range.
+  // Position at spine i's block stream. Reads the spine header (firstCharOffset + blockCount +
+  // auxOffset) AND pre-loads the spine's (small) anchor + label tables from auxOffset, so
+  // spineAnchors()/spineLabels() are available BEFORE the block stream. Returns false on I/O error
+  // or i out of range.
   bool openSpine(uint32_t i);
   uint32_t spineFirstCharOffset() const { return spineFirstCharOffset_; }
+
+  // The current spine's anchors/labels (loaded up front by openSpine). Their blockIndex is a RECORD
+  // index; nextLogicalBlock() reports the first-record index of each logical block via
+  // currentFirstRecordIndex() so callers can cross-reference.
+  const std::vector<Anchor>& spineAnchors() const { return spineAnchors_; }
+  const std::vector<PageBreakLabel>& spineLabels() const { return spineLabels_; }
+
+  // Record index (0-based within the spine) of the FIRST record of the logical block most recently
+  // returned by nextLogicalBlock(). Anchors/labels/chapters are keyed on this.
+  uint32_t currentFirstRecordIndex() const { return currentFirstRecordIndex_; }
 
   // Read the next LOGICAL block of the current spine into `out` (merging any kContinuation records).
   // Returns true and fills `out` when a block was read; false at spine end or on error (check
@@ -81,8 +93,12 @@ class BlockStreamReader {
   std::vector<uint32_t> spineOffsets_;
 
   // Current spine cursor.
-  uint32_t spineBlocksRemaining_ = 0;  // on-disk records left in the current spine
+  uint32_t spineBlockCount_ = 0;       // total on-disk records in the current spine
+  uint32_t spineBlocksRemaining_ = 0;  // on-disk records left to read
   uint32_t spineFirstCharOffset_ = 0;
+  uint32_t currentFirstRecordIndex_ = 0;  // first-record index of the last logical block returned
+  std::vector<Anchor> spineAnchors_;
+  std::vector<PageBreakLabel> spineLabels_;
 
   // One-record lookahead so nextLogicalBlock can peek whether the following record is a
   // continuation of the base it just read.

@@ -89,8 +89,26 @@ bool BlockStreamReader::readChapters(std::vector<Chapter>& out) {
 bool BlockStreamReader::openSpine(uint32_t i) {
   if (!ok_ || !file_ || i >= spineOffsets_.size()) return false;
   if (!file_->seekSet(spineOffsets_[i])) return false;
+  uint32_t auxOffset = 0;
   readPod(*file_, spineFirstCharOffset_);
-  readPod(*file_, spineBlocksRemaining_);
+  readPod(*file_, spineBlockCount_);
+  readPod(*file_, auxOffset);
+  if (!*file_) return false;
+  const uint32_t firstBlockOffset = static_cast<uint32_t>(file_->position());
+
+  // Pre-load the (small) anchors/labels from auxOffset so they are available before the blocks.
+  spineAnchors_.clear();
+  spineLabels_.clear();
+  if (auxOffset != 0) {
+    if (auxOffset > static_cast<uint32_t>(file_->fileSize())) return false;
+    if (!file_->seekSet(auxOffset)) return false;
+    if (!readAnchors(*file_, spineAnchors_)) return false;
+    if (!readLabels(*file_, spineLabels_)) return false;
+  }
+  // Rewind to the first block to begin streaming.
+  if (!file_->seekSet(firstBlockOffset)) return false;
+  spineBlocksRemaining_ = spineBlockCount_;
+  currentFirstRecordIndex_ = 0;
   haveLookahead_ = false;
   return static_cast<bool>(*file_);
 }
@@ -108,6 +126,10 @@ bool BlockStreamReader::readOneRecord(Block& rec) {
 
 bool BlockStreamReader::nextLogicalBlock(Block& out) {
   if (!ok_ || !file_) return false;
+
+  // The record index of the block we are about to return = total records consumed so far. (The
+  // lookahead, if present, was already counted; subtract it so the index points at THIS block.)
+  currentFirstRecordIndex_ = spineBlockCount_ - spineBlocksRemaining_ - (haveLookahead_ ? 1 : 0);
 
   // Take the base: either the lookahead from a prior call, or the next on-disk record.
   if (haveLookahead_) {

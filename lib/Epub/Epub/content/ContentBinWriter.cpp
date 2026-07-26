@@ -58,10 +58,13 @@ void ContentBinWriter::beginSpine() {
   pageBreakLabels_.clear();
   spineOpen_ = true;
   spineHasBlock_ = false;
-  // Placeholder spine header: firstCharOffset (patched at onSpineEnd once known) + blockCount
-  // (patched at onSpineEnd). Reserve the slots now so blocks follow immediately after.
+  // Placeholder spine header: firstCharOffset + blockCount + auxOffset, all patched at onSpineEnd
+  // once known. auxOffset lets the reader seek straight to the (small) anchors/labels — which are
+  // keyed by record index — and load them BEFORE streaming the blocks, so onAnchor/onPageBreakLabel
+  // can fire ahead of the block they introduce. Reserve the slots now so blocks follow.
   writePod(*file_, static_cast<uint32_t>(0));  // firstCharOffset
   writePod(*file_, static_cast<uint32_t>(0));  // blockCount
+  writePod(*file_, static_cast<uint32_t>(0));  // auxOffset (of the anchors/labels section)
   ok_ = static_cast<bool>(*file_);
 }
 
@@ -147,10 +150,11 @@ void ContentBinWriter::onSpineEnd() {
     // A spine with no blocks at all: still emit an (empty) spine so the index has an entry.
     beginSpine();
   }
-  // Write this spine's aux tables after its block stream.
+  // Write this spine's aux tables after its block stream; remember where they start.
+  const uint32_t auxOffset = static_cast<uint32_t>(file_->position());
   writeAnchors(*file_, anchors_);
   writeLabels(*file_, pageBreakLabels_);
-  // Back-patch the spine header (firstCharOffset + blockCount) now that both are known.
+  // Back-patch the spine header (firstCharOffset + blockCount + auxOffset).
   const uint32_t here = static_cast<uint32_t>(file_->position());
   if (!file_->seekSet(spineStartOffset_)) {
     ok_ = false;
@@ -158,6 +162,7 @@ void ContentBinWriter::onSpineEnd() {
   }
   writePod(*file_, spineFirstCharOffset_);
   writePod(*file_, blockCount_);
+  writePod(*file_, auxOffset);
   file_->seekSet(here);  // resume appending at end
   ok_ = static_cast<bool>(*file_);
   spineOpen_ = false;

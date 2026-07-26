@@ -36,12 +36,19 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
   std::vector<uint32_t> spineOffsets;
   spineOffsets.reserve(content.spines.size());
   for (const SpineContent& spine : content.spines) {
-    spineOffsets.push_back(static_cast<uint32_t>(out.position()));
+    const uint32_t spineStart = static_cast<uint32_t>(out.position());
+    spineOffsets.push_back(spineStart);
     writePod(out, spine.firstCharOffset);
     writePod(out, static_cast<uint32_t>(spine.blocks.size()));
+    writePod(out, static_cast<uint32_t>(0));  // auxOffset placeholder
     for (const Block& b : spine.blocks) writeBlock(out, b);
+    const uint32_t auxOffset = static_cast<uint32_t>(out.position());
     writeAnchors(out, spine.anchors);
     writeLabels(out, spine.pageBreakLabels);
+    const uint32_t afterAux = static_cast<uint32_t>(out.position());
+    if (!out.seekSet(spineStart + 2 * sizeof(uint32_t))) return false;  // skip firstCharOffset+blockCount
+    writePod(out, auxOffset);
+    out.seekSet(afterAux);
   }
   const uint32_t stylePoolOff = static_cast<uint32_t>(out.position());
   writeStylePool(out, content.stylePool);
@@ -73,12 +80,13 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
     SpineContent& spine = content.spines[si];
     if (!r.openSpine(si)) return false;
     spine.firstCharOffset = r.spineFirstCharOffset();
+    spine.anchors = r.spineAnchors();  // openSpine pre-loaded these
+    spine.pageBreakLabels = r.spineLabels();
     // Whole-book read keeps the RAW on-disk records (kContinuation splits stored as-is), so read
     // records directly rather than the merged logical blocks.
     Block b;
     while (r.nextRawRecord(b)) spine.blocks.push_back(std::move(b));
     if (!r.ok()) return false;
-    if (!r.readSpineAux(spine.anchors, spine.pageBreakLabels)) return false;
   }
   return r.readChapters(content.chapters);
 }
