@@ -295,6 +295,83 @@ INSTANTIATE_TEST_SUITE_P(Matrix, ContentBinReplayMatrix, testing::ValuesIn(bookP
                            return n;
                          });
 
+// SETTINGS-INDEPENDENCE gate (plan v2, Fable's catch): content.bin must carry NO settings-dependent
+// data. Compile content.bin at profile A, then replay it at a DIFFERENT profile B, and assert the
+// result equals a DIRECT compile+layout at B. If any viewport/font-dependent value leaked into
+// content.bin (e.g. a footnote preview abbreviated at A's viewport), replaying at B would differ
+// from direct-at-B. The byte-identical replay gate (same-profile) cannot see this class of bug.
+// Uses footnote-bearing books (the abbreviation is the exact leak that was fixed and must stay fixed)
+// + a real book, across profile pairs that flex the viewport and font.
+struct IndepCase {
+  std::string dir;
+  std::string book;
+  pipeline_harness::Profile compileProfile;  // A
+  pipeline_harness::Profile replayProfile;   // B (also the direct comparison profile)
+  std::string name;
+};
+
+std::vector<IndepCase> independenceCases() {
+  auto prof = [](const char* n, uint16_t w, int font, bool hyphen) {
+    pipeline_harness::Profile p;
+    p.name = n;
+    p.viewportWidth = w;
+    p.fontId = font;
+    p.hyphenationEnabled = hyphen;
+    return p;
+  };
+  const pipeline_harness::Profile wide = prof("wide", 460, 1, false);
+  const pipeline_harness::Profile narrow = prof("narrow", 240, 1, false);
+  const pipeline_harness::Profile hyphen = prof("hyphen", 300, 1, true);
+  std::vector<IndepCase> out;
+  // Compile at one profile, replay at another — for footnote fixtures (the abbreviation leak class)
+  // and a real book. The compiled content.bin must serve ANY target profile identically to a direct
+  // build at that profile.
+  for (const char* book : {"test_inline_footnotes.epub", "test_text_rendering.epub", "test_tables.epub"}) {
+    out.push_back({CORPUS_DIR, book, wide, narrow, std::string(book) + "_wideCompile_narrowReplay"});
+    out.push_back({CORPUS_DIR, book, narrow, wide, std::string(book) + "_narrowCompile_wideReplay"});
+    out.push_back({CORPUS_DIR, book, wide, hyphen, std::string(book) + "_wideCompile_hyphenReplay"});
+  }
+  out.push_back({FIXTURES_DIR, "moby-dick.epub", wide, narrow, "moby_wideCompile_narrowReplay"});
+  return out;
+}
+
+class SettingsIndependenceMatrix : public testing::TestWithParam<IndepCase> {};
+
+TEST_P(SettingsIndependenceMatrix, ReplayAtBEqualsDirectAtB) {
+  const IndepCase& c = GetParam();
+  const std::string epub = c.dir + "/" + c.book;
+
+  // Compile content.bin at profile A into `binDir`, then replay it at profile B.
+  const std::string binDir = freshDir(c.name + "_bin");
+  {
+    std::ostringstream sink;
+    ASSERT_TRUE(pipeline_harness::compileToContentBin(epub, binDir, c.compileProfile, sink)) << sink.str();
+  }
+  std::ostringstream replayOut;
+  ASSERT_TRUE(pipeline_harness::replayFromContentBin(epub, binDir, c.replayProfile, replayOut)) << replayOut.str();
+
+  // Direct compile+layout at profile B (the ground truth for B).
+  const std::string direct = sinkDump(epub, freshDir(c.name + "_direct"), c.replayProfile);
+
+  if (direct != replayOut.str() && std::getenv("DUMP_DIFF")) {
+    const auto base = fs::temp_directory_path() / "settings_indep_diff";
+    fs::create_directories(base);
+    std::ofstream(base / (c.name + ".direct.txt")) << direct;
+    std::ofstream(base / (c.name + ".replayAtB.txt")) << replayOut.str();
+  }
+  EXPECT_EQ(direct, replayOut.str())
+      << "content.bin compiled at " << c.compileProfile.name << " does not serve " << c.replayProfile.name
+      << " identically to a direct build — a settings-dependent value leaked into content.bin (" << c.name << ")";
+}
+
+INSTANTIATE_TEST_SUITE_P(Matrix, SettingsIndependenceMatrix, testing::ValuesIn(independenceCases()),
+                         [](const testing::TestParamInfo<IndepCase>& info) {
+                           std::string n = info.param.name;
+                           for (char& ch : n)
+                             if (!std::isalnum(static_cast<unsigned char>(ch))) ch = '_';
+                           return n;
+                         });
+
 // The Phase-3 SPEED gate: a settings change today re-runs the full pipeline (ZIP/inflate/Expat/CSS
 // + layout) = layoutViaSink. With a persisted content.bin it re-runs only the Stage-2 layout =
 // replayFromContentBin (read records + paginate). The plan targets >=3x faster relayout. We assert
