@@ -1,6 +1,7 @@
 add_executable(CompiledContentTest
   CompiledContentTest.cpp
   ${REPO_ROOT}/lib/Epub/Epub/content/CompiledContent.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/content/BlockSerialization.cpp
 )
 
 target_include_directories(CompiledContentTest PRIVATE
