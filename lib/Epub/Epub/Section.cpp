@@ -1217,9 +1217,7 @@ bool Section::buildSectionFromContentBin(const BuildParams& p, const bool skipEv
                          p.viewportHeight, p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled,
                          p.imageRendering);
 
-  // Chapters (small, book-level) for the replay's onChapter cross-reference.
-  std::vector<compiled::Chapter> chapters;
-  reader.readChapters(chapters);
+  // v6: chapters are per-spine and loaded by replaySpine's openSpine — no book-level read needed.
 
   // Drive a LayoutSink from the streaming reader; pages stream to the section file via onPageComplete
   // (identical to the parser's completePageFn), so RAM stays ~one page + one block.
@@ -1243,7 +1241,7 @@ bool Section::buildSectionFromContentBin(const BuildParams& p, const bool skipEv
   {
     compiled::LayoutSink sink(renderer, std::move(lp),
                               [this, &lut](std::unique_ptr<Page> page) { lut.emplace_back(onPageComplete(std::move(page))); });
-    replayOk = compiled::replaySpine(reader, static_cast<uint32_t>(spineIndex), chapters, sink);
+    replayOk = compiled::replaySpine(reader, static_cast<uint32_t>(spineIndex), sink);
     if (replayOk) {
       // Write the section tail from the LayoutSink getters (same shapes as the parser's).
       const auto& anchors = sink.anchors();

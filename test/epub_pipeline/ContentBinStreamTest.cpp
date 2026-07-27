@@ -6,6 +6,7 @@
 #include <HalStorage.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <process.h>  // _getpid - per-process temp isolation under parallel ctest
 #include <sstream>
@@ -150,31 +151,43 @@ TEST(ContentBinStream, FootnotesSurviveStreaming) {
   in.close();
 }
 
-// A truncated / never-finished (offsets still 0) content.bin must fail cleanly at open, not crash.
-TEST(ContentBinStream, RejectsCorruptAndUnfinished) {
+// v6: a partially-written file (header + zeroed index, no spines committed) OPENS cleanly — that is
+// the frontier model, not corruption — but every spine reports !spineAvailable(). A truncated file
+// whose committed offsets point past EOF must still be rejected at open.
+TEST(ContentBinStream, PartialFileOpensButSpinesUnavailable) {
   const std::string dir = freshDir("corrupt");
   ContentSink sink;
   ASSERT_TRUE(compileWhole("test_headings.epub", dir, sink));
 
-  // (1) A file whose header was written but never finish()ed: offsets stay 0 → reject.
+  // (1) A file whose header + zeroed index were written but no spine committed (interrupted before
+  // the first onSpineEnd). v6 accepts it (partial = legal); no spine is available yet.
   const std::string unfinished = dir + "/unfinished.bin";
+  const uint32_t spineCount = static_cast<uint32_t>(sink.content().spines.size());
   {
     FsFile f;
     ASSERT_TRUE(f.openForWrite(unfinished));
     ContentBinWriter w;
-    ASSERT_TRUE(w.begin(f, static_cast<uint32_t>(sink.content().spines.size()), 7));
-    // ... deliberately NO spines, NO finish() ...
+    ASSERT_TRUE(w.begin(f, spineCount, 7));
+    // ... deliberately NO spines committed ...
     f.close();
   }
   {
     FsFile in;
     ASSERT_TRUE(in.openForRead(unfinished));
     BlockStreamReader r;
-    EXPECT_FALSE(r.open(in)) << "unfinished (offsets==0) file must be rejected as stale";
+    EXPECT_TRUE(r.open(in)) << "v6 partial file (zeroed index) must open — it is the frontier, not stale";
+    EXPECT_EQ(r.spineCount(), spineCount);
+    for (uint32_t si = 0; si < spineCount; ++si)
+      EXPECT_FALSE(r.spineAvailable(si)) << "no spine committed yet → spine " << si << " unavailable";
+    EXPECT_FALSE(r.openSpine(0)) << "openSpine on an uncommitted slot must fail";
     in.close();
   }
 
-  // (2) A valid file truncated mid-stream → reject.
+  // (2) A valid file truncated mid-stream. v6 puts the spine-offset index at the FRONT (right after
+  // the header), so a mid-file chop leaves the index readable; open() may succeed. Corruption is then
+  // caught either at open (a committed offset now past EOF) OR when the affected spine is read
+  // (openSpine seek / nextLogicalBlock read fails). Assert the reader never returns garbage: it must
+  // fail cleanly at SOME point rather than yielding a full, valid replay of the truncated book.
   const std::string full = dir + "/full.bin";
   ASSERT_TRUE(streamWrite(sink.content(), full, 9));
   const auto fullSize = fs::file_size(full);
@@ -185,7 +198,11 @@ TEST(ContentBinStream, RejectsCorruptAndUnfinished) {
     ASSERT_TRUE(fp);
     ASSERT_EQ(fread(&bytes[0], 1, fullSize, fp), fullSize);
     fclose(fp);
-    bytes.resize(fullSize / 2);  // chop in half — offsets now point past EOF
+    // Chop just past the header + spine index so spine 0's own data is guaranteed truncated,
+    // regardless of book size (a /2 chop could leave a small book's spines fully intact).
+    const size_t cut = compiled::kHeaderSize +
+                       static_cast<size_t>(sink.content().spines.size()) * sizeof(uint32_t) + 8;
+    bytes.resize(std::min<size_t>(bytes.size(), cut));
     FILE* out = fopen(truncated.c_str(), "wb");
     ASSERT_TRUE(out);
     fwrite(bytes.data(), 1, bytes.size(), out);
@@ -195,7 +212,21 @@ TEST(ContentBinStream, RejectsCorruptAndUnfinished) {
     FsFile in;
     ASSERT_TRUE(in.openForRead(truncated));
     BlockStreamReader r;
-    EXPECT_FALSE(r.open(in)) << "truncated file (offsets past EOF) must be rejected";
+    bool cleanlyDetected = false;
+    if (!r.open(in)) {
+      cleanlyDetected = true;  // offset past EOF caught at open
+    } else {
+      // open() accepted the front-loaded index; a full drain of every AVAILABLE spine must hit an
+      // error before completing (a spine's blocks/aux were chopped off).
+      for (uint32_t si = 0; si < r.spineCount() && !cleanlyDetected; ++si) {
+        if (!r.spineAvailable(si)) continue;
+        if (!r.openSpine(si)) { cleanlyDetected = true; break; }
+        Block b;
+        while (r.nextLogicalBlock(b)) { /* drain */ }
+        if (!r.ok()) cleanlyDetected = true;
+      }
+    }
+    EXPECT_TRUE(cleanlyDetected) << "a truncated file must be detected at open or while reading, not silently replayed whole";
     in.close();
   }
 }

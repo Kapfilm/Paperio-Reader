@@ -437,8 +437,7 @@ bool replayFromContentBin(const std::string& epubPath, const std::string& cacheD
     out << "ERROR content.bin fingerprint mismatch (stale cache)\n";
     return false;
   }
-  std::vector<compiled::Chapter> chapters;
-  reader.readChapters(chapters);
+  // v6: chapters are per-spine, loaded by replaySpine's openSpine — no book-level read.
 
   out << "BOOK title=" << epub->getTitle() << " lang=" << epub->getLanguage() << " spine=" << epub->getSpineItemsCount()
       << " toc=" << epub->getTocItemsCount() << " reliableToc=" << (epub->hasReliableToc() ? 1 : 0) << "\n";
@@ -463,7 +462,7 @@ bool replayFromContentBin(const std::string& epubPath, const std::string& cacheD
 
     if (static_cast<uint32_t>(i) < reader.spineCount()) {
       // The shared per-spine replay driver (also used by the device Section read-back build).
-      if (!compiled::replaySpine(reader, static_cast<uint32_t>(i), chapters, sink)) {
+      if (!compiled::replaySpine(reader, static_cast<uint32_t>(i), sink)) {
         out << "SPINE " << i << " ERROR block stream replay failed\n";
         return false;
       }

@@ -109,10 +109,13 @@ compiled::TableCell textCell(const std::vector<std::string>& words, bool isHeade
 }
 
 void expectEqual(const CompiledContent& in, const CompiledContent& out) {
-  ASSERT_EQ(in.stylePool.size(), out.stylePool.size());
-  for (size_t i = 0; i < in.stylePool.size(); ++i) {
-    EXPECT_TRUE(styleEq(in.stylePool[i], out.stylePool[i])) << "style " << i;
-  }
+  // v6: styles are per-spine self-contained, so writeContentBin re-interns each spine's referenced
+  // styles into a local pool and readContentBin re-flattens them into out.stylePool with dedup. The
+  // pool INDICES and SIZE are therefore not preserved across the round-trip — only the STYLE each
+  // block resolves to is. Compare resolved styles per block (below), not raw styleId / pool layout.
+  const auto resolvedStyle = [](const CompiledContent& c, uint16_t id) -> CssStyle {
+    return id < c.stylePool.size() ? c.stylePool[id] : CssStyle{};
+  };
   ASSERT_EQ(in.spines.size(), out.spines.size());
   for (size_t s = 0; s < in.spines.size(); ++s) {
     EXPECT_EQ(in.spines[s].firstCharOffset, out.spines[s].firstCharOffset);
@@ -121,7 +124,8 @@ void expectEqual(const CompiledContent& in, const CompiledContent& out) {
       const Block& a = in.spines[s].blocks[bi];
       const Block& b = out.spines[s].blocks[bi];
       EXPECT_EQ(static_cast<int>(a.type), static_cast<int>(b.type));
-      EXPECT_EQ(a.styleId, b.styleId);
+      EXPECT_TRUE(styleEq(resolvedStyle(in, a.styleId), resolvedStyle(out, b.styleId)))
+          << "resolved style, spine " << s << " block " << bi;
       EXPECT_EQ(a.flags, b.flags);
       EXPECT_EQ(a.charOffset, b.charOffset);
       EXPECT_EQ(a.text, b.text);

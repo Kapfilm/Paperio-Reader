@@ -14,52 +14,57 @@ using serialization::writePod;
 
 }  // namespace
 
-// Whole-book v5 writer. Produces the SAME on-disk layout as the streaming ContentBinWriter (header
-// with back-patched section offsets → per-spine block streams → style pool → spine index →
-// chapters), but from an already-materialized CompiledContent (test/tooling convenience). Blocks are
-// written AS-IS (their existing styleId + already-split kContinuation records), so it faithfully
-// round-trips whatever the caller built.
+// Whole-book v6 writer. Produces the SAME on-disk layout as the streaming ContentBinWriter (header →
+// pre-allocated spine-offset index → per-spine SELF-CONTAINED sections: block stream then an aux
+// region of anchors + labels + this spine's style table + this spine's chapters), from an
+// already-materialized CompiledContent (test/tooling convenience). Blocks are written AS-IS (their
+// existing styleId + already-split kContinuation records). The caller's block styleId values must
+// index a PER-SPINE pool (v6); this writer re-derives each spine's local pool from the referenced
+// styles so a CompiledContent carrying a single book-global stylePool still round-trips. The
+// book-level content.chapters are partitioned back to their spines by Chapter::spineIndex.
 bool writeContentBin(FsFile& out, const CompiledContent& content) {
   if (!out) return false;
-  const auto writeHeader = [&](uint32_t spineCount, uint32_t stylePoolOff, uint32_t spineIndexOff,
-                               uint32_t chaptersOff) {
-    out.write(reinterpret_cast<const uint8_t*>(kMagic), 4);
-    writePod(out, kVersion);
-    writePod(out, content.sourceFingerprint);
-    writePod(out, spineCount);
-    writePod(out, stylePoolOff);
-    writePod(out, spineIndexOff);
-    writePod(out, chaptersOff);
-  };
-  writeHeader(static_cast<uint32_t>(content.spines.size()), 0, 0, 0);  // placeholder
+  const uint32_t spineCount = static_cast<uint32_t>(content.spines.size());
+  out.write(reinterpret_cast<const uint8_t*>(kMagic), 4);
+  writePod(out, kVersion);
+  writePod(out, content.sourceFingerprint);
+  writePod(out, spineCount);
+  const uint32_t indexPos = static_cast<uint32_t>(out.position());  // == kHeaderSize
+  for (uint32_t i = 0; i < spineCount; ++i) writePod(out, static_cast<uint32_t>(0));  // zeroed index
 
-  std::vector<uint32_t> spineOffsets;
-  spineOffsets.reserve(content.spines.size());
-  for (const SpineContent& spine : content.spines) {
+  for (uint32_t si = 0; si < spineCount; ++si) {
+    const SpineContent& spine = content.spines[si];
     const uint32_t spineStart = static_cast<uint32_t>(out.position());
-    spineOffsets.push_back(spineStart);
     writePod(out, spine.firstCharOffset);
     writePod(out, static_cast<uint32_t>(spine.blocks.size()));
     writePod(out, static_cast<uint32_t>(0));  // auxOffset placeholder
-    for (const Block& b : spine.blocks) writeBlock(out, b);
+
+    // Re-map each block's styleId into a spine-local pool (v6 self-contained styles). The source
+    // CompiledContent may carry a book-global stylePool; we intern only the styles this spine uses.
+    std::vector<CssStyle> spineStyles;
+    for (Block b : spine.blocks) {
+      const CssStyle& s =
+          (b.styleId < content.stylePool.size()) ? content.stylePool[b.styleId] : CssStyle{};
+      b.styleId = internStyle(spineStyles, s);
+      writeBlock(out, b);
+    }
     const uint32_t auxOffset = static_cast<uint32_t>(out.position());
     writeAnchors(out, spine.anchors);
     writeLabels(out, spine.pageBreakLabels);
+    writeStylePool(out, spineStyles);
+    // This spine's chapters, in book order, re-based to this spine.
+    std::vector<Chapter> spineChapters;
+    for (const Chapter& ch : content.chapters)
+      if (ch.spineIndex == static_cast<uint16_t>(si)) spineChapters.push_back(ch);
+    writeChapters(out, spineChapters);
+
     const uint32_t afterAux = static_cast<uint32_t>(out.position());
     if (!out.seekSet(spineStart + 2 * sizeof(uint32_t))) return false;  // skip firstCharOffset+blockCount
     writePod(out, auxOffset);
+    if (!out.seekSet(indexPos + si * sizeof(uint32_t))) return false;   // commit index slot si
+    writePod(out, spineStart);
     out.seekSet(afterAux);
   }
-  const uint32_t stylePoolOff = static_cast<uint32_t>(out.position());
-  writeStylePool(out, content.stylePool);
-  const uint32_t spineIndexOff = static_cast<uint32_t>(out.position());
-  writePod(out, static_cast<uint32_t>(spineOffsets.size()));
-  for (uint32_t off : spineOffsets) writePod(out, off);
-  const uint32_t chaptersOff = static_cast<uint32_t>(out.position());
-  writeChapters(out, content.chapters);
-
-  if (!out.seekSet(0)) return false;
-  writeHeader(static_cast<uint32_t>(content.spines.size()), stylePoolOff, spineIndexOff, chaptersOff);
   return static_cast<bool>(out);
 }
 
@@ -72,7 +77,6 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
   BlockStreamReader r;
   if (!r.open(in)) return false;
   content.sourceFingerprint = r.fingerprint();
-  content.stylePool = r.stylePool();
 
   const uint32_t spineCount = r.spineCount();
   content.spines.resize(spineCount);
@@ -82,13 +86,23 @@ bool readContentBin(FsFile& in, CompiledContent& content) {
     spine.firstCharOffset = r.spineFirstCharOffset();
     spine.anchors = r.spineAnchors();  // openSpine pre-loaded these
     spine.pageBreakLabels = r.spineLabels();
+    // v6: styles + chapters are per-spine. Flatten them back into the book-global CompiledContent
+    // shape: re-base each block's styleId into content.stylePool (deduped across spines) and collect
+    // the spine's chapters into content.chapters.
+    const auto& spineStyles = r.spineStylePool();
+    std::vector<uint16_t> remap(spineStyles.size(), 0);
+    for (size_t k = 0; k < spineStyles.size(); ++k) remap[k] = internStyle(content.stylePool, spineStyles[k]);
     // Whole-book read keeps the RAW on-disk records (kContinuation splits stored as-is), so read
     // records directly rather than the merged logical blocks.
     Block b;
-    while (r.nextRawRecord(b)) spine.blocks.push_back(std::move(b));
+    while (r.nextRawRecord(b)) {
+      if (b.styleId < remap.size()) b.styleId = remap[b.styleId];
+      spine.blocks.push_back(std::move(b));
+    }
     if (!r.ok()) return false;
+    for (const Chapter& ch : r.spineChapters()) content.chapters.push_back(ch);
   }
-  return r.readChapters(content.chapters);
+  return true;
 }
 
 bool styleEquals(const CssStyle& a, const CssStyle& b) {

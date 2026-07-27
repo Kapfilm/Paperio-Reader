@@ -35,13 +35,22 @@ inline constexpr char kMagic[4] = {'W', 'B', 'C', '1'};
 // (style pool, spine-offset index, chapters) so ContentBinWriter can append one block at a time and
 // BlockStreamReader can seek to any spine and read one block at a time — neither ever holds a whole
 // spine (let alone the whole book) in RAM. See docs/stage1-revised-plan-v2-2026-07-26.md.
-inline constexpr uint8_t kVersion = 5;
+// v6 makes the file READABLE WHILE STILL BEING WRITTEN (Increment E producer/consumer, see
+// docs/stage1-incr-E-producer-consumer-design-2026-07-26.md): each spine is SELF-CONTAINED — it
+// carries its OWN local style table + its own chapter entries inside its section — so a committed
+// spine can be replayed the instant its offset commits, with no dependency on any later-written
+// book-global structure. The spine-offset INDEX is pre-allocated at a fixed location right after the
+// header (spineCount slots, all 0) and each spine's start offset is committed into its slot as the
+// spine finishes; a 0 slot means "not compiled yet". There is no book-global style pool or chapters
+// section any more. No device shipped v5 content.bin → clean break, no migration.
+inline constexpr uint8_t kVersion = 6;
 
-// v5 fixed header: magic(4) + version(1) + fingerprint(8) + spineCount(4) + stylePoolOffset(4) +
-// spineIndexOffset(4) + chaptersOffset(4). The three offsets and spineCount are 0 until finish()
-// back-patches them. A reader validates magic+version, reads the offsets, loads the (small) style
-// pool + spine-offset index up front, then streams blocks per spine.
-inline constexpr uint32_t kHeaderSize = 4 + 1 + 8 + 4 + 4 + 4 + 4;  // = 29 bytes
+// v6 fixed header: magic(4) + version(1) + fingerprint(8) + spineCount(4). Immediately followed by
+// the pre-allocated spine-offset index: spineCount × u32, all 0 at begin(), each committed as its
+// spine finishes. A reader validates magic+version, reads spineCount, then reads the index that
+// starts at kHeaderSize; a 0 offset = spine not yet available. Per-spine style tables + chapters
+// live inside each spine's section (self-contained), so there are no book-level pool/chapter offsets.
+inline constexpr uint32_t kHeaderSize = 4 + 1 + 8 + 4;  // = 17 bytes; spine index begins here
 
 // Word::styleSpan bits. Bits 0-6 = inline font style (the EpdFontFamily::Style set,
 // remapped to a stable on-disk layout); bit 7 = word attaches to the previous word

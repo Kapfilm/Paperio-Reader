@@ -8,21 +8,27 @@
 // It is a BlockSink: attach it to the walk (Section::setStage1Sink) exactly like ContentSink, and
 // the walk drives it block-by-block. The 8 KB split (appendTextSplit) still applies per block.
 //
-// Usage (the caller owns the FsFile — opened read/write + seekable, so open()/finish() can
-// back-patch the header):
+// v6 (Increment E): each spine is SELF-CONTAINED — its aux region holds the spine's OWN style table
+// and chapter entries alongside its anchors/labels — and the spine-offset index is PRE-ALLOCATED at a
+// fixed location right after the header (spineCount slots, all 0). onSpineEnd() commits the spine's
+// start offset into its index slot, so a consumer can read + replay any committed spine (slot != 0)
+// the instant it finishes, WHILE later spines are still being written. There is no book-global style
+// pool / chapters section and no finish()-time header back-patch of section offsets.
+//
+// Usage (the caller owns the FsFile — opened read/write + seekable, so the index slots + spine
+// headers can be back-patched):
 //   FsFile f; Storage.openFileForWrite("SCT", path, f);   // device; host tests: HalFile::forReadWrite()
 //   ContentBinWriter w;
-//   w.begin(f, spineCount, fingerprint);     // writes a placeholder header
+//   w.begin(f, spineCount, fingerprint);     // header + zeroed spineCount-slot index
 //   for each spine i in [0, spineCount):
 //     w.beginSpine();                        // (also happens lazily on the first onBlock)
 //     ... walk drives onBlock/onAnchor/onChapter/onFootnote/onPageBreakLabel/onXPathAdvance ...
-//     w.onSpineEnd();                        // flushes the spine's aux tables + records its offset
-//   w.finish();                              // appends style pool + spine index + chapters,
-//                                            // back-patches the header. Caller closes the file.
+//     w.onSpineEnd();                        // flush aux (anchors+labels+styles+chapters); commit slot i
+//   w.finish();                              // flushes the file; no index/pool append. Caller closes.
 //
-// No device has v4 content.bin, so there is NO migration path: v5 is the only format. A book can
-// later be written spine-by-spine across build sessions (per-spine-on-first-visit); this class
-// writes a whole book in one begin/finish for now (the host gate + first device test).
+// The spine cursor MUST advance monotonically (spine i then i+1 …) within one begin/finish so the
+// index slots commit in order; a producer that reorders which spine to compile reopens/reseeks per
+// spine (Increment E producer). No device shipped v5 → clean break, no migration.
 
 #include <cstdint>
 #include <string>
@@ -56,11 +62,12 @@ class ContentBinWriter : public BlockSink {
   void onXPathAdvance(uint16_t paragraphIndex, uint16_t listItemIndex, uint32_t bodyChildByteOffset) override;
   void onSpineEnd() override;
 
-  // Open a new spine explicitly (optional — the first onBlock of a spine opens one lazily).
+  // Open a new spine explicitly (optional — the first onBlock of a spine opens one lazily). Advances
+  // the internal spine cursor; spines must be written in index order within one begin/finish.
   void beginSpine();
 
-  // Append the style pool + spine-offset index + chapters, back-patch the header, close. Returns
-  // false on any I/O error. After finish(), the writer is done (reopen for another book).
+  // Flush the file. v6 writes no book-level index/pool/chapters (they are per-spine), so this only
+  // closes out any open spine and syncs. Returns false on any I/O error.
   bool finish();
 
   bool ok() const { return ok_; }
@@ -68,24 +75,27 @@ class ContentBinWriter : public BlockSink {
  private:
   bool flushBlock(Block&& block);  // apply 8 KB split, write each record, count blocks
   bool writeOneRecord(const Block& rec);
+  void commitSpineOffset(uint32_t spineIndex, uint32_t offset);  // back-patch index slot spineIndex
 
   FsFile* file_ = nullptr;  // caller-owned
   bool ok_ = false;
   uint32_t spineCount_ = 0;
   uint64_t fingerprint_ = 0;
+  uint32_t nextSpineIndex_ = 0;  // which index slot the NEXT beginSpine() commits (monotonic)
 
-  std::vector<CssStyle> stylePool_;     // interned styles (small; written at finish)
-  std::vector<uint32_t> spineOffsets_;  // file offset of each spine's start (for the index)
-  std::vector<Chapter> chapters_;       // book-level; small; written at finish
-
-  // Current spine state (all small; RESET at each spine — never a whole spine of blocks).
+  // Current spine state (all small; RESET at each spine — never a whole spine of blocks). v6: the
+  // style pool + chapters are PER-SPINE (written into the spine's aux region at onSpineEnd), so a
+  // committed spine is self-describing.
   bool spineOpen_ = false;
   bool spineHasBlock_ = false;
-  uint32_t spineStartOffset_ = 0;   // where this spine's [firstCharOffset|blockCount] header sits
+  uint32_t spineIndexBeingWritten_ = 0;  // index slot this open spine will commit at onSpineEnd
+  uint32_t spineStartOffset_ = 0;   // where this spine's [firstCharOffset|blockCount|auxOffset] sits
   uint32_t spineFirstCharOffset_ = 0;
   uint32_t blockCount_ = 0;         // running count; back-patched into the spine header at onSpineEnd
-  std::vector<Anchor> anchors_;             // this spine only
+  std::vector<CssStyle> spineStyles_;            // this spine's local, deduped style pool
+  std::vector<Anchor> anchors_;                  // this spine only
   std::vector<PageBreakLabel> pageBreakLabels_;  // this spine only
+  std::vector<Chapter> spineChapters_;           // this spine's chapter entries only
 
   // Footnotes/xpath arrive DURING a block's build (before its onBlock). Buffered, attached at onBlock.
   std::vector<FootnoteRef> pendingFootnotes_;

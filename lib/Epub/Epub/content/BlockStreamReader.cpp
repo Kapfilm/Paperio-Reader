@@ -36,8 +36,9 @@ void mergeContinuation(Block& into, const Block& cont) {
 bool BlockStreamReader::open(FsFile& file) {
   file_ = &file;
   ok_ = false;
-  stylePool_.clear();
   spineOffsets_.clear();
+  spineStylePool_.clear();
+  spineChapters_.clear();
   if (!file) return false;
 
   if (!file.seekSet(0)) return false;
@@ -52,42 +53,26 @@ bool BlockStreamReader::open(FsFile& file) {
   readPod(file, fingerprint_);
   uint32_t spineCount = 0;
   readPod(file, spineCount);
-  readPod(file, stylePoolOffset_);
-  readPod(file, spineIndexOffset_);
-  readPod(file, chaptersOffset_);
 
   const uint32_t fileSize = static_cast<uint32_t>(file.fileSize());
-  // A placeholder header whose offsets were never back-patched (interrupted write) → treat as stale.
-  if (stylePoolOffset_ == 0 || spineIndexOffset_ == 0 || chaptersOffset_ == 0) return false;
-  if (stylePoolOffset_ > fileSize || spineIndexOffset_ > fileSize || chaptersOffset_ > fileSize) return false;
-
-  // Load the (small) style pool.
-  if (!file.seekSet(stylePoolOffset_)) return false;
-  if (!readStylePool(file, stylePool_)) return false;
-
-  // Load the spine-offset index.
-  if (!file.seekSet(spineIndexOffset_)) return false;
-  uint32_t indexCount = 0;
-  readPod(file, indexCount);
-  if (indexCount != spineCount) return false;  // header/index disagree → corrupt
-  spineOffsets_.resize(indexCount);
-  for (uint32_t i = 0; i < indexCount; ++i) {
+  // The spine-offset index is fixed right after the header (spineCount × u32). A 0 slot = spine not
+  // yet committed (partial file / never compiled), which is legal — spineAvailable() reports it. Only
+  // a NON-ZERO offset past EOF is corruption.
+  if (fileSize < kHeaderSize + spineCount * sizeof(uint32_t)) return false;  // index truncated
+  if (!file.seekSet(kHeaderSize)) return false;
+  spineOffsets_.resize(spineCount);
+  for (uint32_t i = 0; i < spineCount; ++i) {
     readPod(file, spineOffsets_[i]);
-    if (spineOffsets_[i] > fileSize) return false;  // offset past EOF → corrupt
+    if (spineOffsets_[i] > fileSize) return false;  // committed offset past EOF → corrupt
   }
 
   ok_ = static_cast<bool>(file);
   return ok_;
 }
 
-bool BlockStreamReader::readChapters(std::vector<Chapter>& out) {
-  if (!ok_ || !file_) return false;
-  if (!file_->seekSet(chaptersOffset_)) return false;
-  return compiled::readChapters(*file_, out);
-}
-
 bool BlockStreamReader::openSpine(uint32_t i) {
   if (!ok_ || !file_ || i >= spineOffsets_.size()) return false;
+  if (spineOffsets_[i] == 0) return false;  // spine not yet committed (frontier)
   if (!file_->seekSet(spineOffsets_[i])) return false;
   uint32_t auxOffset = 0;
   readPod(*file_, spineFirstCharOffset_);
@@ -96,14 +81,20 @@ bool BlockStreamReader::openSpine(uint32_t i) {
   if (!*file_) return false;
   const uint32_t firstBlockOffset = static_cast<uint32_t>(file_->position());
 
-  // Pre-load the (small) anchors/labels from auxOffset so they are available before the blocks.
+  // Pre-load the spine's SELF-CONTAINED aux region from auxOffset (anchors + labels + style table +
+  // chapters, in the exact order ContentBinWriter::onSpineEnd wrote them) so all are available
+  // before the blocks stream.
   spineAnchors_.clear();
   spineLabels_.clear();
+  spineStylePool_.clear();
+  spineChapters_.clear();
   if (auxOffset != 0) {
     if (auxOffset > static_cast<uint32_t>(file_->fileSize())) return false;
     if (!file_->seekSet(auxOffset)) return false;
     if (!readAnchors(*file_, spineAnchors_)) return false;
     if (!readLabels(*file_, spineLabels_)) return false;
+    if (!readStylePool(*file_, spineStylePool_)) return false;
+    if (!compiled::readChapters(*file_, spineChapters_)) return false;
   }
   // Rewind to the first block to begin streaming.
   if (!file_->seekSet(firstBlockOffset)) return false;

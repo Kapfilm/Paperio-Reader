@@ -863,11 +863,12 @@ void LayoutSink::onSpineEnd() {
   }
 }
 
-bool replaySpine(BlockStreamReader& reader, uint32_t spineIndex, const std::vector<Chapter>& chapters,
-                 LayoutSink& sink) {
+bool replaySpine(BlockStreamReader& reader, uint32_t spineIndex, LayoutSink& sink) {
   if (!reader.openSpine(spineIndex)) return false;
   const auto& anchors = reader.spineAnchors();  // keyed by first-record index of a logical block
   const auto& labels = reader.spineLabels();
+  const auto& stylePool = reader.spineStylePool();  // v6: this spine's own local pool
+  const auto& chapters = reader.spineChapters();    // v6: this spine's own chapter entries
 
   Block lb;
   while (reader.nextLogicalBlock(lb)) {
@@ -881,11 +882,10 @@ bool replaySpine(BlockStreamReader& reader, uint32_t spineIndex, const std::vect
     for (const auto& fn : lb.footnotes) sink.onFootnote(static_cast<int>(fn.wordIndex), fn.entry);
     if (lb.hasXPath) sink.onXPathAdvance(lb.xpath.paragraphIndex, lb.xpath.listItemIndex, lb.xpath.bodyChildByteOffset);
     static const CssStyle kEmptyStyle{};
-    const CssStyle& style = (lb.styleId < reader.stylePool().size()) ? reader.stylePool()[lb.styleId] : kEmptyStyle;
+    const CssStyle& style = (lb.styleId < stylePool.size()) ? stylePool[lb.styleId] : kEmptyStyle;
     sink.onBlock(std::move(lb), style);
     for (const auto& ch : chapters)
-      if (ch.spineIndex == static_cast<uint16_t>(spineIndex) && ch.blockIndex == bi)
-        sink.onChapter(ch.level, ch.title);
+      if (ch.blockIndex == bi) sink.onChapter(ch.level, ch.title);
   }
   if (!reader.ok()) return false;
   sink.onSpineEnd();
