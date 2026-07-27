@@ -59,9 +59,11 @@ void ContentBinWriter::commitSpineOffset(uint32_t spineIndex, uint32_t offset) {
   ok_ = static_cast<bool>(*file_);
 }
 
-void ContentBinWriter::beginSpine() {
+void ContentBinWriter::beginSpine() { beginSpineAt(nextSpineIndex_++); }
+
+void ContentBinWriter::beginSpineAt(uint32_t spineIndex) {
   if (!ok_ || !file_) return;
-  spineIndexBeingWritten_ = nextSpineIndex_++;
+  spineIndexBeingWritten_ = spineIndex;
   spineStartOffset_ = static_cast<uint32_t>(file_->position());
   spineFirstCharOffset_ = 0;
   blockCount_ = 0;

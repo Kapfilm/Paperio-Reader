@@ -62,9 +62,17 @@ class ContentBinWriter : public BlockSink {
   void onXPathAdvance(uint16_t paragraphIndex, uint16_t listItemIndex, uint32_t bodyChildByteOffset) override;
   void onSpineEnd() override;
 
-  // Open a new spine explicitly (optional — the first onBlock of a spine opens one lazily). Advances
-  // the internal spine cursor; spines must be written in index order within one begin/finish.
+  // Open the NEXT spine in sequence (index = the internal cursor, post-incremented). Optional — the
+  // first onBlock of a spine opens one lazily. Use this for the whole-book/host path that writes
+  // spines 0..N in order.
   void beginSpine();
+
+  // Open spine `spineIndex` explicitly (Increment E producer): the spine's records are APPENDED at
+  // the current file position (physical order = compile order) but its start offset commits into
+  // index slot `spineIndex` at onSpineEnd, so the producer may compile spines in ANY order (e.g.
+  // read-position order) and the reader still seeks each by its logical index. `spineIndex` must be
+  // < spineCount and not already committed. The internal sequential cursor is left untouched.
+  void beginSpineAt(uint32_t spineIndex);
 
   // Flush the file. v6 writes no book-level index/pool/chapters (they are per-spine), so this only
   // closes out any open spine and syncs. Returns false on any I/O error.
