@@ -863,13 +863,27 @@ void LayoutSink::onSpineEnd() {
   }
 }
 
-bool replaySpine(BlockStreamReader& reader, uint32_t spineIndex, LayoutSink& sink) {
-  if (!reader.openSpine(spineIndex)) return false;
+bool replaySpineBegin(BlockStreamReader& reader, uint32_t spineIndex, SpineReplayCursor& cur) {
+  cur = SpineReplayCursor{};
+  cur.spineIndex = spineIndex;
+  if (!reader.openSpine(spineIndex)) {
+    cur.ok = false;
+    return false;
+  }
+  cur.started = true;
+  return true;
+}
+
+bool replaySpineStep(BlockStreamReader& reader, LayoutSink& sink, uint32_t maxBlocks, SpineReplayCursor& cur) {
+  if (!cur.started || cur.finished || !cur.ok) return false;
+  // openSpine (via replaySpineBegin) loaded these for the spine; they persist across slices because
+  // the reader's per-spine state is unchanged between nextLogicalBlock calls.
   const auto& anchors = reader.spineAnchors();  // keyed by first-record index of a logical block
   const auto& labels = reader.spineLabels();
   const auto& stylePool = reader.spineStylePool();  // v6: this spine's own local pool
   const auto& chapters = reader.spineChapters();    // v6: this spine's own chapter entries
 
+  uint32_t done = 0;
   Block lb;
   while (reader.nextLogicalBlock(lb)) {
     const uint32_t bi = reader.currentFirstRecordIndex();
@@ -886,10 +900,23 @@ bool replaySpine(BlockStreamReader& reader, uint32_t spineIndex, LayoutSink& sin
     sink.onBlock(std::move(lb), style);
     for (const auto& ch : chapters)
       if (ch.blockIndex == bi) sink.onChapter(ch.level, ch.title);
+    if (maxBlocks != 0 && ++done >= maxBlocks) return true;  // yield mid-spine; more blocks remain
   }
-  if (!reader.ok()) return false;
+  if (!reader.ok()) {
+    cur.ok = false;
+    return false;
+  }
   sink.onSpineEnd();
-  return true;
+  cur.finished = true;
+  return false;  // spine complete
+}
+
+bool replaySpine(BlockStreamReader& reader, uint32_t spineIndex, LayoutSink& sink) {
+  SpineReplayCursor cur;
+  if (!replaySpineBegin(reader, spineIndex, cur)) return false;
+  // Run to completion in one call (maxBlocks == 0).
+  replaySpineStep(reader, sink, /*maxBlocks=*/0, cur);
+  return cur.finished && cur.ok;
 }
 
 }  // namespace compiled

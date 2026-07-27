@@ -387,6 +387,7 @@ struct SectionEqCase {
   int spineIndex;
   pipeline_harness::Profile profile;
   std::string name;
+  bool sliced = false;  // Increment E: true drives the resumable stepReadBackFromContentBin
 };
 
 std::vector<SectionEqCase> sectionEqCases() {
@@ -394,15 +395,25 @@ std::vector<SectionEqCase> sectionEqCases() {
   pipeline_harness::Profile narrow;
   narrow.name = "narrow";
   narrow.viewportWidth = 240;
-  std::vector<SectionEqCase> out;
+  std::vector<SectionEqCase> base;
   for (const char* book : {"test_headings.epub", "test_text_rendering.epub", "test_tables.epub",
                            "test_inline_footnotes.epub", "test_png_images.epub"}) {
-    out.push_back({CORPUS_DIR, book, 0, deflt, std::string(book) + "_s0_default"});
-    out.push_back({CORPUS_DIR, book, 0, narrow, std::string(book) + "_s0_narrow"});
+    base.push_back({CORPUS_DIR, book, 0, deflt, std::string(book) + "_s0_default"});
+    base.push_back({CORPUS_DIR, book, 0, narrow, std::string(book) + "_s0_narrow"});
   }
   // A real book, a couple of spines (incl. one with real prose).
-  out.push_back({FIXTURES_DIR, "moby-dick.epub", 0, deflt, "moby_s0_default"});
-  out.push_back({FIXTURES_DIR, "moby-dick.epub", 3, deflt, "moby_s3_default"});
+  base.push_back({FIXTURES_DIR, "moby-dick.epub", 0, deflt, "moby_s0_default"});
+  base.push_back({FIXTURES_DIR, "moby-dick.epub", 3, deflt, "moby_s3_default"});
+  // Each case runs BOTH the run-to-completion read-back and the sliced (1 ms budget) read-back; both
+  // must match the parse byte-for-byte, proving slicing is transparent (Increment E sub-step 2).
+  std::vector<SectionEqCase> out;
+  for (const SectionEqCase& c : base) {
+    out.push_back(c);
+    SectionEqCase s = c;
+    s.sliced = true;
+    s.name = c.name + "_sliced";
+    out.push_back(s);
+  }
   return out;
 }
 
@@ -413,7 +424,7 @@ TEST_P(SectionEquivalenceMatrix, ReadBackSectionEqualsParse) {
   const std::string epub = c.dir + "/" + c.book;
   std::ostringstream diag;
   const bool eq =
-      pipeline_harness::sectionEquivalence(epub, freshDir(c.name), c.spineIndex, c.profile, diag);
+      pipeline_harness::sectionEquivalence(epub, freshDir(c.name), c.spineIndex, c.profile, diag, c.sliced);
   EXPECT_TRUE(eq) << "read-back section cache differs from parse for " << c.name << "\n" << diag.str();
 }
 

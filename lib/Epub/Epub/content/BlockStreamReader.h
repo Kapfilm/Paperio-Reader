@@ -125,6 +125,31 @@ class BlockStreamReader {
 // spine materialized. v6: chapters + styles are the spine's OWN (loaded by openSpine), so the caller
 // passes nothing book-global. Returns false on any read error (check reader.ok()). Shared by the host
 // harness (replayFromContentBin) and the device Section read-back build so they never drift.
+//
+// Run-to-completion; equivalent to replaySpineBegin(...) then replaySpineStep(..., 0) to Done.
 bool replaySpine(BlockStreamReader& reader, uint32_t spineIndex, LayoutSink& sink);
+
+// SLICED replay (Increment E consumer): the same per-spine replay, resumable across ticks so a huge
+// spine never blocks the loop. Hold a SpineReplayCursor across calls; it caches the cross-block state
+// (anchor/label lists + this spine's index) that openSpine loaded, so replaySpineStep only walks the
+// block stream. The reader + sink must be the SAME instances (and stay alive) across calls.
+struct SpineReplayCursor {
+  uint32_t spineIndex = 0;
+  bool started = false;   // openSpine done
+  bool finished = false;  // onSpineEnd fired (terminal)
+  bool ok = true;         // false on any read error
+};
+
+// Open `spineIndex` and prime `cur`. Returns false if the spine is not available / open failed.
+bool replaySpineBegin(BlockStreamReader& reader, uint32_t spineIndex, SpineReplayCursor& cur);
+
+// Replay at most `maxBlocks` logical blocks of the current spine through `sink` (maxBlocks == 0 =
+// run the spine to completion in one call). Returns true while blocks remain (call again); false
+// once the spine is fully replayed (onSpineEnd fired) OR on error — check cur.finished / cur.ok to
+// distinguish. Fires the same onAnchor/onPageBreakLabel/onFootnote/onXPathAdvance/onBlock/onChapter
+// order as replaySpine, so the produced pages are identical regardless of slice boundaries.
+// Timing-agnostic (block-count budget); the caller wraps this in its own millis() budget loop so the
+// layout layer stays free of a timing dependency.
+bool replaySpineStep(BlockStreamReader& reader, LayoutSink& sink, uint32_t maxBlocks, SpineReplayCursor& cur);
 
 }  // namespace compiled

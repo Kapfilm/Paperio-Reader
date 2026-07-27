@@ -587,12 +587,30 @@ struct Section::BuildState {
   uint32_t parseMs = 0;
 };
 
-// Out-of-line (see header): both need the complete BuildState type, and the dtor must
+// Live state of an in-progress content.bin READ-BACK (Increment E consumer), owned across
+// stepReadBackFromContentBin() calls. Holds exactly what must survive a mid-spine yield: the open
+// content.bin (its BlockStreamReader cursor), the LayoutSink (accumulating pages/anchors/labels),
+// the page-offset LUT, the replay cursor, and the property hash so a variant change can be detected.
+// The section file is `Section::file` (opened at setup, streamed to by the sink's completePageFn).
+struct Section::ReadBackState {
+  compiled::SpineReplayCursor cursor;          // per-spine replay position
+  FsFile binFile;                             // content.bin, kept open (reader points into it)
+  compiled::BlockStreamReader reader;
+  std::unique_ptr<compiled::LayoutSink> sink;  // heap-owned: its completePageFn captures &lut
+  std::vector<uint32_t> lut;                    // page byte-offsets, grown as pages complete
+  uint32_t propertyHash = 0;                    // variant key; a change discards the partial
+  uint32_t startMs = 0;
+};
+
+// Out-of-line (see header): both need the complete BuildState/ReadBackState types, and the dtor must
 // not leave a partially written cache file behind when a Section dies with a build in
 // flight (book close, activity exit) — its header was never patched with offsets.
 Section::Section(const std::shared_ptr<Epub>& epub, const int spineIndex, GfxRenderer& renderer)
     : epub(epub), spineIndex(spineIndex), renderer(renderer) {}
-Section::~Section() { abortSectionBuild(); }
+Section::~Section() {
+  abortSectionBuild();
+  abortReadBack();
+}
 
 Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   const BuildParams& p = st.params;
@@ -1178,96 +1196,156 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   }
 }
 
+void Section::abortReadBack() {
+  if (!readBackState_) return;
+  // Close+remove the half-written section file so a partial read-back never survives as a valid
+  // cache. The BlockStreamReader/LayoutSink/binFile drop with the state.
+  file.close();
+  if (!filePath.empty()) Storage.remove(filePath.c_str());
+  pageCount = 0;
+  this->lut.clear();
+  readBackState_.reset();
+}
+
 bool Section::buildSectionFromContentBin(const BuildParams& p, const bool skipEviction) {
 #if !EPUB_STAGE1
   (void)p;
   (void)skipEviction;
   return false;
 #else
-  const uint32_t t0 = millis();
-  // Content.bin must exist and match the book on disk.
-  const std::string binPath = epub->getCachePath() + "/content.bin";
-  FsFile binFile;
-  if (!Storage.openFileForRead("SCT", binPath, binFile)) return false;
-  compiled::BlockStreamReader reader;
-  if (!reader.open(binFile)) {
-    LOG_INF("SCT", "content.bin present but unreadable/stale for spine %d; falling back to parse", spineIndex);
-    return false;
+  // Run-to-completion wrapper: pump the sliced read-back with no budget (never yields mid-spine).
+  for (;;) {
+    switch (stepReadBackFromContentBin(p, /*budgetMs=*/0, skipEviction)) {
+      case ReadBackStep::Done:
+        return true;
+      case ReadBackStep::Failed:
+      case ReadBackStep::NotAvailable:
+        return false;
+      case ReadBackStep::More:
+        continue;  // budgetMs==0 only yields on the initial setup boundary, if at all
+    }
   }
-  uint64_t bookFp = 0;
-  if (reader.fingerprint() != 0 && epub->zipContentFingerprint(&bookFp) && bookFp != reader.fingerprint()) {
-    LOG_INF("SCT", "content.bin fingerprint mismatch for spine %d; falling back to parse", spineIndex);
-    return false;
-  }
-  if (static_cast<uint32_t>(spineIndex) >= reader.spineCount()) return false;  // spine not compiled yet
+#endif
+}
 
-  if (!skipEviction) evictOldVariants();
+// Number of logical blocks replayed per inner slice before the ms-budget is re-checked. Small enough
+// that one slice's layout work overshoots the budget by at most a handful of blocks, large enough to
+// keep the per-slice overhead (the millis() check) negligible. Mirrors the parser's ~1 KB feed chunk.
+static constexpr uint32_t kReadBackBlocksPerSlice = 8;
 
+Section::ReadBackStep Section::stepReadBackFromContentBin(const BuildParams& p, const uint32_t budgetMs,
+                                                         const bool skipEviction) {
+#if !EPUB_STAGE1
+  (void)p;
+  (void)budgetMs;
+  (void)skipEviction;
+  return ReadBackStep::NotAvailable;
+#else
   const uint32_t propertyHash = calculatePropertyHash(
       p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment, p.viewportWidth, p.viewportHeight,
       p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled, p.inlineFootnotePreviews, p.imageRendering);
-  filePath = getSectionFilePath(propertyHash);
-  { const auto sectionsDir = epub->getCachePath() + "/sections"; Storage.mkdir(sectionsDir.c_str()); }
 
-  file.close();
-  pageCount = 0;
-  this->lut.clear();
-  if (!Storage.openFileForWrite("SCT", filePath, file)) return false;
-  writeSectionFileHeader(p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment, p.viewportWidth,
-                         p.viewportHeight, p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled,
-                         p.imageRendering);
+  // A live read-back for a DIFFERENT variant (settings changed mid-build) is stale — discard it.
+  if (readBackState_ && readBackState_->propertyHash != propertyHash) abortReadBack();
 
-  // v6: chapters are per-spine and loaded by replaySpine's openSpine — no book-level read needed.
-
-  // Drive a LayoutSink from the streaming reader; pages stream to the section file via onPageComplete
-  // (identical to the parser's completePageFn), so RAM stays ~one page + one block.
-  std::vector<uint32_t> lut;
-  compiled::LayoutParams lp;
-  lp.fontId = p.fontId;
-  lp.lineCompression = p.lineCompression;
-  lp.extraParagraphSpacing = p.extraParagraphSpacing;
-  lp.paragraphAlignment = p.paragraphAlignment;
-  lp.viewportWidth = p.viewportWidth;
-  lp.viewportHeight = p.viewportHeight;
-  lp.hyphenationEnabled = p.hyphenationEnabled;
-  lp.bionicReadingEnabled = p.bionicReadingEnabled;
-  lp.embeddedStyle = p.embeddedStyle;
-  lp.fontSizeLadder = p.fontSizeLadder;
-  lp.imageBasePath = getImageBasePath(propertyHash);
-  lp.epubFilePath = epub->getPath();
-  Hyphenator::setPreferredLanguage(epub->getLanguage());
-
-  bool replayOk = false;
-  {
-    compiled::LayoutSink sink(renderer, std::move(lp),
-                              [this, &lut](std::unique_ptr<Page> page) { lut.emplace_back(onPageComplete(std::move(page))); });
-    replayOk = compiled::replaySpine(reader, static_cast<uint32_t>(spineIndex), sink);
-    if (replayOk) {
-      // Write the section tail from the LayoutSink getters (same shapes as the parser's).
-      const auto& anchors = sink.anchors();
-      if (!writeSectionTail(lut, anchors, sink.pageBreakLabels(), sink.paragraphLutPerPage(),
-                            static_cast<uint16_t>(pageCount), /*parseComplete=*/true)) {
-        return false;  // writeSectionTail closed+removed the file
-      }
-      buildTocBoundaries(anchors);
-      this->pageBreakLabels.clear();
-      for (const auto& e : sink.pageBreakLabels()) this->pageBreakLabels.emplace_back(e.first, e.second);
+  // ---- Setup (first call for this variant) ----
+  if (!readBackState_) {
+    const std::string binPath = epub->getCachePath() + "/content.bin";
+    auto st = std::make_unique<ReadBackState>();
+    st->propertyHash = propertyHash;
+    st->startMs = millis();
+    if (!Storage.openFileForRead("SCT", binPath, st->binFile)) return ReadBackStep::NotAvailable;
+    if (!st->reader.open(st->binFile)) {
+      LOG_INF("SCT", "content.bin present but unreadable/stale for spine %d; falling back to parse", spineIndex);
+      return ReadBackStep::NotAvailable;
     }
-  }
-  if (!replayOk) {
-    LOG_ERR("SCT", "content.bin replay failed for spine %d; removing partial + falling back", spineIndex);
+    uint64_t bookFp = 0;
+    if (st->reader.fingerprint() != 0 && epub->zipContentFingerprint(&bookFp) &&
+        bookFp != st->reader.fingerprint()) {
+      LOG_INF("SCT", "content.bin fingerprint mismatch for spine %d; falling back to parse", spineIndex);
+      return ReadBackStep::NotAvailable;
+    }
+    // Spine must be present AND committed (frontier: a producer may not have reached it yet).
+    if (static_cast<uint32_t>(spineIndex) >= st->reader.spineCount()) return ReadBackStep::NotAvailable;
+    if (!st->reader.spineAvailable(static_cast<uint32_t>(spineIndex))) return ReadBackStep::NotAvailable;
+
+    if (!skipEviction) evictOldVariants();
+
+    filePath = getSectionFilePath(propertyHash);
+    { const auto sectionsDir = epub->getCachePath() + "/sections"; Storage.mkdir(sectionsDir.c_str()); }
     file.close();
-    Storage.remove(filePath.c_str());
-    return false;
+    pageCount = 0;
+    this->lut.clear();
+    if (!Storage.openFileForWrite("SCT", filePath, file)) return ReadBackStep::Failed;
+    writeSectionFileHeader(p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment, p.viewportWidth,
+                           p.viewportHeight, p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled,
+                           p.imageRendering);
+
+    // Drive a LayoutSink from the streaming reader; pages stream to the section file via
+    // onPageComplete (identical to the parser's completePageFn), so RAM stays ~one page + one block.
+    compiled::LayoutParams lp;
+    lp.fontId = p.fontId;
+    lp.lineCompression = p.lineCompression;
+    lp.extraParagraphSpacing = p.extraParagraphSpacing;
+    lp.paragraphAlignment = p.paragraphAlignment;
+    lp.viewportWidth = p.viewportWidth;
+    lp.viewportHeight = p.viewportHeight;
+    lp.hyphenationEnabled = p.hyphenationEnabled;
+    lp.bionicReadingEnabled = p.bionicReadingEnabled;
+    lp.embeddedStyle = p.embeddedStyle;
+    lp.fontSizeLadder = p.fontSizeLadder;
+    lp.imageBasePath = getImageBasePath(propertyHash);
+    lp.epubFilePath = epub->getPath();
+    Hyphenator::setPreferredLanguage(epub->getLanguage());
+
+    ReadBackState* raw = st.get();  // stable across ticks (heap-owned); the sink captures raw->lut
+    st->sink = std::make_unique<compiled::LayoutSink>(
+        renderer, std::move(lp),
+        [this, raw](std::unique_ptr<Page> page) { raw->lut.emplace_back(onPageComplete(std::move(page))); });
+    if (!compiled::replaySpineBegin(st->reader, static_cast<uint32_t>(spineIndex), st->cursor)) {
+      LOG_ERR("SCT", "content.bin openSpine failed for spine %d; falling back to parse", spineIndex);
+      file.close();
+      Storage.remove(filePath.c_str());
+      return ReadBackStep::NotAvailable;
+    }
+    readBackState_ = std::move(st);
   }
 
+  // ---- Replay slices ----
+  ReadBackState& st = *readBackState_;
+  const uint32_t sliceStart = millis();
+  const auto overBudget = [&] { return budgetMs != 0 && millis() - sliceStart >= budgetMs; };
+  while (compiled::replaySpineStep(st.reader, *st.sink, kReadBackBlocksPerSlice, st.cursor)) {
+    if (overBudget()) return ReadBackStep::More;  // more blocks remain; resume next call
+  }
+  if (!st.cursor.ok) {
+    LOG_ERR("SCT", "content.bin replay failed for spine %d; removing partial + falling back", spineIndex);
+    abortReadBack();
+    return ReadBackStep::Failed;
+  }
+
+  // ---- Finalize (spine fully replayed: onSpineEnd fired) ----
+  const auto& anchors = st.sink->anchors();
+  if (!writeSectionTail(st.lut, anchors, st.sink->pageBreakLabels(), st.sink->paragraphLutPerPage(),
+                        static_cast<uint16_t>(pageCount), /*parseComplete=*/true)) {
+    readBackState_.reset();  // writeSectionTail already closed+removed the file
+    return ReadBackStep::Failed;
+  }
+  buildTocBoundaries(anchors);
+  this->pageBreakLabels.clear();
+  for (const auto& e : st.sink->pageBreakLabels()) this->pageBreakLabels.emplace_back(e.first, e.second);
+
   file.close();
-  if (!Storage.openFileForRead("SCT", filePath, file)) return false;
+  if (!Storage.openFileForRead("SCT", filePath, file)) {
+    readBackState_.reset();
+    return ReadBackStep::Failed;
+  }
   truncatedCache = false;
-  this->lut = std::move(lut);
+  this->lut = std::move(st.lut);
   LOG_INF("SCT", "buildSectionFromContentBin spine=%d done: %ums pages=%u (read-back, no parse)", spineIndex,
-          millis() - t0, pageCount);
-  return true;
+          millis() - st.startMs, pageCount);
+  readBackState_.reset();
+  return ReadBackStep::Done;
 #endif
 }
 

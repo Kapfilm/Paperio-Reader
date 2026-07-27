@@ -332,7 +332,7 @@ std::string findSectionFile(const std::string& bookDir, int spineIndex) {
 }  // namespace
 
 bool sectionEquivalence(const std::string& epubPath, const std::string& cacheDir, int spineIndex,
-                        const Profile& profile, std::ostream& out) {
+                        const Profile& profile, std::ostream& out, bool sliced) {
   const std::string bookDir = bookCacheDir(cacheDir, epubPath);
 
   // (1) Normal parse build of the spine → capture the section file bytes.
@@ -382,9 +382,22 @@ bool sectionEquivalence(const std::string& epubPath, const std::string& cacheDir
   }
 
   // (3) Read-back build of the spine (overwrites the same section file path). Reuses `bp` from (2).
+  // sliced=false: run-to-completion. sliced=true: pump the resumable stepper with a 1 ms budget so it
+  // yields mid-spine many times — the section file must come out identical regardless of slicing.
   {
     Section section(epub, spineIndex, renderer);
-    if (!section.buildSectionFromContentBin(bp, /*skipEviction=*/true)) {
+    if (sliced) {
+      int guard = 0;
+      Section::ReadBackStep step = Section::ReadBackStep::More;
+      while (guard++ < 1000000) {
+        step = section.stepReadBackFromContentBin(bp, /*budgetMs=*/1, /*skipEviction=*/true);
+        if (step != Section::ReadBackStep::More) break;
+      }
+      if (step != Section::ReadBackStep::Done) {
+        out << "ERROR sliced read-back build did not reach Done (step=" << static_cast<int>(step) << ")\n";
+        return false;
+      }
+    } else if (!section.buildSectionFromContentBin(bp, /*skipEviction=*/true)) {
       out << "ERROR read-back build failed (buildSectionFromContentBin returned false)\n";
       return false;
     }

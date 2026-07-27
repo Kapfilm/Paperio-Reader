@@ -70,6 +70,13 @@ class Section {
   // In-flight incremental build, owned across stepSectionBuild() calls. Null when no build
   // is live. Heap-owned so the visitor's &lut capture stays stable across ticks.
   std::unique_ptr<BuildState> buildState_;
+  // In-flight incremental content.bin READ-BACK (Increment E consumer), owned across
+  // stepReadBackFromContentBin() calls. Null when none is live. Defined in Section.cpp so the
+  // LayoutSink / BlockStreamReader types stay out of this header. Heap-owned so the LayoutSink's
+  // completePageFn &lut capture stays stable across ticks.
+  struct ReadBackState;
+  std::unique_ptr<ReadBackState> readBackState_;
+  void abortReadBack();  // drop a partial read-back (close+remove the half-written section file)
   // See setExternalBuildScratch. Not owned; must outlive any active build.
   BuildArena* externalScratch_ = nullptr;
   // See setStage1Sink. Not owned; forwarded to the parser when the build's visitor is created.
@@ -167,8 +174,21 @@ class Section {
   // compiled::LayoutSink from the streaming reader (replaySpine) with pages streamed to disk via
   // onPageComplete, and writes the SAME section file the parse would (writeSectionTail). Returns
   // false (caller falls back to createSectionFile) when content.bin is absent/stale/missing this
-  // spine, or on any build error. Run-to-completion (not sliced) for now. Behind EPUB_STAGE1.
+  // spine, or on any build error. Run-to-completion — a thin wrapper over stepReadBackFromContentBin
+  // pumped with no budget. Behind EPUB_STAGE1.
   bool buildSectionFromContentBin(const BuildParams& params, bool skipEviction);
+
+  // Incremental (Increment E) form of the read-back: advances the content.bin replay by at most
+  // ~budgetMs of layout work (budgetMs == 0 = run to a terminal state in one call) and returns More
+  // while blocks remain, Done on success, Failed/NotAvailable when the caller should fall back to a
+  // parse. Mirrors stepSectionBuild's re-entry model: the replay state (reader + sink + lut + open
+  // section file) is owned across calls, so a huge spine never blocks the loop — this is what lets
+  // the reader lift D-4b's 64 KB size cap. A params-hash change discards the partial and restarts.
+  // Behind EPUB_STAGE1.
+  enum class ReadBackStep : uint8_t { More, Done, Failed, NotAvailable };
+  ReadBackStep stepReadBackFromContentBin(const BuildParams& params, uint32_t budgetMs, bool skipEviction);
+  // True while an incremental read-back is in flight (stepReadBackFromContentBin returned More).
+  bool hasActiveReadBack() const { return static_cast<bool>(readBackState_); }
 
   // Compile the WHOLE book to <cachePath>/content.bin in one pass: walk every spine once with a
   // streaming compiled::ContentBinWriter attached (content-only, no pages), so a later
