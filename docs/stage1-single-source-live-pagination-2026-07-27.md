@@ -185,6 +185,20 @@ PRECEDING page boundary, well-defined because floats/margins are page-reset. Thi
 `layout(cursor)` local to "this page boundary + a trailing empty-block lookback," never a
 stream-from-spine-start.
 
+### Multi-page tables (checked 2026-07-27) — no new cross-page state
+
+A table that spans pages is NOT a straddling element. The WHOLE table is one compiled `Block`
+(`block.rows`); `placeTable` wraps every cell up front, then `packTableFragments`
+(TableLayout.cpp:9-61) **page-breaks BETWEEN ROWS**, emitting an independent `PageTableFragment`
+per page via `emitPageAndReset()`. So a 3-page table = 3 self-contained fragments, one per
+`Page`. The only cross-page state is `currentPageNextY_` (via `SinkTableCtx`), which `emitPage`
+already zeroes — no "rows remaining"/split cursor survives a boundary. The restart invariant
+holds. **Cursor refinement: `PagePosition.offset` is POLYMORPHIC by block type** — line index
+for text, pixel-row for a tall image, **row index for a table** — exactly microreader's overloaded
+`offset` field. "Page starts at table block N, row R" re-wraps the table (cheap, one compiled
+block) and packs forward one page from row R. Bounded, page-local. (Images already work this way
+in microreader: offset = pixel row into a promoted/standalone image split across pages.)
+
 **Test oracle**: the existing whole-spine `LayoutSink` pagination stays as the GOLDEN. Page K
 produced by the pull core (`layout` from page K's start cursor) must be position-identical to
 page K from a full `replaySpine` run, across the corpus × profile matrix. Backward layout:
