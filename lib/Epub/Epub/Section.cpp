@@ -189,15 +189,7 @@ struct SectionVariant {
 };
 
 void Section::evictOldVariants() const {
-  // Increment F: content.bin is the SINGLE persisted cache. The per-settings section file is a
-  // TRANSIENT current-spine page store — keep only the most recent variant per spine (a settings
-  // change re-paginates from content.bin, fast, rather than loading a stale persisted variant). When
-  // EPUB_STAGE1 is off, keep the legacy multi-variant cache (5) so the shipping behaviour is unchanged.
-#if EPUB_STAGE1
-  constexpr size_t MAX_VARIANTS = 1;
-#else
-  constexpr size_t MAX_VARIANTS = 5;  // legacy: keep up to 5 recent variants to avoid re-parsing
-#endif
+  constexpr size_t MAX_VARIANTS = 5;  // keep up to 5 recent variants to avoid re-parsing
 
   std::string sectionsDir = epub->getCachePath() + "/sections";
   auto files = Storage.listFiles(sectionsDir.c_str(), 100);

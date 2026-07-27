@@ -20,7 +20,6 @@
 #include <Epub/FootnotePreviews.h>
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
-#include <Epub/content/ContentBinWriter.h>  // Increment F book-scoped content.bin writer (complete type)
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
@@ -195,9 +194,6 @@ constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 #ifndef RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES
 #define RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES (16 * 1024)
 #endif
-// (Increment E sub-step 4b removed STAGE1_READBACK_MAX_INFLATED_BYTES: the content.bin read-back is
-// now the sliced stepReadBackFromContentBin and is strictly lighter than the parse it replaces, so
-// there is no spine-size cap on serving from content.bin.)
 
 constexpr uint8_t TRUNCATED_SECTION_HINT_RENDER_COUNT = 2;
 constexpr const char* TRUNCATED_SECTION_HINT_LINE_1 = "Chapter may be truncated (low memory).";
@@ -276,13 +272,6 @@ int getImageOnlyPageYOffset(const Page& page, const int viewportHeight) {
 }
 
 }  // namespace
-
-// Ctor + dtor defined here (not in the header) so ~unique_ptr<compiled::ContentBinWriter>
-// instantiates against the complete type included by this .cpp. See the comment in the header.
-EpubReaderActivity::EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                       std::unique_ptr<Epub> epub)
-    : Activity("EpubReader", renderer, mappedInput), epub(std::move(epub)) {}
-EpubReaderActivity::~EpubReaderActivity() = default;
 
 void EpubReaderActivity::onEnter() {
   Activity::onEnter();
@@ -450,17 +439,6 @@ void EpubReaderActivity::onExit() {
   // Abort any in-flight Background-B build (deletes its partial cache file) before the
   // epub it references goes away.
   resetBackgroundBuild();
-#if EPUB_STAGE1
-  // Finish + close the Increment F content.bin writer before the epub it references goes away:
-  // finish() flushes; any uncommitted (in-flight / degraded) spine stays unpublished. Do this AFTER
-  // resetBackgroundBuild()/before section.reset() so no build still holds the tee.
-  if (contentBinWriter_) {
-    contentBinWriter_->finish();
-    contentBinWriter_.reset();
-    contentBinFile_.close();
-  }
-  contentBinWriterOpenAttempted_ = false;
-#endif
   section.reset();  // also aborts an in-flight Background-C build of the current section
   // Background-C may have BORROWED the secondary buffer for headroom (lent, not freed); the
   // build is now aborted (section.reset above released into the arena), so hand the block back.
@@ -900,14 +878,6 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
         backgroundBuildInflatedSize_ = 0;
         epub->getItemSize(epub->getSpineItem(targetSpine).href, &backgroundBuildInflatedSize_);
         backgroundBuildState_ = BackgroundBuildState::WaitHeap;
-#if EPUB_STAGE1
-        // Increment F: this look-ahead build will PARSE the spine — emit it to content.bin via the
-        // tee (one walk builds the section cache AND content.bin), so content.bin fills AHEAD of the
-        // reader, not just for the current spine. Attach BEFORE the Building state's first
-        // stepSectionBuild (which calls startBuild, where the tee is read). Skips a spine already
-        // covered. This is what dissolves the Increment-E producer-vs-B conflict: B IS the producer.
-        attachContentBinTee(*backgroundSection_, static_cast<uint32_t>(targetSpine));
-#endif
       }
       return;  // one bounded step per tick
     }
@@ -1016,50 +986,6 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
     }
   }
 }
-
-#if EPUB_STAGE1
-void EpubReaderActivity::attachContentBinTee(Section& section, const uint32_t spineIndex) {
-  if (!epub) return;
-  // Lazily open the book-scoped writer on the first parse build for a book. Prefer openExisting() so a
-  // matching prior-session content.bin is APPENDED to (its committed spines stay available); a stale /
-  // foreign / absent file falls back to a fresh begin() (truncate). A hard failure latches so we don't
-  // retry every build. The writer is in non-autoCommit mode: Section::setContentBinTee publishes each
-  // spine's slot only on a clean build.
-  if (!contentBinWriter_ && !contentBinWriterOpenAttempted_) {
-    contentBinWriterOpenAttempted_ = true;
-    const std::string binPath = epub->getCachePath() + "/content.bin";
-    const uint32_t spineCount = static_cast<uint32_t>(epub->getSpineItemsCount());
-    uint64_t fingerprint = 0;
-    epub->zipContentFingerprint(&fingerprint);
-    auto writer = std::make_unique<compiled::ContentBinWriter>();
-    writer->setAutoCommit(false);
-    bool opened = false;
-    if (Storage.exists(binPath.c_str()) && Storage.openFileForReadWrite("ERS", binPath, contentBinFile_)) {
-      opened = writer->openExisting(contentBinFile_, spineCount, fingerprint);
-      if (!opened) contentBinFile_.close();  // stale/foreign → fall back to fresh
-    }
-    if (!opened) {
-      if (Storage.openFileForWrite("ERS", binPath, contentBinFile_) &&
-          writer->begin(contentBinFile_, spineCount, fingerprint)) {
-        opened = true;
-      } else {
-        contentBinFile_.close();
-      }
-    }
-    if (opened) {
-      contentBinWriter_ = std::move(writer);
-      LOG_INF("ERS", "content.bin writer open (spines=%u)", spineCount);
-    } else {
-      LOG_INF("ERS", "content.bin writer open failed; not emitting content.bin this session");
-    }
-  }
-  // Attach the tee only if the spine isn't already covered — a build then emits it via one walk.
-  if (contentBinWriter_ && spineIndex < static_cast<uint32_t>(epub->getSpineItemsCount()) &&
-      !contentBinWriter_->spineCommitted(spineIndex)) {
-    section.setContentBinTee(contentBinWriter_.get(), spineIndex);
-  }
-}
-#endif
 
 void EpubReaderActivity::stepCurrentSectionBuild() {
   if (!epub || !section || !section->hasActiveBuild()) {
@@ -2608,23 +2534,7 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
         /*skipEviction=*/false, buildParams.fontSizeLadder);
   };
 
-  // Stage-2 read-back fast path (docs/stage1-incr-F): if content.bin covers this spine with a matching
-  // ZIP fingerprint, replay it (skip ZIP/XML/CSS). A miss falls back to the ordinary parse (runParse);
-  // that parse emits the spine to content.bin via the tee (Increment F, see buildSection /
-  // attachContentBinTee), so the next visit / a relayout is a fast read-back. content.bin fills as the
-  // reader and Background-B build spines — no separate whole-book compile blocks this path.
-  const auto runCreate = [&]() -> bool {
-#if EPUB_STAGE1
-    // Per-spine read-back is strictly cheaper than the parse the in-place gate already sanctioned
-    // (no ZIP inflate / Expat / CSS parse — same LayoutSink Stage-2 as the parser's back half), so
-    // it is safe on both the in-place and released paths.
-    if (section->buildSectionFromContentBin(buildParams, /*skipEviction=*/false)) {
-      LOG_INF("ERS", "Section served from content.bin (Stage-2 read-back)");
-      return true;
-    }
-#endif
-    return runParse();
-  };
+  const auto runCreate = [&]() -> bool { return runParse(); };
 
   const uint32_t createStart = millis();
   bool createOk = runCreate();
@@ -2773,42 +2683,11 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
     size_t inflatedSize = 0;
     epub->getSpineItemInflatedSize(currentSpineIndex, &inflatedSize);
 
-    // Stage-2 read-back fast path (docs/stage1-incr-D-design + incr-E). Before choosing a build mode,
-    // try to replay this spine from content.bin (skip ZIP/XML/CSS entirely). Since Increment E sub-2
-    // buildSectionFromContentBin runs the SLICED stepper — and a read-back is Stage-2 layout ONLY (no
-    // inflate ring, no Expat, no CSS parse), i.e. strictly lighter than the parse the reader would
-    // otherwise run blocking on this same spine — there is no size cap: any covered spine is served
-    // from content.bin. buildSectionFromContentBin returns false (fall through to the normal build)
-    // when content.bin is absent/stale, the spine is not yet committed by the producer (frontier), or
-    // on any error. On success we bypass the build machinery and fall through to the shared
-    // resolveInto/render tail, exactly like a cache hit.
-    bool servedFromContentBin = false;
-#if EPUB_STAGE1
-    if (!resumeBackgroundBuild && !cssFallbackRebuild &&
-        section->buildSectionFromContentBin(makeSectionBuildParams(), /*skipEviction=*/false)) {
-      servedFromContentBin = true;
-      readerPhase_ = ReaderPhase::READING;
-      LOG_INF("ERS", "Section spine=%d served from content.bin (Stage-2 read-back, inflated=%lu)", currentSpineIndex,
-              static_cast<unsigned long>(inflatedSize));
-    }
-    // Miss → we are about to PARSE this spine. Emit it to content.bin via the tee (one walk builds the
-    // section cache AND content.bin), so the next visit / a relayout is a fast read-back. Skips when
-    // the spine is already covered or the writer can't open. A resumed partial B build already began
-    // its walk without the tee, so don't attach mid-build; the CSS-fallback rebuild is a degraded
-    // reparse we don't want in content.bin.
-    if (!servedFromContentBin && !resumeBackgroundBuild && !cssFallbackRebuild) {
-      attachContentBinTee(*section, static_cast<uint32_t>(currentSpineIndex));
-    }
-#endif
-
-    // When the read-back served the section, force both sub-blocks off (incremental + blocking) so
-    // control falls straight through to the shared resolveInto/render tail, exactly like a cache hit.
-    const SectionBuildMode mode = servedFromContentBin ? SectionBuildMode::Blocking
-                                  : (resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
+    const SectionBuildMode mode = (resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
                                       ? chooseSectionBuildMode(embeddedStyle, inflatedSize)
                                       : SectionBuildMode::Blocking;
-    const bool incremental = !servedFromContentBin && mode != SectionBuildMode::Blocking;
-    bool runBlocking = !servedFromContentBin && !incremental;
+    const bool incremental = mode != SectionBuildMode::Blocking;
+    bool runBlocking = !incremental;
 
     // Single grep-able marker for the build mode actually taken for this spine — pairs with the
     // heapAllowsInPlaceBuild line above to explain every section-entry build decision from the log.

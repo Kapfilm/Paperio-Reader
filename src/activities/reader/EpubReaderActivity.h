@@ -12,16 +12,9 @@
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
-#include <Epub/content/Stage1Config.h>  // EPUB_STAGE1 (content.bin read-back gate)
 
 #include <atomic>
 #include <memory>
-
-#if EPUB_STAGE1
-namespace compiled {
-class ContentBinWriter;  // Increment F book-scoped content.bin writer (fwd; complete type in .cpp)
-}  // namespace compiled
-#endif
 
 #include "BookmarkStore.h"
 #include "EpubReaderMenuActivity.h"
@@ -380,22 +373,6 @@ class EpubReaderActivity final : public Activity {
   // the release solves, not a parse failure, so it must not collapse to the blocking path
   // (which indexes the whole section before showing anything). -1 = no such latch.
   int forceReleasedBuildSpine_ = -1;
-#if EPUB_STAGE1
-  // Increment F: the book-scoped content.bin WRITER. A section build for a spine not yet in
-  // content.bin runs through the tee (Section::setContentBinTee) so the SAME walk that builds the
-  // section cache also emits the spine to content.bin (for relayout + revisit). Lazily opened on the
-  // first such build — openExisting() to append to a matching prior-session file, else begin() fresh —
-  // and finished/closed on book exit. `contentBinWriter_` is null until opened; its FsFile is held
-  // alongside so the writer's back-patching handle stays valid. See
-  // docs/stage1-incr-F-content-bin-primary-design-2026-07-27.md.
-  std::unique_ptr<compiled::ContentBinWriter> contentBinWriter_;
-  FsFile contentBinFile_;
-  bool contentBinWriterOpenAttempted_ = false;  // don't re-attempt a hard-failed open every build
-  // Attach the tee writer to `section` for `spineIndex` if the spine is not already committed to
-  // content.bin. Lazily opens the writer. No-op (returns without attaching) on any failure — the
-  // build then just parses without emitting content.bin. Called before a parse build on a miss.
-  void attachContentBinTee(Section& section, uint32_t spineIndex);
-#endif
   // Debug-only Background A glyph for the status-bar overlay. The transient flags
   // (pendingPreRender / preRenderedPage.ready) are cleared at the top of render()
   // before the status bar is drawn, so the overlay could never sample a non-idle
@@ -695,13 +672,8 @@ class EpubReaderActivity final : public Activity {
   void restoreSavedPosition();
 
  public:
-  // Ctor + dtor are out-of-line (defined in the .cpp): the unique_ptr<compiled::ContentBinWriter>
-  // member is an incomplete type in this header (fwd-declared), so both the ctor (which must be able
-  // to destroy already-constructed members if a later init throws) and the dtor need the complete
-  // type — defining them inline here makes every TU that includes this header fail to instantiate
-  // ~unique_ptr against the incomplete type.
-  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub);
-  ~EpubReaderActivity() override;
+  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub)
+      : Activity("EpubReader", renderer, mappedInput), epub(std::move(epub)) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
