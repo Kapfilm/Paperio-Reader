@@ -270,7 +270,21 @@ Microreader can (its layout is lean); our per-word measure path is heavier. So:
    pagination (page K from cursor == page K from full run — byte/'position-identical').
 4. **G3 — `ContentReader`**: windowed arena-backed random-access spine reader. Host test:
    window hits/evictions, random access == sequential.
-5. **G4 — device gate**: measure ms/page on King's Avatar + Small Gods. GO/NO-GO on full
+   - **G2a (DONE, 55e03962)**: scaffold — `layoutPage(cursor)` drives LayoutSink for one page from a
+     page-boundary cursor. Oracle: pull-core first page == whole-spine golden first page, corpus ×
+     3 profiles. Proved the cursor + seekToBlock + oracle rig, zero layout-behavior risk.
+   - **G2b+G3 MERGED (decided 2026-07-27)**: build the PURE collect() core, retiring the
+     LayoutSink-driving scaffold. Microreader's `collect_page_items` (TextLayout.cpp:1250) shows why:
+     precise intra-block END cursor (`break_idx`), mid-block resume (`start_idx = pos.offset`), and
+     backward layout (`collect_page_items_backward`) all fall out of OWNING the collect loop —
+     extracting them from the streaming LayoutSink would be invasive surgery on the trusted engine.
+     The per-paragraph laid-out cache the core needs IS G3's cache, so the two steps merge. Reuse
+     `ParsedText::layoutAndExtractLines` (line-breaking) + `buildBlockStyle`/`resolveBlockFont`;
+     do NOT reuse LayoutSink's pagination. Handle the cross-block caveats (empty-block lookback,
+     `auxFontId`/`imageCounter` carried in the cursor) per the restart-boundary analysis. Oracle
+     extends to: page K from page-K-start cursor == golden page K (ALL pages) + `layout_backward`
+     (page K+1 start) == page K, across the corpus × profile matrix.
+4. **G4 — device gate**: measure ms/page on King's Avatar + Small Gods. GO/NO-GO on full
    deletion. (This is the decision point; nothing deleted before it passes.)
 6. **G5 — reader read loop**: `PagePosition` navigation on live layout; background compile
    pass (Option-2 shape, no tee); frontier hand-off. Behind `EPUB_STAGE1`.
