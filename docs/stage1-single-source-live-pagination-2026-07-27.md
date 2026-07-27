@@ -96,6 +96,66 @@ PagePosition { uint16 spine; uint16 blockIndex; uint16 wordOffset; }   // the cu
   `para_char_offsets_`; we add per-block char offsets to the block-offset table). No
   page-number LUT needed — position is a cursor, and progress is char-offset / total-chars.
 
+## 3a. The layout engine — pull core, not streaming sink (decided 2026-07-27)
+
+Studying microreader's `TextLayout` against our `LayoutSink` surfaced an architecture fork.
+They are opposites, and the microreader shape is the one we adopt.
+
+- **microreader `TextLayout`**: a PURE function — `layout(pos) → PageContent` and
+  `layout_backward(pos) → PageContent`, both `const`, computing exactly ONE page from a cursor.
+  Built from composable primitives: `layout_paragraph()` (break one paragraph into lines) →
+  `LaidOutParagraph` (the cached per-paragraph result, in a 16-slot ring) → `collect()` /
+  `collect_backward()` (pull items that fit a pixel budget, symmetric) → `collect_page_items`
+  (walk paragraphs until the page is full) → `assemble_page` (absolute coords). Alignment is a
+  post-pass (`align_line` shifts word `x` on a finished line vector), fully decoupled from
+  pagination.
+- **our `LayoutSink`**: a STATEFUL STREAMING SINK — blocks are pushed in via `onBlock`, and
+  pages are EMITTED via `completePageFn` as a side effect of the stream. `makePages`/
+  `addLineToPage` thread `currentPageNextY_`/`currentPage_`/float-propagation/margin-collapse/
+  footnote-assignment/LUT-emission together. No one-page entry, no backward layout, no
+  per-paragraph reuse across a page boundary.
+
+**Decision: build a microreader-shaped PULL CORE** (`layout(pos)` / `layout_backward(pos)` over
+our compiled `Block` stream, with a per-paragraph line cache) and RETIRE `LayoutSink`'s
+pagination role. Reuse `LayoutSink`/`ParsedText`'s per-paragraph MEASURE+WRAP primitive
+(`ParsedText::layoutAndExtractLines` == microreader's `layout_para_lines`) and the
+block→BlockStyle resolution (`buildBlockStyle`, `resolveBlockFont`) verbatim; what changes is
+the page-assembly AROUND it. Rationale:
+  1. **Native one-page + backward layout** — the read model needs both; the sink has neither.
+  2. **Per-paragraph cache de-risks G4** — a paragraph spanning a page boundary is laid out
+     once and reused by the page that ends on it and the page that starts on it. This is the
+     single thing that makes live per-page turning cheap; bolting one-page mode onto the sink
+     would enter the latency gate WITHOUT it.
+  3. **RTL (near-term requirement)** — in microreader, direction is a contained per-line pass
+     (mirror word `x` → `line_width - x - w`, reverse BiDi runs); pagination never sees
+     direction. In `LayoutSink`, alignment/x-inset is woven into the page state machine, so RTL
+     would touch pagination. The pull core keeps the RTL seam where microreader has it.
+
+**Our-types mapping** (microreader → ours):
+  - `TextParagraph` (runs) → our `Block` (words/text/style) — one LOGICAL block = one paragraph.
+  - `layout_para_lines` → `ParsedText::layoutAndExtractLines` (already measures/wraps/hyphenates).
+  - `LaidOutParagraph` (cache slot) → NEW: cache the `std::vector<TextBlock-line>` + per-line
+    heights for a block index, in a small ring; key = block index; invalidate on any
+    LayoutParams change (font/viewport/spacing/align/hyphenation/bionic/embeddedStyle).
+  - `PageContent{items, start, end}` → our `Page` (elements) + the start/end `PagePosition`.
+  - `collect`/`collect_backward` → NEW forward/backward "pull items until height budget" over the
+    cached lines, returning the boundary cursor.
+  - `align_line` → today lives inside `TextBlock`/`PageLine` x-offset; keep as the RTL seam.
+
+**PagePosition** for us: `{blockIndex, lineIndex}` within a spine (mirrors microreader's
+`{paragraph, offset}`); `wordOffset`/`text_offset` as the stable re-sync key across a settings
+change (microreader's `resolve_stable_position`). Cross-block state the sink kept (margin
+collapse, float propagation, `<br>` alignment inheritance) must be recomputed deterministically
+from the cursor's block backward to a safe boundary — the pull core recomputes a bounded prefix,
+it does not stream from spine start. (Detail to nail in implementation; float/margin context is
+the main subtlety vs microreader, whose paragraphs are more self-contained.)
+
+**Test oracle**: the existing whole-spine `LayoutSink` pagination stays as the GOLDEN. Page K
+produced by the pull core (`layout` from page K's start cursor) must be position-identical to
+page K from a full `replaySpine` run, across the corpus × profile matrix. Backward layout:
+`layout_backward(page K+1 start)` must reproduce page K. This makes the rewrite verifiable
+against the byte-identical engine we already trust.
+
 ## 4. Background compilation + fast first page (our differentiator)
 
 Preserve today's first-open latency. On open:
