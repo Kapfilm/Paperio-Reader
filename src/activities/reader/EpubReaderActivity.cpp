@@ -20,6 +20,7 @@
 #include <Epub/FootnotePreviews.h>
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
+#include <Epub/content/ContentBinProducer.h>  // Increment E background producer (complete type)
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
@@ -194,15 +195,9 @@ constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 #ifndef RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES
 #define RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES (16 * 1024)
 #endif
-// Stage-1 content.bin read-back (buildSectionFromContentBin) runs to completion, not sliced, so a
-// huge spine would freeze the loop for seconds. Only short-circuit Background-C's sliced parse with
-// a read-back when the spine's inflated size is below this cap; larger spines keep the responsive
-// sliced parse (Stage-1 slicing is a later step). The vast majority of spines (chapters are a few
-// KB) fall well under this — the ~584 KB single-file books (Small Gods) are the exception the cap
-// excludes. Only consulted when EPUB_STAGE1 is set.
-#ifndef STAGE1_READBACK_MAX_INFLATED_BYTES
-#define STAGE1_READBACK_MAX_INFLATED_BYTES (64 * 1024)
-#endif
+// (Increment E sub-step 4b removed STAGE1_READBACK_MAX_INFLATED_BYTES: the content.bin read-back is
+// now the sliced stepReadBackFromContentBin and is strictly lighter than the parse it replaces, so
+// there is no spine-size cap on serving from content.bin.)
 
 constexpr uint8_t TRUNCATED_SECTION_HINT_RENDER_COUNT = 2;
 constexpr const char* TRUNCATED_SECTION_HINT_LINE_1 = "Chapter may be truncated (low memory).";
@@ -281,6 +276,13 @@ int getImageOnlyPageYOffset(const Page& page, const int viewportHeight) {
 }
 
 }  // namespace
+
+// Ctor + dtor defined here (not in the header) so ~unique_ptr<compiled::ContentBinProducer>
+// instantiates against the complete type included by this .cpp. See the comment in the header.
+EpubReaderActivity::EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                       std::unique_ptr<Epub> epub)
+    : Activity("EpubReader", renderer, mappedInput), epub(std::move(epub)) {}
+EpubReaderActivity::~EpubReaderActivity() = default;
 
 void EpubReaderActivity::onEnter() {
   Activity::onEnter();
@@ -448,6 +450,12 @@ void EpubReaderActivity::onExit() {
   // Abort any in-flight Background-B build (deletes its partial cache file) before the
   // epub it references goes away.
   resetBackgroundBuild();
+#if EPUB_STAGE1
+  // Tear down the Increment E background producer before the epub it references goes away: its dtor
+  // finish()es the content.bin (durable frontier) and drops the in-flight Section it holds.
+  contentBinProducer_.reset();
+  contentBinProducerBegun_ = false;
+#endif
   section.reset();  // also aborts an in-flight Background-C build of the current section
   // Background-C may have BORROWED the secondary buffer for headroom (lent, not freed); the
   // build is now aborted (section.reset above released into the arena), so hand the block back.
@@ -676,7 +684,22 @@ void EpubReaderActivity::serviceBackgroundWork() {
     stepCurrentSectionBuild();
     return;
   }
+  const auto bStateBefore = backgroundBuildState_;
   stepBackgroundSectionBuild();
+#if EPUB_STAGE1
+  // Lowest-priority phase (Increment E): the background content.bin producer. It only advances on a
+  // tick where AA is idle, no read-back/Background-C build is live, and Background-B had nothing to do
+  // this tick (unchanged state == parked in Settled/Probe with no work) — "producer fills the reader's
+  // idle gaps", the consumer-priority contract expressed purely by ordering. It never borrows the
+  // secondary buffer and self-gates on heap, so it cannot starve the reader.
+  if (backgroundBuildState_ == bStateBefore &&
+      (backgroundBuildState_ == BackgroundBuildState::Settled ||
+       backgroundBuildState_ == BackgroundBuildState::Probe)) {
+    stepContentBinProducer();
+  }
+#else
+  (void)bStateBefore;
+#endif
 }
 
 void EpubReaderActivity::serviceBackgroundDebugLog() {
@@ -839,6 +862,11 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
     backgroundBuildBaseSpine_ = currentSpineIndex;
     backgroundBuildSpineIndex_ = currentSpineIndex + 1;
     backgroundWindowPagesBuilt_ = 0;
+#if EPUB_STAGE1
+    // Read position drives the producer's compile order (Increment E decisions #1 + #2): prioritize
+    // the reader's current spine + a window ahead. Cheap queue re-head; no effect if not yet begun.
+    if (contentBinProducer_) contentBinProducer_->setReadPosition(static_cast<uint32_t>(currentSpineIndex));
+#endif
   }
   // Walk forward from currentSpineIndex+1 to the book end. The cursor advances as each target
   // settles (Settled case below); already-cached spines settle for free in Probe.
@@ -995,6 +1023,48 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
     }
   }
 }
+
+#if EPUB_STAGE1
+void EpubReaderActivity::stepContentBinProducer() {
+  if (!epub || readerPhase_ != ReaderPhase::READING) return;
+  // Same critical-path courtesy as Background-B: don't contend for the render lock while a
+  // refresh/render/image-decode is in flight (a blocked loop task can't service input).
+  if (renderer.isRefreshPending() || RenderLock::peek() || imageProcessingActive_) return;
+
+  // Lazily begin the producer the first time we get here for this book. begin() only opens the file +
+  // queues; it compiles nothing until stepped. A hard failure (or begin already attempted) latches so
+  // we don't retry every idle tick. The book's fingerprint keys content.bin, so a fresh producer for
+  // a changed book is handled by begin() starting a new file.
+  if (!contentBinProducerBegun_) {
+    contentBinProducerBegun_ = true;
+    auto prod = std::make_unique<compiled::ContentBinProducer>();
+    if (prod->begin(epub, renderer, makeSectionBuildParams())) {
+      prod->setReadPosition(static_cast<uint32_t>(currentSpineIndex));
+      contentBinProducer_ = std::move(prod);
+      LOG_INF("ERS", "ContentBinProducer started (read pos spine=%d)", currentSpineIndex);
+    } else {
+      LOG_INF("ERS", "ContentBinProducer begin failed; background content.bin disabled this session");
+      return;
+    }
+  }
+  if (!contentBinProducer_ || contentBinProducer_->done()) return;
+
+  // Heap gate: the producer is a RESIDENT content-only build (peak ~one block + the inflate ring), so
+  // reuse Background-B's parse/contig floors. If heap is tight this tick, just skip — try again later.
+  const uint32_t freeHeap = esp_get_free_heap_size();
+  const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+  if (freeHeap < BG_BUILD_PARSE_MIN_FREE_HEAP_BYTES || contigHeap < BG_BUILD_MIN_CONTIG_HEAP_BYTES) {
+    return;
+  }
+
+  // One bounded slice under the render lock (SD I/O + shared renderer glyph metrics, exactly like B).
+  RenderLock lock;
+  if (renderer.isRefreshPending() || pendingPreRender) return;  // re-check under the lock
+  renderer.clearFontAccumulation();  // metadata-only prewarm next slice (see stepBackgroundSectionBuild)
+  contentBinProducer_->step(BG_BUILD_BUDGET_MS);
+  checkHeapIntegrity("after_producer_slice");
+}
+#endif
 
 void EpubReaderActivity::stepCurrentSectionBuild() {
   if (!epub || !section || !section->hasActiveBuild()) {
@@ -2543,10 +2613,12 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
         /*skipEviction=*/false, buildParams.fontSizeLadder);
   };
 
-  // Stage-2 read-back fast path (docs/stage1-incr-D-design): if a whole-book content.bin exists and
-  // covers this spine with a matching ZIP fingerprint, replay it (skip ZIP/XML/CSS). On the first
-  // miss, compile the whole book to content.bin ONCE, then replay. Any failure falls back to the
-  // ordinary parse (runParse), so the parse path is bit-for-bit unchanged when the flag is off.
+  // Stage-2 read-back fast path (docs/stage1-incr-D-design + incr-E): if content.bin covers this spine
+  // (produced in the background by ContentBinProducer) with a matching ZIP fingerprint, replay it
+  // (skip ZIP/XML/CSS). A miss falls back to the ordinary parse (runParse); the background producer
+  // will have content.bin ready for the next visit / relayout. Increment E replaced the old one-time
+  // blocking whole-book compile here with the background producer (serviceBackgroundWork), so the
+  // blocking path never spends seconds walking the whole book — it just parses this one spine.
   const auto runCreate = [&]() -> bool {
 #if EPUB_STAGE1
     // Per-spine read-back is strictly cheaper than the parse the in-place gate already sanctioned
@@ -2555,22 +2627,6 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
     if (section->buildSectionFromContentBin(buildParams, /*skipEviction=*/false)) {
       LOG_INF("ERS", "Section served from content.bin (Stage-2 read-back)");
       return true;
-    }
-    // The one-time whole-book compile re-walks EVERY spine (ZIP/XML/CSS), so it carries the same
-    // peak RAM as a normal blocking parse and MUST run with the secondary buffer released — never
-    // in place. On the in-place path we skip it and fall through to runParse; the compile happens
-    // on the released retry (or the next released build) instead.
-    if (released && !contentBinCompileAttempted_) {
-      contentBinCompileAttempted_ = true;
-      const uint32_t compileStart = millis();
-      const bool compiled = Section::compileBookToContentBin(epub, renderer, buildParams);
-      LOG_INF("ERS", "compileBookToContentBin returned %d in %ums (free=%lu)", compiled ? 1 : 0,
-              millis() - compileStart, esp_get_free_heap_size());
-      checkHeapIntegrity("after_compileBookToContentBin");
-      if (compiled && section->buildSectionFromContentBin(buildParams, /*skipEviction=*/false)) {
-        LOG_INF("ERS", "Section served from freshly compiled content.bin");
-        return true;
-      }
     }
 #endif
     return runParse();
@@ -2723,20 +2779,18 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
     size_t inflatedSize = 0;
     epub->getSpineItemInflatedSize(currentSpineIndex, &inflatedSize);
 
-    // Stage-2 read-back fast path (docs/stage1-incr-D-design). Before choosing a build mode, try to
-    // replay this spine from a whole-book content.bin (skip ZIP/XML/CSS entirely). This runs to
-    // completion — not sliced like Background-C — so it is gated to small spines
-    // (STAGE1_READBACK_MAX_INFLATED_BYTES); a large single-file spine keeps the responsive sliced
-    // parse below. On success we bypass the whole build machinery and fall through to the shared
-    // resolveInto/render tail, exactly like a cache hit. A miss (no content.bin, stale fingerprint,
-    // spine not yet compiled, or any error) leaves the section untouched and drops into the normal
-    // build. The one-time whole-book compile that CREATES content.bin lives on the released blocking
-    // path (compileSectionCache); it is deliberately not triggered here, so the first reads of a book
-    // parse normally and read-back only kicks in once some spine has fallen to the blocking builder.
+    // Stage-2 read-back fast path (docs/stage1-incr-D-design + incr-E). Before choosing a build mode,
+    // try to replay this spine from content.bin (skip ZIP/XML/CSS entirely). Since Increment E sub-2
+    // buildSectionFromContentBin runs the SLICED stepper — and a read-back is Stage-2 layout ONLY (no
+    // inflate ring, no Expat, no CSS parse), i.e. strictly lighter than the parse the reader would
+    // otherwise run blocking on this same spine — there is no size cap: any covered spine is served
+    // from content.bin. buildSectionFromContentBin returns false (fall through to the normal build)
+    // when content.bin is absent/stale, the spine is not yet committed by the producer (frontier), or
+    // on any error. On success we bypass the build machinery and fall through to the shared
+    // resolveInto/render tail, exactly like a cache hit.
     bool servedFromContentBin = false;
 #if EPUB_STAGE1
-    if (!resumeBackgroundBuild && !cssFallbackRebuild && inflatedSize > 0 &&
-        inflatedSize <= STAGE1_READBACK_MAX_INFLATED_BYTES &&
+    if (!resumeBackgroundBuild && !cssFallbackRebuild &&
         section->buildSectionFromContentBin(makeSectionBuildParams(), /*skipEviction=*/false)) {
       servedFromContentBin = true;
       readerPhase_ = ReaderPhase::READING;

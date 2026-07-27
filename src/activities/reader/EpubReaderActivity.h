@@ -15,6 +15,13 @@
 #include <Epub/content/Stage1Config.h>  // EPUB_STAGE1 (content.bin read-back gate)
 
 #include <atomic>
+#include <memory>
+
+#if EPUB_STAGE1
+namespace compiled {
+class ContentBinProducer;  // Increment E background content.bin compiler (fwd; complete type in .cpp)
+}  // namespace compiled
+#endif
 
 #include "BookmarkStore.h"
 #include "EpubReaderMenuActivity.h"
@@ -374,13 +381,15 @@ class EpubReaderActivity final : public Activity {
   // (which indexes the whole section before showing anything). -1 = no such latch.
   int forceReleasedBuildSpine_ = -1;
 #if EPUB_STAGE1
-  // One-shot latch for the whole-book Stage-1 compile (compileBookToContentBin). We attempt the
-  // content.bin read-back (buildSectionFromContentBin) on every blocking section build; on the
-  // first miss we compile the whole book once, then never re-walk on subsequent misses even if the
-  // compile failed (a book that fails once will keep failing — retrying every page would be a
-  // pathological per-page full-book walk). Reset only by re-opening the book. See
-  // docs/stage1-incr-D-design.
-  bool contentBinCompileAttempted_ = false;
+  // Increment E background producer: compiles content.bin spine-by-spine, sliced, in read-position
+  // order, as the LOWEST-priority background phase (after AA / Background-C / Background-B) so it
+  // never competes with the reader for the loop or the secondary buffer. Lazily begun on first idle
+  // service when the book has no fresh content.bin; torn down on book close (onExit). Null until then.
+  // See docs/stage1-incr-E-substep4-reader-integration-design-2026-07-27.md.
+  std::unique_ptr<compiled::ContentBinProducer> contentBinProducer_;
+  bool contentBinProducerBegun_ = false;  // begin() attempted (success or hard-fail) — don't retry
+  // Advance the producer one bounded slice; lazily begins it. The lowest-priority background phase.
+  void stepContentBinProducer();
 #endif
   // Debug-only Background A glyph for the status-bar overlay. The transient flags
   // (pendingPreRender / preRenderedPage.ready) are cleared at the top of render()
@@ -681,8 +690,13 @@ class EpubReaderActivity final : public Activity {
   void restoreSavedPosition();
 
  public:
-  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub)
-      : Activity("EpubReader", renderer, mappedInput), epub(std::move(epub)) {}
+  // Ctor + dtor are out-of-line (defined in the .cpp): the unique_ptr<compiled::ContentBinProducer>
+  // member is an incomplete type in this header (fwd-declared), so both the ctor (which must be able
+  // to destroy already-constructed members if a later init throws) and the dtor need the complete
+  // type — defining them inline here makes every TU that includes this header fail to instantiate
+  // ~unique_ptr against the incomplete type.
+  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub);
+  ~EpubReaderActivity() override;
   void onEnter() override;
   void onExit() override;
   void loop() override;
