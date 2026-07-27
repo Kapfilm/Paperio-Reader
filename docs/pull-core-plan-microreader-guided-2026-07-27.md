@@ -102,8 +102,17 @@ K. Extended over the corpus × profile matrix. (G2a already gates the FIRST page
   seed. Replace the scaffold's LayoutSink-driving innards for text books. Oracle: ALL pages of the
   text corpus (test_text_rendering, test_headings, test_kerning_ligature, moby-dick) × profiles ==
   golden. Precise end cursor now emitted (line granularity).
-- **P2 — Images + HR.** Add `collect_image` (page-split by pixel row → `offset` = pixel row) + HR.
-  Oracle: image/HR books (test_png_images, test_jpeg_images, test_mixed_images) pass all pages.
+- **P2 — Images + HR.** Add block-image + HR placement. **NOTE (verified 2026-07-27): our block
+  images are ATOMIC — they never split across pages.** `computeImageDisplaySize` (ImageLayout.cpp:24,
+  38, 55, 64) clamps display height to `viewportHeight` in every branch, and `placeBlockImage`
+  (LayoutSink.cpp:438-455) page-breaks a whole image to the next page if it doesn't fit, then places
+  it entire. So — UNLIKE microreader, whose promoted/standalone images split by pixel row — our
+  image `collect` is trivial: one image = one indivisible item that either fits the remaining page
+  or forces a page break. NO pixel-row `offset`, NO partial slices, NO `y_crop`. The polymorphic
+  cursor `offset` therefore only ever needs line-index (text) and row-index (table); the pixel-row
+  case from microreader does not apply to us. HR is likewise a single indivisible item (half-line
+  margins above/below). Oracle: image/HR books (test_png_images, test_jpeg_images, test_mixed_images)
+  pass all pages.
 - **P3 — Floats (D4).** Oracle: float-bearing books pass.
 - **P4 — Grid tables (D5).** Add row-packed `collect` + fragment emit. Oracle: test_tables passes
   all pages (incl. tables spanning pages via multiple fragments).

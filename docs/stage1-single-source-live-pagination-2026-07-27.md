@@ -194,10 +194,13 @@ per page via `emitPageAndReset()`. So a 3-page table = 3 self-contained fragment
 `Page`. The only cross-page state is `currentPageNextY_` (via `SinkTableCtx`), which `emitPage`
 already zeroes — no "rows remaining"/split cursor survives a boundary. The restart invariant
 holds. **Cursor refinement: `PagePosition.offset` is POLYMORPHIC by block type** — line index
-for text, pixel-row for a tall image, **row index for a table** — exactly microreader's overloaded
-`offset` field. "Page starts at table block N, row R" re-wraps the table (cheap, one compiled
-block) and packs forward one page from row R. Bounded, page-local. (Images already work this way
-in microreader: offset = pixel row into a promoted/standalone image split across pages.)
+for text, **row index for a table** — a subset of microreader's overloaded `offset` field. "Page
+starts at table block N, row R" re-wraps the table (cheap, one compiled block) and packs forward
+one page from row R. Bounded, page-local. (CORRECTION 2026-07-27: microreader's third case, a
+pixel-row offset into a page-SPLIT image, does NOT apply to us — our block images are ATOMIC,
+clamped to `viewportHeight` by computeImageDisplaySize and never split by placeBlockImage. So our
+`offset` is only line-index or table-row; an image/HR is always a single indivisible item. See the
+P2 note in docs/pull-core-plan-microreader-guided-2026-07-27.md §3.)
 
 **Hyphenation page-break retry — the cache's correctness contract (resolved 2026-07-27).** Our
 `ParsedText` line-breaker has a page-COUPLED quirk `LayoutSink` relies on that microreader lacks:
