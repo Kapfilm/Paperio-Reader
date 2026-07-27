@@ -199,6 +199,21 @@ for text, pixel-row for a tall image, **row index for a table** — exactly micr
 block) and packs forward one page from row R. Bounded, page-local. (Images already work this way
 in microreader: offset = pixel row into a promoted/standalone image split across pages.)
 
+**Hyphenation page-break retry — the cache's correctness contract (resolved 2026-07-27).** Our
+`ParsedText` line-breaker has a page-COUPLED quirk `LayoutSink` relies on that microreader lacks:
+when a HYPHENATED line lands as the LAST line before a page break (`noRoomForAnotherLine`,
+LayoutSink.cpp:131-135), it is re-wrapped WITHOUT hyphenation (a page must not end on a dangling
+`exam-`). The retry fires *during* the emit loop and REWRITES the block's word vector
+(ParsedText.cpp:335-422), so `layoutAndExtractLines` is NOT a pure "give me all lines" function —
+its output depends on where page breaks fall. The retry only ever affects the line immediately
+before a page break (the condition IS "this line fits, the next won't"). **Decision (preserve
+byte-identical output): the per-block cache holds the page-INDEPENDENT hyphenated line-set; the
+COLLECT LOOP owns the retry** — when a cached hyphenated line becomes last-before-break, re-wrap
+just that one line without hyphenation (ParsedText single-line-no-hyphen path). This relocates the
+retry from the line-break layer to the collect layer (exactly where microreader's page-fill
+decisions live), keeping the cache clean AND the output identical. Rejected: dropping the retry
+(would shift the golden — a deliberate visual change we're not taking).
+
 **Test oracle**: the existing whole-spine `LayoutSink` pagination stays as the GOLDEN. Page K
 produced by the pull core (`layout` from page K's start cursor) must be position-identical to
 page K from a full `replaySpine` run, across the corpus × profile matrix. Backward layout:
