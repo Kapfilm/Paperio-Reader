@@ -55,6 +55,11 @@ class BlockStreamReader {
   // replayable. A producer commits the slot only after the whole spine (incl. its aux) is on disk.
   bool spineAvailable(uint32_t i) const { return i < spineOffsets_.size() && spineOffsets_[i] != 0; }
 
+  // Re-read ONLY the fixed spine-offset index (cheap: no magic/version/fingerprint re-check) so a
+  // consumer chasing a live producer's write frontier picks up spines committed since open(). Returns
+  // false on I/O error. Header count is unchanged (fixed at begin), so the index size is unchanged.
+  bool refreshIndex();
+
   // The CURRENT spine's chapter entries (v6: per-spine), loaded by openSpine. Empty until openSpine.
   const std::vector<Chapter>& spineChapters() const { return spineChapters_; }
 

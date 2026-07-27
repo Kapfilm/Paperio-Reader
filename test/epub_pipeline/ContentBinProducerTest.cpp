@@ -258,3 +258,49 @@ TEST(ContentBinProducer, PartialFrontierIsReplayable) {
   EXPECT_TRUE(r.ok());
   in.close();
 }
+
+// A consumer that opened content.bin before a spine was committed picks the spine up via
+// refreshIndex() once the producer commits it — the frontier handshake (sub-step 3). Exercises the
+// durable per-spine flush: the newly-committed slot + its data are visible to the second read handle.
+TEST(ContentBinProducer, RefreshIndexPicksUpNewCommits) {
+  const std::string book = kMultiSpineBook;
+  const std::string dir = freshCacheDir("refresh");
+  auto epub = loadBook(book, dir);
+  const std::string bin = epub->getCachePath() + "/content.bin";
+  const uint32_t spineCount = static_cast<uint32_t>(epub->getSpineItemsCount());
+  ASSERT_GE(spineCount, 3u);
+
+  GfxRenderer renderer;
+  ContentBinProducer prod;
+  ASSERT_TRUE(prod.begin(epub, renderer, goldenParams()));
+
+  // Commit exactly spine 0 (ascending default order).
+  int guard = 0;
+  while (prod.committedCount() < 1 && !prod.done() && guard++ < 100000) prod.step(/*budgetMs=*/0);
+  ASSERT_EQ(prod.committedCount(), 1u);
+
+  // Consumer opens now: spine 0 available, spine 1 not yet.
+  FsFile in;
+  ASSERT_TRUE(in.openForRead(bin));
+  BlockStreamReader r;
+  ASSERT_TRUE(r.open(in));
+  ASSERT_TRUE(r.spineAvailable(0));
+  ASSERT_FALSE(r.spineAvailable(1)) << "spine 1 not committed at open time";
+
+  // Producer commits the next spine while the consumer's handle stays open.
+  while (prod.committedCount() < 2 && !prod.done() && guard++ < 100000) prod.step(/*budgetMs=*/0);
+  ASSERT_GE(prod.committedCount(), 2u);
+
+  // Without a refresh the consumer's snapshot is stale; refreshIndex() picks up the new commit and the
+  // now-committed spine is fully replayable (its data was flushed before its slot).
+  EXPECT_FALSE(r.spineAvailable(1)) << "stale snapshot before refresh";
+  ASSERT_TRUE(r.refreshIndex());
+  EXPECT_TRUE(r.spineAvailable(1)) << "refreshIndex must surface the newly committed spine";
+  ASSERT_TRUE(r.openSpine(1));
+  Block b;
+  size_t records = 0;
+  while (r.nextRawRecord(b)) ++records;
+  EXPECT_GT(records, 0u);
+  EXPECT_TRUE(r.ok());
+  in.close();
+}

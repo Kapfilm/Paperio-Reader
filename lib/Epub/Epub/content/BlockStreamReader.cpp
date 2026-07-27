@@ -70,6 +70,21 @@ bool BlockStreamReader::open(FsFile& file) {
   return ok_;
 }
 
+bool BlockStreamReader::refreshIndex() {
+  if (!ok_ || !file_) return false;
+  const uint32_t fileSize = static_cast<uint32_t>(file_->fileSize());
+  if (!file_->seekSet(kHeaderSize)) return false;
+  for (uint32_t i = 0; i < spineOffsets_.size(); ++i) {
+    uint32_t off = 0;
+    readPod(*file_, off);
+    if (off > fileSize) return false;  // committed offset past EOF → corrupt
+    // Slots only advance 0 -> committed; never un-commit. Keep the max so a concurrent partial read
+    // of a slot mid-write can never regress an already-seen availability.
+    if (off != 0) spineOffsets_[i] = off;
+  }
+  return static_cast<bool>(*file_);
+}
+
 bool BlockStreamReader::openSpine(uint32_t i) {
   if (!ok_ || !file_ || i >= spineOffsets_.size()) return false;
   if (spineOffsets_[i] == 0) return false;  // spine not yet committed (frontier)

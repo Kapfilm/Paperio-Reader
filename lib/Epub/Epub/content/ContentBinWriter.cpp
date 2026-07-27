@@ -187,9 +187,19 @@ void ContentBinWriter::onSpineEnd() {
   writePod(*file_, auxOffset);
   file_->seekSet(here);  // resume appending at end
   ok_ = static_cast<bool>(*file_);
-  // Commit this spine's start offset into its index slot — the frontier advance. From here a
-  // consumer can seek the index, see a non-zero slot, and replay the fully self-contained spine.
+  if (!ok_) return;
+
+  // Durable frontier commit (two-phase so a mid-compile reader — or a power loss — can never see a
+  // committed index slot whose spine data is not yet on disk):
+  //   1. flush the spine's blocks + aux + patched header FIRST, so the data is durable;
+  //   2. commit the index slot;
+  //   3. flush the slot, so a consumer that reads a non-zero slot is guaranteed the durable data
+  //      behind it. On device flush() syncs the SD card; on the host shim it is a no-op (the OS page
+  //      cache already makes writes visible to a second read handle), so this is device-correct
+  //      without changing host behaviour.
+  file_->flush();
   commitSpineOffset(spineIndexBeingWritten_, spineStartOffset_);
+  file_->flush();
   spineOpen_ = false;
   pendingFootnotes_.clear();
   pendingXPath_ = false;
