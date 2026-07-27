@@ -19,6 +19,7 @@
 #include "../blocks/ImageBlock.h"
 #include "../blocks/TextBlock.h"
 #include "../content/CompiledContent.h"  // compiled::Block (unique_ptr member needs the complete type)
+#include "../content/TeeBlockSink.h"      // compiled::TeeBlockSink (unique_ptr member; header-only)
 #include "../css/CssParser.h"
 #include "../css/CssStyle.h"
 
@@ -225,12 +226,20 @@ class ChapterHtmlSlimParser final : public Print {
   // (stage1OpenBlock flushes the prior one; finalize() flushes the last). Text is stored raw
   // Unicode in logical order so RTL shaping/reordering stays a Stage-2 concern.
   compiled::BlockSink* stage1Sink_ = nullptr;
+  // Increment F: when true, stage1Sink_ runs ALONGSIDE the internal layout sink (a tee), not instead
+  // of it — the SAME walk feeds both the LayoutSink (Stage-2 pages, the transient current-spine page
+  // store) and stage1Sink_ (a ContentBinWriter → content.bin). When false (the legacy mode used by
+  // the host whole-book compile), stage1Sink_ REPLACES the layout sink (content-only, no pages). See
+  // effectiveSink() + setup().
+  bool stage1SinkTee_ = false;
   // Step 6 (unify): the parser's own layout consumer. Constructed in setup() from the parser's
-  // settings members. The producer drives EITHER the external stage1Sink_ (a ContentSink compiling
-  // content.bin — content-only, no pages) OR this internal layout sink (device + section-cache
-  // builds), never both: see effectiveSink(). Its emitPage routes pages through completePageFn and
-  // its getters back the parser's getAnchors()/getPageBreakLabels()/getParagraphLutPerPage().
+  // settings members. Drives EITHER the external stage1Sink_ (content-only compile) OR this internal
+  // layout sink, OR — in tee mode (stage1SinkTee_) — BOTH via effectiveSink()'s TeeBlockSink. Its
+  // emitPage routes pages through completePageFn and its getters back the parser's
+  // getAnchors()/getPageBreakLabels()/getParagraphLutPerPage().
   std::unique_ptr<compiled::LayoutSink> layoutSink_;
+  // The tee that fans the walk to layoutSink_ + stage1Sink_ in tee mode. Owned; built in setup().
+  std::unique_ptr<compiled::TeeBlockSink> stage1TeeSink_;
   // Rebuilt by getParagraphLutPerPage() from the internal sink's LayoutLutEntry vector, so the
   // getter can return the parser's ParagraphLutEntry type (field-identical) without changing
   // Section.cpp's reader. Mutable: the getter is const.
@@ -349,10 +358,21 @@ class ChapterHtmlSlimParser final : public Print {
   // effective font size differs from the body resolve to the nearest real font on it.
   void setFontSizeLadder(const FontSizeLadder& ladder) { fontSizeLadder_ = ladder; }
 
-  // Attach a Stage-1 content sink (null clears it). Non-null makes the walk emit a
-  // materialized compiled::Block per text block in addition to laying out — the fused
-  // layout output is unchanged. See docs/stage1-extraction-design.md.
-  void setStage1Sink(compiled::BlockSink* sink) { stage1Sink_ = sink; }
+  // Attach a Stage-1 content sink in CONTENT-ONLY mode: the walk emits materialized blocks through
+  // `sink` and produces NO pages (replaces the internal layout sink). Used by the host whole-book
+  // compile (compileBookToContentBin). Null clears it. See docs/stage1-extraction-design.md.
+  void setStage1Sink(compiled::BlockSink* sink) {
+    stage1Sink_ = sink;
+    stage1SinkTee_ = false;
+  }
+
+  // Attach a Stage-1 content sink in TEE mode (Increment F): the walk feeds BOTH the internal layout
+  // sink (Stage-2 pages) AND `sink` (a ContentBinWriter) from one walk, so the section build also
+  // emits content.bin. Null clears it (reverts to plain layout). See effectiveSink().
+  void setStage1TeeSink(compiled::BlockSink* sink) {
+    stage1Sink_ = sink;
+    stage1SinkTee_ = (sink != nullptr);
+  }
 
  private:
   // Stage-1 producer tap (no-ops when stage1Sink_ is null). Defined in the .cpp where

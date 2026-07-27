@@ -436,6 +436,37 @@ INSTANTIATE_TEST_SUITE_P(Matrix, SectionEquivalenceMatrix, testing::ValuesIn(sec
                            return n;
                          });
 
+// Increment F GATE: the reader's parse-and-display-on-a-content.bin-miss path drives the section build
+// through a TEE (Section::setStage1TeeSink + a ContentBinWriter), so ONE walk emits both the section
+// cache AND content.bin. This must (a) leave the section file byte-identical to a plain parse (the
+// fan-out does not disturb layout) AND (b) emit a content.bin that reads back byte-identical to the
+// parse. Reuses the SectionEquivalence book/profile cases (the sliced variants are irrelevant to the
+// tee, so filter to the non-sliced ones).
+class TeeEquivalenceMatrix : public testing::TestWithParam<SectionEqCase> {};
+
+TEST_P(TeeEquivalenceMatrix, TeeSectionAndContentBinEqualParse) {
+  const SectionEqCase& c = GetParam();
+  const std::string epub = c.dir + "/" + c.book;
+  std::ostringstream diag;
+  const bool eq = pipeline_harness::teeEquivalence(epub, freshDir(c.name + "_tee"), c.spineIndex, c.profile, diag);
+  EXPECT_TRUE(eq) << "tee section cache / content.bin differs from parse for " << c.name << "\n" << diag.str();
+}
+
+std::vector<SectionEqCase> teeEqCases() {
+  std::vector<SectionEqCase> out;
+  for (const SectionEqCase& c : sectionEqCases())
+    if (!c.sliced) out.push_back(c);  // one entry per book/profile; slicing is orthogonal to the tee
+  return out;
+}
+
+INSTANTIATE_TEST_SUITE_P(Matrix, TeeEquivalenceMatrix, testing::ValuesIn(teeEqCases()),
+                         [](const testing::TestParamInfo<SectionEqCase>& info) {
+                           std::string n = info.param.name;
+                           for (char& ch : n)
+                             if (!std::isalnum(static_cast<unsigned char>(ch))) ch = '_';
+                           return n;
+                         });
+
 // The Phase-3 SPEED gate: a settings change today re-runs the full pipeline (ZIP/inflate/Expat/CSS
 // + layout) = layoutViaSink. With a persisted content.bin it re-runs only the Stage-2 layout =
 // replayFromContentBin (read records + paginate). The plan targets >=3x faster relayout. We assert

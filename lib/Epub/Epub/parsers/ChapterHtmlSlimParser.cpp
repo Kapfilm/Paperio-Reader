@@ -17,6 +17,7 @@
 #include "../content/ImageLayout.h"
 #include "../content/LayoutSink.h"
 #include "../content/TableLayout.h"
+#include "../content/TeeBlockSink.h"
 #include "../converters/ImageDecoderFactory.h"
 #include "../converters/ImageToFramebufferDecoder.h"
 #include "../htmlEntities.h"
@@ -2047,9 +2048,12 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
 ChapterHtmlSlimParser::~ChapterHtmlSlimParser() = default;
 
 compiled::BlockSink* ChapterHtmlSlimParser::effectiveSink() const {
-  // A ContentSink compile (external stage1Sink_) is content-only and does not need pages, so it
-  // REPLACES the internal layout sink for that build; otherwise the internal layout sink drives the
-  // section-cache/device path. Never both — one sink at a time, no fan-out.
+  // Three modes:
+  //  - TEE (Increment F): the walk feeds BOTH the layout sink (pages) and stage1Sink_ (content.bin)
+  //    via the TeeBlockSink built in setup(). Used by the reader's parse-and-display-on-miss build.
+  //  - CONTENT-ONLY: a stage1Sink_ that REPLACES the layout sink (no pages) — host whole-book compile.
+  //  - PLAIN LAYOUT: no external sink; the internal layout sink drives the section-cache/device path.
+  if (stage1SinkTee_ && stage1TeeSink_) return stage1TeeSink_.get();
   return stage1Sink_ ? stage1Sink_ : static_cast<compiled::BlockSink*>(layoutSink_.get());
 }
 
@@ -2075,9 +2079,11 @@ const std::vector<ChapterHtmlSlimParser::ParagraphLutEntry>& ChapterHtmlSlimPars
 
 bool ChapterHtmlSlimParser::setup(const size_t totalInflatedSize) {
   // Construct the internal layout sink from the parser's settings members BEFORE the first
-  // startNewTextBlock (which drives the producer). Skipped when an external ContentSink is attached
-  // — that build is content-only and needs no pages. (Step 6 unify; see effectiveSink().)
-  if (!stage1Sink_) {
+  // startNewTextBlock (which drives the producer). Built when NO external sink is attached (the plain
+  // layout/section-cache build) OR in TEE mode (Increment F: pages AND content.bin from one walk).
+  // Skipped only in content-ONLY mode (a stage1Sink that replaces layout — the host whole-book
+  // compile). (Step 6 unify + Increment F tee; see effectiveSink().)
+  if (!stage1Sink_ || stage1SinkTee_) {
     compiled::LayoutParams lp;
     lp.fontId = fontId;
     lp.lineCompression = lineCompression;
@@ -2092,6 +2098,11 @@ bool ChapterHtmlSlimParser::setup(const size_t totalInflatedSize) {
     lp.imageBasePath = imageBasePath;
     lp.epubFilePath = epub ? epub->getPath() : std::string();
     layoutSink_ = std::make_unique<compiled::LayoutSink>(renderer, std::move(lp), completePageFn);
+  }
+  // Tee mode: fan the walk to the layout sink (pages) AND the external content sink (content.bin).
+  // The layout sink is `first` (gets the Block copy) so its getters back the section tail as usual.
+  if (stage1SinkTee_ && stage1Sink_) {
+    stage1TeeSink_ = std::make_unique<compiled::TeeBlockSink>(layoutSink_.get(), stage1Sink_);
   }
 
   auto paragraphAlignmentBlockStyle = BlockStyle();

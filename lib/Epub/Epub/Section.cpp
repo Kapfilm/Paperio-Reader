@@ -724,7 +724,13 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
       st.cssParser, epub->getImageManifest());
   st.visitor->setExternalPageBreakAnchors(std::move(externalPageBreakAnchors));
   st.visitor->setFontSizeLadder(p.fontSizeLadder);
-  st.visitor->setStage1Sink(stage1Sink_);  // null unless a Stage-1 compile is driving this build
+  // null unless a Stage-1 compile is driving this build. Tee mode (Increment F) emits content.bin
+  // ALONGSIDE the section-cache pages from one walk; content-only mode replaces the layout sink.
+  if (stage1SinkTee_) {
+    st.visitor->setStage1TeeSink(stage1Sink_);
+  } else {
+    st.visitor->setStage1Sink(stage1Sink_);
+  }
   Hyphenator::setPreferredLanguage(epub->getLanguage());
 
   // Inline footnote previews come from the book-level footnotes.bin gathered up front

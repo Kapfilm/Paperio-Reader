@@ -14,6 +14,7 @@
 #include "Epub/Section.h"
 #include "Epub/content/BlockStreamReader.h"
 #include "Epub/content/CompiledContent.h"
+#include "Epub/content/ContentBinWriter.h"
 #include "Epub/content/ContentSink.h"
 #include "Epub/content/LayoutSink.h"
 
@@ -414,6 +415,98 @@ bool sectionEquivalence(const std::string& epubPath, const std::string& cacheDir
   if (diff > 0) {
     out << "DIFF section file at byte offset " << (diff - 1) << " (parse size=" << parseSize << ")\n";
     return false;
+  }
+  return true;
+}
+
+bool teeEquivalence(const std::string& epubPath, const std::string& cacheDir, int spineIndex,
+                    const Profile& profile, std::ostream& out) {
+  const std::string bookDir = bookCacheDir(cacheDir, epubPath);
+
+  GfxRenderer renderer;
+  auto epub = std::make_shared<Epub>(epubPath, cacheDir);
+  if (!epub->load(true)) { out << "ERROR load failed\n"; return false; }
+  epub->loadImageManifest();
+  FootnotePreviews::gather(*epub);
+
+  Section::BuildParams bp;
+  bp.fontId = profile.fontId;
+  bp.lineCompression = profile.lineCompression;
+  bp.extraParagraphSpacing = profile.extraParagraphSpacing;
+  bp.paragraphAlignment = profile.paragraphAlignment;
+  bp.viewportWidth = profile.viewportWidth;
+  bp.viewportHeight = profile.viewportHeight;
+  bp.hyphenationEnabled = profile.hyphenationEnabled;
+  bp.embeddedStyle = profile.embeddedStyle;
+  bp.bionicReadingEnabled = profile.bionicReadingEnabled;
+  bp.inlineFootnotePreviews = profile.inlineFootnotePreviews;
+  bp.imageRendering = profile.imageRendering;
+
+  // (1) Plain parse build → capture the section file bytes as the reference.
+  {
+    Section section(epub, spineIndex, renderer);
+    if (!section.createSectionFile(bp.fontId, bp.lineCompression, bp.extraParagraphSpacing, bp.paragraphAlignment,
+                                   bp.viewportWidth, bp.viewportHeight, bp.hyphenationEnabled, bp.embeddedStyle,
+                                   bp.bionicReadingEnabled, bp.inlineFootnotePreviews, bp.imageRendering, {},
+                                   /*skipEviction=*/true, {})) {
+      out << "ERROR plain parse build failed\n";
+      return false;
+    }
+  }
+  const std::string sectionPath = findSectionFile(bookDir, spineIndex);
+  if (sectionPath.empty()) { out << "ERROR parse section file not found\n"; return false; }
+  const std::string parseCopy = bookDir + "/parse_section.bin";
+  { std::error_code ec; fs::copy_file(sectionPath, parseCopy, fs::copy_options::overwrite_existing, ec);
+    if (ec) { out << "ERROR copy parse section file: " << ec.message() << "\n"; return false; } }
+
+  // (2) TEE build of the SAME spine: one walk emits the section cache (overwrites sectionPath) AND
+  //     content.bin. Mirrors the reader's parse-and-display-on-miss path (Section::setStage1TeeSink).
+  const std::string binPath = bookDir + "/content.bin";
+  {
+    uint64_t fingerprint = 0;
+    epub->zipContentFingerprint(&fingerprint);
+    FsFile binFile;
+    if (!Storage.openFileForWrite("TEE", binPath, binFile)) { out << "ERROR open content.bin\n"; return false; }
+    compiled::ContentBinWriter writer;
+    if (!writer.begin(binFile, static_cast<uint32_t>(epub->getSpineItemsCount()), fingerprint)) {
+      out << "ERROR content.bin begin\n"; return false;
+    }
+    writer.beginSpineAt(static_cast<uint32_t>(spineIndex));  // emit into THIS spine's slot
+    Section section(epub, spineIndex, renderer);
+    section.setStage1TeeSink(&writer);  // pages AND content.bin from one walk
+    if (!section.createSectionFile(bp.fontId, bp.lineCompression, bp.extraParagraphSpacing, bp.paragraphAlignment,
+                                   bp.viewportWidth, bp.viewportHeight, bp.hyphenationEnabled, bp.embeddedStyle,
+                                   bp.bionicReadingEnabled, bp.inlineFootnotePreviews, bp.imageRendering, {},
+                                   /*skipEviction=*/true, {})) {
+      out << "ERROR tee build failed\n"; return false;
+    }
+    if (!writer.finish()) { out << "ERROR content.bin finish\n"; return false; }
+    binFile.close();
+  }
+
+  // (2a) The tee's section file must be byte-identical to the plain parse (pages unaffected by fan-out).
+  {
+    const long a = fileSizeOf(parseCopy), b = fileSizeOf(sectionPath);
+    const long d = firstDiffOffset(parseCopy, sectionPath);
+    if (d == -1) { out << "ERROR diff tee section file\n"; return false; }
+    if (d == -2 || a != b) { out << "DIFF tee section SIZE: parse=" << a << " tee=" << b << "\n"; return false; }
+    if (d > 0) { out << "DIFF tee section file at byte " << (d - 1) << " (parse size=" << a << ")\n"; return false; }
+  }
+
+  // (3) Read-back from the TEE-emitted content.bin → section file must ALSO match the plain parse
+  //     (content.bin was emitted correctly).
+  {
+    Section section(epub, spineIndex, renderer);
+    if (!section.buildSectionFromContentBin(bp, /*skipEviction=*/true)) {
+      out << "ERROR read-back from tee content.bin failed\n"; return false;
+    }
+  }
+  {
+    const long a = fileSizeOf(parseCopy), b = fileSizeOf(sectionPath);
+    const long d = firstDiffOffset(parseCopy, sectionPath);
+    if (d == -1) { out << "ERROR diff readback section file\n"; return false; }
+    if (d == -2 || a != b) { out << "DIFF readback(tee-bin) SIZE: parse=" << a << " readback=" << b << "\n"; return false; }
+    if (d > 0) { out << "DIFF readback(tee-bin) at byte " << (d - 1) << " (parse size=" << a << ")\n"; return false; }
   }
   return true;
 }

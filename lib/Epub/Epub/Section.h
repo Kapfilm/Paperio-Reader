@@ -79,8 +79,10 @@ class Section {
   void abortReadBack();  // drop a partial read-back (close+remove the half-written section file)
   // See setExternalBuildScratch. Not owned; must outlive any active build.
   BuildArena* externalScratch_ = nullptr;
-  // See setStage1Sink. Not owned; forwarded to the parser when the build's visitor is created.
+  // See setStage1Sink / setStage1TeeSink. Not owned; forwarded to the parser when the build's visitor
+  // is created. stage1SinkTee_ selects TEE mode (pages + content.bin) vs content-only.
   compiled::BlockSink* stage1Sink_ = nullptr;
+  bool stage1SinkTee_ = false;
   // Outcome of one phase method. Mostly maps to BuildStep: More means the phase yielded
   // mid-way after spending its time budget; RetryNoCss asks the entry function to tear the
   // state down and restart from setup with embeddedStyle=false.
@@ -219,10 +221,19 @@ class Section {
   // Call before the first stepSectionBuild/createSectionFile of a build; a null
   // pointer reverts to the internal heap-backed arena.
   void setExternalBuildScratch(BuildArena* scratch) { externalScratch_ = scratch; }
-  // Attach a Stage-1 content sink (default null). When set, the section build's parser
-  // also emits materialized compiled::Blocks through it, with layout output unchanged
-  // (see docs/stage1-extraction-design.md). Used by the Stage-1 producer + its tests.
-  void setStage1Sink(compiled::BlockSink* sink) { stage1Sink_ = sink; }
+  // Attach a Stage-1 content sink in CONTENT-ONLY mode (default null): the build's parser emits
+  // materialized blocks through it and produces NO pages. Used by the host whole-book compile.
+  void setStage1Sink(compiled::BlockSink* sink) {
+    stage1Sink_ = sink;
+    stage1SinkTee_ = false;
+  }
+  // Attach a Stage-1 content sink in TEE mode (Increment F): the SAME build produces the section
+  // cache (pages) AND emits `sink` (a ContentBinWriter) → content.bin, from one walk. This is the
+  // reader's parse-and-display-on-a-content.bin-miss path. Null clears it.
+  void setStage1TeeSink(compiled::BlockSink* sink) {
+    stage1Sink_ = sink;
+    stage1SinkTee_ = (sink != nullptr);
+  }
   // Percent of the spine XHTML consumed by the in-flight build (0–100; 100 once the
   // stream is exhausted and only Finalize remains). 0 when no build is live. Feeds the
   // DEBUG_BACKGROUND_WORK overlay.
