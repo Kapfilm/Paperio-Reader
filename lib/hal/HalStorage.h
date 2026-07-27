@@ -44,6 +44,10 @@ class HalStorage {
   bool openFileForWrite(const char* moduleName, const char* path, HalFile& file);
   bool openFileForWrite(const char* moduleName, const std::string& path, HalFile& file);
   bool openFileForWrite(const char* moduleName, const String& path, HalFile& file);
+  // Read-write, seekable, NON-truncating (Increment F content.bin append — keep committed spines,
+  // append new ones at EOF). The file must already exist. Returns false if it can't be opened.
+  bool openFileForReadWrite(const char* moduleName, const char* path, HalFile& file);
+  bool openFileForReadWrite(const char* moduleName, const std::string& path, HalFile& file);
   bool removeDir(const char* path);
   bool copyFile(const char* moduleName, const std::string& srcPath, const char* dstPath);
 

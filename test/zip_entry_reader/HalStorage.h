@@ -54,6 +54,13 @@ class HalFile : public Print {
     return fp_ != nullptr;
   }
 
+  // Read-write, seekable, NON-truncating (Increment F content.bin append). The file must exist.
+  bool openForReadWrite(const std::string& path) {
+    close();
+    fp_ = fopen(path.c_str(), "r+b");
+    return fp_ != nullptr;
+  }
+
   bool close() {
     if (fp_) {
       fclose(fp_);
@@ -131,6 +138,7 @@ class HalStorage {
   bool openFileForRead(const char*, const std::string& path, HalFile& f) { return f.openForRead(path); }
   bool openFileForRead(const char*, const char* path, HalFile& f) { return f.openForRead(path); }
   bool openFileForWrite(const char*, const std::string& path, HalFile& f) { return f.openForWrite(path); }
+  bool openFileForReadWrite(const char*, const std::string& path, HalFile& f) { return f.openForReadWrite(path); }
   bool exists(const char* path) { return std::filesystem::exists(path); }
   bool mkdir(const char* path, bool recursive = true) {
     std::error_code ec;

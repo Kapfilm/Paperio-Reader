@@ -9,6 +9,7 @@
 namespace compiled {
 namespace {
 
+using serialization::readPod;
 using serialization::writePod;
 
 // Write the v6 fixed header: magic + version + fingerprint + spineCount. The spine-offset index
@@ -47,6 +48,58 @@ bool ContentBinWriter::begin(FsFile& file, uint32_t spineCount, uint64_t fingerp
   return ok_;
 }
 
+bool ContentBinWriter::openExisting(FsFile& file, uint32_t spineCount, uint64_t fingerprint) {
+  file_ = &file;
+  ok_ = false;
+  spineCount_ = spineCount;
+  fingerprint_ = fingerprint;
+  nextSpineIndex_ = 0;
+  committed_.assign(spineCount, false);
+  spineStyles_.clear();
+  spineChapters_.clear();
+  spineOpen_ = false;
+  spineHasBlock_ = false;
+  blockCount_ = 0;
+  anchors_.clear();
+  pageBreakLabels_.clear();
+  pendingFootnotes_.clear();
+  pendingXPath_ = false;
+  lastSpineDataWritten_ = false;
+  if (!file) return false;
+
+  // Validate the existing file's header (magic/version/fingerprint/spineCount) — a mismatch means it
+  // is stale/foreign, so the caller should truncate-and-begin() instead.
+  if (!file.seekSet(0)) return false;
+  char magic[4] = {};
+  if (file.read(magic, 4) != 4) return false;
+  for (int i = 0; i < 4; ++i)
+    if (magic[i] != kMagic[i]) return false;
+  uint8_t version = 0;
+  readPod(file, version);
+  if (version != kVersion) return false;
+  uint64_t fp = 0;
+  readPod(file, fp);
+  uint32_t sc = 0;
+  readPod(file, sc);
+  if (fp != fingerprint || sc != spineCount) return false;
+
+  // Load the committed slots so beginSpineAt on an already-done spine is a no-op and spineCommitted()
+  // answers the caller's "is this spine already covered?" query.
+  const uint32_t fileSize = static_cast<uint32_t>(file.fileSize());
+  if (fileSize < kHeaderSize + spineCount * sizeof(uint32_t)) return false;  // index truncated
+  if (!file.seekSet(kHeaderSize)) return false;
+  for (uint32_t i = 0; i < spineCount; ++i) {
+    uint32_t off = 0;
+    readPod(file, off);
+    if (off > fileSize) return false;  // committed offset past EOF → corrupt; caller truncates
+    if (off != 0) committed_[i] = true;
+  }
+  // Append new spine sections at EOF; committed slots + their data are left intact.
+  if (!file.seekSet(fileSize)) return false;
+  ok_ = static_cast<bool>(file);
+  return ok_;
+}
+
 void ContentBinWriter::commitSpineOffset(uint32_t spineIndex, uint32_t offset) {
   if (!ok_ || !file_ || spineIndex >= spineCount_) return;
   const uint32_t here = static_cast<uint32_t>(file_->position());
@@ -57,6 +110,7 @@ void ContentBinWriter::commitSpineOffset(uint32_t spineIndex, uint32_t offset) {
   writePod(*file_, offset);
   file_->seekSet(here);  // resume appending
   ok_ = static_cast<bool>(*file_);
+  if (ok_ && spineIndex < committed_.size()) committed_[spineIndex] = true;
 }
 
 void ContentBinWriter::beginSpine() { beginSpineAt(nextSpineIndex_++); }

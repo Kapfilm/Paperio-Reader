@@ -280,3 +280,79 @@ TEST(ContentBinStream, DeferredCommitGatesAvailability) {
     EXPECT_FALSE(r.spineAvailable(si)) << "written-but-uncommitted spine " << si << " must stay unavailable";
   in.close();
 }
+
+// Increment F cross-session append: a writer opened with openExisting() on a matching content.bin
+// keeps the already-committed spines and appends new ones at EOF, so a second session extends coverage
+// instead of truncating. Emulates the reader reopening a book: session 1 commits spine 0, session 2
+// (openExisting) commits spine 1; both must be available + replayable afterwards.
+TEST(ContentBinStream, OpenExistingAppendsKeepingCommittedSpines) {
+  const std::string dir = freshDir("append");
+  ContentSink sink;
+  ASSERT_TRUE(compileWhole("test_text_rendering.epub", dir, sink));
+  const CompiledContent& built = sink.content();
+  ASSERT_GE(built.spines.size(), 2u);
+  const uint32_t spineCount = static_cast<uint32_t>(built.spines.size());
+  const uint64_t fp = 0xABCD'1234'5678'9999ull;
+  const std::string bin = dir + "/content.bin";
+
+  const auto writeSpine = [&](ContentBinWriter& w, uint32_t si) {
+    w.beginSpineAt(si);
+    for (const auto& b : built.spines[si].blocks) {
+      if (b.hasXPath) w.onXPathAdvance(b.xpath.paragraphIndex, b.xpath.listItemIndex, b.xpath.bodyChildByteOffset);
+      for (const auto& fn : b.footnotes) w.onFootnote(static_cast<int>(fn.wordIndex), fn.entry);
+      Block copy = b;
+      copy.footnotes.clear();
+      copy.hasXPath = false;
+      const CssStyle& style = (b.styleId < built.stylePool.size()) ? built.stylePool[b.styleId] : CssStyle{};
+      w.onBlock(std::move(copy), style);
+    }
+    for (const auto& a : built.spines[si].anchors) w.onAnchor(a.id);
+    for (const auto& pl : built.spines[si].pageBreakLabels) w.onPageBreakLabel(pl.label);
+    w.onSpineEnd();
+  };
+
+  // Session 1: fresh begin(), commit ONLY spine 0.
+  {
+    FsFile f;
+    ASSERT_TRUE(f.openForWrite(bin));
+    ContentBinWriter w;
+    ASSERT_TRUE(w.begin(f, spineCount, fp));
+    writeSpine(w, 0);
+    ASSERT_TRUE(w.finish());
+    f.close();
+  }
+  // Session 2: openExisting() on the same file, append + commit spine 1. Spine 0 stays committed.
+  {
+    FsFile f;
+    ASSERT_TRUE(Storage.openFileForReadWrite("TST", bin, f));
+    ContentBinWriter w;
+    ASSERT_TRUE(w.openExisting(f, spineCount, fp)) << "matching-fingerprint file must reopen for append";
+    EXPECT_TRUE(w.spineCommitted(0)) << "prior-session spine 0 seen as committed";
+    EXPECT_FALSE(w.spineCommitted(1));
+    writeSpine(w, 1);
+    ASSERT_TRUE(w.finish());
+    f.close();
+  }
+  // Both spines are now available and replay.
+  FsFile in;
+  ASSERT_TRUE(in.openForRead(bin));
+  BlockStreamReader r;
+  ASSERT_TRUE(r.open(in));
+  EXPECT_TRUE(r.spineAvailable(0)) << "spine 0 survived the append";
+  EXPECT_TRUE(r.spineAvailable(1)) << "spine 1 was appended + committed";
+  EXPECT_TRUE(r.openSpine(0));
+  { Block b; size_t n = 0; while (r.nextRawRecord(b)) ++n; EXPECT_GT(n, 0u); }
+  EXPECT_TRUE(r.openSpine(1));
+  { Block b; size_t n = 0; while (r.nextRawRecord(b)) ++n; EXPECT_GT(n, 0u); }
+  EXPECT_TRUE(r.ok());
+  in.close();
+
+  // openExisting with a MISMATCHED fingerprint must refuse (caller then truncate+begin()s).
+  {
+    FsFile f;
+    ASSERT_TRUE(Storage.openFileForReadWrite("TST", bin, f));
+    ContentBinWriter w;
+    EXPECT_FALSE(w.openExisting(f, spineCount, fp ^ 0x1)) << "fingerprint mismatch must be rejected";
+    f.close();
+  }
+}

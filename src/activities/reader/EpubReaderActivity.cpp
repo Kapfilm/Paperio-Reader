@@ -20,7 +20,7 @@
 #include <Epub/FootnotePreviews.h>
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
-#include <Epub/content/ContentBinProducer.h>  // Increment E background producer (complete type)
+#include <Epub/content/ContentBinWriter.h>  // Increment F book-scoped content.bin writer (complete type)
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <FsHelpers.h>
@@ -451,10 +451,15 @@ void EpubReaderActivity::onExit() {
   // epub it references goes away.
   resetBackgroundBuild();
 #if EPUB_STAGE1
-  // Tear down the Increment E background producer before the epub it references goes away: its dtor
-  // finish()es the content.bin (durable frontier) and drops the in-flight Section it holds.
-  contentBinProducer_.reset();
-  contentBinProducerBegun_ = false;
+  // Finish + close the Increment F content.bin writer before the epub it references goes away:
+  // finish() flushes; any uncommitted (in-flight / degraded) spine stays unpublished. Do this AFTER
+  // resetBackgroundBuild()/before section.reset() so no build still holds the tee.
+  if (contentBinWriter_) {
+    contentBinWriter_->finish();
+    contentBinWriter_.reset();
+    contentBinFile_.close();
+  }
+  contentBinWriterOpenAttempted_ = false;
 #endif
   section.reset();  // also aborts an in-flight Background-C build of the current section
   // Background-C may have BORROWED the secondary buffer for headroom (lent, not freed); the
@@ -684,22 +689,7 @@ void EpubReaderActivity::serviceBackgroundWork() {
     stepCurrentSectionBuild();
     return;
   }
-  const auto bStateBefore = backgroundBuildState_;
   stepBackgroundSectionBuild();
-#if EPUB_STAGE1
-  // Lowest-priority phase (Increment E): the background content.bin producer. It only advances on a
-  // tick where AA is idle, no read-back/Background-C build is live, and Background-B had nothing to do
-  // this tick (unchanged state == parked in Settled/Probe with no work) — "producer fills the reader's
-  // idle gaps", the consumer-priority contract expressed purely by ordering. It never borrows the
-  // secondary buffer and self-gates on heap, so it cannot starve the reader.
-  if (backgroundBuildState_ == bStateBefore &&
-      (backgroundBuildState_ == BackgroundBuildState::Settled ||
-       backgroundBuildState_ == BackgroundBuildState::Probe)) {
-    stepContentBinProducer();
-  }
-#else
-  (void)bStateBefore;
-#endif
 }
 
 void EpubReaderActivity::serviceBackgroundDebugLog() {
@@ -862,11 +852,6 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
     backgroundBuildBaseSpine_ = currentSpineIndex;
     backgroundBuildSpineIndex_ = currentSpineIndex + 1;
     backgroundWindowPagesBuilt_ = 0;
-#if EPUB_STAGE1
-    // Read position drives the producer's compile order (Increment E decisions #1 + #2): prioritize
-    // the reader's current spine + a window ahead. Cheap queue re-head; no effect if not yet begun.
-    if (contentBinProducer_) contentBinProducer_->setReadPosition(static_cast<uint32_t>(currentSpineIndex));
-#endif
   }
   // Walk forward from currentSpineIndex+1 to the book end. The cursor advances as each target
   // settles (Settled case below); already-cached spines settle for free in Probe.
@@ -1025,44 +1010,46 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
 }
 
 #if EPUB_STAGE1
-void EpubReaderActivity::stepContentBinProducer() {
-  if (!epub || readerPhase_ != ReaderPhase::READING) return;
-  // Same critical-path courtesy as Background-B: don't contend for the render lock while a
-  // refresh/render/image-decode is in flight (a blocked loop task can't service input).
-  if (renderer.isRefreshPending() || RenderLock::peek() || imageProcessingActive_) return;
-
-  // Lazily begin the producer the first time we get here for this book. begin() only opens the file +
-  // queues; it compiles nothing until stepped. A hard failure (or begin already attempted) latches so
-  // we don't retry every idle tick. The book's fingerprint keys content.bin, so a fresh producer for
-  // a changed book is handled by begin() starting a new file.
-  if (!contentBinProducerBegun_) {
-    contentBinProducerBegun_ = true;
-    auto prod = std::make_unique<compiled::ContentBinProducer>();
-    if (prod->begin(epub, renderer, makeSectionBuildParams())) {
-      prod->setReadPosition(static_cast<uint32_t>(currentSpineIndex));
-      contentBinProducer_ = std::move(prod);
-      LOG_INF("ERS", "ContentBinProducer started (read pos spine=%d)", currentSpineIndex);
+void EpubReaderActivity::attachContentBinTee(Section& section, const uint32_t spineIndex) {
+  if (!epub) return;
+  // Lazily open the book-scoped writer on the first parse build for a book. Prefer openExisting() so a
+  // matching prior-session content.bin is APPENDED to (its committed spines stay available); a stale /
+  // foreign / absent file falls back to a fresh begin() (truncate). A hard failure latches so we don't
+  // retry every build. The writer is in non-autoCommit mode: Section::setContentBinTee publishes each
+  // spine's slot only on a clean build.
+  if (!contentBinWriter_ && !contentBinWriterOpenAttempted_) {
+    contentBinWriterOpenAttempted_ = true;
+    const std::string binPath = epub->getCachePath() + "/content.bin";
+    const uint32_t spineCount = static_cast<uint32_t>(epub->getSpineItemsCount());
+    uint64_t fingerprint = 0;
+    epub->zipContentFingerprint(&fingerprint);
+    auto writer = std::make_unique<compiled::ContentBinWriter>();
+    writer->setAutoCommit(false);
+    bool opened = false;
+    if (Storage.exists(binPath.c_str()) && Storage.openFileForReadWrite("ERS", binPath, contentBinFile_)) {
+      opened = writer->openExisting(contentBinFile_, spineCount, fingerprint);
+      if (!opened) contentBinFile_.close();  // stale/foreign → fall back to fresh
+    }
+    if (!opened) {
+      if (Storage.openFileForWrite("ERS", binPath, contentBinFile_) &&
+          writer->begin(contentBinFile_, spineCount, fingerprint)) {
+        opened = true;
+      } else {
+        contentBinFile_.close();
+      }
+    }
+    if (opened) {
+      contentBinWriter_ = std::move(writer);
+      LOG_INF("ERS", "content.bin writer open (spines=%u)", spineCount);
     } else {
-      LOG_INF("ERS", "ContentBinProducer begin failed; background content.bin disabled this session");
-      return;
+      LOG_INF("ERS", "content.bin writer open failed; not emitting content.bin this session");
     }
   }
-  if (!contentBinProducer_ || contentBinProducer_->done()) return;
-
-  // Heap gate: the producer is a RESIDENT content-only build (peak ~one block + the inflate ring), so
-  // reuse Background-B's parse/contig floors. If heap is tight this tick, just skip — try again later.
-  const uint32_t freeHeap = esp_get_free_heap_size();
-  const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
-  if (freeHeap < BG_BUILD_PARSE_MIN_FREE_HEAP_BYTES || contigHeap < BG_BUILD_MIN_CONTIG_HEAP_BYTES) {
-    return;
+  // Attach the tee only if the spine isn't already covered — a build then emits it via one walk.
+  if (contentBinWriter_ && spineIndex < static_cast<uint32_t>(epub->getSpineItemsCount()) &&
+      !contentBinWriter_->spineCommitted(spineIndex)) {
+    section.setContentBinTee(contentBinWriter_.get(), spineIndex);
   }
-
-  // One bounded slice under the render lock (SD I/O + shared renderer glyph metrics, exactly like B).
-  RenderLock lock;
-  if (renderer.isRefreshPending() || pendingPreRender) return;  // re-check under the lock
-  renderer.clearFontAccumulation();  // metadata-only prewarm next slice (see stepBackgroundSectionBuild)
-  contentBinProducer_->step(BG_BUILD_BUDGET_MS);
-  checkHeapIntegrity("after_producer_slice");
 }
 #endif
 
@@ -2796,6 +2783,14 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
       readerPhase_ = ReaderPhase::READING;
       LOG_INF("ERS", "Section spine=%d served from content.bin (Stage-2 read-back, inflated=%lu)", currentSpineIndex,
               static_cast<unsigned long>(inflatedSize));
+    }
+    // Miss → we are about to PARSE this spine. Emit it to content.bin via the tee (one walk builds the
+    // section cache AND content.bin), so the next visit / a relayout is a fast read-back. Skips when
+    // the spine is already covered or the writer can't open. A resumed partial B build already began
+    // its walk without the tee, so don't attach mid-build; the CSS-fallback rebuild is a degraded
+    // reparse we don't want in content.bin.
+    if (!servedFromContentBin && !resumeBackgroundBuild && !cssFallbackRebuild) {
+      attachContentBinTee(*section, static_cast<uint32_t>(currentSpineIndex));
     }
 #endif
 

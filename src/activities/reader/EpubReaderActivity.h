@@ -19,7 +19,7 @@
 
 #if EPUB_STAGE1
 namespace compiled {
-class ContentBinProducer;  // Increment E background content.bin compiler (fwd; complete type in .cpp)
+class ContentBinWriter;  // Increment F book-scoped content.bin writer (fwd; complete type in .cpp)
 }  // namespace compiled
 #endif
 
@@ -381,15 +381,20 @@ class EpubReaderActivity final : public Activity {
   // (which indexes the whole section before showing anything). -1 = no such latch.
   int forceReleasedBuildSpine_ = -1;
 #if EPUB_STAGE1
-  // Increment E background producer: compiles content.bin spine-by-spine, sliced, in read-position
-  // order, as the LOWEST-priority background phase (after AA / Background-C / Background-B) so it
-  // never competes with the reader for the loop or the secondary buffer. Lazily begun on first idle
-  // service when the book has no fresh content.bin; torn down on book close (onExit). Null until then.
-  // See docs/stage1-incr-E-substep4-reader-integration-design-2026-07-27.md.
-  std::unique_ptr<compiled::ContentBinProducer> contentBinProducer_;
-  bool contentBinProducerBegun_ = false;  // begin() attempted (success or hard-fail) — don't retry
-  // Advance the producer one bounded slice; lazily begins it. The lowest-priority background phase.
-  void stepContentBinProducer();
+  // Increment F: the book-scoped content.bin WRITER. A section build for a spine not yet in
+  // content.bin runs through the tee (Section::setContentBinTee) so the SAME walk that builds the
+  // section cache also emits the spine to content.bin (for relayout + revisit). Lazily opened on the
+  // first such build — openExisting() to append to a matching prior-session file, else begin() fresh —
+  // and finished/closed on book exit. `contentBinWriter_` is null until opened; its FsFile is held
+  // alongside so the writer's back-patching handle stays valid. See
+  // docs/stage1-incr-F-content-bin-primary-design-2026-07-27.md.
+  std::unique_ptr<compiled::ContentBinWriter> contentBinWriter_;
+  FsFile contentBinFile_;
+  bool contentBinWriterOpenAttempted_ = false;  // don't re-attempt a hard-failed open every build
+  // Attach the tee writer to `section` for `spineIndex` if the spine is not already committed to
+  // content.bin. Lazily opens the writer. No-op (returns without attaching) on any failure — the
+  // build then just parses without emitting content.bin. Called before a parse build on a miss.
+  void attachContentBinTee(Section& section, uint32_t spineIndex);
 #endif
   // Debug-only Background A glyph for the status-bar overlay. The transient flags
   // (pendingPreRender / preRenderedPage.ready) are cleared at the top of render()

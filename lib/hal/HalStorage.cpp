@@ -162,6 +162,18 @@ bool HalStorage::openFileForWrite(const char* moduleName, const String& path, Ha
   return openFileForWrite(moduleName, path.c_str(), file);
 }
 
+bool HalStorage::openFileForReadWrite(const char* /*moduleName*/, const char* path, HalFile& file) {
+  // O_RDWR (no O_TRUNC / no O_CREAT): open an existing file read-write + seekable, preserving its
+  // contents so content.bin can be appended to. Uses the raw open() since SDCardManager exposes only
+  // read/write(truncate) modes.
+  file = open(path, O_RDWR);
+  return static_cast<bool>(file);
+}
+
+bool HalStorage::openFileForReadWrite(const char* moduleName, const std::string& path, HalFile& file) {
+  return openFileForReadWrite(moduleName, path.c_str(), file);
+}
+
 bool HalStorage::removeDir(const char* path) { HAL_STORAGE_WRAPPED_CALL(removeDir, path); }
 
 bool HalStorage::copyFile(const char* moduleName, const std::string& srcPath, const char* dstPath) {

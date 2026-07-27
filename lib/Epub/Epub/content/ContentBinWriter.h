@@ -49,9 +49,21 @@ class ContentBinWriter : public BlockSink {
   ~ContentBinWriter() override = default;
 
   // Begin writing to `file` (caller-owned, opened read/write + seekable) for a book of `spineCount`
-  // spines. Writes a placeholder v5 header (offsets 0). Returns false on I/O error. fingerprint is
-  // the source book's ZIP content fingerprint.
+  // spines. Writes a fresh v6 header + zeroed index (TRUNCATES any existing content — the file must
+  // be opened for write/truncate). Returns false on I/O error. fingerprint is the source book's ZIP
+  // content fingerprint.
   bool begin(FsFile& file, uint32_t spineCount, uint64_t fingerprint);
+
+  // Open an EXISTING content.bin to APPEND (Increment F cross-session): validate its header
+  // (magic/version/fingerprint/spineCount — a mismatch returns false so the caller truncate+begin()s
+  // instead), load its committed slots (spineCommitted()), and position at EOF so new spine sections
+  // append without disturbing already-committed spines + their data. `file` must be opened
+  // read/write + seekable. Returns false on I/O error or a stale/foreign/corrupt file.
+  bool openExisting(FsFile& file, uint32_t spineCount, uint64_t fingerprint);
+
+  // True if spine `i`'s index slot is already committed (from a prior session via openExisting, or
+  // committed this session). Lets the caller skip re-emitting a spine content.bin already covers.
+  bool spineCommitted(uint32_t i) const { return i < committed_.size() && committed_[i]; }
 
   // BlockSink — driven by the walk. onBlock serializes the block immediately and drops it.
   void onBlock(Block&& block, const CssStyle& style) override;
@@ -106,6 +118,9 @@ class ContentBinWriter : public BlockSink {
   bool lastSpineDataWritten_ = false;
   uint32_t lastSpineIndex_ = 0;
   uint32_t lastSpineDataOffset_ = 0;
+  // Committed slots (populated by openExisting + each commitSpineOffset). Empty after a fresh begin()
+  // — nothing committed yet — so spineCommitted() is false for all, which is correct. See openExisting.
+  std::vector<bool> committed_;
 
   // Current spine state (all small; RESET at each spine — never a whole spine of blocks). v6: the
   // style pool + chapters are PER-SPINE (written into the spine's aux region at onSpineEnd), so a
