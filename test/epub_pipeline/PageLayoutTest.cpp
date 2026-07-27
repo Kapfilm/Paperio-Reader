@@ -1,0 +1,161 @@
+// G2a — PageLayout pull-core scaffold gate (docs/stage1-single-source-live-pagination-2026-07-27.md).
+//
+// PageLayout::layoutPage(cursor) lays out exactly ONE page from a page-boundary cursor, live over a
+// content.bin spine, by seekToBlock()ing and driving the trusted LayoutSink for one page. The GOLDEN
+// is the whole-spine LayoutSink run (compiled::replaySpine) — the same engine EpubPipelineTest pins
+// byte-identically to the committed goldens. This test asserts that stopping after ONE page from the
+// spine-start cursor reproduces the golden spine's FIRST page exactly, across the corpus × profile
+// matrix. (Mid-spine cursors + precise end-cursors + backward layout are G2b; this scaffold pins the
+// cursor type, seekToBlock, and the position-identical oracle rig with zero layout-behavior risk.)
+
+#include <gtest/gtest.h>
+
+#include <GfxRenderer.h>
+
+#include <algorithm>
+#include <filesystem>
+#include <memory>
+#include <process.h>  // _getpid — per-process temp isolation under parallel ctest
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "Epub.h"
+#include "Epub/Page.h"
+#include "Epub/content/BlockStreamReader.h"
+#include "Epub/content/LayoutSink.h"
+#include "Epub/content/PageLayout.h"
+#include "PipelineRunner.h"
+
+namespace fs = std::filesystem;
+
+namespace {
+
+std::string freshDir(const std::string& tag) {
+  const auto dir = fs::temp_directory_path() / ("pagelayout_test_" + std::to_string(_getpid())) / tag;
+  fs::remove_all(dir);
+  fs::create_directories(dir);
+  return dir.string();
+}
+
+// Build the LayoutParams a spine is laid out with, mirroring replayFromContentBin's mapping.
+compiled::LayoutParams paramsFor(const pipeline_harness::Profile& p, const std::string& epubPath,
+                                 const std::string& cacheDir, int spineIndex) {
+  compiled::LayoutParams params;
+  params.fontId = p.fontId;
+  params.lineCompression = p.lineCompression;
+  params.extraParagraphSpacing = p.extraParagraphSpacing;
+  params.paragraphAlignment = p.paragraphAlignment;
+  params.viewportWidth = p.viewportWidth;
+  params.viewportHeight = p.viewportHeight;
+  params.hyphenationEnabled = p.hyphenationEnabled;
+  params.bionicReadingEnabled = p.bionicReadingEnabled;
+  params.embeddedStyle = p.embeddedStyle;
+  params.epubFilePath = epubPath;
+  params.imageBasePath = cacheDir + "/img_" + std::to_string(spineIndex) + "_00000000_";
+  return params;
+}
+
+// Golden: drive the whole spine through LayoutSink (compiled::replaySpine) and return its FIRST page,
+// dumped via the shared canonical serializer. Empty string when the spine has no page.
+std::string goldenFirstPageDump(compiled::BlockStreamReader& reader, GfxRenderer& renderer,
+                                const compiled::LayoutParams& params, uint32_t spineIndex,
+                                const std::string& cacheDir) {
+  std::vector<std::unique_ptr<Page>> pages;
+  compiled::LayoutSink sink(renderer, params,
+                            [&pages](std::unique_ptr<Page> page) { pages.push_back(std::move(page)); });
+  if (!compiled::replaySpine(reader, spineIndex, sink)) return "<replay-failed>";
+  if (pages.empty()) return "";
+  std::ostringstream out;
+  pipeline_harness::dumpOnePage(out, *pages.front(), 0, cacheDir);
+  return out.str();
+}
+
+struct BookProfile {
+  std::string dir;
+  std::string book;
+  pipeline_harness::Profile profile;
+};
+
+std::vector<std::string> corpusBooks() {
+  std::vector<std::string> names;
+  for (const auto& entry : fs::directory_iterator(CORPUS_DIR)) {
+    if (entry.path().extension() == ".epub") names.push_back(entry.path().filename().string());
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+std::vector<pipeline_harness::Profile> profileMatrix() {
+  using P = pipeline_harness::Profile;
+  std::vector<P> ps;
+  ps.push_back(P{});  // default
+  P narrow;
+  narrow.name = "narrow";
+  narrow.viewportWidth = 300;
+  narrow.viewportHeight = 500;
+  ps.push_back(narrow);
+  P bigFont;
+  bigFont.name = "bigFont";
+  bigFont.fontId = 3;
+  ps.push_back(bigFont);
+  return ps;
+}
+
+std::vector<BookProfile> bookProfileMatrix() {
+  std::vector<BookProfile> out;
+  for (const auto& book : corpusBooks())
+    for (const auto& p : profileMatrix()) out.push_back({CORPUS_DIR, book, p});
+  return out;
+}
+
+class PageLayoutMatrix : public testing::TestWithParam<BookProfile> {};
+
+// The core G2a gate: PageLayout's one-page layout from the spine-start cursor == the golden spine's
+// first page, for every spine, across the corpus × profile matrix.
+TEST_P(PageLayoutMatrix, FirstPageMatchesWholeSpineGolden) {
+  const BookProfile& bp = GetParam();
+  const std::string epub = bp.dir + "/" + bp.book;
+  const std::string cacheDir = freshDir(bp.book + "_" + bp.profile.name);
+
+  std::ostringstream compileLog;
+  ASSERT_TRUE(pipeline_harness::compileToContentBin(epub, cacheDir, bp.profile, compileLog)) << compileLog.str();
+
+  FsFile binFile;
+  ASSERT_TRUE(binFile.openForRead(cacheDir + "/content.bin"));
+  compiled::BlockStreamReader reader;
+  ASSERT_TRUE(reader.open(binFile));
+
+  GfxRenderer renderer;
+  bool checkedAnySpine = false;
+  for (uint32_t si = 0; si < reader.spineCount(); ++si) {
+    if (!reader.spineAvailable(si)) continue;
+    const compiled::LayoutParams params = paramsFor(bp.profile, epub, cacheDir, static_cast<int>(si));
+
+    const std::string golden = goldenFirstPageDump(reader, renderer, params, si, cacheDir);
+    if (golden.empty()) continue;  // spine with no page (e.g. empty) — nothing to compare
+
+    compiled::PagePosition start;
+    start.spineIndex = static_cast<uint16_t>(si);
+    const compiled::LaidOutPage lp = compiled::layoutPage(reader, renderer, params, start);
+    ASSERT_TRUE(lp.ok) << "layoutPage failed for spine " << si;
+    ASSERT_TRUE(lp.page) << "layoutPage produced no page for spine " << si;
+
+    std::ostringstream pullOut;
+    pipeline_harness::dumpOnePage(pullOut, *lp.page, 0, cacheDir);
+    EXPECT_EQ(golden, pullOut.str()) << "pull-core first page diverges from golden for spine " << si;
+    checkedAnySpine = true;
+  }
+  binFile.close();
+  EXPECT_TRUE(checkedAnySpine) << "no spine produced a comparable first page for " << bp.book;
+}
+
+INSTANTIATE_TEST_SUITE_P(Matrix, PageLayoutMatrix, testing::ValuesIn(bookProfileMatrix()),
+                         [](const testing::TestParamInfo<BookProfile>& info) {
+                           std::string n = info.param.book + "_" + info.param.profile.name;
+                           for (char& c : n)
+                             if (!std::isalnum(static_cast<unsigned char>(c))) c = '_';
+                           return n;
+                         });
+
+}  // namespace
