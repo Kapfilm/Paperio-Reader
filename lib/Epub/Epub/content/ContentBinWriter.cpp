@@ -189,26 +189,40 @@ void ContentBinWriter::onSpineEnd() {
   ok_ = static_cast<bool>(*file_);
   if (!ok_) return;
 
-  // Durable frontier commit (two-phase so a mid-compile reader — or a power loss — can never see a
-  // committed index slot whose spine data is not yet on disk):
-  //   1. flush the spine's blocks + aux + patched header FIRST, so the data is durable;
-  //   2. commit the index slot;
-  //   3. flush the slot, so a consumer that reads a non-zero slot is guaranteed the durable data
-  //      behind it. On device flush() syncs the SD card; on the host shim it is a no-op (the OS page
-  //      cache already makes writes visible to a second read handle), so this is device-correct
-  //      without changing host behaviour.
+  // Flush the spine's blocks + aux + patched header FIRST so the DATA is durable before any slot
+  // that advertises it. The index-slot COMMIT is separate (commitSpine): in autoCommit mode
+  // (whole-book compile / producer — the spine is known clean) we commit here; otherwise the caller
+  // (the reader's tee build) commits explicitly ONLY after confirming the build was not
+  // degraded/truncated, so a bad parse never publishes a bad content.bin spine.
   file_->flush();
-  commitSpineOffset(spineIndexBeingWritten_, spineStartOffset_);
-  file_->flush();
+  lastSpineDataOffset_ = spineStartOffset_;
+  lastSpineIndex_ = spineIndexBeingWritten_;
+  lastSpineDataWritten_ = true;
+  if (autoCommitSpines_) commitSpine(spineIndexBeingWritten_);
   spineOpen_ = false;
   pendingFootnotes_.clear();
   pendingXPath_ = false;
 }
 
+bool ContentBinWriter::commitSpine(uint32_t spineIndex) {
+  // Publish the spine written by the most recent onSpineEnd: commit its start offset into the index
+  // slot + flush, so a reader that sees the non-zero slot is guaranteed the durable data behind it.
+  // Called automatically by onSpineEnd in autoCommit mode; called EXPLICITLY by the reader's tee
+  // build after confirming a clean parse (so a degraded/truncated build never commits). A spineIndex
+  // that does not match the last-written spine, or no data written, is a no-op (caller bug guard).
+  if (!ok_ || !file_ || !lastSpineDataWritten_ || spineIndex != lastSpineIndex_) return false;
+  commitSpineOffset(lastSpineIndex_, lastSpineDataOffset_);
+  file_->flush();
+  lastSpineDataWritten_ = false;  // consumed; a re-commit is a no-op
+  return ok_;
+}
+
 bool ContentBinWriter::finish() {
   if (!ok_ || !file_) return false;
   // v6: nothing book-level to append (index committed slot-by-slot; styles + chapters are per-spine).
-  // Just make sure any open spine was closed out; a well-formed caller already called onSpineEnd.
+  // Just make sure any open spine was closed out; a well-formed caller already called onSpineEnd. In
+  // non-autoCommit mode a spine whose data was written but never explicitly committed stays
+  // uncommitted (slot 0) — correct: the caller chose not to publish it.
   if (spineOpen_) onSpineEnd();
   ok_ = ok_ && static_cast<bool>(*file_);
   return ok_;

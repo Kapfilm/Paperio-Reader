@@ -230,3 +230,53 @@ TEST(ContentBinStream, PartialFileOpensButSpinesUnavailable) {
     in.close();
   }
 }
+
+// Increment F split write/commit: with setAutoCommit(false), onSpineEnd writes a spine's DATA but does
+// NOT publish its index slot — an explicit commitSpine() does. A spine written-but-not-committed stays
+// unavailable, so the reader's tee build can withhold a degraded/truncated parse from content.bin.
+TEST(ContentBinStream, DeferredCommitGatesAvailability) {
+  const std::string dir = freshDir("defercommit");
+  ContentSink sink;
+  ASSERT_TRUE(compileWhole("test_text_rendering.epub", dir, sink));
+  const CompiledContent& built = sink.content();
+  ASSERT_GE(built.spines.size(), 2u);
+
+  const std::string bin = dir + "/content.bin";
+  {
+    FsFile f;
+    ASSERT_TRUE(f.openForWrite(bin));
+    ContentBinWriter w;
+    w.setAutoCommit(false);  // caller publishes spines explicitly
+    ASSERT_TRUE(w.begin(f, static_cast<uint32_t>(built.spines.size()), 55));
+    for (size_t si = 0; si < built.spines.size(); ++si) {
+      const auto& spine = built.spines[si];
+      w.beginSpineAt(static_cast<uint32_t>(si));
+      for (const auto& b : spine.blocks) {
+        if (b.hasXPath) w.onXPathAdvance(b.xpath.paragraphIndex, b.xpath.listItemIndex, b.xpath.bodyChildByteOffset);
+        for (const auto& fn : b.footnotes) w.onFootnote(static_cast<int>(fn.wordIndex), fn.entry);
+        Block copy = b;
+        copy.footnotes.clear();
+        copy.hasXPath = false;
+        const CssStyle& style = (b.styleId < built.stylePool.size()) ? built.stylePool[b.styleId] : CssStyle{};
+        w.onBlock(std::move(copy), style);
+      }
+      for (const auto& a : spine.anchors) w.onAnchor(a.id);
+      for (const auto& pl : spine.pageBreakLabels) w.onPageBreakLabel(pl.label);
+      w.onSpineEnd();  // writes DATA; does NOT commit (autoCommit off)
+      if (si == 0) w.commitSpine(0);  // publish ONLY spine 0
+      // spine 1+ data is written but deliberately left uncommitted
+    }
+    ASSERT_TRUE(w.finish());
+    f.close();
+  }
+
+  FsFile in;
+  ASSERT_TRUE(in.openForRead(bin));
+  BlockStreamReader r;
+  ASSERT_TRUE(r.open(in));
+  EXPECT_TRUE(r.spineAvailable(0)) << "explicitly committed spine is available";
+  EXPECT_TRUE(r.openSpine(0)) << "committed spine replays";
+  for (uint32_t si = 1; si < r.spineCount(); ++si)
+    EXPECT_FALSE(r.spineAvailable(si)) << "written-but-uncommitted spine " << si << " must stay unavailable";
+  in.close();
+}

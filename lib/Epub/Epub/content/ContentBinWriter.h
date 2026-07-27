@@ -74,6 +74,17 @@ class ContentBinWriter : public BlockSink {
   // < spineCount and not already committed. The internal sequential cursor is left untouched.
   void beginSpineAt(uint32_t spineIndex);
 
+  // autoCommit (default true): onSpineEnd commits the spine's index slot immediately (whole-book
+  // compile / producer — the spine is known clean). Set false for the reader's TEE build, where the
+  // spine's data is written by onSpineEnd but the slot is published only by an explicit commitSpine()
+  // AFTER the caller confirms the build was not CSS-degraded / truncated, so a bad parse never
+  // publishes a bad content.bin spine.
+  void setAutoCommit(bool on) { autoCommitSpines_ = on; }
+
+  // Publish the spine written by the most recent onSpineEnd (commit its index slot + flush). No-op in
+  // autoCommit mode (already committed) or if spineIndex != the last-written spine. Returns ok().
+  bool commitSpine(uint32_t spineIndex);
+
   // Flush the file. v6 writes no book-level index/pool/chapters (they are per-spine), so this only
   // closes out any open spine and syncs. Returns false on any I/O error.
   bool finish();
@@ -90,6 +101,11 @@ class ContentBinWriter : public BlockSink {
   uint32_t spineCount_ = 0;
   uint64_t fingerprint_ = 0;
   uint32_t nextSpineIndex_ = 0;  // which index slot the NEXT beginSpine() commits (monotonic)
+  bool autoCommitSpines_ = true;  // see setAutoCommit
+  // Last spine whose DATA onSpineEnd wrote (for a deferred commitSpine in non-autoCommit mode).
+  bool lastSpineDataWritten_ = false;
+  uint32_t lastSpineIndex_ = 0;
+  uint32_t lastSpineDataOffset_ = 0;
 
   // Current spine state (all small; RESET at each spine — never a whole spine of blocks). v6: the
   // style pool + chapters are PER-SPINE (written into the spine's aux region at onSpineEnd), so a
