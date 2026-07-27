@@ -144,11 +144,46 @@ the page-assembly AROUND it. Rationale:
 
 **PagePosition** for us: `{blockIndex, lineIndex}` within a spine (mirrors microreader's
 `{paragraph, offset}`); `wordOffset`/`text_offset` as the stable re-sync key across a settings
-change (microreader's `resolve_stable_position`). Cross-block state the sink kept (margin
-collapse, float propagation, `<br>` alignment inheritance) must be recomputed deterministically
-from the cursor's block backward to a safe boundary — the pull core recomputes a bounded prefix,
-it does not stream from spine start. (Detail to nail in implementation; float/margin context is
-the main subtlety vs microreader, whose paragraphs are more self-contained.)
+change (microreader's `resolve_stable_position`). PLUS two spine-scoped carried scalars (see the
+cross-block analysis below): `auxFontId` and `imageCounter`.
+
+### Cross-block restart-boundary analysis (resolved 2026-07-27 — the algorithm-defining result)
+
+An audit of every LayoutSink member mutated across block boundaries (file:line-cited) settled
+how far back a "lay out the page starting at block N" computation must look. The load-bearing
+fact: **`emitPage()` (LayoutSink.cpp:76-93) resets ALL pixel-affecting cross-block accumulators**
+— `currentPageNextY_→0`, `lastBlockMarginBottom_→0`, all float state cleared, continuing block's
+`floatZoneCount→0`. And a float **provably never crosses a page boundary** (attachFloatImage
+page-breaks before an oversized float; emitPage clears float state; float height ≤ viewportHeight).
+
+So starting layout at a page's FIRST block with a zeroed cursor is pixel-correct, with exactly
+two caveats:
+
+- **Caveat A (bounded local window)**: an empty-block / `<br>` margin-collapse chain
+  (`pendingMergeStyle_`/`hasPendingMerge_`/`lastBlockAlignment_`) is NOT flushed at a page
+  boundary (empty blocks emit no page). If block N is preceded by a run of empty/`<br>` blocks,
+  walk back over just that contiguous run to the last non-empty/image/HR block and replay it to
+  rebuild the merge/alignment state. Formally unbounded (a book could have many empty divs),
+  practically 0-1 blocks.
+- **Caveat B (the ONE genuinely unbounded, pixel-affecting latch)**: `auxFontId_` — a
+  spine-scoped, first-writer-wins latch (the first heading size that snaps to the size ladder
+  claims the single aux-font budget for the whole spine; later different-size headings fall back
+  to scaling). Never reset. A heading at block N renders in a real ladder font vs. a scaled body
+  font depending on what resolved FIRST, arbitrarily far back. **Not page-reconstructible → carry
+  it in the cursor.**
+
+Non-geometry side effects to seed for byte-identical SIDE tables (not pixels): `imageCounter_`
+(image cache filename `img_<spine>_..._<counter>`) and the xpath LUT counters (supplied per-block
+by the stream, so they arrive correct with block N — no replay needed). Carry `imageCounter` in
+the cursor for stable cache paths.
+
+**Restart boundary (final)**: previous page boundary, extended backward over any immediately-
+preceding empty/`<br>` run. Initialize like `emitPage` (zeroed Y, fresh page, no float, no margin
+carry); reconstruct the merge/alignment state by replaying only that trailing empty-block run;
+take `auxFontId` + `imageCounter` from the cursor. `layout_backward` is symmetric — it finds the
+PRECEDING page boundary, well-defined because floats/margins are page-reset. This makes mid-spine
+`layout(cursor)` local to "this page boundary + a trailing empty-block lookback," never a
+stream-from-spine-start.
 
 **Test oracle**: the existing whole-spine `LayoutSink` pagination stays as the GOLDEN. Page K
 produced by the pull core (`layout` from page K's start cursor) must be position-identical to
