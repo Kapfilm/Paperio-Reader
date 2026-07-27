@@ -80,6 +80,18 @@ class BlockStreamReader {
   const std::vector<Anchor>& spineAnchors() const { return spineAnchors_; }
   const std::vector<PageBreakLabel>& spineLabels() const { return spineLabels_; }
 
+  // v7: the current spine's baked per-LOGICAL-block offset table (loaded by openSpine). One entry per
+  // logical block: index i is the i-th block nextLogicalBlock() returns. Empty for a v6 file (none
+  // ship) or a spine with no blocks. Enables O(1) seekToBlock without scanning.
+  const std::vector<BlockOffset>& spineBlockOffsets() const { return spineBlockOffsets_; }
+  uint32_t spineLogicalBlockCount() const { return static_cast<uint32_t>(spineBlockOffsets_.size()); }
+
+  // Reposition the block stream to LOGICAL block `blockIndex` of the current spine (0-based, as
+  // reported by currentFirstRecordIndex()/the block-offset table). The next nextLogicalBlock() returns
+  // that block. Requires an open spine and a valid index; returns false otherwise. O(1) — one seek to
+  // the baked offset, no scan. Clears the continuation lookahead so the merge restarts cleanly.
+  bool seekToBlock(uint32_t blockIndex);
+
   // Record index (0-based within the spine) of the FIRST record of the logical block most recently
   // returned by nextLogicalBlock(). Anchors/labels/chapters are keyed on this.
   uint32_t currentFirstRecordIndex() const { return currentFirstRecordIndex_; }
@@ -117,6 +129,7 @@ class BlockStreamReader {
   std::vector<PageBreakLabel> spineLabels_;
   std::vector<CssStyle> spineStylePool_;   // this spine's local style table
   std::vector<Chapter> spineChapters_;     // this spine's chapter entries
+  std::vector<BlockOffset> spineBlockOffsets_;  // v7: baked per-logical-block offset table (seek)
 
   // One-record lookahead so nextLogicalBlock can peek whether the following record is a
   // continuation of the base it just read.

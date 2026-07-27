@@ -135,6 +135,9 @@ class ContentBinWriter : public BlockSink {
   std::vector<Anchor> anchors_;                  // this spine only
   std::vector<PageBreakLabel> pageBreakLabels_;  // this spine only
   std::vector<Chapter> spineChapters_;           // this spine's chapter entries only
+  // v7: one entry per LOGICAL block (captured at the start of each onBlock, before its records are
+  // written), baked into the aux region at onSpineEnd for O(1) seekToBlock in the reader.
+  std::vector<BlockOffset> blockOffsets_;
 
   // Footnotes/xpath arrive DURING a block's build (before its onBlock). Buffered, attached at onBlock.
   std::vector<FootnoteRef> pendingFootnotes_;

@@ -508,4 +508,26 @@ bool readChapters(FsFile& in, std::vector<Chapter>& chapters) {
   return static_cast<bool>(in);
 }
 
+bool writeBlockOffsets(FsFile& out, const std::vector<BlockOffset>& offsets) {
+  writePod(out, static_cast<uint32_t>(offsets.size()));
+  for (const BlockOffset& bo : offsets) {
+    writePod(out, bo.fileOffset);
+    writePod(out, bo.charOffset);
+    writePod(out, bo.recordIndex);
+  }
+  return static_cast<bool>(out);
+}
+
+bool readBlockOffsets(FsFile& in, std::vector<BlockOffset>& offsets) {
+  uint32_t count = 0;
+  readPod(in, count);
+  offsets.resize(count);
+  for (BlockOffset& bo : offsets) {
+    readPod(in, bo.fileOffset);
+    readPod(in, bo.charOffset);
+    readPod(in, bo.recordIndex);
+  }
+  return static_cast<bool>(in);
+}
+
 }  // namespace compiled

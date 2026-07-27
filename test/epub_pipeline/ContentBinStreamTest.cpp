@@ -151,6 +151,65 @@ TEST(ContentBinStream, FootnotesSurviveStreaming) {
   in.close();
 }
 
+// v7: the baked per-spine block-offset table gives O(1) seekToBlock. Prove (a) the table has exactly
+// one entry per LOGICAL block, (b) seeking to any block N and reading forward yields the SAME blocks
+// as a sequential read from N, and (c) the table's charOffset matches the block's own charOffset.
+TEST(ContentBinStream, SeekToBlockMatchesSequentialRead) {
+  const std::string dir = freshDir("seek");
+  ContentSink sink;
+  ASSERT_TRUE(compileWhole("test_headings.epub", dir, sink));
+  const CompiledContent& built = sink.content();
+
+  const std::string bin = dir + "/content.bin";
+  ASSERT_TRUE(streamWrite(built, bin, 0xFEED'FACE'0000'0001ull));
+
+  FsFile in;
+  ASSERT_TRUE(in.openForRead(bin));
+  BlockStreamReader r;
+  ASSERT_TRUE(r.open(in));
+
+  for (uint32_t si = 0; si < r.spineCount(); ++si) {
+    ASSERT_TRUE(r.openSpine(si));
+
+    // (a) Sequentially read all LOGICAL blocks (text + first-record index + char offset), which also
+    // establishes the ground truth we seek against.
+    struct Ref { std::string text; uint32_t firstRecord; uint32_t charOffset; };
+    std::vector<Ref> seq;
+    Block b;
+    while (r.nextLogicalBlock(b)) {
+      seq.push_back(Ref{b.text, r.currentFirstRecordIndex(), b.charOffset});
+    }
+    ASSERT_TRUE(r.ok());
+
+    // The baked table has exactly one entry per logical block.
+    ASSERT_EQ(r.spineLogicalBlockCount(), seq.size()) << "spine " << si << " logical-block count";
+    for (size_t i = 0; i < seq.size(); ++i) {
+      EXPECT_EQ(r.spineBlockOffsets()[i].recordIndex, seq[i].firstRecord) << "spine " << si << " table recordIndex " << i;
+      EXPECT_EQ(r.spineBlockOffsets()[i].charOffset, seq[i].charOffset) << "spine " << si << " table charOffset " << i;
+    }
+
+    // (b) For every start block N, seekToBlock(N) then a forward read must reproduce seq[N..].
+    for (uint32_t start = 0; start < seq.size(); ++start) {
+      ASSERT_TRUE(r.seekToBlock(start)) << "spine " << si << " seekToBlock(" << start << ")";
+      for (uint32_t j = start; j < seq.size(); ++j) {
+        Block bj;
+        ASSERT_TRUE(r.nextLogicalBlock(bj)) << "spine " << si << " seek " << start << " read " << j;
+        EXPECT_EQ(r.currentFirstRecordIndex(), seq[j].firstRecord)
+            << "spine " << si << " seek " << start << " block " << j << " record index";
+        EXPECT_EQ(bj.text, seq[j].text) << "spine " << si << " seek " << start << " block " << j << " text";
+        EXPECT_EQ(bj.charOffset, seq[j].charOffset) << "spine " << si << " seek " << start << " block " << j << " char";
+      }
+      // Reading past the end returns false, exactly like a sequential drain.
+      Block tail;
+      EXPECT_FALSE(r.nextLogicalBlock(tail)) << "spine " << si << " seek " << start << " must end at spine end";
+    }
+
+    // Out-of-range seek is rejected, not silently clamped.
+    EXPECT_FALSE(r.seekToBlock(static_cast<uint32_t>(seq.size())));
+  }
+  in.close();
+}
+
 // v6: a partially-written file (header + zeroed index, no spines committed) OPENS cleanly — that is
 // the frontier model, not corruption — but every spine reports !spineAvailable(). A truncated file
 // whose committed offsets point past EOF must still be rejected at open.

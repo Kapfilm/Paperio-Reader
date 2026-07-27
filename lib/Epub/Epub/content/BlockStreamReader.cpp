@@ -103,6 +103,7 @@ bool BlockStreamReader::openSpine(uint32_t i) {
   spineLabels_.clear();
   spineStylePool_.clear();
   spineChapters_.clear();
+  spineBlockOffsets_.clear();
   if (auxOffset != 0) {
     if (auxOffset > static_cast<uint32_t>(file_->fileSize())) return false;
     if (!file_->seekSet(auxOffset)) return false;
@@ -110,11 +111,27 @@ bool BlockStreamReader::openSpine(uint32_t i) {
     if (!readLabels(*file_, spineLabels_)) return false;
     if (!readStylePool(*file_, spineStylePool_)) return false;
     if (!compiled::readChapters(*file_, spineChapters_)) return false;
+    if (!readBlockOffsets(*file_, spineBlockOffsets_)) return false;  // v7 baked seek table
   }
   // Rewind to the first block to begin streaming.
   if (!file_->seekSet(firstBlockOffset)) return false;
   spineBlocksRemaining_ = spineBlockCount_;
   currentFirstRecordIndex_ = 0;
+  haveLookahead_ = false;
+  return static_cast<bool>(*file_);
+}
+
+bool BlockStreamReader::seekToBlock(uint32_t blockIndex) {
+  if (!ok_ || !file_) return false;
+  if (blockIndex >= spineBlockOffsets_.size()) return false;
+  const BlockOffset& bo = spineBlockOffsets_[blockIndex];
+  if (!file_->seekSet(bo.fileOffset)) return false;
+  // Restore the record-stream state as if we had read forward to this logical block's first record.
+  // recordIndex is that first record's index; currentFirstRecordIndex_ is derived as
+  // spineBlockCount_ - spineBlocksRemaining_ - (lookahead?1:0), so set remaining accordingly and drop
+  // any pending continuation lookahead (the merge restarts cleanly at the new position).
+  spineBlocksRemaining_ = spineBlockCount_ - bo.recordIndex;
+  currentFirstRecordIndex_ = bo.recordIndex;
   haveLookahead_ = false;
   return static_cast<bool>(*file_);
 }

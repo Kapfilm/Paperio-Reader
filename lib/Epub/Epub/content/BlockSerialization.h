@@ -49,6 +49,11 @@ bool readStylePool(FsFile& in, std::vector<CssStyle>& pool);
 bool writeChapters(FsFile& out, const std::vector<Chapter>& chapters);
 bool readChapters(FsFile& in, std::vector<Chapter>& chapters);
 
+// Serialize a spine's per-logical-block offset table (v7: count + entries). Baked into the aux region
+// so a reader can seek to any block in O(1). Mirrors readBlockOffsets.
+bool writeBlockOffsets(FsFile& out, const std::vector<BlockOffset>& offsets);
+bool readBlockOffsets(FsFile& in, std::vector<BlockOffset>& offsets);
+
 // Pack the 24 explicit-set CSS flags into one u32 (used for style equality/dedup, and by the
 // style serializer). Exposed so styleEquals stays in lockstep with the serialized form.
 uint32_t packDefined(const CssPropertyFlags& d);

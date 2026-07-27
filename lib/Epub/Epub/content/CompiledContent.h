@@ -43,7 +43,13 @@ inline constexpr char kMagic[4] = {'W', 'B', 'C', '1'};
 // header (spineCount slots, all 0) and each spine's start offset is committed into its slot as the
 // spine finishes; a 0 slot means "not compiled yet". There is no book-global style pool or chapters
 // section any more. No device shipped v5 content.bin → clean break, no migration.
-inline constexpr uint8_t kVersion = 6;
+// v7 bakes a per-spine BLOCK-OFFSET table into each spine's aux region (after the chapter table):
+// blockCount x BlockOffset{fileOffset, charOffset}, one entry per LOGICAL block. This gives the
+// reader O(1) seekToBlock(i) with no content scan -- the piece live pagination needs to start
+// mid-spine and lay out backward (docs/stage1-single-source-live-pagination-2026-07-27.md). It is
+// microreader's baked-descriptor-table approach (MrbChapterSource bulk-reads its offsets at open).
+// content.bin is a rebuildable cache; a v6 file just fails the version check and is recompiled.
+inline constexpr uint8_t kVersion = 7;
 
 // v6 fixed header: magic(4) + version(1) + fingerprint(8) + spineCount(4). Immediately followed by
 // the pre-allocated spine-offset index: spineCount × u32, all 0 at begin(), each committed as its
@@ -205,6 +211,19 @@ struct Chapter {
 struct PageBreakLabel {
   std::string label;
   uint32_t blockIndex = 0;  // block index within the spine at which the label occurs
+};
+
+// v7: per-LOGICAL-block descriptor, baked into the spine's aux region so a reader can seek to any
+// block in O(1) (no scan) — the piece that lets live pagination start mid-spine and go backward.
+// Mirrors microreader's MrbChapterSource descriptor table (file offset + cumulative char offset per
+// paragraph, bulk-read at chapter open). One entry per LOGICAL block (kContinuation split records
+// share their base block's entry), so index i here == the i-th block nextLogicalBlock() returns.
+struct BlockOffset {
+  uint32_t fileOffset = 0;    // absolute content.bin offset of this logical block's FIRST record
+  uint32_t charOffset = 0;    // absolute char offset of this block's first char (reading progress)
+  uint32_t recordIndex = 0;   // RECORD index of this logical block's first record (anchors/labels/
+                              // chapters are keyed on record index; seekToBlock restores it so the
+                              // replay cross-reference in LayoutSink keeps resolving after a seek).
 };
 
 // Per-spine content, in document order.

@@ -125,6 +125,7 @@ void ContentBinWriter::beginSpineAt(uint32_t spineIndex) {
   anchors_.clear();
   pageBreakLabels_.clear();
   spineChapters_.clear();
+  blockOffsets_.clear();
   spineOpen_ = true;
   spineHasBlock_ = false;
   // Placeholder spine header: firstCharOffset + blockCount + auxOffset, all patched at onSpineEnd
@@ -173,6 +174,14 @@ void ContentBinWriter::onBlock(Block&& block, const CssStyle& style) {
     spineFirstCharOffset_ = block.charOffset;
     spineHasBlock_ = true;
   }
+
+  // v7: record this LOGICAL block's start (file position before its first record, its char offset,
+  // and the record index of its first record = the current running record count) for the baked
+  // block-offset table. One entry per onBlock — the kContinuation split records that flushBlock may
+  // append all belong to this same logical block, so they share this entry. recordIndex lets the
+  // reader's seekToBlock restore currentFirstRecordIndex_ (anchors/labels/chapters key on it).
+  blockOffsets_.push_back(
+      BlockOffset{static_cast<uint32_t>(file_->position()), block.charOffset, blockCount_});
 
   if (block.type == BlockType::Text) {
     flushBlock(std::move(block));  // may emit multiple continuation records
@@ -230,6 +239,7 @@ void ContentBinWriter::onSpineEnd() {
   writeLabels(*file_, pageBreakLabels_);
   writeStylePool(*file_, spineStyles_);
   writeChapters(*file_, spineChapters_);
+  writeBlockOffsets(*file_, blockOffsets_);  // v7: baked per-block offset table (after chapters)
   // Back-patch the spine header (firstCharOffset + blockCount + auxOffset).
   const uint32_t here = static_cast<uint32_t>(file_->position());
   if (!file_->seekSet(spineStartOffset_)) {
