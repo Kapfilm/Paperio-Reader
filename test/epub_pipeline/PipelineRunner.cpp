@@ -459,8 +459,10 @@ bool teeEquivalence(const std::string& epubPath, const std::string& cacheDir, in
   { std::error_code ec; fs::copy_file(sectionPath, parseCopy, fs::copy_options::overwrite_existing, ec);
     if (ec) { out << "ERROR copy parse section file: " << ec.message() << "\n"; return false; } }
 
-  // (2) TEE build of the SAME spine: one walk emits the section cache (overwrites sectionPath) AND
-  //     content.bin. Mirrors the reader's parse-and-display-on-miss path (Section::setStage1TeeSink).
+  // (2) TEE build of the SAME spine via the REAL reader path (Section::setContentBinTee): the section
+  //     build drives the tee itself — beginSpineAt at build start, commitSpine on a clean Done — so
+  //     this gate exercises exactly the code the reader runs on a content.bin miss. Writer in
+  //     non-autoCommit mode (the reader owns the publish decision).
   const std::string binPath = bookDir + "/content.bin";
   {
     uint64_t fingerprint = 0;
@@ -468,12 +470,12 @@ bool teeEquivalence(const std::string& epubPath, const std::string& cacheDir, in
     FsFile binFile;
     if (!Storage.openFileForWrite("TEE", binPath, binFile)) { out << "ERROR open content.bin\n"; return false; }
     compiled::ContentBinWriter writer;
+    writer.setAutoCommit(false);  // Section::setContentBinTee publishes the spine explicitly on clean Done
     if (!writer.begin(binFile, static_cast<uint32_t>(epub->getSpineItemsCount()), fingerprint)) {
       out << "ERROR content.bin begin\n"; return false;
     }
-    writer.beginSpineAt(static_cast<uint32_t>(spineIndex));  // emit into THIS spine's slot
     Section section(epub, spineIndex, renderer);
-    section.setStage1TeeSink(&writer);  // pages AND content.bin from one walk
+    section.setContentBinTee(&writer, static_cast<uint32_t>(spineIndex));  // Section drives the tee lifecycle
     if (!section.createSectionFile(bp.fontId, bp.lineCompression, bp.extraParagraphSpacing, bp.paragraphAlignment,
                                    bp.viewportWidth, bp.viewportHeight, bp.hyphenationEnabled, bp.embeddedStyle,
                                    bp.bionicReadingEnabled, bp.inlineFootnotePreviews, bp.imageRendering, {},
@@ -482,6 +484,16 @@ bool teeEquivalence(const std::string& epubPath, const std::string& cacheDir, in
     }
     if (!writer.finish()) { out << "ERROR content.bin finish\n"; return false; }
     binFile.close();
+    // The clean build must have PUBLISHED the spine (committed slot) via Section::setContentBinTee.
+    FsFile check;
+    if (!check.openForRead(binPath)) { out << "ERROR reopen content.bin\n"; return false; }
+    compiled::BlockStreamReader cr;
+    if (!cr.open(check) || !cr.spineAvailable(static_cast<uint32_t>(spineIndex))) {
+      out << "ERROR tee spine not committed by setContentBinTee (clean build should publish)\n";
+      check.close();
+      return false;
+    }
+    check.close();
   }
 
   // (2a) The tee's section file must be byte-identical to the plain parse (pages unaffected by fan-out).

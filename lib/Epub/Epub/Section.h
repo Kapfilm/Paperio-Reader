@@ -15,6 +15,7 @@ class CssParser;
 class BuildArena;
 namespace compiled {
 struct BlockSink;
+class ContentBinWriter;
 }  // namespace compiled
 
 class Section {
@@ -83,6 +84,10 @@ class Section {
   // is created. stage1SinkTee_ selects TEE mode (pages + content.bin) vs content-only.
   compiled::BlockSink* stage1Sink_ = nullptr;
   bool stage1SinkTee_ = false;
+  // Increment F content.bin-emit-during-build (setContentBinTee). Book-scoped writer, not owned;
+  // beginSpineAt at each build (re)start, commitSpine on a clean Done. Null = disabled.
+  compiled::ContentBinWriter* contentBinTeeWriter_ = nullptr;
+  uint32_t contentBinTeeSpine_ = 0;
   // Outcome of one phase method. Mostly maps to BuildStep: More means the phase yielded
   // mid-way after spending its time budget; RetryNoCss asks the entry function to tear the
   // state down and restart from setup with embeddedStyle=false.
@@ -233,6 +238,18 @@ class Section {
   void setStage1TeeSink(compiled::BlockSink* sink) {
     stage1Sink_ = sink;
     stage1SinkTee_ = (sink != nullptr);
+  }
+
+  // Increment F: emit THIS spine to content.bin as a by-product of the next section build (any path:
+  // blocking, incremental, Background-B). `writer` is a book-scoped ContentBinWriter (setAutoCommit
+  // false) the caller owns; `spineIndex` is this spine's slot. Section manages the lifecycle across
+  // the build's setup / retry / abort / finalize: it calls writer->beginSpineAt(spineIndex) at each
+  // build (re)start and, on a CLEAN completion (not CSS-degraded, not truncated), writer->commitSpine
+  // to publish the slot. A degraded/truncated/aborted build leaves the slot uncommitted (a bad parse
+  // never publishes a bad content.bin spine). Pass null to disable. The writer must outlive the build.
+  void setContentBinTee(compiled::ContentBinWriter* writer, uint32_t spineIndex) {
+    contentBinTeeWriter_ = writer;
+    contentBinTeeSpine_ = spineIndex;
   }
   // Percent of the spine XHTML consumed by the in-flight build (0–100; 100 once the
   // stream is exhausted and only Finalize remains). 0 when no build is live. Feeds the

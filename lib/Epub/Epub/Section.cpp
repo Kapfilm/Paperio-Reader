@@ -1448,6 +1448,17 @@ bool Section::startBuild(const BuildParams& params, const std::function<void(int
   buildState_->requestedHash = requestedHash;
   buildState_->totalStartMs = millis();
 
+  // Increment F: if a content.bin tee writer is attached, emit THIS spine to content.bin alongside
+  // the section-cache build. beginSpineAt starts a fresh spine section at the writer's current file
+  // position — so a no-CSS RETRY (startBuild called again) correctly begins a new spine (the failed
+  // attempt's partial is orphaned but harmless: its slot was never committed). setStage1TeeSink makes
+  // runBuildSetup wire the parser's tee (pages + content.bin from one walk).
+  if (contentBinTeeWriter_) {
+    contentBinTeeWriter_->beginSpineAt(contentBinTeeSpine_);
+    stage1Sink_ = contentBinTeeWriter_;
+    stage1SinkTee_ = true;
+  }
+
   if (runBuildSetup(*buildState_) != BuildPhaseResult::Ok) {
     buildState_.reset();
     return false;
@@ -1503,7 +1514,21 @@ Section::BuildStep Section::stepSectionBuild(const BuildParams& params, const ui
     }
 
     buildState_.reset();
-    return fin == BuildPhaseResult::Done ? BuildStep::Done : BuildStep::Failed;
+    const bool done = (fin == BuildPhaseResult::Done);
+    // Increment F: publish this spine to content.bin ONLY on a clean completion — a build that
+    // CSS-degraded (styles skipped under low heap) or truncated produced wrong/partial records, so
+    // its already-written (uncommitted) content.bin spine must NOT be advertised. commitSpine
+    // publishes the slot; a bad build leaves it 0 (unavailable), and the orphaned records are dead
+    // weight until content.bin is next rewritten.
+    if (contentBinTeeWriter_) {
+      if (done && !cssLowHeapDegraded_ && !truncatedCache) {
+        contentBinTeeWriter_->commitSpine(contentBinTeeSpine_);
+      } else {
+        LOG_INF("SCT", "content.bin tee spine=%d NOT committed (done=%d cssDegraded=%d truncated=%d)",
+                contentBinTeeSpine_, done ? 1 : 0, cssLowHeapDegraded_ ? 1 : 0, truncatedCache ? 1 : 0);
+      }
+    }
+    return done ? BuildStep::Done : BuildStep::Failed;
   }
 }
 
