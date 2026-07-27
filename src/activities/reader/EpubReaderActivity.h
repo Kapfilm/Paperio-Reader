@@ -695,7 +695,7 @@ class EpubReaderActivity final : public Activity {
   void restoreSavedPosition();
 
  public:
-  // Ctor + dtor are out-of-line (defined in the .cpp): the unique_ptr<compiled::ContentBinProducer>
+  // Ctor + dtor are out-of-line (defined in the .cpp): the unique_ptr<compiled::ContentBinWriter>
   // member is an incomplete type in this header (fwd-declared), so both the ctor (which must be able
   // to destroy already-constructed members if a later init throws) and the dtor need the complete
   // type — defining them inline here makes every TU that includes this header fail to instantiate

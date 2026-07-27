@@ -277,7 +277,7 @@ int getImageOnlyPageYOffset(const Page& page, const int viewportHeight) {
 
 }  // namespace
 
-// Ctor + dtor defined here (not in the header) so ~unique_ptr<compiled::ContentBinProducer>
+// Ctor + dtor defined here (not in the header) so ~unique_ptr<compiled::ContentBinWriter>
 // instantiates against the complete type included by this .cpp. See the comment in the header.
 EpubReaderActivity::EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                        std::unique_ptr<Epub> epub)
@@ -900,6 +900,14 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
         backgroundBuildInflatedSize_ = 0;
         epub->getItemSize(epub->getSpineItem(targetSpine).href, &backgroundBuildInflatedSize_);
         backgroundBuildState_ = BackgroundBuildState::WaitHeap;
+#if EPUB_STAGE1
+        // Increment F: this look-ahead build will PARSE the spine — emit it to content.bin via the
+        // tee (one walk builds the section cache AND content.bin), so content.bin fills AHEAD of the
+        // reader, not just for the current spine. Attach BEFORE the Building state's first
+        // stepSectionBuild (which calls startBuild, where the tee is read). Skips a spine already
+        // covered. This is what dissolves the Increment-E producer-vs-B conflict: B IS the producer.
+        attachContentBinTee(*backgroundSection_, static_cast<uint32_t>(targetSpine));
+#endif
       }
       return;  // one bounded step per tick
     }
@@ -2600,12 +2608,11 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
         /*skipEviction=*/false, buildParams.fontSizeLadder);
   };
 
-  // Stage-2 read-back fast path (docs/stage1-incr-D-design + incr-E): if content.bin covers this spine
-  // (produced in the background by ContentBinProducer) with a matching ZIP fingerprint, replay it
-  // (skip ZIP/XML/CSS). A miss falls back to the ordinary parse (runParse); the background producer
-  // will have content.bin ready for the next visit / relayout. Increment E replaced the old one-time
-  // blocking whole-book compile here with the background producer (serviceBackgroundWork), so the
-  // blocking path never spends seconds walking the whole book — it just parses this one spine.
+  // Stage-2 read-back fast path (docs/stage1-incr-F): if content.bin covers this spine with a matching
+  // ZIP fingerprint, replay it (skip ZIP/XML/CSS). A miss falls back to the ordinary parse (runParse);
+  // that parse emits the spine to content.bin via the tee (Increment F, see buildSection /
+  // attachContentBinTee), so the next visit / a relayout is a fast read-back. content.bin fills as the
+  // reader and Background-B build spines — no separate whole-book compile blocks this path.
   const auto runCreate = [&]() -> bool {
 #if EPUB_STAGE1
     // Per-spine read-back is strictly cheaper than the parse the in-place gate already sanctioned
