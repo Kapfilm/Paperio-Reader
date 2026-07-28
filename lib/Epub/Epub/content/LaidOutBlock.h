@@ -7,31 +7,39 @@
 // page that ends on this block AND the page that starts on it both reuse this slot — the property
 // that makes live one-page-from-cursor layout cheap.
 //
-// P1 is TEXT-ONLY: a spine with any Image/Hr/Table block falls back to the scaffold LayoutSink path,
-// so LaidOutBlock models only Text (empty <br>/wrapper blocks included, which contribute spacing but
-// no lines). Images/Hr/tables are P2-P4.
+// P2 adds ATOMIC block Images + HRs: our block images never split across pages (clamped to the
+// viewport by computeImageDisplaySize; placeBlockImage places them whole), so an Image/Hr block is a
+// single indivisible item that either fits the remaining page or forces a break — no line set, no
+// pixel-row offset. Tables (P4) remain a scaffold fallback for now.
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "Epub/blocks/BlockStyle.h"
 
 class TextBlock;
+class ImageBlock;
 class ParsedText;
 
 namespace compiled {
 
-// One text logical block, laid out to its page-independent lines. `lines` are the exact
-// std::shared_ptr<TextBlock> objects ParsedText emits (per-word xpos already baked), so a placed
-// PageLine is byte-identical to LayoutSink's. Empty (<br>/wrapper) blocks have no lines but still
-// carry a merged style whose margins/padding fold into the following block — reproduced by the
-// preprocessor that fills these slots, so the collect loop only ever sees final styles.
+// A laid-out logical block: a run of text lines, a standalone block image, or a horizontal rule. The
+// preprocessor (PullDriver::prepareBlock) resolves the settings-dependent layout ONCE (line-breaking,
+// image display size, wrapper-spacing merge); the collect loop then only does the vertical accounting
+// + page-break decision, so a page that ends on a block and the page that starts on it reuse this slot.
 struct LaidOutBlock {
+  enum class Kind { Text, Image, Hr };
+  Kind kind = Kind::Text;
+
+  // --- Text (kind == Text) ---
   // The resolved, post-merge block style actually laid out (headings folded, empty-block merge
   // already applied by the preprocessor). resolveBlockFont has NOT been run yet — the collect loop
   // runs it (seeded from the carried auxFontId) exactly where makePages does.
   BlockStyle style;
+  // `lines` are the exact std::shared_ptr<TextBlock> objects ParsedText emits (per-word xpos already
+  // baked), so a placed PageLine is byte-identical to LayoutSink's.
   std::vector<std::shared_ptr<TextBlock>> lines;
 
   bool isEmptyBlock = false;      // <br>/empty wrapper: no lines, spacing-only (folded into next)
@@ -44,6 +52,18 @@ struct LaidOutBlock {
   // Word count per emitted line (prefix-summable), for reproducing addLineToPage's footnote
   // assignment (a footnote lands on the page whose lines have covered its anchor word index).
   std::vector<uint16_t> lineWordCounts;
+
+  // --- Image (kind == Image): a centered block image, placed whole (mirrors placeBlockImage) ---
+  std::shared_ptr<ImageBlock> image;  // pre-built with the display size + resolved cache path
+  int16_t imageX = 0;                 // centered x
+  int16_t imageHeight = 0;            // display height (Y advance for the image itself)
+  int16_t imageSpacingTop = 0;        // wrapper (pending-merge) spacing consumed above the image
+  int16_t imageSpacingBottom = 0;     // wrapper spacing consumed below the image
+
+  // --- Hr (kind == Hr): a centered rule (mirrors placeHr) ---
+  int16_t hrX = 0;
+  int16_t hrWidth = 0;
+  int16_t hrMarginV = 0;  // half-line margin above and below the 1px rule
 };
 
 }  // namespace compiled

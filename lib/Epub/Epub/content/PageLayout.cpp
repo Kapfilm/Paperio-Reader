@@ -4,12 +4,15 @@
 
 #include <algorithm>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "Epub/Page.h"
 #include "Epub/ParsedText.h"
+#include "Epub/blocks/ImageBlock.h"
 #include "Epub/blocks/TextBlock.h"
 #include "FootnotePreviewLayout.h"
+#include "ImageLayout.h"
 #include "LaidOutBlock.h"
 
 // P1 — the microreader-style forward "collect" pull core, TEXT-only
@@ -47,12 +50,12 @@ EpdFontFamily::Style spanToFontStyle(uint8_t span) {
   return static_cast<EpdFontFamily::Style>(s);
 }
 
-// True when this logical block forces the pull core onto the scaffold fallback: any non-Text block,
-// or a Text block carrying an inline float image (a P3 concern). Text blocks with footnote previews /
-// footnotes / xpath are handled by the pull core.
+// True when this logical block forces the pull core onto the scaffold fallback. P2 handles atomic
+// block Images + HRs; Tables (P4) and float images (P3, an inline image on a Text block) still fall
+// back. Text blocks with footnote previews / footnotes / xpath are handled by the pull core.
 bool needsScaffold(const Block& b) {
-  if (b.type != BlockType::Text) return true;
-  if (!b.inlineImageEntryPath.empty()) return true;  // float image — P3
+  if (b.type == BlockType::Table) return true;                    // P4
+  if (b.type == BlockType::Text && !b.inlineImageEntryPath.empty()) return true;  // float image — P3
   return false;
 }
 
@@ -62,7 +65,7 @@ bool needsScaffold(const Block& b) {
 // LayoutSink::makePages/addLineToPage precisely; the empty-block merge mirrors LayoutSink::onBlock.
 class PullDriver {
  public:
-  PullDriver(GfxRenderer& renderer, const LayoutParams& params, int32_t auxFontIdSeed)
+  PullDriver(GfxRenderer& renderer, const LayoutParams& params, int32_t auxFontIdSeed, int imageCounterSeed)
       : renderer_(renderer),
         fontId_(params.fontId),
         lineCompression_(params.lineCompression),
@@ -74,9 +77,13 @@ class PullDriver {
         bionicReadingEnabled_(params.bionicReadingEnabled),
         embeddedStyle_(params.embeddedStyle),
         fontSizeLadder_(params.fontSizeLadder),
-        auxFontId_(auxFontIdSeed) {}
+        imageBasePath_(params.imageBasePath),
+        epubFilePath_(params.epubFilePath),
+        auxFontId_(auxFontIdSeed),
+        imageCounter_(imageCounterSeed) {}
 
   int32_t auxFontId() const { return auxFontId_; }
+  int imageCounter() const { return imageCounter_; }
 
   // --- onBlock's empty-block merge (D2) ---
 
@@ -85,6 +92,9 @@ class PullDriver {
   // style. Returns false for an empty (<br>/wrapper) block: it contributed only to the running merge
   // and produces no page content. Mirrors the onBlock/layoutTextBlock split.
   bool prepareBlock(Block&& block, const CssStyle& style, LaidOutBlock& out) {
+    if (block.type == BlockType::Image) return prepareImage(block, style, out);
+    if (block.type == BlockType::Hr) return prepareHr(out);
+
     const bool isHeading = (block.flags & kStartsChapter) != 0;
     const bool fromBr = (block.flags & kFromBrElement) != 0;
     out.isContinuation = (block.flags & kContinuation) != 0;
@@ -175,11 +185,16 @@ class PullDriver {
         finalizeAssignedFootnotes();
         return std::move(currentPage_);
       }
-      const size_t firstLine = (bi == 0) ? startLine : 0;
-      size_t brokeAt = firstLine;
-      const bool placedAll = placeBlock(lb, footnotes[bi], firstLine, brokeAt);
+      size_t brokeAt = 0;
+      bool placedAll;
+      if (lb.kind == LaidOutBlock::Kind::Text) {
+        const size_t firstLine = (bi == 0) ? startLine : 0;
+        brokeAt = firstLine;
+        placedAll = placeBlock(lb, footnotes[bi], firstLine, brokeAt);
+      } else {
+        placedAll = placeAtomic(lb, brokeAt);  // atomic Image/Hr: brokeAt 0 = block starts next page
+      }
       if (!placedAll) {
-        // Page broke inside this block at line `brokeAt`.
         endBlockOffset = bi;
         endLine = brokeAt;
         hitEnd = false;
@@ -200,6 +215,9 @@ class PullDriver {
   // window-gathering stop condition only. Not used for placement — collectPageForward does the exact
   // Y math — so a slight over-estimate just reads one extra block, which is harmless.
   int blockPlacedHeight(const LaidOutBlock& lb) const {
+    if (lb.kind == LaidOutBlock::Kind::Image)
+      return lb.imageSpacingTop + lb.imageHeight + lb.imageSpacingBottom;
+    if (lb.kind == LaidOutBlock::Kind::Hr) return 2 * lb.hrMarginV + 1;
     const BlockStyle& bs = lb.style;
     const int lineHeight = effectiveLineHeight(bs);
     int h = 0;
@@ -303,6 +321,97 @@ class PullDriver {
                                 /*blockStartY=*/0, /*lineHeight=*/0);
   }
 
+  // Allocate the next per-spine image cache path (mirrors LayoutSink::nextImageCachePath).
+  std::string nextImageCachePath(const std::string& entryPath) {
+    std::string ext;
+    const size_t extPos = entryPath.find_last_of('.');
+    if (extPos != std::string::npos) ext = entryPath.substr(extPos);
+    return imageBasePath_ + std::to_string(imageCounter_++) + ext;
+  }
+
+  // Prepare a standalone (centered) block image, mirroring LayoutSink::placeBlockImage's non-placement
+  // half: resolve the display size against the pending-merge container, consume the wrapper spacing,
+  // build the ImageBlock + cache path. The page-break/placement is deferred to placeImage so a block
+  // that ends on a page and the one that starts on it can reuse this slot.
+  bool prepareImage(const Block& block, const CssStyle& imgStyle, LaidOutBlock& out) {
+    out.kind = LaidOutBlock::Kind::Image;
+    int containerWidth = viewportWidth_;
+    if (hasPendingMerge_) {
+      const int inset = pendingMergeStyle_.totalHorizontalInset();
+      if (inset > 0 && inset < viewportWidth_) containerWidth = viewportWidth_ - inset;
+    }
+    const float emSize = static_cast<float>(renderer_.getFontAscenderSize(fontId_));
+    const ImageDisplaySize ds = computeImageDisplaySize(block.width, block.height, imgStyle, viewportWidth_,
+                                                        viewportHeight_, containerWidth, emSize);
+
+    int spacingTop = 0, spacingBottom = 0;
+    if (hasPendingMerge_) {
+      spacingTop = std::max(0, static_cast<int>(pendingMergeStyle_.marginTop)) +
+                   std::max(0, static_cast<int>(pendingMergeStyle_.paddingTop));
+      spacingBottom = std::max(0, static_cast<int>(pendingMergeStyle_.marginBottom)) +
+                      std::max(0, static_cast<int>(pendingMergeStyle_.paddingBottom));
+    }
+    // The wrapper spacing is consumed around the image; clear the merge so it doesn't leak forward.
+    hasPendingMerge_ = false;
+    pendingMergeFromBr_ = false;
+
+    const std::string cachePath = nextImageCachePath(block.entryPath);
+    out.image = std::make_shared<ImageBlock>(cachePath, static_cast<int16_t>(ds.width),
+                                             static_cast<int16_t>(ds.height), block.alt, epubFilePath_,
+                                             block.entryPath);
+    out.imageX = static_cast<int16_t>((viewportWidth_ - ds.width) / 2);
+    out.imageHeight = static_cast<int16_t>(ds.height);
+    out.imageSpacingTop = static_cast<int16_t>(spacingTop);
+    out.imageSpacingBottom = static_cast<int16_t>(spacingBottom);
+    return true;
+  }
+
+  // Prepare a horizontal rule, mirroring LayoutSink::placeHr's geometry. NOTE: placeHr's pending-merge
+  // handling (materializing an empty block before the rule + carrying a br-gap forward) is not modeled
+  // here yet — a spine that hits that path falls back to the scaffold (needsScaffold gates a pending
+  // <br>/empty run before an HR). The common case (a bare <hr/>) is handled.
+  bool prepareHr(LaidOutBlock& out) {
+    out.kind = LaidOutBlock::Kind::Hr;
+    const int lineHeight = static_cast<int>(renderer_.getLineHeight(fontId_) * lineCompression_ + 0.5f);
+    out.hrMarginV = static_cast<int16_t>(lineHeight / 2);
+    out.hrWidth = static_cast<int16_t>(viewportWidth_ / 2);
+    out.hrX = static_cast<int16_t>(viewportWidth_ / 4);
+    return true;
+  }
+
+  // Place an atomic Image or Hr block. Returns true when it fit; false when it forced a page break
+  // (the block itself starts the next page — brokeAt = 0, meaning "before this block's content").
+  bool placeAtomic(const LaidOutBlock& lb, size_t& brokeAt) {
+    if (lb.kind == LaidOutBlock::Kind::Image) {
+      const int totalHeight = lb.imageSpacingTop + lb.imageHeight + lb.imageSpacingBottom;
+      if (!currentPage_->elements.empty() && currentPageNextY_ + totalHeight > viewportHeight_) {
+        brokeAt = 0;
+        pageDone_ = true;
+        return false;
+      }
+      currentPageNextY_ = static_cast<int16_t>(currentPageNextY_ + lb.imageSpacingTop);
+      currentPage_->elements.push_back(std::make_shared<PageImage>(lb.image, lb.imageX, currentPageNextY_));
+      currentPageNextY_ = static_cast<int16_t>(currentPageNextY_ + lb.imageHeight + lb.imageSpacingBottom);
+      lastBlockMarginBottom_ = 0;
+      brokeAt = 1;
+      return true;
+    }
+    // Hr: half-line margin above, 1px rule, half-line below (mirrors placeHr).
+    currentPageNextY_ = static_cast<int16_t>(currentPageNextY_ + lb.hrMarginV);
+    if (currentPageNextY_ + 1 + lb.hrMarginV > viewportHeight_ && !currentPage_->elements.empty()) {
+      // Undo the margin we just added; the rule starts the next page.
+      currentPageNextY_ = static_cast<int16_t>(currentPageNextY_ - lb.hrMarginV);
+      brokeAt = 0;
+      pageDone_ = true;
+      return false;
+    }
+    currentPage_->elements.push_back(std::make_shared<PageHR>(lb.hrX, currentPageNextY_, lb.hrWidth));
+    currentPageNextY_ = static_cast<int16_t>(currentPageNextY_ + 1 + lb.hrMarginV);
+    lastBlockMarginBottom_ = 0;
+    brokeAt = 1;
+    return true;
+  }
+
   // Place one prepared block's lines [firstLine..] onto the current page, reproducing
   // makePages + addLineToPage. Returns true when the whole block fit; false when the page broke inside
   // it, setting `brokeAt` to the first unplaced line index.
@@ -396,7 +505,10 @@ class PullDriver {
   const bool bionicReadingEnabled_;
   const bool embeddedStyle_;
   FontSizeLadder fontSizeLadder_;
+  const std::string imageBasePath_;
+  const std::string epubFilePath_;
   int32_t auxFontId_ = 0;
+  int imageCounter_ = 0;  // per-spine image-cache-path counter (carried in the cursor, like auxFontId_)
 
   bool hasPendingMerge_ = false;
   BlockStyle pendingMergeStyle_;
@@ -504,7 +616,7 @@ LaidOutPage layoutPage(BlockStreamReader& reader, GfxRenderer& renderer, const L
   const auto& stylePool = reader.spineStylePool();
   static const CssStyle kEmptyStyle{};
 
-  PullDriver driver(renderer, params, start.auxFontId);
+  PullDriver driver(renderer, params, start.auxFontId, start.imageCounter);
 
   std::vector<LaidOutBlock> window;        // content blocks only (empty blocks fold into the merge)
   std::vector<std::vector<FootnoteRef>> windowFootnotes;
@@ -572,6 +684,7 @@ LaidOutPage layoutPage(BlockStreamReader& reader, GfxRenderer& renderer, const L
     out.end.offset = static_cast<uint16_t>(endLine);
   }
   out.end.auxFontId = driver.auxFontId();
+  out.end.imageCounter = driver.imageCounter();
   out.ok = true;
   return out;
 }
