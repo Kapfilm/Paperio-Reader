@@ -125,13 +125,20 @@ K. Extended over the corpus × profile matrix. (G2a already gates the FIRST page
   non-float content. Revisit only if profiling shows float spines common enough to matter (they are
   not in normal reading). The rejected alternative (lazy per-page layout of float blocks in the
   collect hot path) buys full parity at the cost of the uniform cache + collect-loop complexity.
-- **P4 — Grid tables (D5).** Add row-packed `collect` + fragment emit. Oracle: test_tables passes
-  all pages (incl. tables spanning pages via multiple fragments).
+- **P4 — Grid tables (D5). DECIDED 2026-07-27: tables stay on the SCAFFOLD fallback.** A table is
+  one `Block` row-packed into independent per-page `PageTableFragment`s with NO cross-page state
+  (only `currentPageNextY_` crosses, which resets per page), so it COULD fit the pull core — but the
+  machinery is substantial (cache `layoutRows`, run `packTableFragments` at collect time with a pull
+  context, plus the paragraph-fallback + oversize-row paths that emit `PageLine`s mid-table). Only
+  one corpus book uses tables (`test_tables`), already byte-identical via the scaffold, so the value
+  is low next to P5 (backward layout, which the reader NEEDS for prev-page). `needsScaffold` keeps
+  deferring Table blocks. Revisit if tables prove common. (Unlike floats, this is a value/effort
+  call, not a cache-model limitation — tables would fit the cache cleanly.)
 - **P5 — Backward layout.** `collectPageBackward(end)` + `collect_backward` per block type
   (symmetric, reuses the cache). Oracle: `layoutPageBackward(page K+1 start)` == golden page K,
-  whole corpus × profiles. At this point the whole corpus passes forward AND backward (float spines
-  excepted — served by the scaffold, see P3) — the pull core is the read engine for all non-float
-  content; the scaffold remains only for float spines.
+  whole corpus × profiles. At this point the whole corpus passes forward AND backward (float + table
+  spines excepted — served by the scaffold, see P3/P4) — the pull core is the read engine for all
+  text/image/HR content; the scaffold remains only for float + table spines.
 - **P6 — Arena memory home.** Move the `BlockCache` slots + working lines onto a reader-owned
   `BuildArena` (device); host keeps heap. Deterministic footprint; this is the anti-fragmentation
   improvement. (Can be deferred to G5 reader-wiring if cleaner, but decide here.)
