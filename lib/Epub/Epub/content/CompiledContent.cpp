@@ -41,12 +41,22 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
 
     // Re-map each block's styleId into a spine-local pool (v6 self-contained styles). The source
     // CompiledContent may carry a book-global stylePool; we intern only the styles this spine uses.
+    // v7: capture one BlockOffset per LOGICAL block (a base record, not a kContinuation) — file
+    // position + charOffset + record index — for the reader's O(1) seekToBlock. Mirrors
+    // ContentBinWriter's per-onBlock capture so both writers produce the same table.
     std::vector<CssStyle> spineStyles;
+    std::vector<BlockOffset> blockOffsets;
+    uint32_t recordIndex = 0;
     for (Block b : spine.blocks) {
       const CssStyle& s =
           (b.styleId < content.stylePool.size()) ? content.stylePool[b.styleId] : CssStyle{};
       b.styleId = internStyle(spineStyles, s);
+      const bool isContinuation = (b.flags & kContinuation) != 0 && b.type == BlockType::Text;
+      if (!isContinuation) {
+        blockOffsets.push_back(BlockOffset{static_cast<uint32_t>(out.position()), b.charOffset, recordIndex});
+      }
       writeBlock(out, b);
+      ++recordIndex;
     }
     const uint32_t auxOffset = static_cast<uint32_t>(out.position());
     writeAnchors(out, spine.anchors);
@@ -57,6 +67,7 @@ bool writeContentBin(FsFile& out, const CompiledContent& content) {
     for (const Chapter& ch : content.chapters)
       if (ch.spineIndex == static_cast<uint16_t>(si)) spineChapters.push_back(ch);
     writeChapters(out, spineChapters);
+    writeBlockOffsets(out, blockOffsets);  // v7: after chapters, matching BlockStreamReader::openSpine
 
     const uint32_t afterAux = static_cast<uint32_t>(out.position());
     if (!out.seekSet(spineStart + 2 * sizeof(uint32_t))) return false;  // skip firstCharOffset+blockCount
