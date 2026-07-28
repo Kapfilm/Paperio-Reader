@@ -113,13 +113,25 @@ K. Extended over the corpus × profile matrix. (G2a already gates the FIRST page
   case from microreader does not apply to us. HR is likewise a single indivisible item (half-line
   margins above/below). Oracle: image/HR books (test_png_images, test_jpeg_images, test_mixed_images)
   pass all pages.
-- **P3 — Floats (D4).** Oracle: float-bearing books pass.
+- **P3 — Floats (D4). DECIDED 2026-07-27: floats stay on the SCAFFOLD fallback — a deliberate
+  boundary, not a gap.** A float image's zone carries ABSOLUTE page-Y coordinates and narrows the
+  line-widths of the block it rides on AND every later block it vertically overlaps (LayoutSink feeds
+  `layoutAndExtractLines` a `blockStartY`/`lineHeightForFloat` derived from `currentPageNextY_`). So a
+  float-affected block's LINE-BREAKING depends on page position — the one place the page-independent
+  cache genuinely does not fit our engine (unlike text/image/HR/table). Floats are rare (one corpus
+  book, `test_float_images`), page-bounded (a float never crosses a page), and already byte-identical
+  via the scaffold. `needsScaffold` keeps deferring a Text block with a float image; a float-bearing
+  SPINE is served one page at a time by the scaffold LayoutSink, while the pull core handles all
+  non-float content. Revisit only if profiling shows float spines common enough to matter (they are
+  not in normal reading). The rejected alternative (lazy per-page layout of float blocks in the
+  collect hot path) buys full parity at the cost of the uniform cache + collect-loop complexity.
 - **P4 — Grid tables (D5).** Add row-packed `collect` + fragment emit. Oracle: test_tables passes
   all pages (incl. tables spanning pages via multiple fragments).
 - **P5 — Backward layout.** `collectPageBackward(end)` + `collect_backward` per block type
   (symmetric, reuses the cache). Oracle: `layoutPageBackward(page K+1 start)` == golden page K,
-  whole corpus × profiles. At this point the whole corpus passes forward AND backward — the pull
-  core fully replaces LayoutSink pagination for reading.
+  whole corpus × profiles. At this point the whole corpus passes forward AND backward (float spines
+  excepted — served by the scaffold, see P3) — the pull core is the read engine for all non-float
+  content; the scaffold remains only for float spines.
 - **P6 — Arena memory home.** Move the `BlockCache` slots + working lines onto a reader-owned
   `BuildArena` (device); host keeps heap. Deterministic footprint; this is the anti-fragmentation
   improvement. (Can be deferred to G5 reader-wiring if cleaner, but decide here.)
