@@ -173,6 +173,13 @@ def get_base_version(project_dir):
     return config.get('crosspoint', 'version')
 
 
+def get_build_label(project_dir):
+    ini_path = os.path.join(project_dir, 'platformio.ini')
+    config = configparser.ConfigParser()
+    config.read(ini_path)
+    return config.get('crosspoint', 'build_label', fallback='').strip()
+
+
 def normalize_semver_patch(version: str) -> str:
     version = version.strip()
     if version.count('.') == 1:
@@ -210,8 +217,12 @@ def inject_version(env):
         return
 
     base_version = get_base_version(project_dir)
-    branch = get_git_branch(project_dir)
-    version_string = f'{base_version}-dev+{branch}'
+    build_label = get_build_label(project_dir)
+    if build_label:
+        version_string = f'{base_version}-{build_label}'
+    else:
+        branch = get_git_branch(project_dir)
+        version_string = f'{base_version}-dev+{branch}'
 
     env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
     print(f'CrossPoint build version: {version_string}')

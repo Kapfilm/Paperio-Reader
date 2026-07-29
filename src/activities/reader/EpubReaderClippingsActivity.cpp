@@ -49,8 +49,15 @@ void EpubReaderClippingsActivity::loop() {
       return;
     }
     if (total > 0 &&
-        (event.button == MappedInputManager::Button::PageForward ||
-         event.button == MappedInputManager::Button::Right) &&
+        (event.button == MappedInputManager::Button::PageBack ||
+         event.button == MappedInputManager::Button::PageForward) &&
+        event.type == ButtonEventManager::PressType::Short) {
+      const int delta = event.button == MappedInputManager::Button::PageForward ? 1 : -1;
+      selectedIndex = (selectedIndex + delta + total) % total;
+      requestUpdate();
+      return;
+    }
+    if (total > 0 && event.button == MappedInputManager::Button::Right &&
         event.type == ButtonEventManager::PressType::Short) {
       store.removeAt(static_cast<size_t>(selectedIndex));
       const int remaining = static_cast<int>(store.getAll().size());
