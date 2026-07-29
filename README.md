@@ -1,5 +1,29 @@
 # Witch(hunt) Reader
 
+> [!IMPORTANT]
+> ## Форк Kapfilm (`Kf`)
+>
+> Это пользовательский форк [Witch Reader](https://github.com/jpirnay/witchhunt-reader)
+> для XTEINK X3/X4. Он сохраняет возможности исходной прошивки и добавляет работу
+> с важными фрагментами текста в EPUB.
+>
+> **Что добавлено в Kf-форке:**
+>
+> - выделение текста сплошным маркером, включая промежутки между словами;
+> - выбор начала и конца фрагмента с перемещением боковыми кнопками по строкам;
+> - сохранение нескольких выделений отдельно для каждой книги;
+> - раздел **«Выделения»** с просмотром, удалением и переходом к сохранённому месту;
+> - точный переход к странице и позиции выделенного текста, а не к началу главы;
+> - назначаемое действие **«Выделить текст»** в настройках управления;
+> - собственные OTA-обновления из релизов `Kapfilm/witchhunt-reader`;
+> - автоматическая сборка и публикация `firmware.bin` для новых версий `*-Kf`.
+>
+> **Скачать прошивку:** [последний релиз](https://github.com/Kapfilm/witchhunt-reader/releases/latest)
+> · [firmware.bin](https://github.com/Kapfilm/witchhunt-reader/releases/latest/download/firmware.bin)
+>
+> Версию `2.10.2-Kf` необходимо установить вручную один раз. После этого следующие
+> версии Kf-форка можно устанавливать штатно по Wi-Fi.
+
 This firmware is based on the [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) for the XTEINK X3/X4, a great piece of software by Dave Allie and others.
 
 
