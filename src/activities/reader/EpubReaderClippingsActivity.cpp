@@ -8,23 +8,28 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+namespace {
+std::string displayText(const std::string& text) {
+  std::string result;
+  result.reserve(text.size());
+  bool previousWasSpace = false;
+  for (const char c : text) {
+    const bool isSpace = c == ' ' || c == '\r' || c == '\n' || c == '\t';
+    if (isSpace) {
+      if (!result.empty() && !previousWasSpace) result.push_back(' ');
+    } else {
+      result.push_back(c);
+    }
+    previousWasSpace = isSpace;
+  }
+  if (!result.empty() && result.back() == ' ') result.pop_back();
+  return result;
+}
+}  // namespace
+
 void EpubReaderClippingsActivity::onEnter() {
   Activity::onEnter();
   requestUpdate();
-}
-
-std::string EpubReaderClippingsActivity::itemLabel(const int index) const {
-  const Clipping& clipping = store.getAll()[index];
-  std::string preview;
-  preview.reserve(80);
-  for (const char c : clipping.text) {
-    preview += (c == '\r' || c == '\n' || c == '\t') ? ' ' : c;
-    if (preview.size() >= 72) {
-      preview += "...";
-      break;
-    }
-  }
-  return std::to_string(index + 1) + ". " + preview;
 }
 
 void EpubReaderClippingsActivity::loop() {
@@ -82,17 +87,37 @@ void EpubReaderClippingsActivity::render(RenderLock&&) {
   renderer.clearScreen();
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect contentRect = UITheme::getContentRect(renderer, true, true);
+  const int total = static_cast<int>(store.getAll().size());
+  const std::string position =
+      total > 0 ? std::to_string(selectedIndex + 1) + " / " + std::to_string(total) : std::string();
   GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.headerHeight},
-                 tr(STR_CLIPPINGS));
+                 tr(STR_CLIPPINGS), position.empty() ? nullptr : position.c_str());
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
-  const int total = static_cast<int>(store.getAll().size());
   if (total == 0) {
     renderer.drawText(UI_10_FONT_ID, contentRect.x + metrics.contentSidePadding, contentTop + 20,
                       tr(STR_NO_CLIPPINGS));
   } else {
-    GUI.drawList(renderer, Rect{contentRect.x, contentTop, contentRect.width, contentHeight}, total, selectedIndex,
-                 [this](const int index) { return itemLabel(index); });
+    const Clipping& clipping = store.getAll()[selectedIndex];
+    const int textX = contentRect.x + metrics.contentSidePadding;
+    const int textWidth = contentRect.width - metrics.contentSidePadding * 2;
+    int textY = contentTop;
+
+    if (clipping.chapterTitle[0] != '\0') {
+      const std::string chapter =
+          renderer.truncatedText(UI_10_FONT_ID, clipping.chapterTitle, textWidth, EpdFontFamily::BOLD);
+      renderer.drawText(UI_10_FONT_ID, textX, textY, chapter.c_str(), true, EpdFontFamily::BOLD);
+      textY += renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing;
+    }
+
+    const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+    const int maxLines = std::max(1, (contentTop + contentHeight - textY) / lineHeight);
+    const std::string fullText = displayText(clipping.text);
+    const auto lines = renderer.wrappedText(SMALL_FONT_ID, fullText.c_str(), textWidth, maxLines);
+    for (const std::string& line : lines) {
+      renderer.drawText(SMALL_FONT_ID, textX, textY, line.c_str());
+      textY += lineHeight;
+    }
   }
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), total > 0 ? tr(STR_OPEN) : "", "",
                                             total > 0 ? tr(STR_DELETE) : "");

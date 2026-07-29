@@ -4023,74 +4023,88 @@ void EpubReaderActivity::startClipSelection() {
 
   {
     RenderLock lock(*this);
-    auto page = section->loadPageFromSectionFile();
-    if (!page) {
-      requestUpdate();
-      return;
-    }
     const int viewportHeight = std::max(0, renderer.getScreenHeight() - layout.marginTop - layout.marginBottom);
-    const int contentTop = layout.marginTop + getImageOnlyPageYOffset(*page, viewportHeight);
-    constexpr size_t MAX_SELECTABLE_WORDS = 160;
-    words.reserve(MAX_SELECTABLE_WORDS);
-    uint16_t pageWordIndex = 0;
+    constexpr int SELECTABLE_PAGE_COUNT = 2;
+    constexpr size_t MAX_SELECTABLE_WORDS_PER_PAGE = 160;
+    words.reserve(MAX_SELECTABLE_WORDS_PER_PAGE * SELECTABLE_PAGE_COUNT);
 
-    for (const auto& element : page->elements) {
-      if (element->getTag() != TAG_PageLine) continue;
-      const auto& line = static_cast<const PageLine&>(*element);
-      if (!line.getBlock()) continue;
-      const TextBlock& block = *line.getBlock();
-      const int effectiveFontId =
-          block.getBlockStyle().headingFontId != 0 ? block.getBlockStyle().headingFontId : readerFontId;
-      const float blockScale = block.getBlockStyle().fontSizeMultiplier;
-      const float maxScale = blockScale * (block.maxSizePct() / 100.0f);
-      const int lineAscender = maxScale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
-                                               : renderer.getFontAscenderSizeScaled(effectiveFontId, maxScale);
+    for (int relativePage = 0;
+         relativePage < SELECTABLE_PAGE_COUNT && startPage + relativePage < section->pageCount; ++relativePage) {
+      section->currentPage = startPage + relativePage;
+      auto page = section->loadPageFromSectionFile();
+      if (!page) {
+        if (relativePage == 0) {
+          section->currentPage = startPage;
+          requestUpdate();
+          return;
+        }
+        break;
+      }
 
-      for (uint16_t i = 0; i < block.wordCount() && words.size() < MAX_SELECTABLE_WORDS; ++i) {
-        const char* text = block.wordText(i);
-        bool visible = false;
-        for (const char* p = text; *p; ++p) {
-          if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
-            visible = true;
-            break;
+      const int contentTop = layout.marginTop + getImageOnlyPageYOffset(*page, viewportHeight);
+      const size_t pageWordLimit = words.size() + MAX_SELECTABLE_WORDS_PER_PAGE;
+      uint16_t pageWordIndex = 0;
+
+      for (const auto& element : page->elements) {
+        if (element->getTag() != TAG_PageLine) continue;
+        const auto& line = static_cast<const PageLine&>(*element);
+        if (!line.getBlock()) continue;
+        const TextBlock& block = *line.getBlock();
+        const int effectiveFontId =
+            block.getBlockStyle().headingFontId != 0 ? block.getBlockStyle().headingFontId : readerFontId;
+        const float blockScale = block.getBlockStyle().fontSizeMultiplier;
+        const float maxScale = blockScale * (block.maxSizePct() / 100.0f);
+        const int lineAscender = maxScale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
+                                                 : renderer.getFontAscenderSizeScaled(effectiveFontId, maxScale);
+
+        for (uint16_t i = 0; i < block.wordCount() && words.size() < pageWordLimit; ++i) {
+          const char* text = block.wordText(i);
+          bool visible = false;
+          for (const char* p = text; *p; ++p) {
+            if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
+              visible = true;
+              break;
+            }
           }
-        }
-        if (!visible) continue;
+          if (!visible) continue;
 
-        const float scale = blockScale * (block.wordSizePct(i) / 100.0f);
-        const auto style = block.wordStyle(i);
-        const int ascender = scale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
-                                           : renderer.getFontAscenderSizeScaled(effectiveFontId, scale);
-        int wordY = contentTop + line.yPos + lineAscender - ascender;
-        if ((style & EpdFontFamily::SUP) != 0) {
-          wordY -= renderer.getFontAscenderSize(effectiveFontId) * 2 / 5;
-        } else if ((style & EpdFontFamily::SUB) != 0) {
-          wordY += renderer.getFontAscenderSize(effectiveFontId) / 4;
-        }
-        int wordWidth = scale == 1.0f ? renderer.getTextWidth(effectiveFontId, text, style)
-                                      : renderer.getTextWidthScaled(effectiveFontId, text, style, scale);
-        if (i + 1 < block.wordCount() && block.wordXpos(i + 1) > block.wordXpos(i)) {
-          wordWidth = std::min(wordWidth, static_cast<int>(block.wordXpos(i + 1) - block.wordXpos(i)));
-        }
-        if (wordWidth <= 0) continue;
+          const float scale = blockScale * (block.wordSizePct(i) / 100.0f);
+          const auto style = block.wordStyle(i);
+          const int ascender = scale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
+                                             : renderer.getFontAscenderSizeScaled(effectiveFontId, scale);
+          int wordY = contentTop + line.yPos + lineAscender - ascender;
+          if ((style & EpdFontFamily::SUP) != 0) {
+            wordY -= renderer.getFontAscenderSize(effectiveFontId) * 2 / 5;
+          } else if ((style & EpdFontFamily::SUB) != 0) {
+            wordY += renderer.getFontAscenderSize(effectiveFontId) / 4;
+          }
+          int wordWidth = scale == 1.0f ? renderer.getTextWidth(effectiveFontId, text, style)
+                                        : renderer.getTextWidthScaled(effectiveFontId, text, style, scale);
+          if (i + 1 < block.wordCount() && block.wordXpos(i + 1) > block.wordXpos(i)) {
+            wordWidth = std::min(wordWidth, static_cast<int>(block.wordXpos(i + 1) - block.wordXpos(i)));
+          }
+          if (wordWidth <= 0) continue;
 
-        WordRef word;
-        word.x = layout.marginLeft + line.xPos + block.wordXpos(i);
-        word.y = wordY;
-        word.w = wordWidth;
-        word.h = std::max(renderer.getLineHeight(effectiveFontId), ascender + 4);
-        word.effectiveFontId = effectiveFontId;
-        word.scale = scale;
-        word.pageWordIndex = pageWordIndex++;
-        word.text = text;
-        word.style = style;
-        if (!words.empty() && word.y != words.back().y) {
-          const int indentThreshold = renderer.getLineHeight(readerFontId) / 2;
-          word.paragraphStart = word.x > words.back().x + indentThreshold;
+          WordRef word;
+          word.x = layout.marginLeft + line.xPos + block.wordXpos(i);
+          word.y = wordY;
+          word.w = wordWidth;
+          word.h = std::max(renderer.getLineHeight(effectiveFontId), ascender + 4);
+          word.pageIndex = relativePage;
+          word.effectiveFontId = effectiveFontId;
+          word.scale = scale;
+          word.pageWordIndex = pageWordIndex++;
+          word.text = text;
+          word.style = style;
+          if (!words.empty() && words.back().pageIndex == relativePage && word.y != words.back().y) {
+            const int indentThreshold = renderer.getLineHeight(readerFontId) / 2;
+            word.paragraphStart = word.x > words.back().x + indentThreshold;
+          }
+          words.push_back(std::move(word));
         }
-        words.push_back(std::move(word));
       }
     }
+    section->currentPage = startPage;
 
     const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
     if (tocIndex >= 0) chapterTitle = epub->getTocItem(tocIndex).title;

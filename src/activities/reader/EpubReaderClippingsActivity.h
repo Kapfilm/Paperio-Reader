@@ -16,6 +16,4 @@ class EpubReaderClippingsActivity final : public Activity {
  private:
   ClippingStore& store;
   int selectedIndex = 0;
-
-  std::string itemLabel(int index) const;
 };

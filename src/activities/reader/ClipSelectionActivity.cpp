@@ -81,13 +81,19 @@ void ClipSelectionActivity::moveCursorByLine(const int direction) {
          words[lineWord].pageIndex == currentPage && words[lineWord].y == currentY) {
     lineWord += direction > 0 ? 1 : -1;
   }
-  if (lineWord < 0 || lineWord >= static_cast<int>(words.size()) || words[lineWord].pageIndex != currentPage) return;
+  if (lineWord < 0 || lineWord >= static_cast<int>(words.size())) return;
+
+  // Crossing the top/bottom edge continues on the nearest word of the last/first
+  // line of the adjacent page. This preserves the cursor's horizontal position
+  // while allowing a selection to span the page boundary.
+  const int targetPage = words[lineWord].pageIndex;
+  if (targetPage != currentPage && std::abs(targetPage - currentPage) != 1) return;
 
   const int targetY = words[lineWord].y;
   int best = lineWord;
   int bestDistance = std::abs(words[lineWord].x + words[lineWord].w / 2 - currentCenter);
   for (int i = lineWord + (direction > 0 ? 1 : -1);
-       i >= 0 && i < static_cast<int>(words.size()) && words[i].pageIndex == currentPage && words[i].y == targetY;
+       i >= 0 && i < static_cast<int>(words.size()) && words[i].pageIndex == targetPage && words[i].y == targetY;
        i += direction > 0 ? 1 : -1) {
     const int distance = std::abs(words[i].x + words[i].w / 2 - currentCenter);
     if (distance < bestDistance) {
