@@ -1,14 +1,11 @@
 #pragma once
 
 #include <Epub/Section.h>
-#include <Memory.h>
 
-#include <memory>
 #include <vector>
 
 #include "WordRef.h"
 #include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
 
 class ClipSelectionActivity final : public Activity {
  public:
@@ -22,8 +19,6 @@ class ClipSelectionActivity final : public Activity {
   bool isReaderActivity() const override { return true; }
 
  private:
-  static constexpr size_t BUFFER_CHUNK_SIZE = 4096;
-
   std::vector<WordRef> words;
   int fontId = 0;
   Section& section;
@@ -34,16 +29,10 @@ class ClipSelectionActivity final : public Activity {
   int displayedRelativePage = 0;
   int cursor = 0;
   int selectionStart = -1;
-  bool pageSwitchPending = false;
-  bool hasSnapshot = false;
-  size_t snapshotSize = 0;
-  std::vector<std::unique_ptr<uint8_t[]>> snapshotChunks;
-  ButtonNavigator buttonNavigator;
 
-  bool allocateSnapshot();
-  void saveSnapshot();
-  void restoreSnapshot() const;
-  bool showPage(int relativePage);
+  bool renderBasePage(int relativePage);
   void moveCursor(int next);
+  void confirmSelection();
+  void cancelSelection();
   void drawWord(const WordRef& word, bool cursorStyle) const;
 };
