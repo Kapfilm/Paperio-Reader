@@ -32,6 +32,7 @@ class ClipSelectionActivity final : public Activity {
 
   bool renderBasePage(int relativePage);
   void moveCursor(int next);
+  void moveCursorByLine(int direction);
   void confirmSelection();
   void cancelSelection();
   void drawWord(const WordRef& word, bool cursorStyle) const;

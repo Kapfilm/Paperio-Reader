@@ -105,6 +105,7 @@ struct ClippingResult {
 struct ClippingJumpResult {
   uint16_t spineIndex = 0;
   uint16_t page = 0;
+  uint16_t pageCount = 1;
   uint16_t paragraphIndex = UINT16_MAX;
   uint16_t clippingIndex = UINT16_MAX;
 };

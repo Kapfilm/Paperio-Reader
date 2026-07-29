@@ -42,7 +42,8 @@ void EpubReaderClippingsActivity::loop() {
     if (total > 0 && event.button == MappedInputManager::Button::Confirm &&
         event.type == ButtonEventManager::PressType::Short) {
       const Clipping& clipping = store.getAll()[selectedIndex];
-      setResult(ClippingJumpResult{clipping.spineIndex, clipping.startPage, clipping.paragraphIndex,
+      setResult(ClippingJumpResult{clipping.spineIndex, clipping.startPage, clipping.pageCount,
+                                   clipping.paragraphIndex,
                                    static_cast<uint16_t>(selectedIndex)});
       finish();
       return;

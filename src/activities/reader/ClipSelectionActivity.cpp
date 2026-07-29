@@ -7,6 +7,7 @@
 #include <Epub/Page.h>
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "MappedInputManager.h"
 #include "activities/ActivityResult.h"
@@ -69,6 +70,34 @@ void ClipSelectionActivity::moveCursor(const int next) {
   requestUpdate();
 }
 
+void ClipSelectionActivity::moveCursorByLine(const int direction) {
+  if (direction == 0 || words.empty()) return;
+
+  const int currentPage = words[cursor].pageIndex;
+  const int currentY = words[cursor].y;
+  const int currentCenter = words[cursor].x + words[cursor].w / 2;
+  int lineWord = cursor + (direction > 0 ? 1 : -1);
+  while (lineWord >= 0 && lineWord < static_cast<int>(words.size()) &&
+         words[lineWord].pageIndex == currentPage && words[lineWord].y == currentY) {
+    lineWord += direction > 0 ? 1 : -1;
+  }
+  if (lineWord < 0 || lineWord >= static_cast<int>(words.size()) || words[lineWord].pageIndex != currentPage) return;
+
+  const int targetY = words[lineWord].y;
+  int best = lineWord;
+  int bestDistance = std::abs(words[lineWord].x + words[lineWord].w / 2 - currentCenter);
+  for (int i = lineWord + (direction > 0 ? 1 : -1);
+       i >= 0 && i < static_cast<int>(words.size()) && words[i].pageIndex == currentPage && words[i].y == targetY;
+       i += direction > 0 ? 1 : -1) {
+    const int distance = std::abs(words[i].x + words[i].w / 2 - currentCenter);
+    if (distance < bestDistance) {
+      best = i;
+      bestDistance = distance;
+    }
+  }
+  moveCursor(best);
+}
+
 void ClipSelectionActivity::confirmSelection() {
   if (selectionStart < 0) {
     selectionStart = cursor;
@@ -113,16 +142,23 @@ void ClipSelectionActivity::loop() {
       confirmSelection();
       return;
     }
-    if (event.button == Button::Left || event.button == Button::PageBack) {
+    if (event.button == Button::Left) {
       moveCursor(cursor - 1);
       continue;
     }
-    if (event.button == Button::Right || event.button == Button::PageForward) {
+    if (event.button == Button::Right) {
       moveCursor(cursor + 1);
       continue;
     }
+    if (event.button == Button::PageBack) {
+      moveCursorByLine(-1);
+      continue;
+    }
+    if (event.button == Button::PageForward) {
+      moveCursorByLine(1);
+      continue;
+    }
   }
-
 }
 
 void ClipSelectionActivity::drawWord(const WordRef& word, const bool cursorStyle) const {
@@ -151,7 +187,12 @@ void ClipSelectionActivity::render(RenderLock&&) {
     const int from = std::min(selectionStart, cursor);
     const int to = std::max(selectionStart, cursor);
     for (int i = from; i <= to; ++i) {
-      if (words[i].pageIndex == displayedRelativePage) drawWord(words[i], false);
+      if (words[i].pageIndex != displayedRelativePage) continue;
+      WordRef paintedWord = words[i];
+      if (i < to && words[i + 1].pageIndex == paintedWord.pageIndex && words[i + 1].y == paintedWord.y) {
+        paintedWord.w = std::max(paintedWord.w, words[i + 1].x - paintedWord.x);
+      }
+      drawWord(paintedWord, false);
     }
   }
   if (words[cursor].pageIndex == displayedRelativePage) drawWord(words[cursor], true);

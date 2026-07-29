@@ -1387,18 +1387,19 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               const auto& clipping = std::get<ClippingJumpResult>(result.data);
               RenderLock lock(*this);
               if (section && currentSpineIndex == clipping.spineIndex) {
-                section->currentPage = clipping.page;
-                if (clipping.paragraphIndex != UINT16_MAX) {
-                  if (const auto page = section->getPageForParagraphIndex(clipping.paragraphIndex)) {
-                    section->currentPage = *page;
-                  }
+                int targetPage = clipping.page;
+                if (clipping.pageCount > 0 && clipping.pageCount != section->pageCount) {
+                  targetPage = static_cast<int>(static_cast<uint32_t>(clipping.page) * section->pageCount /
+                                                clipping.pageCount);
                 }
-                navTarget = NavigationTarget::makePage(section->currentPage);
+                targetPage = std::clamp(targetPage, 0, std::max(0, section->pageCount - 1));
+                section->currentPage = targetPage;
+                navTarget = NavigationTarget::makePage(targetPage);
               } else {
                 currentSpineIndex = clipping.spineIndex;
-                navTarget = clipping.paragraphIndex == UINT16_MAX
-                                ? NavigationTarget::makePage(clipping.page)
-                                : NavigationTarget::makeParagraph(clipping.paragraphIndex, clipping.page);
+                navTarget = NavigationTarget::makePage(clipping.page);
+                navTarget.cachedPageCount = clipping.pageCount;
+                navTarget.cachedSpineIdx = clipping.spineIndex;
                 section.reset();
               }
             }
@@ -4133,6 +4134,19 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
   const uint16_t currentPage = static_cast<uint16_t>(section->currentPage);
   const uint16_t currentPageCount = static_cast<uint16_t>(section->pageCount);
   uint16_t pageWordIndex = 0;
+  const auto isHighlighted = [&](const uint16_t wordIndex) {
+    for (const Clipping& clipping : clippingStore.getAll()) {
+      if (clipping.spineIndex != static_cast<uint16_t>(currentSpineIndex) ||
+          clipping.pageCount != currentPageCount || currentPage < clipping.startPage ||
+          currentPage > clipping.endPage) {
+        continue;
+      }
+      const uint16_t first = currentPage == clipping.startPage ? clipping.startWordIndex : 0;
+      const uint16_t last = currentPage == clipping.endPage ? clipping.endWordIndex : UINT16_MAX;
+      if (wordIndex >= first && wordIndex <= last) return true;
+    }
+    return false;
+  };
 
   for (const auto& element : page.elements) {
     if (element->getTag() != TAG_PageLine) continue;
@@ -4157,20 +4171,7 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
       }
       if (!visible) continue;
 
-      bool highlighted = false;
-      for (const Clipping& clipping : clippingStore.getAll()) {
-        if (clipping.spineIndex != static_cast<uint16_t>(currentSpineIndex) ||
-            clipping.pageCount != currentPageCount || currentPage < clipping.startPage ||
-            currentPage > clipping.endPage) {
-          continue;
-        }
-        const uint16_t first = currentPage == clipping.startPage ? clipping.startWordIndex : 0;
-        const uint16_t last = currentPage == clipping.endPage ? clipping.endWordIndex : UINT16_MAX;
-        if (pageWordIndex >= first && pageWordIndex <= last) {
-          highlighted = true;
-          break;
-        }
-      }
+      const bool highlighted = isHighlighted(pageWordIndex);
       if (highlighted) {
         const auto style = block.wordStyle(i);
         const float scale = blockScale * (block.wordSizePct(i) / 100.0f);
@@ -4180,7 +4181,10 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
         int wordWidth = scale == 1.0f ? renderer.getTextWidth(effectiveFontId, text, style)
                                       : renderer.getTextWidthScaled(effectiveFontId, text, style, scale);
         if (i + 1 < block.wordCount() && block.wordXpos(i + 1) > block.wordXpos(i)) {
-          wordWidth = std::min(wordWidth, static_cast<int>(block.wordXpos(i + 1) - block.wordXpos(i)));
+          const int distanceToNext = static_cast<int>(block.wordXpos(i + 1) - block.wordXpos(i));
+          wordWidth = isHighlighted(static_cast<uint16_t>(pageWordIndex + 1))
+                          ? distanceToNext
+                          : std::min(wordWidth, distanceToNext);
         }
         const int wordX = marginLeft + line.xPos + block.wordXpos(i);
         const int wordHeight = std::max(renderer.getLineHeight(effectiveFontId), ascender + 4);
@@ -4415,6 +4419,11 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
     case BA::BTN_QUICK_OVERRIDES:
       if (epub) {
         openQuickOverrides();
+      }
+      break;
+    case BA::BTN_CREATE_CLIPPING:
+      if (epub) {
+        startClipSelection();
       }
       break;
     case BA::BTN_FORCE_REFRESH:
