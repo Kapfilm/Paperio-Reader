@@ -16,6 +16,7 @@
 #include <atomic>
 
 #include "BookmarkStore.h"
+#include "ClippingStore.h"
 #include "EpubReaderMenuActivity.h"
 #include "ReaderUtils.h"
 #include "activities/Activity.h"
@@ -456,6 +457,9 @@ class EpubReaderActivity final : public Activity {
 
   // Bookmarks (starred pages)
   BookmarkStore bookmarkStore;
+  // EPUB highlights/clippings. The vector is bounded to 64 records and loaded
+  // once per reader session; text payloads are capped at 512 bytes each.
+  ClippingStore clippingStore;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -615,6 +619,8 @@ class EpubReaderActivity final : public Activity {
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  void startClipSelection();
+  void drawClippingHighlights(const Page& page, int fontId, int contentTop, int marginLeft) const;
   void launchKOReaderSync(SyncLaunchMode mode = SyncLaunchMode::COMPARE);
   // Reader-close auto-push gate. Returns true if AUTO_PUSH was launched (the caller
   // must not perform its own exit — the sync activity will route to home on completion).

@@ -40,6 +40,8 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderChapterSelectionActivity.h"
+#include "ClipSelectionActivity.h"
+#include "EpubReaderClippingsActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderPrintedPageInputActivity.h"
@@ -62,6 +64,8 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ScreenshotUtil.h"
+#include "clippings/ClippingsManager.h"
+#include "WordRef.h"
 
 // Defined further down (near the other font helpers); declared here because
 // buildRenderParams() above it needs the ladder.
@@ -368,6 +372,9 @@ void EpubReaderActivity::onEnter() {
   // Load bookmarks for this book
   bookmarkStore.load(epub->getCachePath());
   logReaderMemSnapshot("onEnter_after_bookmarks_loaded");
+  if (!clippingStore.loadForBook(epub->getPath(), epub->getTitle(), epub->getAuthor())) {
+    LOG_ERR("CLIP", "Could not load highlights for %s", epub->getPath().c_str());
+  }
 
   // Save current epub as last opened epub and add to recent books
   APP_STATE.openEpubPath = epub->getPath();
@@ -425,6 +432,7 @@ void EpubReaderActivity::onExit() {
 
   // Save bookmarks before exit
   bookmarkStore.save();
+  clippingStore.unload();
   if (epub) {
     GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, epub->getPath(), epub->getCachePath(), epub->getTitle(), false);
   }
@@ -1365,6 +1373,36 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                 section.reset();
               }
             }
+          });
+      break;
+    }
+    case EpubReaderMenuActivity::MenuAction::CREATE_CLIPPING:
+      startClipSelection();
+      break;
+    case EpubReaderMenuActivity::MenuAction::VIEW_CLIPPINGS: {
+      startActivityForResult(
+          std::make_unique<EpubReaderClippingsActivity>(renderer, mappedInput, clippingStore),
+          [this](const ActivityResult& result) {
+            if (!result.isCancelled) {
+              const auto& clipping = std::get<ClippingJumpResult>(result.data);
+              RenderLock lock(*this);
+              if (section && currentSpineIndex == clipping.spineIndex) {
+                section->currentPage = clipping.page;
+                if (clipping.paragraphIndex != UINT16_MAX) {
+                  if (const auto page = section->getPageForParagraphIndex(clipping.paragraphIndex)) {
+                    section->currentPage = *page;
+                  }
+                }
+                navTarget = NavigationTarget::makePage(section->currentPage);
+              } else {
+                currentSpineIndex = clipping.spineIndex;
+                navTarget = clipping.paragraphIndex == UINT16_MAX
+                                ? NavigationTarget::makePage(clipping.page)
+                                : NavigationTarget::makeParagraph(clipping.paragraphIndex, clipping.page);
+                section.reset();
+              }
+            }
+            requestUpdate();
           });
       break;
     }
@@ -3333,6 +3371,7 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   logReaderMemSnapshot("before_bw_render");
   page->render(renderer, getEffectiveReaderFontId(), orientedMarginLeft, contentTop, effectiveForceLoad,
                imageMonochrome);
+  drawClippingHighlights(*page, getEffectiveReaderFontId(), contentTop, orientedMarginLeft);
   // The BW render also touches images (placeholder/cache draws) and runs the full
   // glyph pipeline; check here too so a clean after_image_warm_pass followed by a
   // corrupt reading convicts the BW render rather than the decode.
@@ -3510,6 +3549,7 @@ void EpubReaderActivity::displayBuildPage(RenderLock& lock, const Page& page, co
   renderer.clearScreen();
   page.render(renderer, getEffectiveReaderFontId(), layout.marginLeft, contentTop, /*forceLoadLargeImages=*/false,
               /*monochromeOutput=*/true);
+  drawClippingHighlights(page, getEffectiveReaderFontId(), contentTop, layout.marginLeft);
   renderStatusBar();
   if (forceHalfRefreshAfterPopup_) {
     // First real page after the indexing popup: establish a clean baseline (see
@@ -3542,6 +3582,7 @@ void EpubReaderActivity::renderPageContentOnly(const Page& page, const int orien
 
   renderer.clearScreen();
   page.render(renderer, getEffectiveReaderFontId(), orientedMarginLeft, contentTop);
+  drawClippingHighlights(page, getEffectiveReaderFontId(), contentTop, orientedMarginLeft);
   // Status bar intentionally omitted — superimposed at display time with live values.
 }
 
@@ -3967,6 +4008,194 @@ void EpubReaderActivity::openQuickOverrides() {
                          });
 }
 
+void EpubReaderActivity::startClipSelection() {
+  if (!section || !epub || section->pageCount <= 0) {
+    requestUpdate();
+    return;
+  }
+
+  std::vector<WordRef> words;
+  const RenderLayout layout = computeRenderLayout();
+  const int readerFontId = getEffectiveReaderFontId();
+  const int startPage = section->currentPage;
+  std::string chapterTitle;
+
+  {
+    RenderLock lock(*this);
+    auto page = section->loadPageFromSectionFile();
+    if (!page) {
+      requestUpdate();
+      return;
+    }
+    const int viewportHeight = std::max(0, renderer.getScreenHeight() - layout.marginTop - layout.marginBottom);
+    const int contentTop = layout.marginTop + getImageOnlyPageYOffset(*page, viewportHeight);
+    constexpr size_t MAX_SELECTABLE_WORDS = 160;
+    words.reserve(MAX_SELECTABLE_WORDS);
+    uint16_t pageWordIndex = 0;
+
+    for (const auto& element : page->elements) {
+      if (element->getTag() != TAG_PageLine) continue;
+      const auto& line = static_cast<const PageLine&>(*element);
+      if (!line.getBlock()) continue;
+      const TextBlock& block = *line.getBlock();
+      const int effectiveFontId =
+          block.getBlockStyle().headingFontId != 0 ? block.getBlockStyle().headingFontId : readerFontId;
+      const float blockScale = block.getBlockStyle().fontSizeMultiplier;
+      const float maxScale = blockScale * (block.maxSizePct() / 100.0f);
+      const int lineAscender = maxScale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
+                                               : renderer.getFontAscenderSizeScaled(effectiveFontId, maxScale);
+
+      for (uint16_t i = 0; i < block.wordCount() && words.size() < MAX_SELECTABLE_WORDS; ++i) {
+        const char* text = block.wordText(i);
+        bool visible = false;
+        for (const char* p = text; *p; ++p) {
+          if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
+            visible = true;
+            break;
+          }
+        }
+        if (!visible) continue;
+
+        const float scale = blockScale * (block.wordSizePct(i) / 100.0f);
+        const auto style = block.wordStyle(i);
+        const int ascender = scale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
+                                           : renderer.getFontAscenderSizeScaled(effectiveFontId, scale);
+        int wordY = contentTop + line.yPos + lineAscender - ascender;
+        if ((style & EpdFontFamily::SUP) != 0) {
+          wordY -= renderer.getFontAscenderSize(effectiveFontId) * 2 / 5;
+        } else if ((style & EpdFontFamily::SUB) != 0) {
+          wordY += renderer.getFontAscenderSize(effectiveFontId) / 4;
+        }
+        int wordWidth = scale == 1.0f ? renderer.getTextWidth(effectiveFontId, text, style)
+                                      : renderer.getTextWidthScaled(effectiveFontId, text, style, scale);
+        if (i + 1 < block.wordCount() && block.wordXpos(i + 1) > block.wordXpos(i)) {
+          wordWidth = std::min(wordWidth, static_cast<int>(block.wordXpos(i + 1) - block.wordXpos(i)));
+        }
+        if (wordWidth <= 0) continue;
+
+        WordRef word;
+        word.x = layout.marginLeft + line.xPos + block.wordXpos(i);
+        word.y = wordY;
+        word.w = wordWidth;
+        word.h = std::max(renderer.getLineHeight(effectiveFontId), ascender + 4);
+        word.effectiveFontId = effectiveFontId;
+        word.scale = scale;
+        word.pageWordIndex = pageWordIndex++;
+        word.text = text;
+        word.style = style;
+        if (!words.empty() && word.y != words.back().y) {
+          const int indentThreshold = renderer.getLineHeight(readerFontId) / 2;
+          word.paragraphStart = word.x > words.back().x + indentThreshold;
+        }
+        words.push_back(std::move(word));
+      }
+    }
+
+    const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+    if (tocIndex >= 0) chapterTitle = epub->getTocItem(tocIndex).title;
+  }
+
+  if (words.empty()) {
+    GUI.drawPopup(renderer, tr(STR_NO_SELECTABLE_TEXT));
+    delay(900);
+    requestUpdate();
+    return;
+  }
+
+  startActivityForResult(
+      std::make_unique<ClipSelectionActivity>(renderer, mappedInput, std::move(words), readerFontId, *section,
+                                              startPage, layout.marginTop, layout.marginLeft),
+      [this, chapterTitle = std::move(chapterTitle)](const ActivityResult& result) {
+        if (!result.isCancelled) {
+          const auto& clip = std::get<ClippingResult>(result.data);
+          const auto addResult = clippingStore.addClipping(
+              static_cast<uint16_t>(currentSpineIndex), clip.sectionPage, clip.endSectionPage, clip.sectionPageCount,
+              clip.startPageWordIndex, clip.endPageWordIndex, clip.wordCount, chapterTitle.c_str(),
+              clip.paragraphIndex, clip.text);
+          const bool exported =
+              addResult == ClippingStore::AddResult::Added &&
+              ClippingsManager::appendKindleExport(epub->getTitle(), epub->getAuthor(), chapterTitle,
+                                                    static_cast<int>(clip.sectionPage) + 1, clip.text);
+          GUI.drawPopup(renderer, addResult == ClippingStore::AddResult::LimitReached
+                                      ? tr(STR_CLIPPING_LIMIT_REACHED)
+                                      : (addResult == ClippingStore::AddResult::Added
+                                             ? (exported ? tr(STR_CLIPPING_SAVED) : tr(STR_CLIPPING_EXPORT_FAILED))
+                                             : tr(STR_CLIPPING_FAILED)));
+          delay(900);
+        }
+        requestUpdate();
+      });
+}
+
+void EpubReaderActivity::drawClippingHighlights(const Page& page, const int fontId, const int contentTop,
+                                                const int marginLeft) const {
+  if (!section || clippingStore.empty() || section->pageCount <= 0 || section->currentPage < 0) return;
+  const uint16_t currentPage = static_cast<uint16_t>(section->currentPage);
+  const uint16_t currentPageCount = static_cast<uint16_t>(section->pageCount);
+  uint16_t pageWordIndex = 0;
+
+  for (const auto& element : page.elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*element);
+    if (!line.getBlock()) continue;
+    const TextBlock& block = *line.getBlock();
+    const int effectiveFontId =
+        block.getBlockStyle().headingFontId != 0 ? block.getBlockStyle().headingFontId : fontId;
+    const float blockScale = block.getBlockStyle().fontSizeMultiplier;
+    const float maxScale = blockScale * (block.maxSizePct() / 100.0f);
+    const int lineAscender = maxScale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
+                                             : renderer.getFontAscenderSizeScaled(effectiveFontId, maxScale);
+
+    for (uint16_t i = 0; i < block.wordCount(); ++i) {
+      const char* text = block.wordText(i);
+      bool visible = false;
+      for (const char* p = text; *p; ++p) {
+        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') {
+          visible = true;
+          break;
+        }
+      }
+      if (!visible) continue;
+
+      bool highlighted = false;
+      for (const Clipping& clipping : clippingStore.getAll()) {
+        if (clipping.spineIndex != static_cast<uint16_t>(currentSpineIndex) ||
+            clipping.pageCount != currentPageCount || currentPage < clipping.startPage ||
+            currentPage > clipping.endPage) {
+          continue;
+        }
+        const uint16_t first = currentPage == clipping.startPage ? clipping.startWordIndex : 0;
+        const uint16_t last = currentPage == clipping.endPage ? clipping.endWordIndex : UINT16_MAX;
+        if (pageWordIndex >= first && pageWordIndex <= last) {
+          highlighted = true;
+          break;
+        }
+      }
+      if (highlighted) {
+        const auto style = block.wordStyle(i);
+        const float scale = blockScale * (block.wordSizePct(i) / 100.0f);
+        const int ascender = scale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
+                                           : renderer.getFontAscenderSizeScaled(effectiveFontId, scale);
+        int wordY = contentTop + line.yPos + lineAscender - ascender;
+        int wordWidth = scale == 1.0f ? renderer.getTextWidth(effectiveFontId, text, style)
+                                      : renderer.getTextWidthScaled(effectiveFontId, text, style, scale);
+        if (i + 1 < block.wordCount() && block.wordXpos(i + 1) > block.wordXpos(i)) {
+          wordWidth = std::min(wordWidth, static_cast<int>(block.wordXpos(i + 1) - block.wordXpos(i)));
+        }
+        const int wordX = marginLeft + line.xPos + block.wordXpos(i);
+        const int wordHeight = std::max(renderer.getLineHeight(effectiveFontId), ascender + 4);
+        renderer.fillRectDither(wordX, wordY, wordWidth, wordHeight, Color::LightGray);
+        if (scale == 1.0f) {
+          renderer.drawText(effectiveFontId, wordX, wordY, text, true, style);
+        } else {
+          renderer.drawTextScaled(effectiveFontId, wordX, wordY, text, true, style, scale);
+        }
+      }
+      ++pageWordIndex;
+    }
+  }
+}
+
 void EpubReaderActivity::openReaderMenu() {
   const int currentPage = section ? section->currentPage + 1 : 0;
   const int totalPages = section ? section->pageCount : 0;
@@ -3999,7 +4228,8 @@ void EpubReaderActivity::openReaderMenu() {
           !currentPageFootnotes.empty(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
           bookSdFontFamilyOverride, bookFontSizeOverride, SETTINGS.textDarkness, getEffectiveBionicReading(),
           bookGuideDotsOverride, bookParagraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
-          bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages),
+          bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages,
+          !clippingStore.empty()),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);

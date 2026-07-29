@@ -66,7 +66,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const int8_t initialGuideDotsOverride, const int8_t initialParagraphAlignmentOverride,
     const int8_t initialTextAntiAliasingOverride, const int8_t initialHyphenationOverride,
     const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages, const bool isCurrentPageStarred,
-    const bool hasPrintedPages)
+    const bool hasPrintedPages, const bool hasClippings)
     : MenuListActivity("EpubReaderMenu", renderer, mappedInput),
       currentPageStarred(isCurrentPageStarred),
       pendingOrientation(currentOrientation),
@@ -86,11 +86,12 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
       currentPage(currentPage),
       totalPages(totalPages),
       bookProgressPercent(bookProgressPercent) {
-  buildMenuItems(hasFootnotes, hasStarredPages, hasPrintedPages);
+  buildMenuItems(hasFootnotes, hasStarredPages, hasPrintedPages, hasClippings);
 }
 
-void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPages, bool hasPrintedPages) {
-  menuItems.reserve(21);
+void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPages, bool hasPrintedPages,
+                                            bool hasClippings) {
+  menuItems.reserve(23);
 
   // --- Navigation ---
   menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_NAVIGATION));
@@ -106,6 +107,10 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   menuItems.push_back(SettingInfo::Action(StrId::STR_STAR_PAGE, SettingAction::None));
   if (hasStarredPages) {
     menuItems.push_back(SettingInfo::Action(StrId::STR_STARRED_PAGES, SettingAction::None));
+  }
+  menuItems.push_back(SettingInfo::Action(StrId::STR_CREATE_CLIPPING, SettingAction::None));
+  if (hasClippings) {
+    menuItems.push_back(SettingInfo::Action(StrId::STR_CLIPPINGS, SettingAction::None));
   }
   if (hasFootnotes) {
     menuItems.push_back(SettingInfo::Action(StrId::STR_FOOTNOTES, SettingAction::None));
@@ -374,6 +379,10 @@ EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForNameId(StrId
       return MenuAction::STARRED_PAGES;
     case StrId::STR_STAR_PAGE:
       return MenuAction::STAR_PAGE;
+    case StrId::STR_CREATE_CLIPPING:
+      return MenuAction::CREATE_CLIPPING;
+    case StrId::STR_CLIPPINGS:
+      return MenuAction::VIEW_CLIPPINGS;
     case StrId::STR_FOOTNOTES:
       return MenuAction::FOOTNOTES;
     case StrId::STR_AUTO_TURN_PAGES_PER_MIN:

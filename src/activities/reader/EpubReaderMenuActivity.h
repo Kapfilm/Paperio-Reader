@@ -29,6 +29,8 @@ class EpubReaderMenuActivity final : public MenuListActivity {
     PUSH_LOCAL,
     STARRED_PAGES,
     STAR_PAGE,
+    CREATE_CLIPPING,
+    VIEW_CLIPPINGS,
     MARK_AS_READ,
     DELETE_CACHE,
     RENDER_BENCHMARK,
@@ -46,13 +48,14 @@ class EpubReaderMenuActivity final : public MenuListActivity {
                                   const int8_t initialGuideDotsOverride, const int8_t initialParagraphAlignmentOverride,
                                   const int8_t initialTextAntiAliasingOverride, const int8_t initialHyphenationOverride,
                                   const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages,
-                                  const bool isCurrentPageStarred, const bool hasPrintedPages);
+                                  const bool isCurrentPageStarred, const bool hasPrintedPages,
+                                  const bool hasClippings);
 
   void onEnter() override;
   void render(RenderLock&&) override;
 
  private:
-  void buildMenuItems(bool hasFootnotes, bool hasStarredPages, bool hasPrintedPages);
+  void buildMenuItems(bool hasFootnotes, bool hasStarredPages, bool hasPrintedPages, bool hasClippings);
 
   bool currentPageStarred = false;
   void finishWithAction(MenuAction action);
