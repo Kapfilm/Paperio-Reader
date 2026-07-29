@@ -5,9 +5,9 @@ PlatformIO pre-build script: inject Git metadata into preprocessor defines.
   1.1.0-dev+feat-koysnc-xpath
 - The gh_release_rc environment gets CROSSPOINT_VERSION with an RC tag from CI metadata
   when available, or a local fallback like: 1.1.0-rc+local
-- All environments get CROSSPOINT_GIT_REPOSITORY, resolved from CI metadata
-  or local Git remotes. A safe fallback is defined in src/network/OtaUpdater.h in case
-  resolution here fails.
+- All environments get CROSSPOINT_GIT_REPOSITORY, resolved from an explicit
+  [crosspoint] repository setting, CI metadata, or local Git remotes. A safe fallback
+  is defined in src/network/OtaUpdater.h in case resolution here fails.
 """
 
 import configparser
@@ -93,6 +93,13 @@ def get_git_remote_url(project_dir, remote_name):
 
 
 def get_git_repository(project_dir):
+    ini_path = os.path.join(project_dir, 'platformio.ini')
+    config = configparser.ConfigParser()
+    config.read(ini_path)
+    configured_repository = config.get('crosspoint', 'repository', fallback='').strip()
+    if configured_repository:
+        return configured_repository
+
     # Other CI systems (Forgejo, Codeberg) may set GITHUB_REPOSITORY for compatibility
     # with GHA. We could also check for other CI-specific env vars to expand support
     # later, such as:
