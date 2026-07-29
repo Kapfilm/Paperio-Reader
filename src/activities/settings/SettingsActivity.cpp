@@ -402,9 +402,12 @@ void SettingsActivity::render(RenderLock&&) {
       nullptr, [&settings](int i) { return settings[i].getDisplayValue(); }, true);
 
   // Draw help text
-  const auto confirmLabel = (selectedSettingIndex == 0)
-                                ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-                                : tr(STR_TOGGLE);
+  const int nextCategory = (selectedCategoryIndex + 1) % categoryCount;
+  const auto confirmLabel =
+      (selectedSettingIndex == 0)
+          ? (categoryNames[nextCategory] == StrId::STR_CAT_CONTROLS ? tr(STR_BUTTON_CONTROLS)
+                                                                    : I18N.get(categoryNames[nextCategory]))
+          : tr(STR_TOGGLE);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

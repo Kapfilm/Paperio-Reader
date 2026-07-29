@@ -784,10 +784,10 @@ void FontDownloadActivity::deleteFamilyAtIndex(int familyIndex) {
 std::string FontDownloadActivity::confirmButtonLabel() const {
   if (families_.empty()) return tr(STR_DOWNLOAD);
   if (isDownloadAllSelected()) return tr(STR_DOWNLOAD);
-  if (isUpdateAllSelected()) return tr(STR_UPDATE);
+  if (isUpdateAllSelected()) return tr(STR_BUTTON_UPDATE);
   const auto& family = families_[familyIndexFromList(selectedIndex_)];
   if (family.installed && !family.hasUpdate) return tr(STR_DELETE);
-  if (family.hasUpdate) return tr(STR_UPDATE);
+  if (family.hasUpdate) return tr(STR_BUTTON_UPDATE);
   if (family.hasResumableDownload) return tr(STR_RESUME);
   return tr(STR_DOWNLOAD);
 }

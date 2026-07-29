@@ -144,7 +144,7 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                          StrId::STR_CAT_DISPLAY));
   settings.push_back(SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
                                        {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
-                                        StrId::STR_THEME_LYRA_CAROUSEL},
+                                        StrId::STR_THEME_LYRA_CAROUSEL, StrId::STR_THEME_MINIMAL},
                                        "uiTheme", StrId::STR_CAT_DISPLAY)
                          .withSelectorActivity());
 

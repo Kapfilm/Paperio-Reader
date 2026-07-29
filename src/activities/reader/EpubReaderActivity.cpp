@@ -1381,7 +1381,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     case EpubReaderMenuActivity::MenuAction::VIEW_CLIPPINGS: {
       startActivityForResult(
-          std::make_unique<EpubReaderClippingsActivity>(renderer, mappedInput, clippingStore),
+          std::make_unique<EpubReaderClippingsActivity>(renderer, mappedInput, clippingStore, *epub),
           [this](const ActivityResult& result) {
             if (!result.isCancelled) {
               const auto& clipping = std::get<ClippingJumpResult>(result.data);
@@ -4097,6 +4097,8 @@ void EpubReaderActivity::startClipSelection() {
           word.text = text;
           word.style = style;
           if (!words.empty() && words.back().pageIndex == relativePage && word.y != words.back().y) {
+            const std::string& previousText = words.back().text;
+            word.joinsPreviousWord = !previousText.empty() && previousText.back() == '-';
             const int indentThreshold = renderer.getLineHeight(readerFontId) / 2;
             word.paragraphStart = word.x > words.back().x + indentThreshold;
           }

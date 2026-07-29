@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-inline constexpr size_t CLIPPING_CHAPTER_TITLE_MAX = 48;
+inline constexpr size_t CLIPPING_CHAPTER_TITLE_MAX = 256;
 inline constexpr size_t CLIPPING_TEXT_MAX = 512;
 inline constexpr uint16_t CLIPPING_MAX_PER_BOOK = 64;
 
@@ -19,7 +19,7 @@ struct Clipping {
   uint16_t wordCount = 0;
   uint16_t paragraphIndex = UINT16_MAX;
   uint32_t timestamp = 0;
-  char chapterTitle[CLIPPING_CHAPTER_TITLE_MAX] = {};
+  std::string chapterTitle;
   std::string text;
 };
 

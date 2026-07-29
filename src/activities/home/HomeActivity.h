@@ -43,6 +43,8 @@ class HomeActivity final : public Activity {
   bool recentsLoaded = false;
   bool firstRenderDone = false;
   bool hasOpdsServers = false;
+  bool minimalMenuOpen = false;
+  int minimalMenuIndex = 0;
   bool coverRendered = false;
   bool coverBufferStored = false;
   // True while the ~48 KB secondary framebuffer has been released to give the

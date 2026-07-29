@@ -3,6 +3,9 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <algorithm>
+#include <vector>
+
 #include "MappedInputManager.h"
 #include "activities/ActivityResult.h"
 #include "components/UITheme.h"
@@ -12,23 +15,47 @@ namespace {
 std::string displayText(const std::string& text) {
   std::string result;
   result.reserve(text.size());
-  bool previousWasSpace = false;
-  for (const char c : text) {
+  for (size_t i = 0; i < text.size(); ++i) {
+    const char c = text[i];
     const bool isSpace = c == ' ' || c == '\r' || c == '\n' || c == '\t';
     if (isSpace) {
-      if (!result.empty() && !previousWasSpace) result.push_back(' ');
+      size_t next = i + 1;
+      while (next < text.size() &&
+             (text[next] == ' ' || text[next] == '\r' || text[next] == '\n' || text[next] == '\t')) {
+        ++next;
+      }
+      const bool transferredWord =
+          result.size() >= 2 && result.back() == '-' && result[result.size() - 2] != '-' && next < text.size();
+      if (transferredWord) {
+        result.pop_back();
+      } else if (!result.empty() && result.back() != ' ') {
+        result.push_back(' ');
+      }
     } else {
       result.push_back(c);
     }
-    previousWasSpace = isSpace;
   }
   if (!result.empty() && result.back() == ' ') result.pop_back();
   return result;
 }
+
+struct ClippingLayout {
+  std::vector<std::string> titleLines;
+  std::vector<std::string> textLines;
+  int height = 0;
+};
 }  // namespace
 
 void EpubReaderClippingsActivity::onEnter() {
   Activity::onEnter();
+  chapterTitles.clear();
+  chapterTitles.reserve(store.getAll().size());
+  for (const Clipping& clipping : store.getAll()) {
+    std::string chapter = clipping.chapterTitle;
+    const int tocIndex = epub.getTocIndexForSpineIndex(clipping.spineIndex);
+    if (tocIndex >= 0) chapter = epub.getTocItem(tocIndex).title;
+    chapterTitles.push_back(std::move(chapter));
+  }
   requestUpdate();
 }
 
@@ -61,13 +88,20 @@ void EpubReaderClippingsActivity::loop() {
          event.button == MappedInputManager::Button::Down) &&
         event.type == ButtonEventManager::PressType::Short) {
       const int delta = event.button == MappedInputManager::Button::Down ? 1 : -1;
-      selectedIndex = (selectedIndex + delta + total) % total;
-      requestUpdate();
+      const int nextIndex = std::clamp(selectedIndex + delta, 0, total - 1);
+      if (nextIndex != selectedIndex) {
+        selectedIndex = nextIndex;
+        requestUpdate();
+      }
       continue;
     }
     if (total > 0 && event.button == MappedInputManager::Button::Right &&
         event.type == ButtonEventManager::PressType::Short) {
-      store.removeAt(static_cast<size_t>(selectedIndex));
+      const int removedIndex = selectedIndex;
+      if (store.removeAt(static_cast<size_t>(removedIndex)) &&
+          removedIndex < static_cast<int>(chapterTitles.size())) {
+        chapterTitles.erase(chapterTitles.begin() + removedIndex);
+      }
       const int remaining = static_cast<int>(store.getAll().size());
       if (remaining == 0) {
         ActivityResult result;
@@ -88,35 +122,72 @@ void EpubReaderClippingsActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect contentRect = UITheme::getContentRect(renderer, true, true);
   const int total = static_cast<int>(store.getAll().size());
-  const std::string position =
-      total > 0 ? std::to_string(selectedIndex + 1) + " / " + std::to_string(total) : std::string();
   GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.headerHeight},
-                 tr(STR_CLIPPINGS), position.empty() ? nullptr : position.c_str());
+                 tr(STR_CLIPPINGS));
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
   if (total == 0) {
     renderer.drawText(UI_10_FONT_ID, contentRect.x + metrics.contentSidePadding, contentTop + 20,
                       tr(STR_NO_CLIPPINGS));
   } else {
-    const Clipping& clipping = store.getAll()[selectedIndex];
-    const int textX = contentRect.x + metrics.contentSidePadding;
-    const int textWidth = contentRect.width - metrics.contentSidePadding * 2;
-    int textY = contentTop;
+    constexpr int MAX_TITLE_LINES = 16;
+    constexpr int MAX_TEXT_LINES = 64;
+    const int markerWidth = 4;
+    const int markerGap = 8;
+    const int textX = contentRect.x + metrics.contentSidePadding + markerWidth + markerGap;
+    const int textWidth = contentRect.width - metrics.contentSidePadding * 2 - markerWidth - markerGap;
+    const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+    const int itemGap = metrics.verticalSpacing * 2;
+    const int contentBottom = contentTop + contentHeight;
 
-    if (clipping.chapterTitle[0] != '\0') {
-      const std::string chapter =
-          renderer.truncatedText(UI_10_FONT_ID, clipping.chapterTitle, textWidth, EpdFontFamily::BOLD);
-      renderer.drawText(UI_10_FONT_ID, textX, textY, chapter.c_str(), true, EpdFontFamily::BOLD);
-      textY += renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing;
+    std::vector<ClippingLayout> layouts;
+    layouts.reserve(total);
+    for (int index = 0; index < total; ++index) {
+      const Clipping& clipping = store.getAll()[index];
+      ClippingLayout layout;
+      const std::string& chapter =
+          index < static_cast<int>(chapterTitles.size()) ? chapterTitles[index] : clipping.chapterTitle;
+      if (!chapter.empty()) {
+        layout.titleLines =
+            renderer.wrappedText(UI_10_FONT_ID, chapter.c_str(), textWidth, MAX_TITLE_LINES, EpdFontFamily::BOLD);
+      }
+      const std::string fullText = displayText(clipping.text);
+      layout.textLines = renderer.wrappedText(UI_10_FONT_ID, fullText.c_str(), textWidth, MAX_TEXT_LINES);
+      layout.height = static_cast<int>(layout.titleLines.size() + layout.textLines.size()) * lineHeight;
+      if (!layout.titleLines.empty() && !layout.textLines.empty()) layout.height += metrics.verticalSpacing;
+      layout.height += itemGap + 1;
+      layouts.push_back(std::move(layout));
     }
 
-    const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
-    const int maxLines = std::max(1, (contentTop + contentHeight - textY) / lineHeight);
-    const std::string fullText = displayText(clipping.text);
-    const auto lines = renderer.wrappedText(SMALL_FONT_ID, fullText.c_str(), textWidth, maxLines);
-    for (const std::string& line : lines) {
-      renderer.drawText(SMALL_FONT_ID, textX, textY, line.c_str());
-      textY += lineHeight;
+    int firstVisible = selectedIndex;
+    int usedHeight = layouts[selectedIndex].height;
+    while (firstVisible > 0 && usedHeight + layouts[firstVisible - 1].height <= contentHeight) {
+      --firstVisible;
+      usedHeight += layouts[firstVisible].height;
+    }
+
+    int textY = contentTop;
+    for (int index = firstVisible; index < total && textY < contentBottom; ++index) {
+      const ClippingLayout& layout = layouts[index];
+      const int itemTop = textY;
+      for (const std::string& line : layout.titleLines) {
+        if (textY + lineHeight > contentBottom) break;
+        renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str(), true, EpdFontFamily::BOLD);
+        textY += lineHeight;
+      }
+      if (!layout.titleLines.empty() && !layout.textLines.empty()) textY += metrics.verticalSpacing;
+      for (const std::string& line : layout.textLines) {
+        if (textY + lineHeight > contentBottom) break;
+        renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str());
+        textY += lineHeight;
+      }
+      textY += itemGap;
+      if (index == selectedIndex) {
+        renderer.drawLine(textX - markerGap, itemTop, textX - markerGap,
+                          std::min(textY - 1, contentBottom - 1), markerWidth, true);
+      }
+      if (textY < contentBottom) renderer.drawLine(textX, textY, textX + textWidth, textY);
+      ++textY;
     }
   }
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), total > 0 ? tr(STR_OPEN) : "", "",

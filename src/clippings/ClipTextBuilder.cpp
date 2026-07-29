@@ -36,7 +36,13 @@ ClippingResult build(const std::vector<WordRef>& words, const int from, const in
   for (int i = from; i <= to; ++i) {
     const std::string word = clean(words[i].text);
     if (word.empty()) continue;
-    if (!result.text.empty()) result.text += words[i].paragraphStart ? '\n' : ' ';
+    if (!result.text.empty()) {
+      if (words[i].joinsPreviousWord && result.text.back() == '-') {
+        result.text.pop_back();
+      } else {
+        result.text += words[i].paragraphStart ? '\n' : ' ';
+      }
+    }
     result.text += word;
   }
   return result;

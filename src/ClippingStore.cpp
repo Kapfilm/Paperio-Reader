@@ -4,12 +4,14 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <Utf8.h>
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 namespace {
-constexpr uint8_t FILE_VERSION = 1;
+constexpr uint8_t FILE_VERSION = 2;
+constexpr size_t LEGACY_CHAPTER_TITLE_MAX = 48;
 constexpr size_t INITIAL_RESERVE = 4;
 constexpr char CLIPPINGS_DIR[] = "/.crosspoint/clippings";
 
@@ -81,7 +83,11 @@ ClippingStore::AddResult ClippingStore::addClipping(
   clipping.wordCount = wordCount;
   clipping.paragraphIndex = paragraphIndex;
   clipping.timestamp = static_cast<uint32_t>(millis() / 1000UL);
-  snprintf(clipping.chapterTitle, sizeof(clipping.chapterTitle), "%s", chapterTitle ? chapterTitle : "");
+  clipping.chapterTitle = chapterTitle ? chapterTitle : "";
+  if (clipping.chapterTitle.size() > CLIPPING_CHAPTER_TITLE_MAX) {
+    clipping.chapterTitle.resize(
+        utf8SafeTruncateBuffer(clipping.chapterTitle.data(), static_cast<int>(CLIPPING_CHAPTER_TITLE_MAX)));
+  }
   clipping.text.assign(text.data(), std::min(text.size(), CLIPPING_TEXT_MAX));
 
   clippings.push_back(std::move(clipping));
@@ -113,7 +119,7 @@ bool ClippingStore::readFromFile() {
   std::string storedTitle;
   std::string storedAuthor;
   std::string storedPath;
-  if (!readPodChecked(file, version) || version != FILE_VERSION || !readPodChecked(file, count) ||
+  if (!readPodChecked(file, version) || (version != 1 && version != FILE_VERSION) || !readPodChecked(file, count) ||
       count > CLIPPING_MAX_PER_BOOK || !readStringChecked(file, storedTitle) ||
       !readStringChecked(file, storedAuthor) || !readStringChecked(file, storedPath)) {
     LOG_ERR("CLIP", "Invalid clipping file: %s", storeFilePath.c_str());
@@ -129,16 +135,35 @@ bool ClippingStore::readFromFile() {
         !readPodChecked(file, clipping.endPage) || !readPodChecked(file, clipping.pageCount) ||
         !readPodChecked(file, clipping.startWordIndex) || !readPodChecked(file, clipping.endWordIndex) ||
         !readPodChecked(file, clipping.wordCount) || !readPodChecked(file, clipping.paragraphIndex) ||
-        !readPodChecked(file, clipping.timestamp) ||
-        file.read(reinterpret_cast<uint8_t*>(clipping.chapterTitle), sizeof(clipping.chapterTitle)) !=
-            sizeof(clipping.chapterTitle) ||
-        !readStringChecked(file, clipping.text)) {
+        !readPodChecked(file, clipping.timestamp)) {
       LOG_ERR("CLIP", "Truncated clipping file at record %u", i);
       clippings.clear();
       file.close();
       return false;
     }
-    clipping.chapterTitle[sizeof(clipping.chapterTitle) - 1] = '\0';
+    if (version == 1) {
+      char legacyTitle[LEGACY_CHAPTER_TITLE_MAX] = {};
+      if (file.read(reinterpret_cast<uint8_t*>(legacyTitle), sizeof(legacyTitle)) != sizeof(legacyTitle)) {
+        LOG_ERR("CLIP", "Truncated clipping title at record %u", i);
+        clippings.clear();
+        file.close();
+        return false;
+      }
+      legacyTitle[sizeof(legacyTitle) - 1] = '\0';
+      clipping.chapterTitle = legacyTitle;
+    } else if (!readStringChecked(file, clipping.chapterTitle) ||
+               clipping.chapterTitle.size() > CLIPPING_CHAPTER_TITLE_MAX) {
+      LOG_ERR("CLIP", "Invalid clipping title at record %u", i);
+      clippings.clear();
+      file.close();
+      return false;
+    }
+    if (!readStringChecked(file, clipping.text)) {
+      LOG_ERR("CLIP", "Truncated clipping text at record %u", i);
+      clippings.clear();
+      file.close();
+      return false;
+    }
     if (clipping.text.size() > CLIPPING_TEXT_MAX) clipping.text.resize(CLIPPING_TEXT_MAX);
     clippings.push_back(std::move(clipping));
   }
@@ -166,9 +191,7 @@ bool ClippingStore::writeToFile() const {
          writePodChecked(file, clipping.endPage) && writePodChecked(file, clipping.pageCount) &&
          writePodChecked(file, clipping.startWordIndex) && writePodChecked(file, clipping.endWordIndex) &&
          writePodChecked(file, clipping.wordCount) && writePodChecked(file, clipping.paragraphIndex) &&
-         writePodChecked(file, clipping.timestamp) &&
-         file.write(reinterpret_cast<const uint8_t*>(clipping.chapterTitle), sizeof(clipping.chapterTitle)) ==
-             sizeof(clipping.chapterTitle) &&
+         writePodChecked(file, clipping.timestamp) && writeStringChecked(file, clipping.chapterTitle) &&
          writeStringChecked(file, clipping.text);
     if (!ok) break;
   }

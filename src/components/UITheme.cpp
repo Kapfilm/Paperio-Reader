@@ -23,6 +23,7 @@
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraCarouselTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
+#include "components/themes/minimal/MinimalTheme.h"
 #include "fontIds.h"
 
 namespace {
@@ -115,6 +116,11 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       LOG_DBG("UI", "Using Lyra Carousel theme");
       currentTheme = std::make_unique<LyraCarouselTheme>();
       currentMetrics = &LyraCarouselMetrics::values;
+      break;
+    case CrossPointSettings::UI_THEME::MINIMAL:
+      LOG_DBG("UI", "Using Minimal theme");
+      currentTheme = std::make_unique<MinimalTheme>();
+      currentMetrics = &MinimalMetrics::values;
       break;
     default:
       LOG_ERR("UI", "Unknown theme %d, falling back to Classic", static_cast<int>(type));

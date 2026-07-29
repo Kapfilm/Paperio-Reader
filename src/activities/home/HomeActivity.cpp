@@ -30,6 +30,7 @@
 #include "RecentBooksStore.h"
 #include "activities/reader/ReaderActivity.h"
 #include "components/UITheme.h"
+#include "components/themes/minimal/MinimalTheme.h"
 #include "fontIds.h"
 
 namespace {
@@ -52,6 +53,10 @@ bool isLyraFamilyTheme() {
 
 bool isLyraExtendedTheme() {
   return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::LYRA_3_COVERS;
+}
+
+bool isMinimalTheme() {
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::MINIMAL;
 }
 
 int getMinRecentTileHeight() {
@@ -654,6 +659,8 @@ void HomeActivity::onEnter() {
   recentsLoading = false;
   recentsLoaded = false;
   firstRenderDone = false;
+  minimalMenuOpen = false;
+  minimalMenuIndex = 0;
   nextRecentCoverIndex = 0;
   nextThumbSizeIndex = 0;
   extractSession.reset();
@@ -747,6 +754,56 @@ void HomeActivity::freeCoverBuffer() {
 void HomeActivity::loop() {
   if (menuEntriesDirty) {
     rebuildMenuEntries();
+  }
+
+  if (isMinimalTheme()) {
+    const bool inputWaiting =
+        mappedInput.hasPendingInput() || mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased();
+    if (firstRenderDone && !recentsLoaded && !recentsLoading && !inputWaiting) {
+      loadRecentCovers(UITheme::getInstance().getMetrics().homeCoverHeight);
+      return;
+    }
+
+    if (minimalMenuOpen) {
+      const int menuCount = static_cast<int>(menuEntries.size());
+      buttonNavigator.onNext([this, menuCount] {
+        minimalMenuIndex = ButtonNavigator::nextIndex(minimalMenuIndex, menuCount);
+        requestUpdate();
+      });
+      buttonNavigator.onPrevious([this, menuCount] {
+        minimalMenuIndex = ButtonNavigator::previousIndex(minimalMenuIndex, menuCount);
+        requestUpdate();
+      });
+      if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+        minimalMenuOpen = false;
+        requestUpdate();
+        return;
+      }
+      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && menuCount > 0) {
+        dispatchMenuAction(menuEntries[minimalMenuIndex].action);
+      }
+      return;
+    }
+
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      minimalMenuOpen = true;
+      minimalMenuIndex = 0;
+      requestUpdate();
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      dispatchMenuAction(MenuAction::FileBrowser);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      dispatchMenuAction(MenuAction::Settings);
+      return;
+    }
+    if (mappedInput.wasReleased(MappedInputManager::Button::Right) && !recentBooks.empty()) {
+      onSelectBook(recentBooks.front().path);
+      return;
+    }
+    return;
   }
 
   const bool isCarousel = (GUI.getHomeNavigation() == HomeNavigation::Carousel);
@@ -849,6 +906,45 @@ void HomeActivity::render(RenderLock&&) {
 
   if (menuEntriesDirty) {
     rebuildMenuEntries();
+  }
+
+  if (isMinimalTheme()) {
+    renderer.clearScreen();
+    GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.homeTopPadding},
+                   nullptr);
+
+    if (minimalMenuOpen) {
+      GUI.drawButtonMenu(
+          renderer,
+          Rect{contentRect.x, metrics.homeTopPadding, contentRect.width, contentRect.height - metrics.homeTopPadding},
+          static_cast<int>(menuEntries.size()), minimalMenuIndex,
+          [this](int index) { return std::string(I18N.get(menuEntries[index].label)); },
+          [this](int index) { return menuEntries[index].icon; });
+      const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+      renderer.displayBuffer();
+      return;
+    }
+
+    bool bufferRestored = coverBufferStored && restoreCoverBuffer();
+    coverRectX = contentRect.x;
+    coverRectY = metrics.homeTopPadding;
+    coverRectW = contentRect.width;
+    coverRectH = std::min(metrics.homeCoverTileHeight, contentRect.height - metrics.homeTopPadding);
+    GUI.drawRecentBookCover(
+        renderer, Rect{coverRectX, coverRectY, coverRectW, coverRectH}, recentBooks, 0, coverRendered,
+        coverBufferStored, bufferRestored, std::bind(&HomeActivity::storeCoverBuffer, this));
+
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_MENU), tr(STR_BROWSE), tr(STR_SETTINGS_TITLE),
+                              recentBooks.empty() ? "" : tr(STR_READ));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    renderer.displayBuffer();
+    if (!firstRenderDone) {
+      firstRenderDone = true;
+      requestUpdate();
+    }
+    return;
   }
 
   const int menuCount = static_cast<int>(menuEntries.size());
