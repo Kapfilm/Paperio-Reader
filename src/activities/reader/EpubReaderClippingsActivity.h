@@ -2,7 +2,6 @@
 
 #include "ClippingStore.h"
 #include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
 
 class EpubReaderClippingsActivity final : public Activity {
  public:
@@ -16,7 +15,6 @@ class EpubReaderClippingsActivity final : public Activity {
 
  private:
   ClippingStore& store;
-  ButtonNavigator buttonNavigator;
   int selectedIndex = 0;
 
   std::string itemLabel(int index) const;

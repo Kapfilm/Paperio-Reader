@@ -48,14 +48,17 @@ void EpubReaderClippingsActivity::loop() {
       finish();
       return;
     }
+    // Each physical side button is exposed through two logical names
+    // (Up/PageBack or Down/PageForward). Handle only Up/Down so one tap advances
+    // exactly once; the PageBack/PageForward alias is intentionally discarded.
     if (total > 0 &&
-        (event.button == MappedInputManager::Button::PageBack ||
-         event.button == MappedInputManager::Button::PageForward) &&
+        (event.button == MappedInputManager::Button::Up ||
+         event.button == MappedInputManager::Button::Down) &&
         event.type == ButtonEventManager::PressType::Short) {
-      const int delta = event.button == MappedInputManager::Button::PageForward ? 1 : -1;
+      const int delta = event.button == MappedInputManager::Button::Down ? 1 : -1;
       selectedIndex = (selectedIndex + delta + total) % total;
       requestUpdate();
-      return;
+      continue;
     }
     if (total > 0 && event.button == MappedInputManager::Button::Right &&
         event.type == ButtonEventManager::PressType::Short) {
@@ -73,10 +76,6 @@ void EpubReaderClippingsActivity::loop() {
       return;
     }
   }
-
-  if (total == 0) return;
-  buttonNavigator.onNextList(selectedIndex, total, [this] { requestUpdate(); });
-  buttonNavigator.onPreviousList(selectedIndex, total, [this] { requestUpdate(); });
 }
 
 void EpubReaderClippingsActivity::render(RenderLock&&) {
