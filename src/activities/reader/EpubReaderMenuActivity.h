@@ -44,6 +44,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
                                   const int8_t initialEmbeddedStyleOverride, const int8_t initialImageRenderingOverride,
                                   const int8_t initialFontFamilyOverride,
                                   const std::string& initialSdFontFamilyOverride, const int8_t initialFontSizeOverride,
+                                  const int16_t initialLineHeightPercentOverride,
                                   const uint8_t initialTextDarkness, const bool initialBionicReadingOverride,
                                   const int8_t initialGuideDotsOverride, const int8_t initialParagraphAlignmentOverride,
                                   const int8_t initialTextAntiAliasingOverride, const int8_t initialHyphenationOverride,
@@ -67,6 +68,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   void onSettingToggled(int index) override;
   void toggleCurrentItem() override;
   void openSubmenu(const SettingInfo& submenuEntry);
+  void openLineHeightOverridePicker();
 
   // Map from StrId to MenuAction for result passing
   static MenuAction actionForNameId(StrId nameId);
@@ -80,6 +82,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   int8_t pendingFontFamilyOverride = -1;
   std::string pendingSdFontFamilyOverride;
   int8_t pendingFontSizeOverride = -1;
+  int16_t pendingLineHeightPercentOverride = -1;
   uint8_t pendingTextDarkness = 1;
   bool pendingBionicReading = false;
   int8_t pendingGuideDotsOverride = -1;

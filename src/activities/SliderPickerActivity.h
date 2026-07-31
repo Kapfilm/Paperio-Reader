@@ -23,6 +23,11 @@ class SliderPickerActivity : public Activity {
     // Label used instead of the numeric value when value == minValue.
     // Empty string = show numeric value even at min.
     std::string zeroLabel;
+    // Show separate front/side button step hints below the slider.
+    bool showButtonStepHints = false;
+    // Optional first numeric value after a labelled minimum sentinel (for example
+    // "Default" at 69 followed by the real 70-200 percent range).
+    int firstNumericValue = 0;
   };
 
   explicit SliderPickerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, Config config)

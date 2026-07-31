@@ -86,11 +86,11 @@ void SettingsSubmenuActivity::onActionSelected(int index) {
 
 std::string SettingsSubmenuActivity::getItemValueString(int index) const {
   const auto& item = menuItems[index];
-  if (item.type == SettingType::ACTION && item.action != SettingAction::Submenu) {
-    return {};
-  }
   if (itemValueStringOverride) {
     return itemValueStringOverride(item);
+  }
+  if (item.type == SettingType::ACTION && item.action != SettingAction::Submenu) {
+    return {};
   }
   return MenuListActivity::getItemValueString(index);
 }
@@ -99,6 +99,32 @@ void SettingsSubmenuActivity::toggleCurrentItem() {
   if (selectedIndex < 0 || selectedIndex >= static_cast<int>(menuItems.size())) return;
   const auto& setting = menuItems[selectedIndex];
   if (setting.isSeparator) return;
+
+  if (setting.valuePtr == &CrossPointSettings::lineHeightPercent) {
+    SliderPickerActivity::Config cfg{
+        .titleId = StrId::STR_LINE_SPACING,
+        .hintId = StrId::STR_SLIDER_STEP_HINT,
+        .minValue = CrossPointSettings::MIN_LINE_HEIGHT_PERCENT,
+        .maxValue = CrossPointSettings::MAX_LINE_HEIGHT_PERCENT,
+        .initialValue = SETTINGS.lineHeightPercent,
+        .suffix = "%",
+        .showButtonStepHints = true,
+    };
+    startActivityForResult(std::make_unique<SliderPickerActivity>(renderer, mappedInput, std::move(cfg)),
+                           [this](const ActivityResult& result) {
+                             if (!result.isCancelled) {
+                               const auto* selected = std::get_if<PercentResult>(&result.data);
+                               if (selected) {
+                                 SETTINGS.lineHeightPercent = CrossPointSettings::clampedLineHeightPercent(
+                                     static_cast<uint8_t>(selected->percent));
+                                 if (persistSettingsOnChange) SETTINGS.saveToFile();
+                               }
+                             }
+                             needsHalfRefresh = true;
+                             requestUpdate();
+                           });
+    return;
+  }
 
   if (setting.usesSelectorActivity) {
     auto selector = createSelectorActivity(setting, renderer, mappedInput);

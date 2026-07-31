@@ -448,6 +448,7 @@ class EpubReaderActivity final : public Activity {
   int8_t bookFontFamilyOverride = -1;
   std::string bookSdFontFamilyOverride;
   int8_t bookFontSizeOverride = -1;
+  int16_t bookLineHeightPercentOverride = -1;
   int8_t bookBionicReadingOverride = -1;
   int8_t bookParagraphAlignmentOverride = -1;
   int8_t bookTextAntiAliasingOverride = -1;
@@ -650,7 +651,7 @@ class EpubReaderActivity final : public Activity {
                                 const std::string& sdFontFamilyOverride, int8_t fontSizeOverride,
                                 int8_t bionicReadingOverride, int8_t paragraphAlignmentOverride,
                                 int8_t textAntiAliasingOverride, int8_t hyphenationOverride, int8_t guideDotsOverride,
-                                int8_t inlineFootnotePreviewsOverride);
+                                int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride);
   void openReaderMenu();
   void openQuickOverrides();
   bool getEffectiveEmbeddedStyle() const;

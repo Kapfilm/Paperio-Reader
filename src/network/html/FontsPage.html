@@ -424,7 +424,7 @@
     }
 
     // Derive family name from a .cpfont filename: take everything before the
-    // last '-' or '_' (separator that precedes the size suffix, e.g. Bookerly_12.cpfont).
+    // last '-' or '_' (separator that precedes the size suffix, e.g. NotoSans_12.cpfont).
     function familyFromFilename(name) {
       const stem = name.replace(/\.cpfont$/i, '');
       const cut = Math.max(stem.lastIndexOf('-'), stem.lastIndexOf('_'));

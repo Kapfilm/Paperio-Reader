@@ -298,6 +298,16 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
     s.refreshFrequencyPages = (v <= 60) ? v : 15;
   }
 
+  // Migrate the former named spacing choices to their exact rendering percentages.
+  if (doc["lineHeightPercent"].isNull()) {
+    const uint8_t legacy = clamp(doc["lineSpacing"] | static_cast<uint8_t>(CrossPointSettings::NORMAL),
+                                 static_cast<uint8_t>(CrossPointSettings::LINE_COMPRESSION_COUNT),
+                                 static_cast<uint8_t>(CrossPointSettings::NORMAL));
+    const char* legacySdFont = doc["sdFontFamilyName"] | "";
+    s.lineHeightPercent = CrossPointSettings::legacyLineSpacingToPercent(legacy, legacySdFont[0] != '\0');
+    if (needsResave) *needsResave = true;
+  }
+
   const auto settings = getSettingsList();
 
   for (const auto& info : settings) {
@@ -359,8 +369,8 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
 
   // Font family uses a DynamicEnumCtx in SettingsList (no valuePtr) so the generic
   // loop above skips it. Load manually.
-  s.fontFamily = clamp(doc["fontFamily"] | (uint8_t)CrossPointSettings::BOOKERLY,
-                       CrossPointSettings::BUILTIN_FONT_COUNT, CrossPointSettings::BOOKERLY);
+  s.fontFamily = clamp(doc["fontFamily"] | (uint8_t)CrossPointSettings::NOTOSANS,
+                       CrossPointSettings::BUILTIN_FONT_COUNT, CrossPointSettings::NOTOSANS);
   const char* sfn = doc["sdFontFamilyName"] | "";
   strncpy(s.sdFontFamilyName, sfn, sizeof(s.sdFontFamilyName) - 1);
   s.sdFontFamilyName[sizeof(s.sdFontFamilyName) - 1] = '\0';
@@ -592,6 +602,7 @@ bool JsonSettingsIO::saveRecentBooks(const RecentBooksStore& store, const char* 
     obj["hyphenationOverride"] = book.hyphenationOverride;
     obj["guideDotsOverride"] = book.guideDotsOverride;
     obj["inlineFootnotePreviewsOverride"] = book.inlineFootnotePreviewsOverride;
+    obj["lineHeightPercentOverride"] = book.lineHeightPercentOverride;
   }
 
   String json;
@@ -641,6 +652,13 @@ bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) 
     book.hyphenationOverride = clampInt8(obj["hyphenationOverride"] | -1, -1, 1, -1);
     book.guideDotsOverride = clampInt8(obj["guideDotsOverride"] | -1, -1, 1, -1);
     book.inlineFootnotePreviewsOverride = clampInt8(obj["inlineFootnotePreviewsOverride"] | -1, -1, 1, -1);
+    const int lineHeightOverride = obj["lineHeightPercentOverride"] | -1;
+    book.lineHeightPercentOverride =
+        (lineHeightOverride == -1 ||
+         (lineHeightOverride >= CrossPointSettings::MIN_LINE_HEIGHT_PERCENT &&
+          lineHeightOverride <= CrossPointSettings::MAX_LINE_HEIGHT_PERCENT))
+            ? static_cast<int16_t>(lineHeightOverride)
+            : -1;
     store.recentBooks.push_back(book);
   }
 

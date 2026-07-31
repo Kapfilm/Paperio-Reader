@@ -43,7 +43,10 @@ std::string SettingInfo::getDisplayValue() const {
       return {};
     }
     case SettingType::VALUE: {
-      if (valuePtr) return std::to_string(SETTINGS.*(valuePtr));
+      if (valuePtr) {
+        const std::string value = std::to_string(SETTINGS.*(valuePtr));
+        return valuePtr == &CrossPointSettings::lineHeightPercent ? value + "%" : value;
+      }
       if (valueGetter) return std::to_string(callValueGetter());
       return {};
     }

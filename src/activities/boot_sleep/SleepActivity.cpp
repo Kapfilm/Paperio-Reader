@@ -57,7 +57,7 @@ bool renderPngSleepScreen(const std::string& filename, GfxRenderer& renderer, co
     if (overlayInfo.progressText.empty()) {
       return;
     }
-    const int lineHeight12 = renderer.getLineHeight(BOOKERLY_12_FONT_ID);
+    const int lineHeight12 = renderer.getLineHeight(NOTOSANS_12_FONT_ID);
     const int lineHeight10 = renderer.getLineHeight(UI_10_FONT_ID);
     constexpr int lineSpacing = 3;
     constexpr int sectionSpacing = 10;
@@ -85,8 +85,8 @@ bool renderPngSleepScreen(const std::string& filename, GfxRenderer& renderer, co
     const int overlayY = pageHeight - textBlockHeight - (lineHeight12 / 3) - (lineHeight10 * 2 / 3);
     int y = overlayY + (lineHeight12 / 3);
     if (!overlayInfo.title.empty()) {
-      const std::string title = renderer.truncatedText(BOOKERLY_12_FONT_ID, overlayInfo.title.c_str(), maxTextWidth);
-      renderer.drawText(BOOKERLY_12_FONT_ID, 10, y, title.c_str(), true);
+      const std::string title = renderer.truncatedText(NOTOSANS_12_FONT_ID, overlayInfo.title.c_str(), maxTextWidth);
+      renderer.drawText(NOTOSANS_12_FONT_ID, 10, y, title.c_str(), true);
       y += lineHeight12;
       if (!overlayInfo.author.empty()) {
         y += lineSpacing;
@@ -527,7 +527,7 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
       return;
     }
 
-    const int lineHeight12 = renderer.getLineHeight(BOOKERLY_12_FONT_ID);
+    const int lineHeight12 = renderer.getLineHeight(NOTOSANS_12_FONT_ID);
     const int lineHeight10 = renderer.getLineHeight(UI_10_FONT_ID);
     constexpr int lineSpacing = 3;
     constexpr int sectionSpacing = 10;
@@ -558,8 +558,8 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
 
     if (hasTitle) {
       const std::string titleStr =
-          renderer.truncatedText(BOOKERLY_12_FONT_ID, overlayInfo.title.c_str(), availableWidth, EpdFontFamily::BOLD);
-      renderer.drawCenteredText(BOOKERLY_12_FONT_ID, currentY, titleStr.c_str(), textBlack, EpdFontFamily::BOLD);
+          renderer.truncatedText(NOTOSANS_12_FONT_ID, overlayInfo.title.c_str(), availableWidth, EpdFontFamily::BOLD);
+      renderer.drawCenteredText(NOTOSANS_12_FONT_ID, currentY, titleStr.c_str(), textBlack, EpdFontFamily::BOLD);
       currentY += lineHeight12 + (hasAuthor ? lineSpacing : sectionSpacing);
     }
 

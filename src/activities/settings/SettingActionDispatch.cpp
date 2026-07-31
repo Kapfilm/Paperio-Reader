@@ -40,7 +40,7 @@ std::unique_ptr<Activity> createActivityForAction(SettingAction action, GfxRende
     case SettingAction::OPDSBrowser:
       return std::make_unique<OpdsServerListActivity>(renderer, mappedInput);
     case SettingAction::Network:
-      return std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false);
+      return std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false, true);
     case SettingAction::ClearCache:
       return std::make_unique<ClearCacheActivity>(renderer, mappedInput);
     case SettingAction::CheckForUpdates:

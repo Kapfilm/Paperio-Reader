@@ -44,6 +44,8 @@ struct MenuResult {
   // reader overrides: -1 = default, 0 = off, 1 = on.
   int8_t guideDotsOverride = -1;
   int8_t inlineFootnotePreviewsOverride = -1;
+  // -1 = global reader interval, otherwise an explicit 70-200 percent override.
+  int16_t lineHeightPercentOverride = -1;
 };
 
 struct ChapterResult {

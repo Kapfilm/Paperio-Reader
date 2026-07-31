@@ -114,25 +114,6 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, cons
   }
 }
 
-void MinimalTheme::drawTabBar(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
-                              const bool selected) const {
-  (void)selected;
-  if (tabs.empty()) return;
-
-  renderer.drawLine(rect.x, rect.y, rect.x + rect.width - 1, rect.y);
-  renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1);
-  for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
-    const int slotX = rect.x + i * rect.width / static_cast<int>(tabs.size());
-    const int nextSlotX = rect.x + (i + 1) * rect.width / static_cast<int>(tabs.size());
-    const int slotWidth = nextSlotX - slotX;
-    const auto style = tabs[i].selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
-    const std::string label = renderer.truncatedText(UI_10_FONT_ID, tabs[i].label, slotWidth - 8, style);
-    const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label.c_str(), style);
-    const int textY = rect.y + (rect.height - renderer.getLineHeight(UI_10_FONT_ID)) / 2;
-    renderer.drawText(UI_10_FONT_ID, slotX + (slotWidth - textWidth) / 2, textY, label.c_str(), true, style);
-  }
-}
-
 void MinimalTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                    const char* btn4) const {
   const auto originalOrientation = renderer.getOrientation();

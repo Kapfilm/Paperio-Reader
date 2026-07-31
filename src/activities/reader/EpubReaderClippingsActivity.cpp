@@ -39,11 +39,6 @@ std::string displayText(const std::string& text) {
   return result;
 }
 
-struct ClippingLayout {
-  std::vector<std::string> titleLines;
-  std::vector<std::string> textLines;
-  int height = 0;
-};
 }  // namespace
 
 void EpubReaderClippingsActivity::onEnter() {
@@ -140,43 +135,51 @@ void EpubReaderClippingsActivity::render(RenderLock&&) {
     const int itemGap = metrics.verticalSpacing * 2;
     const int contentBottom = contentTop + contentHeight;
 
-    std::vector<ClippingLayout> layouts;
-    layouts.reserve(total);
-    for (int index = 0; index < total; ++index) {
+    // Do not retain a wrapped copy of every clipping. A 64-item collection could
+    // otherwise hold thousands of strings while this screen is open. Measure
+    // items only until the visible viewport is found, then wrap one item at a time.
+    const auto measureClipping = [&](int index) {
       const Clipping& clipping = store.getAll()[index];
-      ClippingLayout layout;
       const std::string& chapter =
           index < static_cast<int>(chapterTitles.size()) ? chapterTitles[index] : clipping.chapterTitle;
+      std::vector<std::string> titleLines;
       if (!chapter.empty()) {
-        layout.titleLines =
-            renderer.wrappedText(UI_10_FONT_ID, chapter.c_str(), textWidth, MAX_TITLE_LINES, EpdFontFamily::BOLD);
+        titleLines = renderer.wrappedText(UI_10_FONT_ID, chapter.c_str(), textWidth, MAX_TITLE_LINES,
+                                          EpdFontFamily::BOLD);
       }
       const std::string fullText = displayText(clipping.text);
-      layout.textLines = renderer.wrappedText(UI_10_FONT_ID, fullText.c_str(), textWidth, MAX_TEXT_LINES);
-      layout.height = static_cast<int>(layout.titleLines.size() + layout.textLines.size()) * lineHeight;
-      if (!layout.titleLines.empty() && !layout.textLines.empty()) layout.height += metrics.verticalSpacing;
-      layout.height += itemGap + 1;
-      layouts.push_back(std::move(layout));
-    }
+      const auto textLines = renderer.wrappedText(UI_10_FONT_ID, fullText.c_str(), textWidth, MAX_TEXT_LINES);
+      int height = static_cast<int>(titleLines.size() + textLines.size()) * lineHeight;
+      if (!titleLines.empty() && !textLines.empty()) height += metrics.verticalSpacing;
+      return height + itemGap + 1;
+    };
 
     int firstVisible = selectedIndex;
-    int usedHeight = layouts[selectedIndex].height;
-    while (firstVisible > 0 && usedHeight + layouts[firstVisible - 1].height <= contentHeight) {
+    int usedHeight = measureClipping(selectedIndex);
+    while (firstVisible > 0 && usedHeight + measureClipping(firstVisible - 1) <= contentHeight) {
       --firstVisible;
-      usedHeight += layouts[firstVisible].height;
+      usedHeight += measureClipping(firstVisible);
     }
 
     int textY = contentTop;
     for (int index = firstVisible; index < total && textY < contentBottom; ++index) {
-      const ClippingLayout& layout = layouts[index];
       const int itemTop = textY;
-      for (const std::string& line : layout.titleLines) {
+      const Clipping& clipping = store.getAll()[index];
+      const std::string& chapter =
+          index < static_cast<int>(chapterTitles.size()) ? chapterTitles[index] : clipping.chapterTitle;
+      const auto titleLines = chapter.empty()
+                                  ? std::vector<std::string>()
+                                  : renderer.wrappedText(UI_10_FONT_ID, chapter.c_str(), textWidth, MAX_TITLE_LINES,
+                                                       EpdFontFamily::BOLD);
+      const std::string fullText = displayText(clipping.text);
+      const auto textLines = renderer.wrappedText(UI_10_FONT_ID, fullText.c_str(), textWidth, MAX_TEXT_LINES);
+      for (const std::string& line : titleLines) {
         if (textY + lineHeight > contentBottom) break;
         renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str(), true, EpdFontFamily::BOLD);
         textY += lineHeight;
       }
-      if (!layout.titleLines.empty() && !layout.textLines.empty()) textY += metrics.verticalSpacing;
-      for (const std::string& line : layout.textLines) {
+      if (!titleLines.empty() && !textLines.empty()) textY += metrics.verticalSpacing;
+      for (const std::string& line : textLines) {
         if (textY + lineHeight > contentBottom) break;
         renderer.drawText(UI_10_FONT_ID, textX, textY, line.c_str());
         textY += lineHeight;

@@ -177,9 +177,10 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
       const int x = buttonPositions[i];
       renderer.fillRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, false);
       renderer.drawRect(x, pageHeight - buttonY, buttonWidth, buttonHeight);
-      const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, labels[i]);
+      const std::string label = renderer.truncatedText(UI_10_FONT_ID, labels[i], buttonWidth - 8);
+      const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
       const int textX = x + (buttonWidth - 1 - textWidth) / 2;
-      renderer.drawText(UI_10_FONT_ID, textX, pageHeight - buttonY + textYOffset, labels[i]);
+      renderer.drawText(UI_10_FONT_ID, textX, pageHeight - buttonY + textYOffset, label.c_str());
     }
   }
 

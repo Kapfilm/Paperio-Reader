@@ -71,6 +71,10 @@ class WifiSelectionActivity final : public Activity {
   // Whether to attempt auto-connect on entry
   const bool allowAutoConnect;
 
+  // Standalone settings flow has no parent activity to tear WiFi down after this
+  // screen closes. Other callers keep WiFi alive for the operation that follows.
+  const bool shutdownWifiOnExit;
+
   // Whether we are attempting to auto-connect
   bool autoConnecting = false;
 
@@ -136,8 +140,11 @@ class WifiSelectionActivity final : public Activity {
   void onComplete(bool connected);
 
  public:
-  explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true)
-      : Activity("WifiSelection", renderer, mappedInput), allowAutoConnect(autoConnect) {}
+  explicit WifiSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool autoConnect = true,
+                                 bool shutdownOnExit = false)
+      : Activity("WifiSelection", renderer, mappedInput),
+        allowAutoConnect(autoConnect),
+        shutdownWifiOnExit(shutdownOnExit) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

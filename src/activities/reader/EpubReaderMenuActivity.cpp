@@ -6,6 +6,7 @@
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "SdCardFontGlobals.h"
+#include "activities/SliderPickerActivity.h"
 #include "activities/settings/SettingsSubmenuActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -62,7 +63,8 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const int totalPages, const int bookProgressPercent, const uint8_t currentOrientation, const bool hasFootnotes,
     const int8_t initialEmbeddedStyleOverride, const int8_t initialImageRenderingOverride,
     const int8_t initialFontFamilyOverride, const std::string& initialSdFontFamilyOverride,
-    const int8_t initialFontSizeOverride, const uint8_t initialTextDarkness, const bool initialBionicReadingOverride,
+    const int8_t initialFontSizeOverride, const int16_t initialLineHeightPercentOverride,
+    const uint8_t initialTextDarkness, const bool initialBionicReadingOverride,
     const int8_t initialGuideDotsOverride, const int8_t initialParagraphAlignmentOverride,
     const int8_t initialTextAntiAliasingOverride, const int8_t initialHyphenationOverride,
     const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages, const bool isCurrentPageStarred,
@@ -75,6 +77,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
       pendingFontFamilyOverride(initialFontFamilyOverride),
       pendingSdFontFamilyOverride(initialSdFontFamilyOverride),
       pendingFontSizeOverride(initialFontSizeOverride),
+      pendingLineHeightPercentOverride(initialLineHeightPercentOverride),
       pendingTextDarkness(initialTextDarkness),
       pendingBionicReading(initialBionicReadingOverride),
       pendingGuideDotsOverride(initialGuideDotsOverride),
@@ -166,7 +169,7 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
 
   // Reader font family: default + built-ins + discovered SD families.
   {
-    std::vector<StrId> values = {StrId::STR_DEFAULT_VALUE, StrId::STR_BOOKERLY, StrId::STR_NOTO_SANS};
+    std::vector<StrId> values = {StrId::STR_DEFAULT_VALUE, StrId::STR_NOTO_SANS};
     const auto& families = sdFontSystem.registry().getFamilies();
     values.insert(values.end(), families.size(), StrId::STR_NONE_OPT);
 
@@ -214,18 +217,18 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                              .withSubmenu(StrId::STR_READER_OVERRIDES)
                              .withSelectorActivity();
 
-    familySetting.enumLabels = {tr(STR_DEFAULT_VALUE), tr(STR_BOOKERLY), tr(STR_NOTO_SANS)};
+    familySetting.enumLabels = {tr(STR_DEFAULT_VALUE), tr(STR_NOTO_SANS)};
     for (const auto& fam : families) {
       familySetting.enumLabels.push_back(fam.name);
     }
     menuItems.push_back(std::move(familySetting));
   }
 
-  // Reader font size: cycles default(-1) -> Small(0) -> Medium(1) -> Large(2) -> X Large(3) -> Tiny(4)
+  // Reader font size: default plus every globally available built-in size.
   menuItems.push_back(SettingInfo::DynamicEnumCtx(
                           StrId::STR_FONT_SIZE,
                           {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE,
-                           StrId::STR_X_LARGE, StrId::STR_TINY},
+                           StrId::STR_X_LARGE},
                           self,
                           [](const void* ctx) -> uint8_t {
                             const auto* s = static_cast<const EpubReaderMenuActivity*>(ctx);
@@ -239,6 +242,9 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                           })
                           .withSubmenu(StrId::STR_READER_OVERRIDES)
                           .withSelectorActivity());
+
+  menuItems.push_back(
+      SettingInfo::Action(StrId::STR_LINE_SPACING, SettingAction::None).withSubmenu(StrId::STR_READER_OVERRIDES));
 
   // Text darkness: straightforward 0-3 cycle
   menuItems.push_back(
@@ -448,6 +454,7 @@ void EpubReaderMenuActivity::finishWithAction(MenuAction action) {
   // Appended after the file-browser fields, so set by name rather than position.
   payload.guideDotsOverride = pendingGuideDotsOverride;
   payload.inlineFootnotePreviewsOverride = pendingInlineFootnotePreviewsOverride;
+  payload.lineHeightPercentOverride = pendingLineHeightPercentOverride;
   setResult(std::move(payload));
   finish();
 }
@@ -490,6 +497,7 @@ void EpubReaderMenuActivity::onBackPressed() {
   // Appended after the file-browser fields, so set by name rather than position.
   payload.guideDotsOverride = pendingGuideDotsOverride;
   payload.inlineFootnotePreviewsOverride = pendingInlineFootnotePreviewsOverride;
+  payload.lineHeightPercentOverride = pendingLineHeightPercentOverride;
   result.data = std::move(payload);
   setResult(std::move(result));
   finish();
@@ -507,6 +515,13 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
   // Star page: reflect current page's star state
   if (item.nameId == StrId::STR_STAR_PAGE) {
     return currentPageStarred ? std::string(tr(STR_STATE_ON)) : std::string(tr(STR_STATE_OFF));
+  }
+
+  if (item.nameId == StrId::STR_LINE_SPACING) {
+    if (pendingLineHeightPercentOverride < 0) {
+      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + std::to_string(SETTINGS.lineHeightPercent) + "%)";
+    }
+    return std::to_string(pendingLineHeightPercentOverride) + "%";
   }
 
   if (item.type == SettingType::ACTION) {
@@ -573,6 +588,15 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
   if (it == submenuData.end()) return;
 
   auto itemValueStringOverride = [this](const SettingInfo& item) -> std::string {
+    if (item.nameId == StrId::STR_LINE_SPACING) {
+      if (pendingLineHeightPercentOverride < 0) {
+        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + std::to_string(SETTINGS.lineHeightPercent) + "%)";
+      }
+      return std::to_string(pendingLineHeightPercentOverride) + "%";
+    }
+    if (item.type == SettingType::ACTION && item.action != SettingAction::Submenu) {
+      return {};
+    }
     if (item.nameId == StrId::STR_EMBEDDED_STYLE && pendingEmbeddedStyleOverride < 0) {
       const auto defaultEffective = (SETTINGS.embeddedStyle != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
       return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
@@ -636,12 +660,46 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
                                  }
                                }
                                if (menuResult->nameId != -1) {
+                                 if (static_cast<StrId>(menuResult->nameId) == StrId::STR_LINE_SPACING) {
+                                   openLineHeightOverridePicker();
+                                   return;
+                                 }
                                  const auto action = actionForNameId(static_cast<StrId>(menuResult->nameId));
                                  if (action != MenuAction::NONE) {
                                    finishWithAction(action);
                                    return;
                                  }
                                }
+                             }
+                           }
+                           requestUpdate();
+                         });
+}
+
+void EpubReaderMenuActivity::openLineHeightOverridePicker() {
+  constexpr int kDefaultSentinel = CrossPointSettings::MIN_LINE_HEIGHT_PERCENT - 1;
+  const int initialValue =
+      pendingLineHeightPercentOverride < 0 ? kDefaultSentinel : pendingLineHeightPercentOverride;
+  SliderPickerActivity::Config cfg{
+      .titleId = StrId::STR_LINE_SPACING,
+      .hintId = StrId::STR_SLIDER_STEP_HINT,
+      .minValue = kDefaultSentinel,
+      .maxValue = CrossPointSettings::MAX_LINE_HEIGHT_PERCENT,
+      .initialValue = initialValue,
+      .suffix = "%",
+      .zeroLabel = std::string(tr(STR_DEFAULT_VALUE)) + " (" + std::to_string(SETTINGS.lineHeightPercent) + "%)",
+      .showButtonStepHints = true,
+      .firstNumericValue = CrossPointSettings::MIN_LINE_HEIGHT_PERCENT,
+  };
+  startActivityForResult(std::make_unique<SliderPickerActivity>(renderer, mappedInput, std::move(cfg)),
+                         [this](const ActivityResult& result) {
+                           if (!result.isCancelled) {
+                             const auto* selected = std::get_if<PercentResult>(&result.data);
+                             if (selected) {
+                               pendingLineHeightPercentOverride =
+                                   selected->percent < CrossPointSettings::MIN_LINE_HEIGHT_PERCENT
+                                       ? -1
+                                       : static_cast<int16_t>(selected->percent);
                              }
                            }
                            requestUpdate();

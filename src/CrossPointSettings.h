@@ -100,11 +100,11 @@ class CrossPointSettings {
   };
 
   // Font family options (built-in fonts only; SD card fonts use sdFontFamilyName)
-  enum FONT_FAMILY { BOOKERLY = 0, NOTOSANS = 1, FONT_FAMILY_COUNT };
+  enum FONT_FAMILY { NOTOSANS = 0, FONT_FAMILY_COUNT };
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
   // Font size options
-  enum FONT_SIZE { SMALL = 0, MEDIUM = 1, LARGE = 2, EXTRA_LARGE = 3, TINY = 4, FONT_SIZE_COUNT };
-  enum LINE_COMPRESSION { TIGHT = 0, NORMAL = 1, WIDE = 2, LINE_COMPRESSION_COUNT };
+  enum FONT_SIZE { SMALL = 0, MEDIUM = 1, LARGE = 2, EXTRA_LARGE = 3, FONT_SIZE_COUNT };
+  enum LINE_COMPRESSION { TIGHT = 0, NORMAL = 1, WIDE = 2, MAX_SPACING = 3, LINE_COMPRESSION_COUNT };
   enum PARAGRAPH_ALIGNMENT {
     JUSTIFIED = 0,
     LEFT_ALIGN = 1,
@@ -257,7 +257,7 @@ class CrossPointSettings {
   uint8_t frontButtonLeft = FRONT_HW_LEFT;
   uint8_t frontButtonRight = FRONT_HW_RIGHT;
   // Reader font settings (EPUB)
-  uint8_t fontFamily = BOOKERLY;
+  uint8_t fontFamily = NOTOSANS;
   // SD card font family name (empty = use built-in fontFamily)
   char sdFontFamilyName[32] = "";
   uint8_t fontSize = MEDIUM;
@@ -265,7 +265,8 @@ class CrossPointSettings {
   uint8_t txtFontFamily = NOTOSANS;
   char txtSdFontFamilyName[32] = "";
   uint8_t txtFontSize = MEDIUM;
-  uint8_t lineSpacing = NORMAL;
+  uint8_t lineSpacing = NORMAL;  // migration only; new saves use lineHeightPercent
+  uint8_t lineHeightPercent = 95;
   uint8_t paragraphAlignment = JUSTIFIED;
   // Legacy enum fields — kept for JSON migration only; not used at runtime.
   uint8_t sleepTimeout = SLEEP_10_MIN;
@@ -432,7 +433,7 @@ class CrossPointSettings {
   static int getBuiltinReaderFontId(uint8_t family, uint8_t size);
   // Heading sizing: return the built-in fontId `stepUp` sizes taller than `size` for
   // `family`, clamped at the largest size. Steps walk the ascending-pixel ladder
-  // (TINY<SMALL<MEDIUM<LARGE<EXTRA_LARGE), not the FONT_SIZE enum order. `actualStep`
+  // in ascending display size. `actualStep`
   // (out) receives how many steps were actually taken before the cap (so the caller can
   // compute a residual multiplier when clamped). Returns 0 for unknown families.
   static int getTallerBuiltinReaderFontId(uint8_t family, uint8_t size, uint8_t stepUp, uint8_t* actualStep = nullptr);
@@ -448,6 +449,11 @@ class CrossPointSettings {
   // quickResumeSleepScreen=ON). Call after any setting mutation that could invalidate the pair.
   static void normalizeDependentSettings(CrossPointSettings& settings);
 
+  static constexpr uint8_t MIN_LINE_HEIGHT_PERCENT = 70;
+  static constexpr uint8_t MAX_LINE_HEIGHT_PERCENT = 200;
+  static constexpr uint8_t LINE_HEIGHT_PERCENT_STEP = 1;
+  static uint8_t legacyLineSpacingToPercent(uint8_t legacyValue, bool sdFontSelected);
+  static uint8_t clampedLineHeightPercent(uint8_t value);
   float getReaderLineCompression() const;
   unsigned long getSleepTimeoutMs() const;
   int getRefreshFrequency() const;

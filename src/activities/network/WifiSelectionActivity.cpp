@@ -143,9 +143,12 @@ void WifiSelectionActivity::onExit() {
   WiFi.scanDelete();
   LOG_DBG("WIFI", "Free heap after scanDelete: %d bytes", ESP.getFreeHeap());
 
-  // Note: We do NOT disconnect WiFi here - the parent activity
-  // (CrossPointWebServerActivity) manages WiFi connection state. We just clean
-  // up the scan and task.
+  if (shutdownWifiOnExit && WiFi.getMode() != WIFI_MODE_NULL) {
+    LOG_DBG("WIFI", "Standalone selector exit: shutting WiFi down...");
+    WiFi.disconnect(true, false);
+    WiFi.mode(WIFI_OFF);
+    LOG_DBG("WIFI", "Free heap after WiFi shutdown: %d bytes", ESP.getFreeHeap());
+  }
 
   LOG_DBG("WIFI", "Free heap at onExit end: %d bytes", ESP.getFreeHeap());
 }

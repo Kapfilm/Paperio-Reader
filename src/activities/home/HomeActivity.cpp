@@ -936,7 +936,7 @@ void HomeActivity::render(RenderLock&&) {
         coverBufferStored, bufferRestored, std::bind(&HomeActivity::storeCoverBuffer, this));
 
     const auto labels =
-        mappedInput.mapLabels(tr(STR_MENU), tr(STR_BROWSE), tr(STR_SETTINGS_TITLE),
+        mappedInput.mapLabels(tr(STR_MENU), tr(STR_BROWSE), tr(STR_BUTTON_SETTINGS),
                               recentBooks.empty() ? "" : tr(STR_READ));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();

@@ -63,45 +63,7 @@ FontDecompressor fontDecompressor;
 SdCardFontSystem sdFontSystem;
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts());
 
-// Fonts
-EpdFont bookerly14RegularFont(&bookerly_14_regular);
-EpdFont bookerly14BoldFont(&bookerly_14_bold);
-EpdFont bookerly14ItalicFont(&bookerly_14_italic);
-EpdFont bookerly14BoldItalicFont(&bookerly_14_bolditalic);
-EpdFontFamily bookerly14FontFamily(&bookerly14RegularFont, &bookerly14BoldFont, &bookerly14ItalicFont,
-                                   &bookerly14BoldItalicFont);
-#ifndef OMIT_FONTS
-EpdFont bookerly10RegularFont(&bookerly_10_regular);
-EpdFont bookerly10BoldFont(&bookerly_10_bold);
-EpdFont bookerly10ItalicFont(&bookerly_10_italic);
-EpdFont bookerly10BoldItalicFont(&bookerly_10_bolditalic);
-EpdFontFamily bookerly10FontFamily(&bookerly10RegularFont, &bookerly10BoldFont, &bookerly10ItalicFont,
-                                   &bookerly10BoldItalicFont);
-EpdFont bookerly12RegularFont(&bookerly_12_regular);
-EpdFont bookerly12BoldFont(&bookerly_12_bold);
-EpdFont bookerly12ItalicFont(&bookerly_12_italic);
-EpdFont bookerly12BoldItalicFont(&bookerly_12_bolditalic);
-EpdFontFamily bookerly12FontFamily(&bookerly12RegularFont, &bookerly12BoldFont, &bookerly12ItalicFont,
-                                   &bookerly12BoldItalicFont);
-EpdFont bookerly16RegularFont(&bookerly_16_regular);
-EpdFont bookerly16BoldFont(&bookerly_16_bold);
-EpdFont bookerly16ItalicFont(&bookerly_16_italic);
-EpdFont bookerly16BoldItalicFont(&bookerly_16_bolditalic);
-EpdFontFamily bookerly16FontFamily(&bookerly16RegularFont, &bookerly16BoldFont, &bookerly16ItalicFont,
-                                   &bookerly16BoldItalicFont);
-EpdFont bookerly18RegularFont(&bookerly_18_regular);
-EpdFont bookerly18BoldFont(&bookerly_18_bold);
-EpdFont bookerly18ItalicFont(&bookerly_18_italic);
-EpdFont bookerly18BoldItalicFont(&bookerly_18_bolditalic);
-EpdFontFamily bookerly18FontFamily(&bookerly18RegularFont, &bookerly18BoldFont, &bookerly18ItalicFont,
-                                   &bookerly18BoldItalicFont);
-
-EpdFont notosans10RegularFont(&notosans_10_regular);
-EpdFont notosans10BoldFont(&notosans_10_bold);
-EpdFont notosans10ItalicFont(&notosans_10_italic);
-EpdFont notosans10BoldItalicFont(&notosans_10_bolditalic);
-EpdFontFamily notosans10FontFamily(&notosans10RegularFont, &notosans10BoldFont, &notosans10ItalicFont,
-                                   &notosans10BoldItalicFont);
+// Reader font: Noto Sans in the four supported reading sizes.
 EpdFont notosans12RegularFont(&notosans_12_regular);
 EpdFont notosans12BoldFont(&notosans_12_bold);
 EpdFont notosans12ItalicFont(&notosans_12_italic);
@@ -126,8 +88,6 @@ EpdFont notosans18ItalicFont(&notosans_18_italic);
 EpdFont notosans18BoldItalicFont(&notosans_18_bolditalic);
 EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, &notosans18ItalicFont,
                                    &notosans18BoldItalicFont);
-
-#endif  // OMIT_FONTS
 
 EpdFont smallFont(&notosans_8_regular);
 EpdFontFamily smallFontFamily(&smallFont);
@@ -398,19 +358,10 @@ void setupDisplayAndFonts(bool seamless = false, bool skipSdFontDiscovery = fals
   }
   fontCacheManager.setFontDecompressor(&fontDecompressor);
   renderer.setFontCacheManager(&fontCacheManager);
-  renderer.insertFont(BOOKERLY_14_FONT_ID, bookerly14FontFamily);
-#ifndef OMIT_FONTS
-  renderer.insertFont(BOOKERLY_10_FONT_ID, bookerly10FontFamily);
-  renderer.insertFont(BOOKERLY_12_FONT_ID, bookerly12FontFamily);
-  renderer.insertFont(BOOKERLY_16_FONT_ID, bookerly16FontFamily);
-  renderer.insertFont(BOOKERLY_18_FONT_ID, bookerly18FontFamily);
-
-  renderer.insertFont(NOTOSANS_10_FONT_ID, notosans10FontFamily);
   renderer.insertFont(NOTOSANS_12_FONT_ID, notosans12FontFamily);
   renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
-#endif  // OMIT_FONTS
   renderer.insertFont(UI_10_FONT_ID, ui10FontFamily);
   renderer.insertFont(UI_12_FONT_ID, ui12FontFamily);
   renderer.insertFont(SMALL_FONT_ID, smallFontFamily);

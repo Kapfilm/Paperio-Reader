@@ -5,18 +5,7 @@ set -e
 cd "$(dirname "$0")"
 
 READER_FONT_STYLES=("Regular" "Italic" "Bold" "BoldItalic")
-BOOKERLY_FONT_SIZES=(10 12 14 16 18)
-NOTOSANS_FONT_SIZES=(10 12 14 16 18)
-
-for size in ${BOOKERLY_FONT_SIZES[@]}; do
-  for style in ${READER_FONT_STYLES[@]}; do
-    font_name="bookerly_${size}_$(echo $style | tr '[:upper:]' '[:lower:]')"
-    font_path="../builtinFonts/source/Bookerly/Bookerly-${style}.ttf"
-    output_path="../builtinFonts/${font_name}.h"
-    python fontconvert.py $font_name $size $font_path --2bit --compress --zopfli > $output_path
-    echo "Generated $output_path"
-  done
-done
+NOTOSANS_FONT_SIZES=(12 14 16 18)
 
 for size in ${NOTOSANS_FONT_SIZES[@]}; do
   for style in ${READER_FONT_STYLES[@]}; do

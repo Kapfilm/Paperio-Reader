@@ -14,16 +14,10 @@
 // Font ID 0 is reserved as the SD card font "not found" sentinel
 // (SdCardFontManager::computeFontId() never returns 0). Guard against any
 // hash accidentally producing 0 — would cause silent fallback to built-in.
-static_assert(BOOKERLY_12_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(BOOKERLY_14_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(BOOKERLY_16_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(BOOKERLY_18_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(BOOKERLY_10_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(NOTOSANS_12_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(NOTOSANS_14_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(NOTOSANS_16_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(NOTOSANS_18_FONT_ID != 0, "Font ID collision with sentinel");
-static_assert(NOTOSANS_10_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(UI_10_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(UI_12_FONT_ID != 0, "Font ID collision with sentinel");
 static_assert(SMALL_FONT_ID != 0, "Font ID collision with sentinel");
@@ -114,32 +108,42 @@ bool CrossPointSettings::loadFromFile() {
   return false;
 }
 
-float CrossPointSettings::getReaderLineCompression() const {
-  const int effectiveFontId = getReaderFontId();
-  const int notosansId = getBuiltinReaderFontId(NOTOSANS, fontSize);
-
-  if (effectiveFontId == notosansId) {
-    switch (lineSpacing) {
+uint8_t CrossPointSettings::legacyLineSpacingToPercent(const uint8_t legacyValue, const bool sdFontSelected) {
+  if (sdFontSelected) {
+    switch (legacyValue) {
       case TIGHT:
-        return 0.90f;
+        return 95;
+      case WIDE:
+        return 110;
+      case MAX_SPACING:
+        return 115;
       case NORMAL:
       default:
-        return 0.95f;
-      case WIDE:
-        return 1.0f;
+        return 100;
     }
   }
 
-  // Bookerly or any SD card font: use the Bookerly-style neutral values.
-  switch (lineSpacing) {
+  switch (legacyValue) {
     case TIGHT:
-      return 0.95f;
+      return 90;
+    case WIDE:
+      return 100;
+    case MAX_SPACING:
+      return 104;
     case NORMAL:
     default:
-      return 1.0f;
-    case WIDE:
-      return 1.1f;
+      return 95;
   }
+}
+
+uint8_t CrossPointSettings::clampedLineHeightPercent(const uint8_t value) {
+  if (value < MIN_LINE_HEIGHT_PERCENT) return MIN_LINE_HEIGHT_PERCENT;
+  if (value > MAX_LINE_HEIGHT_PERCENT) return MAX_LINE_HEIGHT_PERCENT;
+  return value;
+}
+
+float CrossPointSettings::getReaderLineCompression() const {
+  return static_cast<float>(clampedLineHeightPercent(lineHeightPercent)) / 100.0f;
 }
 
 unsigned long CrossPointSettings::getSleepTimeoutMs() const {
@@ -149,45 +153,23 @@ unsigned long CrossPointSettings::getSleepTimeoutMs() const {
 
 int CrossPointSettings::getRefreshFrequency() const { return static_cast<int>(refreshFrequencyPages); }
 
-int CrossPointSettings::getBuiltinReaderFontId(uint8_t family, uint8_t size) {
-  switch (family) {
-    case BOOKERLY:
+int CrossPointSettings::getBuiltinReaderFontId(uint8_t /*family*/, uint8_t size) {
+  switch (size) {
+    case SMALL:
+      return NOTOSANS_12_FONT_ID;
+    case LARGE:
+      return NOTOSANS_16_FONT_ID;
+    case EXTRA_LARGE:
+      return NOTOSANS_18_FONT_ID;
+    case MEDIUM:
     default:
-      switch (size) {
-        case TINY:
-          return BOOKERLY_10_FONT_ID;
-        case SMALL:
-          return BOOKERLY_12_FONT_ID;
-        case MEDIUM:
-        default:
-          return BOOKERLY_14_FONT_ID;
-        case LARGE:
-          return BOOKERLY_16_FONT_ID;
-        case EXTRA_LARGE:
-          return BOOKERLY_18_FONT_ID;
-      }
-    case NOTOSANS:
-      switch (size) {
-        case TINY:
-          return NOTOSANS_10_FONT_ID;
-        case SMALL:
-          return NOTOSANS_12_FONT_ID;
-        case MEDIUM:
-        default:
-          return NOTOSANS_14_FONT_ID;
-        case LARGE:
-          return NOTOSANS_16_FONT_ID;
-        case EXTRA_LARGE:
-          return NOTOSANS_18_FONT_ID;
-      }
+      return NOTOSANS_14_FONT_ID;
   }
 }
 
 int CrossPointSettings::getTallerBuiltinReaderFontId(const uint8_t family, const uint8_t size, const uint8_t stepUp,
                                                      uint8_t* const actualStep) {
-  // Ascending pixel ladder (smallest -> largest). FONT_SIZE enum order is NOT pixel order
-  // (TINY=4), so step through this explicit table instead of enum arithmetic.
-  static constexpr uint8_t kLadder[] = {TINY, SMALL, MEDIUM, LARGE, EXTRA_LARGE};
+  static constexpr uint8_t kLadder[] = {SMALL, MEDIUM, LARGE, EXTRA_LARGE};
   constexpr int kLadderLen = static_cast<int>(sizeof(kLadder) / sizeof(kLadder[0]));
 
   int idx = -1;

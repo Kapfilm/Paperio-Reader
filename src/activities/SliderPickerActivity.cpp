@@ -3,6 +3,8 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
+#include <cstdio>
+
 #include "MappedInputManager.h"
 #include "activities/ActivityResult.h"
 #include "components/UITheme.h"
@@ -21,6 +23,18 @@ void SliderPickerActivity::onEnter() {
 void SliderPickerActivity::onExit() { Activity::onExit(); }
 
 void SliderPickerActivity::adjustValue(const int delta) {
+  if (cfg.firstNumericValue > cfg.minValue) {
+    if (value == cfg.minValue && delta > 0) {
+      value = cfg.firstNumericValue;
+      requestUpdate();
+      return;
+    }
+    if (value == cfg.firstNumericValue && delta < 0) {
+      value = cfg.minValue;
+      requestUpdate();
+      return;
+    }
+  }
   value += delta;
   if (value < cfg.minValue) value = cfg.minValue;
   if (value > cfg.maxValue) value = cfg.maxValue;
@@ -91,7 +105,15 @@ void SliderPickerActivity::render(RenderLock&&) {
   const int knobX = barX + 2 + fillWidth - 2;
   renderer.fillRect(knobX, barY - 4, 4, barHeight + 8, true);
 
-  renderer.drawCenteredText(SMALL_FONT_ID, barY + 30, I18N.get(cfg.hintId), true);
+  if (cfg.showButtonStepHints) {
+    char hint[64];
+    snprintf(hint, sizeof(hint), "%s: %d%%", tr(STR_STEP_HINT_FRONT), kSmallStep);
+    renderer.drawCenteredText(SMALL_FONT_ID, barY + 30, hint, true);
+    snprintf(hint, sizeof(hint), "%s: %d%%", tr(STR_STEP_HINT_SIDE), kLargeStep);
+    renderer.drawCenteredText(SMALL_FONT_ID, barY + 52, hint, true);
+  } else {
+    renderer.drawCenteredText(SMALL_FONT_ID, barY + 30, I18N.get(cfg.hintId), true);
+  }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "-", "+");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

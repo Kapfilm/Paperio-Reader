@@ -31,6 +31,8 @@ struct RecentBook {
   int8_t guideDotsOverride = -1;
   // -1 = use global default, otherwise explicit per-book override (0 = off, 1 = on).
   int8_t inlineFootnotePreviewsOverride = -1;
+  // -1 = use global setting, otherwise explicit 70-200 percent line height.
+  int16_t lineHeightPercentOverride = -1;
 
   bool operator==(const RecentBook& other) const { return path == other.path; }
 };
@@ -103,7 +105,7 @@ class RecentBooksStore {
                           int8_t fontFamilyOverride, const std::string& sdFontFamilyOverride, int8_t fontSizeOverride,
                           int8_t bionicReadingOverride, int8_t paragraphAlignmentOverride,
                           int8_t textAntiAliasingOverride, int8_t hyphenationOverride, int8_t guideDotsOverride,
-                          int8_t inlineFootnotePreviewsOverride);
+                          int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride);
 };
 
 // Helper macro to access recent books store

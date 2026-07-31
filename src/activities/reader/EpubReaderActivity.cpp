@@ -391,6 +391,7 @@ void EpubReaderActivity::onEnter() {
   bookFontFamilyOverride = currentBook.fontFamilyOverride;
   bookSdFontFamilyOverride = currentBook.sdFontFamilyOverride;
   bookFontSizeOverride = currentBook.fontSizeOverride;
+  bookLineHeightPercentOverride = currentBook.lineHeightPercentOverride;
   bookBionicReadingOverride = currentBook.bionicReadingOverride;
   bookParagraphAlignmentOverride = currentBook.paragraphAlignmentOverride;
   bookTextAntiAliasingOverride = currentBook.textAntiAliasingOverride;
@@ -1626,14 +1627,16 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
   applyBookReaderOverrides(embeddedStyleOverride, imageRenderingOverride, fontFamilyOverride, sdFontFamilyOverride,
                            fontSizeOverride, static_cast<int8_t>(bionicReadingOverride ? 1 : 0),
                            paragraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
-                           bookGuideDotsOverride, bookInlineFootnotePreviewsOverride);
+                           bookGuideDotsOverride, bookInlineFootnotePreviewsOverride,
+                           bookLineHeightPercentOverride);
 }
 
 void EpubReaderActivity::applyBookReaderOverrides(
     const int8_t embeddedStyleOverride, const int8_t imageRenderingOverride, const int8_t fontFamilyOverride,
     const std::string& sdFontFamilyOverride, const int8_t fontSizeOverride, const int8_t bionicReadingOverride,
     const int8_t paragraphAlignmentOverride, const int8_t textAntiAliasingOverride, const int8_t hyphenationOverride,
-    const int8_t guideDotsOverride, const int8_t inlineFootnotePreviewsOverride) {
+    const int8_t guideDotsOverride, const int8_t inlineFootnotePreviewsOverride,
+    const int16_t lineHeightPercentOverride) {
   if (!epub) {
     return;
   }
@@ -1657,7 +1660,8 @@ void EpubReaderActivity::applyBookReaderOverrides(
       bookBionicReadingOverride == bionicReadingOverride &&
       bookParagraphAlignmentOverride == paragraphAlignmentOverride &&
       bookTextAntiAliasingOverride == textAntiAliasingOverride && bookHyphenationOverride == hyphenationOverride &&
-      bookInlineFootnotePreviewsOverride == inlineFootnotePreviewsOverride;
+      bookInlineFootnotePreviewsOverride == inlineFootnotePreviewsOverride &&
+      bookLineHeightPercentOverride == lineHeightPercentOverride;
 
   if (layoutOverridesUnchanged && bookGuideDotsOverride == guideDotsOverride) {
     return;
@@ -1674,10 +1678,12 @@ void EpubReaderActivity::applyBookReaderOverrides(
   bookHyphenationOverride = hyphenationOverride;
   bookGuideDotsOverride = guideDotsOverride;
   bookInlineFootnotePreviewsOverride = inlineFootnotePreviewsOverride;
+  bookLineHeightPercentOverride = lineHeightPercentOverride;
   RECENT_BOOKS.setReaderOverrides(
       epub->getPath(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
       bookSdFontFamilyOverride, bookFontSizeOverride, bookBionicReadingOverride, bookParagraphAlignmentOverride,
-      bookTextAntiAliasingOverride, bookHyphenationOverride, bookGuideDotsOverride, bookInlineFootnotePreviewsOverride);
+      bookTextAntiAliasingOverride, bookHyphenationOverride, bookGuideDotsOverride, bookInlineFootnotePreviewsOverride,
+      bookLineHeightPercentOverride);
 
   if (layoutOverridesUnchanged) {
     // Only guide dots changed: persisted above, and the repaint on resume picks
@@ -1773,31 +1779,11 @@ uint8_t EpubReaderActivity::getEffectiveParagraphAlignment() const {
 }
 
 float EpubReaderActivity::getEffectiveReaderLineCompression() const {
-  const uint8_t fontSize = (bookFontSizeOverride >= 0) ? static_cast<uint8_t>(bookFontSizeOverride) : SETTINGS.fontSize;
-  const int effectiveFontId = getEffectiveReaderFontId();
-  const int notosansId = CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::NOTOSANS, fontSize);
-
-  if (effectiveFontId == notosansId) {
-    switch (SETTINGS.lineSpacing) {
-      case CrossPointSettings::TIGHT:
-        return 0.90f;
-      case CrossPointSettings::NORMAL:
-      default:
-        return 0.95f;
-      case CrossPointSettings::WIDE:
-        return 1.0f;
-    }
+  if (bookLineHeightPercentOverride >= CrossPointSettings::MIN_LINE_HEIGHT_PERCENT &&
+      bookLineHeightPercentOverride <= CrossPointSettings::MAX_LINE_HEIGHT_PERCENT) {
+    return static_cast<float>(bookLineHeightPercentOverride) / 100.0f;
   }
-
-  switch (SETTINGS.lineSpacing) {
-    case CrossPointSettings::TIGHT:
-      return 0.95f;
-    case CrossPointSettings::NORMAL:
-    default:
-      return 1.0f;
-    case CrossPointSettings::WIDE:
-      return 1.1f;
-  }
+  return SETTINGS.getReaderLineCompression();
 }
 
 int EpubReaderActivity::getEffectiveReaderFontId() const {
@@ -1837,11 +1823,10 @@ int EpubReaderActivity::getEffectiveReaderFontId() const {
 // four page slots. Two things changed since: FontCacheManager now prewarms per fontId, and
 // the parser caps sections at ONE auxiliary font (body R/B/I + aux R = exactly four slots).
 static FontSizeLadder buildReaderFontSizeLadder(const int bodyFontId) {
-  static constexpr uint8_t kSizeEnums[] = {CrossPointSettings::TINY, CrossPointSettings::SMALL,
-                                           CrossPointSettings::MEDIUM, CrossPointSettings::LARGE,
-                                           CrossPointSettings::EXTRA_LARGE};
-  static constexpr uint8_t kPointSizes[] = {10, 12, 14, 16, 18};
-  static constexpr uint8_t kFamilies[] = {CrossPointSettings::BOOKERLY, CrossPointSettings::NOTOSANS};
+  static constexpr uint8_t kSizeEnums[] = {CrossPointSettings::SMALL, CrossPointSettings::MEDIUM,
+                                           CrossPointSettings::LARGE};
+  static constexpr uint8_t kPointSizes[] = {12, 14, 16};
+  static constexpr uint8_t kFamilies[] = {CrossPointSettings::NOTOSANS};
 
   FontSizeLadder ladder;
   for (const uint8_t family : kFamilies) {
@@ -3929,33 +3914,11 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
   if (effectiveFontId == 0) {
     effectiveFontId = SETTINGS.getReaderFontId();
   }
-  const auto getEffectiveLineCompression = [&](int fontId) {
-    const int notosansId = CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::NOTOSANS, effectiveFontSize);
-
-    if (fontId == notosansId) {
-      switch (SETTINGS.lineSpacing) {
-        case CrossPointSettings::TIGHT:
-          return 0.90f;
-        case CrossPointSettings::NORMAL:
-        default:
-          return 0.95f;
-        case CrossPointSettings::WIDE:
-          return 1.0f;
-      }
-    }
-
-    switch (SETTINGS.lineSpacing) {
-      case CrossPointSettings::TIGHT:
-        return 0.95f;
-      case CrossPointSettings::NORMAL:
-      default:
-        return 1.0f;
-      case CrossPointSettings::WIDE:
-        return 1.1f;
-    }
-  };
-
-  const float effectiveLineCompression = getEffectiveLineCompression(effectiveFontId);
+  const float effectiveLineCompression =
+      currentBook.lineHeightPercentOverride >= CrossPointSettings::MIN_LINE_HEIGHT_PERCENT &&
+              currentBook.lineHeightPercentOverride <= CrossPointSettings::MAX_LINE_HEIGHT_PERCENT
+          ? static_cast<float>(currentBook.lineHeightPercentOverride) / 100.0f
+          : SETTINGS.getReaderLineCompression();
   auto section = std::make_unique<Section>(epub, spineIndex, renderer);
   if (!section->loadSectionFile(effectiveFontId, effectiveLineCompression, SETTINGS.extraParagraphSpacing,
                                 effectiveParagraphAlignment, viewportWidth, viewportHeight, effectiveHyphenation,
@@ -4005,7 +3968,7 @@ void EpubReaderActivity::openQuickOverrides() {
                                menu.sdFontFamilyOverride, menu.fontSizeOverride,
                                static_cast<int8_t>(menu.bionicReadingOverride), menu.paragraphAlignmentOverride,
                                menu.textAntiAliasingOverride, menu.hyphenationOverride, menu.guideDotsOverride,
-                               menu.inlineFootnotePreviewsOverride);
+                               menu.inlineFootnotePreviewsOverride, bookLineHeightPercentOverride);
                          });
 }
 
@@ -4246,7 +4209,8 @@ void EpubReaderActivity::openReaderMenu() {
       std::make_unique<EpubReaderMenuActivity>(
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !currentPageFootnotes.empty(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
-          bookSdFontFamilyOverride, bookFontSizeOverride, SETTINGS.textDarkness, getEffectiveBionicReading(),
+          bookSdFontFamilyOverride, bookFontSizeOverride, bookLineHeightPercentOverride, SETTINGS.textDarkness,
+          getEffectiveBionicReading(),
           bookGuideDotsOverride, bookParagraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
           bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages,
           !clippingStore.empty()),
@@ -4259,7 +4223,7 @@ void EpubReaderActivity::openReaderMenu() {
                                  menu.sdFontFamilyOverride, menu.fontSizeOverride,
                                  static_cast<bool>(menu.bionicReadingOverride), menu.paragraphAlignmentOverride,
                                  menu.textAntiAliasingOverride, menu.hyphenationOverride, menu.guideDotsOverride,
-                                 menu.inlineFootnotePreviewsOverride);
+                                 menu.inlineFootnotePreviewsOverride, menu.lineHeightPercentOverride);
         if (!result.isCancelled) {
           onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
         }

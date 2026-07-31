@@ -84,7 +84,7 @@ void QuickOverridesActivity::buildMenuItems() {
   // Font family: built-in only — preserves any SD-family override unless the user
   // explicitly picks a built-in (which clears it, matching the storage semantics).
   menuItems.push_back(SettingInfo::DynamicEnumCtx(
-      StrId::STR_FONT_FAMILY, {StrId::STR_DEFAULT_VALUE, StrId::STR_BOOKERLY, StrId::STR_NOTO_SANS}, self,
+      StrId::STR_FONT_FAMILY, {StrId::STR_DEFAULT_VALUE, StrId::STR_NOTO_SANS}, self,
       [](const void* ctx) -> uint8_t {
         const auto* s = static_cast<const QuickOverridesActivity*>(ctx);
         return (s->pendingFontFamilyOverride < 0) ? 0 : static_cast<uint8_t>(s->pendingFontFamilyOverride + 1);
@@ -99,11 +99,10 @@ void QuickOverridesActivity::buildMenuItems() {
         }
       }));
 
-  // Font size: default(-1) -> Small(0) -> Medium(1) -> Large(2) -> X Large(3) -> Tiny(4)
+  // Font size: default plus every globally available built-in size.
   menuItems.push_back(SettingInfo::DynamicEnumCtx(
       StrId::STR_FONT_SIZE,
-      {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE,
-       StrId::STR_TINY},
+      {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE},
       self,
       [](const void* ctx) -> uint8_t {
         const auto* s = static_cast<const QuickOverridesActivity*>(ctx);

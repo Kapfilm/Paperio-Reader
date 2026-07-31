@@ -279,8 +279,8 @@ TEST(WordSizeSerialization, EmptyBlockRoundTrips) {
 // ---------------------------------------------------------------------------
 
 namespace {
-// Bookerly body at 14 pt: rungs 10/12/14/16/18 pt as percent of the body.
-FontSizeLadder bookerly14Ladder() {
+// Synthetic five-rung ladder used to test nearest-size selection.
+FontSizeLadder fiveRungLadder() {
   FontSizeLadder ladder;
   ladder.addRung(101, 71);   // 10 pt
   ladder.addRung(102, 85);   // 12 pt
@@ -299,7 +299,7 @@ TEST(FontSizeLadderTest, EmptyLadderKeepsScaleFallback) {
 }
 
 TEST(FontSizeLadderTest, SnapsToNearestRungWithResidual) {
-  const auto ladder = bookerly14Ladder();
+  const auto ladder = fiveRungLadder();
   // h1 default 160% → nearest rung is 18 pt (128%), residual 160/128.
   const auto h1 = ladder.resolve(160.0f);
   EXPECT_EQ(h1.fontId, 105);
@@ -315,7 +315,7 @@ TEST(FontSizeLadderTest, SnapsToNearestRungWithResidual) {
 }
 
 TEST(FontSizeLadderTest, NearBodySizesStayOnBodyFont) {
-  const auto ladder = bookerly14Ladder();
+  const auto ladder = fiveRungLadder();
   // 105% is nearest the 100% body rung → fontId 0, pure scale (legacy path).
   const auto near = ladder.resolve(105.0f);
   EXPECT_EQ(near.fontId, 0);
@@ -323,7 +323,7 @@ TEST(FontSizeLadderTest, NearBodySizesStayOnBodyFont) {
 }
 
 TEST(FontSizeLadderTest, ResidualDeadZoneSnapsToNativeGlyphs) {
-  const auto ladder = bookerly14Ladder();
+  const auto ladder = fiveRungLadder();
   // 87% → 12 pt rung (85%), residual 1.024 — inside the 3% zone → native 12 pt.
   const auto near12 = ladder.resolve(87.0f);
   EXPECT_EQ(near12.fontId, 102);
