@@ -37,6 +37,8 @@ jobs:
           restore-keys: pio-${{ runner.os }}-
 
       - name: Build CrossPoint
+        env:
+          CROSSPOINT_RELEASE_VERSION: ${{ github.ref_name }}
         run: pio run -e gh_release
 
       - name: Patch min_chip_rev_full to 0

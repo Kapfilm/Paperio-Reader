@@ -1,8 +1,8 @@
 """
 PlatformIO pre-build script: inject Git metadata into preprocessor defines.
 
-- The default (dev) environment gets CROSSPOINT_VERSION with a branch suffix like:
-  1.1.0-dev+feat-koysnc-xpath
+- The default (dev) environment gets CROSSPOINT_VERSION with the configured fork
+  label, while gh_release gets the exact release tag supplied by CI/Git.
 - The gh_release_rc environment gets CROSSPOINT_VERSION with an RC tag from CI metadata
   when available, or a local fallback like: 1.1.0-rc+local
 - All environments get CROSSPOINT_GIT_REPOSITORY, resolved from an explicit
@@ -194,6 +194,26 @@ def normalize_semver_patch(version: str) -> str:
     return version
 
 
+def get_release_version(project_dir: str) -> str:
+    """Return the exact release version, preferring CI metadata and the HEAD tag."""
+    ci_version = os.environ.get('CROSSPOINT_RELEASE_VERSION', '').strip()
+    if ci_version:
+        return ci_version
+
+    try:
+        tagged_version = run_git_command(
+            'describe', '--tags', '--exact-match', 'HEAD', project_dir=project_dir
+        )
+        if tagged_version:
+            return tagged_version
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    base_version = normalize_semver_patch(get_base_version(project_dir))
+    build_label = get_build_label(project_dir)
+    return f'{base_version}-{build_label}' if build_label else base_version
+
+
 def inject_version(env):
     project_dir = env['PROJECT_DIR']
     git_repository = get_git_repository(project_dir)
@@ -218,8 +238,15 @@ def inject_version(env):
         print(f'CrossPoint build version: {version_string}')
         return
 
-    # Only applies to the dev (default) environment; release envs set the
-    # version via build_flags in platformio.ini and are unaffected.
+    # Stable releases must report the same version as their GitHub tag. This
+    # avoids publishing a new OTA asset with a stale version from platformio.ini.
+    if env['PIOENV'] == 'gh_release':
+        version_string = get_release_version(project_dir)
+        env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
+        print(f'CrossPoint build version: {version_string}')
+        return
+
+    # Only applies to the dev (default) environment.
     if env['PIOENV'] != 'default':
         return
 
