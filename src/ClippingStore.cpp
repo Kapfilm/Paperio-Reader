@@ -5,6 +5,7 @@
 #include <Logging.h>
 #include <Serialization.h>
 #include <Utf8.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -43,9 +44,8 @@ bool readStringChecked(FsFile& file, std::string& value) {
 
 bool writeStringChecked(FsFile& file, const std::string& value) {
   const uint32_t length = static_cast<uint32_t>(value.size());
-  return writePodChecked(file, length) &&
-         (length == 0 ||
-          file.write(reinterpret_cast<const uint8_t*>(value.data()), length) == static_cast<size_t>(length));
+  return writePodChecked(file, length) && (length == 0 || file.write(reinterpret_cast<const uint8_t*>(value.data()),
+                                                                     length) == static_cast<size_t>(length));
 }
 }  // namespace
 
@@ -67,10 +67,12 @@ void ClippingStore::unload() {
   storeFilePath.clear();
 }
 
-ClippingStore::AddResult ClippingStore::addClipping(
-    const uint16_t spineIndex, const uint16_t startPage, const uint16_t endPage, const uint16_t pageCount,
-    const uint16_t startWordIndex, const uint16_t endWordIndex, const uint16_t wordCount, const char* chapterTitle,
-    const uint16_t paragraphIndex, const std::string& text, const ClippingHighlightStyle highlightStyle) {
+ClippingStore::AddResult ClippingStore::addClipping(const uint16_t spineIndex, const uint16_t startPage,
+                                                    const uint16_t endPage, const uint16_t pageCount,
+                                                    const uint16_t startWordIndex, const uint16_t endWordIndex,
+                                                    const uint16_t wordCount, const char* chapterTitle,
+                                                    const uint16_t paragraphIndex, const std::string& text,
+                                                    const ClippingHighlightStyle highlightStyle) {
   if (clippings.size() >= CLIPPING_MAX_PER_BOOK) return AddResult::LimitReached;
 
   Clipping clipping;
@@ -214,8 +216,7 @@ bool ClippingStore::writeToFile() const {
          writePodChecked(file, clipping.startWordIndex) && writePodChecked(file, clipping.endWordIndex) &&
          writePodChecked(file, clipping.wordCount) && writePodChecked(file, clipping.paragraphIndex) &&
          writePodChecked(file, clipping.timestamp) && writePodChecked(file, highlightStyle) &&
-         writeStringChecked(file, clipping.chapterTitle) &&
-         writeStringChecked(file, clipping.text);
+         writeStringChecked(file, clipping.chapterTitle) && writeStringChecked(file, clipping.text);
     if (!ok) break;
   }
   if (ok) file.flush();

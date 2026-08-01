@@ -936,9 +936,9 @@ void HomeActivity::render(RenderLock&&) {
     coverRectY = metrics.homeTopPadding;
     coverRectW = contentRect.width;
     coverRectH = std::min(metrics.homeCoverTileHeight, contentRect.height - metrics.homeTopPadding);
-    GUI.drawRecentBookCover(
-        renderer, Rect{coverRectX, coverRectY, coverRectW, coverRectH}, recentBooks, 0, coverRendered,
-        coverBufferStored, bufferRestored, std::bind(&HomeActivity::storeCoverBuffer, this));
+    GUI.drawRecentBookCover(renderer, Rect{coverRectX, coverRectY, coverRectW, coverRectH}, recentBooks, 0,
+                            coverRendered, coverBufferStored, bufferRestored,
+                            std::bind(&HomeActivity::storeCoverBuffer, this));
 
     const auto labels = mappedInput.mapLabels(tr(STR_MENU), tr(STR_BOOKS), tr(STR_BUTTON_SETTINGS),
                                               recentBooks.empty() ? "" : tr(STR_READ));

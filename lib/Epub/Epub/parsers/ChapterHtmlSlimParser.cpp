@@ -634,9 +634,8 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   }
   // TOC chapter boundaries and footnote destinations start on a fresh rendered page.
   // Flush the previous block first so the anchor maps to the new page, not its predecessor.
-  if (!pendingAnchorId.empty() &&
-      (pendingAnchorStartsPage ||
-       std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end())) {
+  if (!pendingAnchorId.empty() && (pendingAnchorStartsPage || std::find(tocAnchors.begin(), tocAnchors.end(),
+                                                                        pendingAnchorId) != tocAnchors.end())) {
     if (currentPage && !currentPage->elements.empty()) {
       emitPage(lastBodyChildByteOffset);
     }
@@ -715,8 +714,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       } else if (strcmp(atts[i], "epub:type") == 0) {
         isPageBreakMarker = isPageBreakMarker || hasAttributeToken(atts[i + 1], "pagebreak");
         isSemanticFootnote = isSemanticFootnote || hasAttributeToken(atts[i + 1], "footnote") ||
-                             hasAttributeToken(atts[i + 1], "endnote") ||
-                             hasAttributeToken(atts[i + 1], "rearnote");
+                             hasAttributeToken(atts[i + 1], "endnote") || hasAttributeToken(atts[i + 1], "rearnote");
       }
     }
   }
@@ -733,9 +731,8 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   const bool isFootnoteContainer = isSemanticFootnote || hasAttributeToken(classAttr.c_str(), "footnote") ||
                                    hasAttributeToken(classAttr.c_str(), "endnote") ||
                                    hasAttributeToken(classAttr.c_str(), "rearnote");
-  const bool isFootnoteDestination = !navigationAnchor.empty() &&
-                                     (isGatheredFootnoteTarget || isFootnoteContainer ||
-                                      looksLikeFootnoteAnchor(navigationAnchor));
+  const bool isFootnoteDestination = !navigationAnchor.empty() && (isGatheredFootnoteTarget || isFootnoteContainer ||
+                                                                   looksLikeFootnoteAnchor(navigationAnchor));
 
   // Emit any "top-of-file" printed-page label as soon as we see real markup. NCX entries
   // without a fragment refer to the start of this XHTML; record now so the label lands on
@@ -782,8 +779,8 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   if (!isPageBreakMarker && !navigationAnchor.empty()) {
     const bool isTocAnchor =
         std::find(self->tocAnchors.begin(), self->tocAnchors.end(), navigationAnchor) != self->tocAnchors.end();
-    const bool keepInlineAnchor = !isNonNavigableInlineElement(name) || isGatheredFootnoteTarget ||
-                                  looksLikeFootnoteAnchor(navigationAnchor);
+    const bool keepInlineAnchor =
+        !isNonNavigableInlineElement(name) || isGatheredFootnoteTarget || looksLikeFootnoteAnchor(navigationAnchor);
     if (isTocAnchor || (keepInlineAnchor && self->anchorData.size() < MAX_ANCHORS_PER_CHAPTER)) {
       self->pendingAnchorId = std::move(navigationAnchor);
       self->pendingAnchorStartsPage = isFootnoteDestination;

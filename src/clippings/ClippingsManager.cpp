@@ -22,10 +22,9 @@ bool appendKindleExport(const std::string& bookTitle, const std::string& author,
   if (!chapterTitle.empty()) header += " | " + chapterTitle;
   header += " | Page " + std::to_string(page) + "\n\n";
   const size_t textLength = std::min(text.size(), MAX_EXPORT_TEXT);
-  const bool ok =
-      file.write(reinterpret_cast<const uint8_t*>(header.data()), header.size()) == header.size() &&
-      file.write(reinterpret_cast<const uint8_t*>(text.data()), textLength) == textLength &&
-      file.write(reinterpret_cast<const uint8_t*>("\n==========\n"), 12) == 12;
+  const bool ok = file.write(reinterpret_cast<const uint8_t*>(header.data()), header.size()) == header.size() &&
+                  file.write(reinterpret_cast<const uint8_t*>(text.data()), textLength) == textLength &&
+                  file.write(reinterpret_cast<const uint8_t*>("\n==========\n"), 12) == 12;
   if (ok) file.flush();
   file.close();
   return ok;

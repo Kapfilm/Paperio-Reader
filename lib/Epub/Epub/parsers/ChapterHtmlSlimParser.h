@@ -174,7 +174,7 @@ class ChapterHtmlSlimParser final : public Print {
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
-  std::string pendingAnchorId;  // deferred until after previous text block is flushed
+  std::string pendingAnchorId;           // deferred until after previous text block is flushed
   bool pendingAnchorStartsPage = false;  // footnote destinations begin at viewport top
   std::vector<std::string> tocAnchors;
 

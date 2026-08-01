@@ -617,8 +617,7 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
   const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
   const GridGeometry geometry = gridGeometry(renderer);
   const int visibleRows = geometry.visibleRows;
-  const int totalRows =
-      (static_cast<int>(recentBooks.size()) + geometry.columns - 1) / geometry.columns;
+  const int totalRows = (static_cast<int>(recentBooks.size()) + geometry.columns - 1) / geometry.columns;
   const int selectedRow = selectorIndex / geometry.columns;
   const int pageStartRow = (selectedRow / visibleRows) * visibleRows;
   const int startIndex = pageStartRow * geometry.columns;
@@ -672,8 +671,7 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
     return;
   }
 
-  const int endIndex =
-      std::min(startIndex + visibleRows * geometry.columns, static_cast<int>(recentBooks.size()));
+  const int endIndex = std::min(startIndex + visibleRows * geometry.columns, static_cast<int>(recentBooks.size()));
   LOG_DBG("RBA", "Full grid redraw: sel=%d prev=%d", selectorIndex, prevSelectorIndex);
   for (int i = startIndex; i < endIndex; i++) {
     int cx, cy;

@@ -37,9 +37,8 @@ class ClippingStore {
   void unload();
 
   AddResult addClipping(uint16_t spineIndex, uint16_t startPage, uint16_t endPage, uint16_t pageCount,
-                        uint16_t startWordIndex, uint16_t endWordIndex, uint16_t wordCount,
-                        const char* chapterTitle, uint16_t paragraphIndex, const std::string& text,
-                        ClippingHighlightStyle highlightStyle);
+                        uint16_t startWordIndex, uint16_t endWordIndex, uint16_t wordCount, const char* chapterTitle,
+                        uint16_t paragraphIndex, const std::string& text, ClippingHighlightStyle highlightStyle);
   bool removeAt(size_t index);
   void clearAll();
 

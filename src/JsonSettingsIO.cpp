@@ -654,9 +654,8 @@ bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) 
     book.inlineFootnotePreviewsOverride = clampInt8(obj["inlineFootnotePreviewsOverride"] | -1, -1, 1, -1);
     const int lineHeightOverride = obj["lineHeightPercentOverride"] | -1;
     book.lineHeightPercentOverride =
-        (lineHeightOverride == -1 ||
-         (lineHeightOverride >= CrossPointSettings::MIN_LINE_HEIGHT_PERCENT &&
-          lineHeightOverride <= CrossPointSettings::MAX_LINE_HEIGHT_PERCENT))
+        (lineHeightOverride == -1 || (lineHeightOverride >= CrossPointSettings::MIN_LINE_HEIGHT_PERCENT &&
+                                      lineHeightOverride <= CrossPointSettings::MAX_LINE_HEIGHT_PERCENT))
             ? static_cast<int16_t>(lineHeightOverride)
             : -1;
     store.recentBooks.push_back(book);

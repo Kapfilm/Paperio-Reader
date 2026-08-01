@@ -41,9 +41,8 @@ Rect coverRectForScreen(const GfxRenderer& renderer, const Rect& rect) {
 
 Rect fittedBitmapRect(const Bitmap& bitmap, const Rect& target) {
   if (bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0) return target;
-  const float scale =
-      std::min(1.0f, std::min(static_cast<float>(target.width) / bitmap.getWidth(),
-                             static_cast<float>(target.height) / bitmap.getHeight()));
+  const float scale = std::min(1.0f, std::min(static_cast<float>(target.width) / bitmap.getWidth(),
+                                              static_cast<float>(target.height) / bitmap.getHeight()));
   const int width = std::max(1, static_cast<int>(std::ceil(bitmap.getWidth() * scale)));
   const int height = std::max(1, static_cast<int>(std::ceil(bitmap.getHeight() * scale)));
   return Rect{target.x + (target.width - width) / 2, target.y + (target.height - height) / 2, width, height};
@@ -53,8 +52,8 @@ void drawMissingCover(const GfxRenderer& renderer, const Rect& coverRect, const 
   renderer.drawRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, 1, kCoverCornerRadius, true);
   const int dividerY = coverRect.y + coverRect.height / 3;
   renderer.drawLine(coverRect.x, dividerY, coverRect.x + coverRect.width - 1, dividerY);
-  renderer.drawIcon(CoverIcon, coverRect.x + (coverRect.width - 32) / 2,
-                    coverRect.y + (coverRect.height / 3 - 32) / 2, 32, 32);
+  renderer.drawIcon(CoverIcon, coverRect.x + (coverRect.width - 32) / 2, coverRect.y + (coverRect.height / 3 - 32) / 2,
+                    32, 32);
 
   const char* emptyTitle = tr(STR_NO_OPEN_BOOK);
   const std::string title = book == nullptr ? emptyTitle : (book->title.empty() ? book->path : book->title);
@@ -100,20 +99,16 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, cons
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
   const int batteryX = rect.x + rect.width - 12 - MinimalMetrics::values.batteryWidth;
   drawBatteryRight(
-      renderer,
-      Rect{batteryX, rect.y + 5, MinimalMetrics::values.batteryWidth, MinimalMetrics::values.batteryHeight},
+      renderer, Rect{batteryX, rect.y + 5, MinimalMetrics::values.batteryWidth, MinimalMetrics::values.batteryHeight},
       showPercentage);
 
   if (title != nullptr) {
     constexpr int titleInset = 12;
     const int maxWidth = batteryX - rect.x - titleInset - MinimalMetrics::values.contentSidePadding;
-    const std::string safeTitle =
-        renderer.truncatedText(UI_12_FONT_ID, title, maxWidth, EpdFontFamily::BOLD);
-    renderer.drawText(UI_12_FONT_ID, rect.x + titleInset,
-                      rect.y + MinimalMetrics::values.batteryBarHeight + 3, safeTitle.c_str(), true,
-                      EpdFontFamily::BOLD);
-    renderer.drawLine(rect.x, rect.y + rect.height - 3, rect.x + rect.width - 1,
-                      rect.y + rect.height - 3, 3, true);
+    const std::string safeTitle = renderer.truncatedText(UI_12_FONT_ID, title, maxWidth, EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, rect.x + titleInset, rect.y + MinimalMetrics::values.batteryBarHeight + 3,
+                      safeTitle.c_str(), true, EpdFontFamily::BOLD);
+    renderer.drawLine(rect.x, rect.y + rect.height - 3, rect.x + rect.width - 1, rect.y + rect.height - 3, 3, true);
   }
 }
 
@@ -190,8 +185,7 @@ void MinimalTheme::drawRecentBookCover(GfxRenderer& renderer, const Rect rect,
 }
 
 void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const int buttonCount,
-                                  const int selectedIndex,
-                                  const std::function<std::string(int index)>& buttonLabel,
+                                  const int selectedIndex, const std::function<std::string(int index)>& buttonLabel,
                                   const std::function<UIIcon(int index)>& rowIcon) const {
   (void)rect;
   (void)rowIcon;
@@ -213,8 +207,8 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
       const int triangleX = rowX + rowWidth - kMenuSelectionTriangleRightInset - kMenuSelectionTriangleWidth;
       const int centerY = rowY + kMenuRowHeight / 2;
       const int xPoints[3] = {triangleX, triangleX, triangleX + kMenuSelectionTriangleWidth};
-      const int yPoints[3] = {centerY - kMenuSelectionTriangleHeight / 2,
-                              centerY + kMenuSelectionTriangleHeight / 2, centerY};
+      const int yPoints[3] = {centerY - kMenuSelectionTriangleHeight / 2, centerY + kMenuSelectionTriangleHeight / 2,
+                              centerY};
       renderer.fillPolygon(xPoints, yPoints, 3, false);
     } else if (i > 0) {
       renderer.fillRectDither(rowX, rowY, rowWidth, 1, Color::LightGray);
@@ -227,8 +221,8 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
                       rowY + (kMenuRowHeight - renderer.getLineHeight(SMALL_FONT_ID)) / 2, indexLabel, !selected);
 
     const int labelX = rowX + kMenuIndexInset + kMenuIndexColumnWidth;
-    const int labelMaxWidth = rowWidth - kMenuIndexInset - kMenuIndexColumnWidth -
-                              kMenuSelectionTriangleRightInset - kMenuSelectionTriangleWidth - 8;
+    const int labelMaxWidth = rowWidth - kMenuIndexInset - kMenuIndexColumnWidth - kMenuSelectionTriangleRightInset -
+                              kMenuSelectionTriangleWidth - 8;
     const std::string label = renderer.truncatedText(UI_12_FONT_ID, buttonLabel(i).c_str(), labelMaxWidth);
     renderer.drawText(UI_12_FONT_ID, labelX, textY, label.c_str(), !selected);
   }

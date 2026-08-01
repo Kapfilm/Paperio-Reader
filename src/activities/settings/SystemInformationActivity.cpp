@@ -122,9 +122,8 @@ void SystemInformationActivity::render(RenderLock&&) {
     constexpr int columnGap = 12;
     const std::string safeLabel =
         renderer.truncatedText(UI_10_FONT_ID, label, valueX - leftX - columnGap, EpdFontFamily::BOLD);
-    const std::string safeValue =
-        renderer.truncatedText(UI_10_FONT_ID, value.c_str(),
-                               contentRect.x + contentRect.width - metrics.contentSidePadding - valueX);
+    const std::string safeValue = renderer.truncatedText(
+        UI_10_FONT_ID, value.c_str(), contentRect.x + contentRect.width - metrics.contentSidePadding - valueX);
     renderer.drawText(UI_10_FONT_ID, leftX, y, safeLabel.c_str(), true, EpdFontFamily::BOLD);
     renderer.drawText(UI_10_FONT_ID, valueX, y, safeValue.c_str());
     y += rowStep;
@@ -203,8 +202,7 @@ void SystemInformationActivity::render(RenderLock&&) {
     renderer.drawImage(Logo120, logoX, logoY, kLogoSize, kLogoSize);
   }
 
-  const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), sdStatusReady_ ? "" : tr(STR_BUTTON_UPDATE), "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), sdStatusReady_ ? "" : tr(STR_BUTTON_UPDATE), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

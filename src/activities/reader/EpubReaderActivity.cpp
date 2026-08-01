@@ -33,10 +33,10 @@
 #include <memory>
 #include <optional>
 
+#include "ClipSelectionActivity.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderChapterSelectionActivity.h"
-#include "ClipSelectionActivity.h"
 #include "EpubReaderClippingsActivity.h"
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
@@ -55,14 +55,14 @@
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
 #include "StarredPagesActivity.h"
+#include "WordRef.h"
 #include "activities/home/BookInfoActivity.h"
 #include "activities/settings/ReadingStatsBookDetailActivity.h"
 #include "activities/settings/SettingsSubmenuActivity.h"
+#include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ScreenshotUtil.h"
-#include "clippings/ClippingsManager.h"
-#include "WordRef.h"
 
 // Defined further down (near the other font helpers); declared here because
 // buildRenderParams() above it needs the ladder.
@@ -1241,17 +1241,17 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           previewLookup.find(currentPageFootnotes[i].href, footnotePreviews[i]);
         }
       }
-      startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(
-                                 renderer, mappedInput, currentPageFootnotes, std::move(footnotePreviews),
-                                 rememberedFootnoteIndex()),
-                             [this](const ActivityResult& result) {
-                               rememberFootnoteIndex(result);
-                               if (!result.isCancelled) {
-                                 const auto& footnoteResult = std::get<FootnoteResult>(result.data);
-                                 navigateToHref(footnoteResult.href, true);
-                               }
-                               requestUpdate();
-                             });
+      startActivityForResult(
+          std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes,
+                                                        std::move(footnotePreviews), rememberedFootnoteIndex()),
+          [this](const ActivityResult& result) {
+            rememberFootnoteIndex(result);
+            if (!result.isCancelled) {
+              const auto& footnoteResult = std::get<FootnoteResult>(result.data);
+              navigateToHref(footnoteResult.href, true);
+            }
+            requestUpdate();
+          });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
@@ -1383,31 +1383,30 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       startClipSelection(ClippingHighlightStyle::Underline);
       break;
     case EpubReaderMenuActivity::MenuAction::VIEW_CLIPPINGS: {
-      startActivityForResult(
-          std::make_unique<EpubReaderClippingsActivity>(renderer, mappedInput, clippingStore, *epub),
-          [this](const ActivityResult& result) {
-            if (!result.isCancelled) {
-              const auto& clipping = std::get<ClippingJumpResult>(result.data);
-              RenderLock lock(*this);
-              if (section && currentSpineIndex == clipping.spineIndex) {
-                int targetPage = clipping.page;
-                if (clipping.pageCount > 0 && clipping.pageCount != section->pageCount) {
-                  targetPage = static_cast<int>(static_cast<uint32_t>(clipping.page) * section->pageCount /
-                                                clipping.pageCount);
-                }
-                targetPage = std::clamp(targetPage, 0, std::max(0, section->pageCount - 1));
-                section->currentPage = targetPage;
-                navTarget = NavigationTarget::makePage(targetPage);
-              } else {
-                currentSpineIndex = clipping.spineIndex;
-                navTarget = NavigationTarget::makePage(clipping.page);
-                navTarget.cachedPageCount = clipping.pageCount;
-                navTarget.cachedSpineIdx = clipping.spineIndex;
-                section.reset();
-              }
-            }
-            requestUpdate();
-          });
+      startActivityForResult(std::make_unique<EpubReaderClippingsActivity>(renderer, mappedInput, clippingStore, *epub),
+                             [this](const ActivityResult& result) {
+                               if (!result.isCancelled) {
+                                 const auto& clipping = std::get<ClippingJumpResult>(result.data);
+                                 RenderLock lock(*this);
+                                 if (section && currentSpineIndex == clipping.spineIndex) {
+                                   int targetPage = clipping.page;
+                                   if (clipping.pageCount > 0 && clipping.pageCount != section->pageCount) {
+                                     targetPage = static_cast<int>(static_cast<uint32_t>(clipping.page) *
+                                                                   section->pageCount / clipping.pageCount);
+                                   }
+                                   targetPage = std::clamp(targetPage, 0, std::max(0, section->pageCount - 1));
+                                   section->currentPage = targetPage;
+                                   navTarget = NavigationTarget::makePage(targetPage);
+                                 } else {
+                                   currentSpineIndex = clipping.spineIndex;
+                                   navTarget = NavigationTarget::makePage(clipping.page);
+                                   navTarget.cachedPageCount = clipping.pageCount;
+                                   navTarget.cachedSpineIdx = clipping.spineIndex;
+                                   section.reset();
+                                 }
+                               }
+                               requestUpdate();
+                             });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_HOME: {
@@ -1629,8 +1628,7 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
   applyBookReaderOverrides(embeddedStyleOverride, imageRenderingOverride, fontFamilyOverride, sdFontFamilyOverride,
                            fontSizeOverride, static_cast<int8_t>(bionicReadingOverride ? 1 : 0),
                            paragraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
-                           bookGuideDotsOverride, bookInlineFootnotePreviewsOverride,
-                           bookLineHeightPercentOverride);
+                           bookGuideDotsOverride, bookInlineFootnotePreviewsOverride, bookLineHeightPercentOverride);
 }
 
 void EpubReaderActivity::applyBookReaderOverrides(
@@ -1681,11 +1679,11 @@ void EpubReaderActivity::applyBookReaderOverrides(
   bookGuideDotsOverride = guideDotsOverride;
   bookInlineFootnotePreviewsOverride = inlineFootnotePreviewsOverride;
   bookLineHeightPercentOverride = lineHeightPercentOverride;
-  RECENT_BOOKS.setReaderOverrides(
-      epub->getPath(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
-      bookSdFontFamilyOverride, bookFontSizeOverride, bookBionicReadingOverride, bookParagraphAlignmentOverride,
-      bookTextAntiAliasingOverride, bookHyphenationOverride, bookGuideDotsOverride, bookInlineFootnotePreviewsOverride,
-      bookLineHeightPercentOverride);
+  RECENT_BOOKS.setReaderOverrides(epub->getPath(), bookEmbeddedStyleOverride, bookImageRenderingOverride,
+                                  bookFontFamilyOverride, bookSdFontFamilyOverride, bookFontSizeOverride,
+                                  bookBionicReadingOverride, bookParagraphAlignmentOverride,
+                                  bookTextAntiAliasingOverride, bookHyphenationOverride, bookGuideDotsOverride,
+                                  bookInlineFootnotePreviewsOverride, bookLineHeightPercentOverride);
 
   if (layoutOverridesUnchanged) {
     // Only guide dots changed: persisted above, and the repaint on resume picks
@@ -4001,27 +3999,26 @@ void EpubReaderActivity::openClipStylePicker() {
   choices.push_back(SettingInfo::Action(StrId::STR_HIGHLIGHT_MARKER, SettingAction::None));
   choices.push_back(SettingInfo::Action(StrId::STR_HIGHLIGHT_UNDERLINE, SettingAction::None));
 
-  startActivityForResult(
-      std::make_unique<SettingsSubmenuActivity>(renderer, mappedInput, StrId::STR_CREATE_CLIPPING,
-                                                std::move(choices), nullptr, false),
-      [this](const ActivityResult& result) {
-        const auto* menu = std::get_if<MenuResult>(&result.data);
-        if (!menu || menu->nameId < 0) {
-          requestUpdate();
-          return;
-        }
-        switch (static_cast<StrId>(menu->nameId)) {
-          case StrId::STR_HIGHLIGHT_MARKER:
-            startClipSelection(ClippingHighlightStyle::Marker);
-            break;
-          case StrId::STR_HIGHLIGHT_UNDERLINE:
-            startClipSelection(ClippingHighlightStyle::Underline);
-            break;
-          default:
-            requestUpdate();
-            break;
-        }
-      });
+  startActivityForResult(std::make_unique<SettingsSubmenuActivity>(renderer, mappedInput, StrId::STR_CREATE_CLIPPING,
+                                                                   std::move(choices), nullptr, false),
+                         [this](const ActivityResult& result) {
+                           const auto* menu = std::get_if<MenuResult>(&result.data);
+                           if (!menu || menu->nameId < 0) {
+                             requestUpdate();
+                             return;
+                           }
+                           switch (static_cast<StrId>(menu->nameId)) {
+                             case StrId::STR_HIGHLIGHT_MARKER:
+                               startClipSelection(ClippingHighlightStyle::Marker);
+                               break;
+                             case StrId::STR_HIGHLIGHT_UNDERLINE:
+                               startClipSelection(ClippingHighlightStyle::Underline);
+                               break;
+                             default:
+                               requestUpdate();
+                               break;
+                           }
+                         });
 }
 
 void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlightStyle) {
@@ -4067,10 +4064,9 @@ void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlig
 
   if (!selectionFits(maxSelectableWords, MIN_SELECTION_HEAP_RESERVE)) {
     const size_t wordVectorBytes = sizeof(WordRef) * maxSelectableWords;
-    LOG_ERR("CLIP", "Not enough heap for selection: need=%u free=%u contig=%u",
-            static_cast<unsigned>(wordVectorBytes), static_cast<unsigned>(esp_get_free_heap_size()),
-            static_cast<unsigned>(
-                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT)));
+    LOG_ERR("CLIP", "Not enough heap for selection: need=%u free=%u contig=%u", static_cast<unsigned>(wordVectorBytes),
+            static_cast<unsigned>(esp_get_free_heap_size()),
+            static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT)));
     GUI.drawPopup(renderer, tr(STR_MEMORY_ERROR));
     delay(900);
     requestUpdate();
@@ -4082,8 +4078,8 @@ void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlig
     const int viewportHeight = std::max(0, renderer.getScreenHeight() - layout.marginTop - layout.marginBottom);
     words.reserve(maxSelectableWords);
 
-    for (int relativePage = 0;
-         relativePage < selectablePageCount && startPage + relativePage < section->pageCount; ++relativePage) {
+    for (int relativePage = 0; relativePage < selectablePageCount && startPage + relativePage < section->pageCount;
+         ++relativePage) {
       section->currentPage = startPage + relativePage;
       auto page = section->loadPageFromSectionFile();
       if (!page) {
@@ -4109,7 +4105,7 @@ void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlig
         const float blockScale = block.getBlockStyle().fontSizeMultiplier;
         const float maxScale = blockScale * (block.maxSizePct() / 100.0f);
         const int lineAscender = maxScale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
-                                                 : renderer.getFontAscenderSizeScaled(effectiveFontId, maxScale);
+                                                  : renderer.getFontAscenderSizeScaled(effectiveFontId, maxScale);
 
         for (uint16_t i = 0; i < block.wordCount() && words.size() < pageWordLimit; ++i) {
           const char* text = block.wordText(i);
@@ -4181,12 +4177,11 @@ void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlig
           const auto& clip = std::get<ClippingResult>(result.data);
           const auto addResult = clippingStore.addClipping(
               static_cast<uint16_t>(currentSpineIndex), clip.sectionPage, clip.endSectionPage, clip.sectionPageCount,
-              clip.startPageWordIndex, clip.endPageWordIndex, clip.wordCount, chapterTitle.c_str(),
-              clip.paragraphIndex, clip.text, highlightStyle);
-          const bool exported =
-              addResult == ClippingStore::AddResult::Added &&
-              ClippingsManager::appendKindleExport(epub->getTitle(), epub->getAuthor(), chapterTitle,
-                                                    static_cast<int>(clip.sectionPage) + 1, clip.text);
+              clip.startPageWordIndex, clip.endPageWordIndex, clip.wordCount, chapterTitle.c_str(), clip.paragraphIndex,
+              clip.text, highlightStyle);
+          const bool exported = addResult == ClippingStore::AddResult::Added &&
+                                ClippingsManager::appendKindleExport(epub->getTitle(), epub->getAuthor(), chapterTitle,
+                                                                     static_cast<int>(clip.sectionPage) + 1, clip.text);
           GUI.drawPopup(renderer, addResult == ClippingStore::AddResult::LimitReached
                                       ? tr(STR_CLIPPING_LIMIT_REACHED)
                                       : (addResult == ClippingStore::AddResult::Added
@@ -4208,9 +4203,8 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
     current = 0;
     next = 0;
     for (const Clipping& clipping : clippingStore.getAll()) {
-      if (clipping.spineIndex != static_cast<uint16_t>(currentSpineIndex) ||
-          clipping.pageCount != currentPageCount || currentPage < clipping.startPage ||
-          currentPage > clipping.endPage) {
+      if (clipping.spineIndex != static_cast<uint16_t>(currentSpineIndex) || clipping.pageCount != currentPageCount ||
+          currentPage < clipping.startPage || currentPage > clipping.endPage) {
         continue;
       }
       const uint16_t first = currentPage == clipping.startPage ? clipping.startWordIndex : 0;
@@ -4229,12 +4223,11 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
     const auto& line = static_cast<const PageLine&>(*element);
     if (!line.getBlock()) continue;
     const TextBlock& block = *line.getBlock();
-    const int effectiveFontId =
-        block.getBlockStyle().headingFontId != 0 ? block.getBlockStyle().headingFontId : fontId;
+    const int effectiveFontId = block.getBlockStyle().headingFontId != 0 ? block.getBlockStyle().headingFontId : fontId;
     const float blockScale = block.getBlockStyle().fontSizeMultiplier;
     const float maxScale = blockScale * (block.maxSizePct() / 100.0f);
     const int lineAscender = maxScale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
-                                             : renderer.getFontAscenderSizeScaled(effectiveFontId, maxScale);
+                                              : renderer.getFontAscenderSizeScaled(effectiveFontId, maxScale);
 
     for (uint16_t i = 0; i < block.wordCount(); ++i) {
       const char* text = block.wordText(i);
@@ -4270,10 +4263,9 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
           markerWidth = (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Marker))) != 0
                             ? distanceToNext
                             : std::min(markerWidth, distanceToNext);
-          underlineWidth =
-              (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Underline))) != 0
-                  ? distanceToNext
-                  : std::min(underlineWidth, distanceToNext);
+          underlineWidth = (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Underline))) != 0
+                               ? distanceToNext
+                               : std::min(underlineWidth, distanceToNext);
         }
         const int wordX = marginLeft + line.xPos + block.wordXpos(i);
         const int wordHeight = std::max(renderer.getLineHeight(effectiveFontId), ascender + 4);
@@ -4326,10 +4318,9 @@ void EpubReaderActivity::openReaderMenu() {
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !currentPageFootnotes.empty(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
           bookSdFontFamilyOverride, bookFontSizeOverride, bookLineHeightPercentOverride, SETTINGS.textDarkness,
-          getEffectiveBionicReading(),
-          bookGuideDotsOverride, bookParagraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
-          bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages,
-          !clippingStore.empty()),
+          getEffectiveBionicReading(), bookGuideDotsOverride, bookParagraphAlignmentOverride,
+          bookTextAntiAliasingOverride, bookHyphenationOverride, bookInlineFootnotePreviewsOverride,
+          !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages, !clippingStore.empty()),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);
