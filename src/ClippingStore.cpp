@@ -5,12 +5,13 @@
 #include <Logging.h>
 #include <Serialization.h>
 #include <Utf8.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 namespace {
-constexpr uint8_t FILE_VERSION = 2;
+constexpr uint8_t FILE_VERSION = 3;
 constexpr size_t LEGACY_CHAPTER_TITLE_MAX = 48;
 constexpr size_t INITIAL_RESERVE = 4;
 constexpr char CLIPPINGS_DIR[] = "/.crosspoint/clippings";
@@ -43,9 +44,8 @@ bool readStringChecked(FsFile& file, std::string& value) {
 
 bool writeStringChecked(FsFile& file, const std::string& value) {
   const uint32_t length = static_cast<uint32_t>(value.size());
-  return writePodChecked(file, length) &&
-         (length == 0 ||
-          file.write(reinterpret_cast<const uint8_t*>(value.data()), length) == static_cast<size_t>(length));
+  return writePodChecked(file, length) && (length == 0 || file.write(reinterpret_cast<const uint8_t*>(value.data()),
+                                                                     length) == static_cast<size_t>(length));
 }
 }  // namespace
 
@@ -67,10 +67,12 @@ void ClippingStore::unload() {
   storeFilePath.clear();
 }
 
-ClippingStore::AddResult ClippingStore::addClipping(
-    const uint16_t spineIndex, const uint16_t startPage, const uint16_t endPage, const uint16_t pageCount,
-    const uint16_t startWordIndex, const uint16_t endWordIndex, const uint16_t wordCount, const char* chapterTitle,
-    const uint16_t paragraphIndex, const std::string& text) {
+ClippingStore::AddResult ClippingStore::addClipping(const uint16_t spineIndex, const uint16_t startPage,
+                                                    const uint16_t endPage, const uint16_t pageCount,
+                                                    const uint16_t startWordIndex, const uint16_t endWordIndex,
+                                                    const uint16_t wordCount, const char* chapterTitle,
+                                                    const uint16_t paragraphIndex, const std::string& text,
+                                                    const ClippingHighlightStyle highlightStyle) {
   if (clippings.size() >= CLIPPING_MAX_PER_BOOK) return AddResult::LimitReached;
 
   Clipping clipping;
@@ -83,6 +85,7 @@ ClippingStore::AddResult ClippingStore::addClipping(
   clipping.wordCount = wordCount;
   clipping.paragraphIndex = paragraphIndex;
   clipping.timestamp = static_cast<uint32_t>(millis() / 1000UL);
+  clipping.highlightStyle = highlightStyle;
   clipping.chapterTitle = chapterTitle ? chapterTitle : "";
   if (clipping.chapterTitle.size() > CLIPPING_CHAPTER_TITLE_MAX) {
     clipping.chapterTitle.resize(
@@ -119,10 +122,15 @@ bool ClippingStore::readFromFile() {
   std::string storedTitle;
   std::string storedAuthor;
   std::string storedPath;
-  if (!readPodChecked(file, version) || (version != 1 && version != FILE_VERSION) || !readPodChecked(file, count) ||
+  if (!readPodChecked(file, version) || (version < 1 || version > FILE_VERSION) || !readPodChecked(file, count) ||
       count > CLIPPING_MAX_PER_BOOK || !readStringChecked(file, storedTitle) ||
       !readStringChecked(file, storedAuthor) || !readStringChecked(file, storedPath)) {
     LOG_ERR("CLIP", "Invalid clipping file: %s", storeFilePath.c_str());
+    file.close();
+    return false;
+  }
+  if (storedPath != bookFilePath || storedTitle != bookTitle || storedAuthor != bookAuthor) {
+    LOG_ERR("CLIP", "Clipping file belongs to a different book: %s", storeFilePath.c_str());
     file.close();
     return false;
   }
@@ -140,6 +148,17 @@ bool ClippingStore::readFromFile() {
       clippings.clear();
       file.close();
       return false;
+    }
+    if (version >= 3) {
+      uint8_t highlightStyle = 0;
+      if (!readPodChecked(file, highlightStyle) ||
+          highlightStyle > static_cast<uint8_t>(ClippingHighlightStyle::Underline)) {
+        LOG_ERR("CLIP", "Invalid clipping highlight style at record %u", i);
+        clippings.clear();
+        file.close();
+        return false;
+      }
+      clipping.highlightStyle = static_cast<ClippingHighlightStyle>(highlightStyle);
     }
     if (version == 1) {
       char legacyTitle[LEGACY_CHAPTER_TITLE_MAX] = {};
@@ -176,9 +195,13 @@ bool ClippingStore::writeToFile() const {
   Storage.mkdir("/.crosspoint");
   Storage.mkdir(CLIPPINGS_DIR);
 
-  FsFile file = Storage.open(storeFilePath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
+  const std::string tempPath = storeFilePath + ".tmp";
+  const std::string backupPath = storeFilePath + ".bak";
+  if (Storage.exists(tempPath.c_str())) Storage.remove(tempPath.c_str());
+
+  FsFile file = Storage.open(tempPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
   if (!file) {
-    LOG_ERR("CLIP", "Unable to write %s", storeFilePath.c_str());
+    LOG_ERR("CLIP", "Unable to write %s", tempPath.c_str());
     return false;
   }
 
@@ -187,16 +210,39 @@ bool ClippingStore::writeToFile() const {
             writeStringChecked(file, bookTitle) && writeStringChecked(file, bookAuthor) &&
             writeStringChecked(file, bookFilePath);
   for (const Clipping& clipping : clippings) {
+    const uint8_t highlightStyle = static_cast<uint8_t>(clipping.highlightStyle);
     ok = ok && writePodChecked(file, clipping.spineIndex) && writePodChecked(file, clipping.startPage) &&
          writePodChecked(file, clipping.endPage) && writePodChecked(file, clipping.pageCount) &&
          writePodChecked(file, clipping.startWordIndex) && writePodChecked(file, clipping.endWordIndex) &&
          writePodChecked(file, clipping.wordCount) && writePodChecked(file, clipping.paragraphIndex) &&
-         writePodChecked(file, clipping.timestamp) && writeStringChecked(file, clipping.chapterTitle) &&
-         writeStringChecked(file, clipping.text);
+         writePodChecked(file, clipping.timestamp) && writePodChecked(file, highlightStyle) &&
+         writeStringChecked(file, clipping.chapterTitle) && writeStringChecked(file, clipping.text);
     if (!ok) break;
   }
   if (ok) file.flush();
-  file.close();
-  if (!ok) LOG_ERR("CLIP", "Failed while writing %s", storeFilePath.c_str());
-  return ok;
+  ok = file.close() && ok;
+  if (!ok) {
+    Storage.remove(tempPath.c_str());
+    LOG_ERR("CLIP", "Failed while writing %s", tempPath.c_str());
+    return false;
+  }
+
+  const bool hadLiveFile = Storage.exists(storeFilePath.c_str());
+  if (hadLiveFile) {
+    if (Storage.exists(backupPath.c_str())) Storage.remove(backupPath.c_str());
+    if (!Storage.rename(storeFilePath.c_str(), backupPath.c_str())) {
+      Storage.remove(tempPath.c_str());
+      LOG_ERR("CLIP", "Unable to preserve previous clipping file: %s", storeFilePath.c_str());
+      return false;
+    }
+  }
+
+  if (!Storage.rename(tempPath.c_str(), storeFilePath.c_str())) {
+    if (hadLiveFile) Storage.rename(backupPath.c_str(), storeFilePath.c_str());
+    Storage.remove(tempPath.c_str());
+    LOG_ERR("CLIP", "Unable to install new clipping file: %s", storeFilePath.c_str());
+    return false;
+  }
+  if (hadLiveFile) Storage.remove(backupPath.c_str());
+  return true;
 }

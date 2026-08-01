@@ -1,10 +1,10 @@
 #include "ClipSelectionActivity.h"
 
+#include <Epub/Page.h>
+#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Logging.h>
-#include <FontCacheManager.h>
-#include <Epub/Page.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -77,8 +77,8 @@ void ClipSelectionActivity::moveCursorByLine(const int direction) {
   const int currentY = words[cursor].y;
   const int currentCenter = words[cursor].x + words[cursor].w / 2;
   int lineWord = cursor + (direction > 0 ? 1 : -1);
-  while (lineWord >= 0 && lineWord < static_cast<int>(words.size()) &&
-         words[lineWord].pageIndex == currentPage && words[lineWord].y == currentY) {
+  while (lineWord >= 0 && lineWord < static_cast<int>(words.size()) && words[lineWord].pageIndex == currentPage &&
+         words[lineWord].y == currentY) {
     lineWord += direction > 0 ? 1 : -1;
   }
   if (lineWord < 0 || lineWord >= static_cast<int>(words.size())) return;

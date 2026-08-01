@@ -64,11 +64,10 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const int8_t initialEmbeddedStyleOverride, const int8_t initialImageRenderingOverride,
     const int8_t initialFontFamilyOverride, const std::string& initialSdFontFamilyOverride,
     const int8_t initialFontSizeOverride, const int16_t initialLineHeightPercentOverride,
-    const uint8_t initialTextDarkness, const bool initialBionicReadingOverride,
-    const int8_t initialGuideDotsOverride, const int8_t initialParagraphAlignmentOverride,
-    const int8_t initialTextAntiAliasingOverride, const int8_t initialHyphenationOverride,
-    const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages, const bool isCurrentPageStarred,
-    const bool hasPrintedPages, const bool hasClippings)
+    const uint8_t initialTextDarkness, const bool initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
+    const int8_t initialParagraphAlignmentOverride, const int8_t initialTextAntiAliasingOverride,
+    const int8_t initialHyphenationOverride, const int8_t initialInlineFootnotePreviewsOverride,
+    const bool hasStarredPages, const bool isCurrentPageStarred, const bool hasPrintedPages, const bool hasClippings)
     : MenuListActivity("EpubReaderMenu", renderer, mappedInput),
       currentPageStarred(isCurrentPageStarred),
       pendingOrientation(currentOrientation),
@@ -111,7 +110,10 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   if (hasStarredPages) {
     menuItems.push_back(SettingInfo::Action(StrId::STR_STARRED_PAGES, SettingAction::None));
   }
-  menuItems.push_back(SettingInfo::Action(StrId::STR_CREATE_CLIPPING, SettingAction::None));
+  menuItems.push_back(
+      SettingInfo::Action(StrId::STR_HIGHLIGHT_MARKER, SettingAction::None).withSubmenu(StrId::STR_CREATE_CLIPPING));
+  menuItems.push_back(
+      SettingInfo::Action(StrId::STR_HIGHLIGHT_UNDERLINE, SettingAction::None).withSubmenu(StrId::STR_CREATE_CLIPPING));
   if (hasClippings) {
     menuItems.push_back(SettingInfo::Action(StrId::STR_CLIPPINGS, SettingAction::None));
   }
@@ -225,23 +227,20 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   }
 
   // Reader font size: default plus every globally available built-in size.
-  menuItems.push_back(SettingInfo::DynamicEnumCtx(
-                          StrId::STR_FONT_SIZE,
-                          {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE,
-                           StrId::STR_X_LARGE},
-                          self,
-                          [](const void* ctx) -> uint8_t {
-                            const auto* s = static_cast<const EpubReaderMenuActivity*>(ctx);
-                            return (s->pendingFontSizeOverride < 0)
-                                       ? 0
-                                       : static_cast<uint8_t>(s->pendingFontSizeOverride + 1);
-                          },
-                          [](void* ctx, uint8_t v) {
-                            auto* s = static_cast<EpubReaderMenuActivity*>(ctx);
-                            s->pendingFontSizeOverride = (v == 0) ? -1 : static_cast<int8_t>(v - 1);
-                          })
-                          .withSubmenu(StrId::STR_READER_OVERRIDES)
-                          .withSelectorActivity());
+  menuItems.push_back(
+      SettingInfo::DynamicEnumCtx(
+          StrId::STR_FONT_SIZE,
+          {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE}, self,
+          [](const void* ctx) -> uint8_t {
+            const auto* s = static_cast<const EpubReaderMenuActivity*>(ctx);
+            return (s->pendingFontSizeOverride < 0) ? 0 : static_cast<uint8_t>(s->pendingFontSizeOverride + 1);
+          },
+          [](void* ctx, uint8_t v) {
+            auto* s = static_cast<EpubReaderMenuActivity*>(ctx);
+            s->pendingFontSizeOverride = (v == 0) ? -1 : static_cast<int8_t>(v - 1);
+          })
+          .withSubmenu(StrId::STR_READER_OVERRIDES)
+          .withSelectorActivity());
 
   menuItems.push_back(
       SettingInfo::Action(StrId::STR_LINE_SPACING, SettingAction::None).withSubmenu(StrId::STR_READER_OVERRIDES));
@@ -385,8 +384,10 @@ EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForNameId(StrId
       return MenuAction::STARRED_PAGES;
     case StrId::STR_STAR_PAGE:
       return MenuAction::STAR_PAGE;
-    case StrId::STR_CREATE_CLIPPING:
-      return MenuAction::CREATE_CLIPPING;
+    case StrId::STR_HIGHLIGHT_MARKER:
+      return MenuAction::CREATE_CLIPPING_MARKER;
+    case StrId::STR_HIGHLIGHT_UNDERLINE:
+      return MenuAction::CREATE_CLIPPING_UNDERLINE;
     case StrId::STR_CLIPPINGS:
       return MenuAction::VIEW_CLIPPINGS;
     case StrId::STR_FOOTNOTES:
@@ -678,8 +679,7 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
 
 void EpubReaderMenuActivity::openLineHeightOverridePicker() {
   constexpr int kDefaultSentinel = CrossPointSettings::MIN_LINE_HEIGHT_PERCENT - 1;
-  const int initialValue =
-      pendingLineHeightPercentOverride < 0 ? kDefaultSentinel : pendingLineHeightPercentOverride;
+  const int initialValue = pendingLineHeightPercentOverride < 0 ? kDefaultSentinel : pendingLineHeightPercentOverride;
   SliderPickerActivity::Config cfg{
       .titleId = StrId::STR_LINE_SPACING,
       .hintId = StrId::STR_SLIDER_STEP_HINT,

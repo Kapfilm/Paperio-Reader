@@ -102,8 +102,7 @@ void QuickOverridesActivity::buildMenuItems() {
   // Font size: default plus every globally available built-in size.
   menuItems.push_back(SettingInfo::DynamicEnumCtx(
       StrId::STR_FONT_SIZE,
-      {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE},
-      self,
+      {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE}, self,
       [](const void* ctx) -> uint8_t {
         const auto* s = static_cast<const QuickOverridesActivity*>(ctx);
         return (s->pendingFontSizeOverride < 0) ? 0 : static_cast<uint8_t>(s->pendingFontSizeOverride + 1);

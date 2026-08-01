@@ -921,6 +921,7 @@ bool CssParser::loadFromStream(FsFile& source) {
   } else {
     LOG_DBG("CSS", "Parsed %zu rules from %zu bytes", rulesBySelector_.size(), totalRead);
   }
+  (void)totalRead;  // LOG_DBG compiles out in host/release builds.
   return true;
 }
 

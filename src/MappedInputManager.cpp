@@ -64,20 +64,33 @@ unsigned long MappedInputManager::getHeldTime() const { return gpio.getHeldTime(
 
 MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const char* confirm, const char* previous,
                                                          const char* next) const {
+  // Direction is already communicated by the physical button position. Remove the
+  // legacy leading « decoration from every mapped hint, regardless of language or
+  // which logical action the user assigned to the leftmost hardware button.
+  const auto withoutLeadingArrow = [](const char* label) -> const char* {
+    if (label == nullptr) return "";
+    const auto* bytes = reinterpret_cast<const unsigned char*>(label);
+    if (bytes[0] == 0xC2 && bytes[1] == 0xAB) {
+      label += 2;
+      while (*label == ' ') ++label;
+    }
+    return label;
+  };
+
   // Build the label order based on the configured hardware mapping.
   auto labelForHardware = [&](uint8_t hw) -> const char* {
     // Compare against configured logical roles and return the matching label.
     if (hw == SETTINGS.frontButtonBack) {
-      return back;
+      return withoutLeadingArrow(back);
     }
     if (hw == SETTINGS.frontButtonConfirm) {
-      return confirm;
+      return withoutLeadingArrow(confirm);
     }
     if (hw == SETTINGS.frontButtonLeft) {
-      return previous;
+      return withoutLeadingArrow(previous);
     }
     if (hw == SETTINGS.frontButtonRight) {
-      return next;
+      return withoutLeadingArrow(next);
     }
     return "";
   };

@@ -165,6 +165,12 @@ class CrossPointSettings {
     DARKNESS_MAXIMUM = 3,     // skip grayscale passes — AA pixels stay solid black from BW pass
     TEXT_DARKNESS_COUNT
   };
+
+  enum CLIPPING_HIGHLIGHT_STYLE {
+    CLIPPING_HIGHLIGHT_MARKER = 0,
+    CLIPPING_HIGHLIGHT_UNDERLINE = 1,
+    CLIPPING_HIGHLIGHT_STYLE_COUNT
+  };
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
   enum IMAGE_DITHERING {
     IMAGE_DITHER_BAYER = 0,
@@ -327,6 +333,8 @@ class CrossPointSettings {
   uint8_t guideDots = 0;
   // Expand semantic EPUB footnote references with a short inline preview.
   uint8_t inlineFootnotePreviews = 0;
+  // Visual style used for saved EPUB text highlights.
+  uint8_t clippingHighlightStyle = CLIPPING_HIGHLIGHT_MARKER;
   // Automatically push reading progress to the KOReader sync server when leaving the reader
   // (1 = enabled, 0 = disabled). The push only fires when credentials are configured and the
   // reader session advanced at least 3 pages, and is skipped when remote progress is already ahead.

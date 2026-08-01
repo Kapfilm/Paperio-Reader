@@ -96,7 +96,7 @@ inline std::vector<SettingInfo> buildSettingsList() {
   };
 
   std::vector<SettingInfo> settings;
-  settings.reserve(77);
+  settings.reserve(78);
 
   // --- Display ---
   settings.push_back(SettingInfo::Action(StrId::STR_TIME_TO_SLEEP, SettingAction::SleepTimeoutPicker)
@@ -160,18 +160,16 @@ inline std::vector<SettingInfo> buildSettingsList() {
   // side (SettingsActivity / CrossPointWebServer enrich enumLabels before
   // iterating). The built-in StrIds are kept as a fallback for code paths that
   // don't enrich enumLabels.
-  settings.push_back(SettingInfo::DynamicEnum(StrId::STR_FONT_FAMILY, {StrId::STR_NOTO_SANS},
-                                              fontFamilyDynamicGetter, fontFamilyDynamicSetter, "fontFamily",
-                                              StrId::STR_CAT_READER)
+  settings.push_back(SettingInfo::DynamicEnum(StrId::STR_FONT_FAMILY, {StrId::STR_NOTO_SANS}, fontFamilyDynamicGetter,
+                                              fontFamilyDynamicSetter, "fontFamily", StrId::STR_CAT_READER)
                          .withSubcategory(StrId::STR_MENU_READER_FONT)
                          .withSubmenu(StrId::STR_MENU_READER_FONT)
                          .withSelectorActivity());
-  settings.push_back(
-      SettingInfo::Enum(StrId::STR_FONT_SIZE, &CrossPointSettings::fontSize,
-                        {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE},
-                        "fontSize", StrId::STR_CAT_READER)
-          .withSubmenu(StrId::STR_MENU_READER_FONT)
-          .withSelectorActivity());
+  settings.push_back(SettingInfo::Enum(StrId::STR_FONT_SIZE, &CrossPointSettings::fontSize,
+                                       {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE},
+                                       "fontSize", StrId::STR_CAT_READER)
+                         .withSubmenu(StrId::STR_MENU_READER_FONT)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Toggle(StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, "textAntiAliasing",
                                          StrId::STR_CAT_READER)
                          .withSubmenu(StrId::STR_MENU_READER_FONT));
@@ -194,12 +192,11 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                               StrId::STR_CAT_READER)
                          .withSubmenu(StrId::STR_MENU_TXT_FONT)
                          .withSelectorActivity());
-  settings.push_back(
-      SettingInfo::Enum(StrId::STR_TXT_FONT_SIZE, &CrossPointSettings::txtFontSize,
-                        {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE},
-                        "txtFontSize", StrId::STR_CAT_READER)
-          .withSubmenu(StrId::STR_MENU_TXT_FONT)
-          .withSelectorActivity());
+  settings.push_back(SettingInfo::Enum(StrId::STR_TXT_FONT_SIZE, &CrossPointSettings::txtFontSize,
+                                       {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE},
+                                       "txtFontSize", StrId::STR_CAT_READER)
+                         .withSubmenu(StrId::STR_MENU_TXT_FONT)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_PARA_ALIGNMENT, &CrossPointSettings::paragraphAlignment,
                                        {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER,
                                         StrId::STR_ALIGN_RIGHT, StrId::STR_BOOK_S_STYLE},
@@ -222,12 +219,12 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin, {5, 40, 5},
                                         "screenMargin", StrId::STR_CAT_READER)
                          .withSubmenu(StrId::STR_MENU_READER_SPACING));
-  settings.push_back(SettingInfo::Value(
-                         StrId::STR_LINE_SPACING, &CrossPointSettings::lineHeightPercent,
+  settings.push_back(
+      SettingInfo::Value(StrId::STR_LINE_SPACING, &CrossPointSettings::lineHeightPercent,
                          {CrossPointSettings::MIN_LINE_HEIGHT_PERCENT, CrossPointSettings::MAX_LINE_HEIGHT_PERCENT,
                           CrossPointSettings::LINE_HEIGHT_PERCENT_STEP},
                          "lineHeightPercent", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_READER_SPACING));
+          .withSubmenu(StrId::STR_MENU_READER_SPACING));
   settings.push_back(SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
                                          "extraParagraphSpacing", StrId::STR_CAT_READER)
                          .withSubmenu(StrId::STR_MENU_READER_SPACING));
@@ -246,6 +243,11 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Toggle(StrId::STR_INLINE_FOOTNOTE_PREVIEWS,
                                          &CrossPointSettings::inlineFootnotePreviews, "inlineFootnotePreviews",
                                          StrId::STR_CAT_READER));
+  settings.push_back(SettingInfo::Enum(StrId::STR_HIGHLIGHT_STYLE, &CrossPointSettings::clippingHighlightStyle,
+                                       {StrId::STR_HIGHLIGHT_MARKER, StrId::STR_HIGHLIGHT_UNDERLINE},
+                                       "clippingHighlightStyle", StrId::STR_CAT_READER)
+                         .withSubmenu(StrId::STR_CREATE_CLIPPING)
+                         .withSelectorActivity());
 
   // --- Controls ---
   // --- Button Actions (short / double / long press per logical button) ---

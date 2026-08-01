@@ -82,6 +82,7 @@ struct NetworkModeResult {
 
 struct FootnoteResult {
   std::string href;
+  int selectedIndex = 0;
 };
 
 struct FilePathResult {
@@ -112,10 +113,9 @@ struct ClippingJumpResult {
   uint16_t clippingIndex = UINT16_MAX;
 };
 
-using ResultVariant =
-    std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, PageResult,
-                 SyncResult, NetworkModeResult, FootnoteResult, FilePathResult, StarredPageResult, PrintedPageResult,
-                 ClippingResult, ClippingJumpResult>;
+using ResultVariant = std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult,
+                                   PageResult, SyncResult, NetworkModeResult, FootnoteResult, FilePathResult,
+                                   StarredPageResult, PrintedPageResult, ClippingResult, ClippingJumpResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

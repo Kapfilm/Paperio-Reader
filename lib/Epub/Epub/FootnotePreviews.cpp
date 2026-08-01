@@ -503,4 +503,21 @@ bool Lookup::find(const char* href, std::string& outText) {
   return file_.read(reinterpret_cast<uint8_t*>(&outText[0]), len) == static_cast<int>(len);
 }
 
+bool Lookup::containsTarget(const char* fragment) const {
+  if (entryCount_ == 0 || currentSpineIndex_ < 0 || !fragment || fragment[0] == '\0') return false;
+  const uint32_t keyHash = makeKeyHash(currentSpineIndex_, fragment);
+  int lo = 0;
+  int hi = entryCount_ - 1;
+  while (lo <= hi) {
+    const int mid = lo + (hi - lo) / 2;
+    if (index_[mid].keyHash == keyHash) return true;
+    if (index_[mid].keyHash < keyHash) {
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return false;
+}
+
 }  // namespace FootnotePreviews

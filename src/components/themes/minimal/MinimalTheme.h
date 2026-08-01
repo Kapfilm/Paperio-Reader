@@ -4,14 +4,14 @@
 
 namespace MinimalMetrics {
 constexpr ThemeMetrics makeValues() {
-  ThemeMetrics values = LyraMetrics::values;
-  values.homeTopPadding = 50;
-  values.homeCoverHeight = 583;
-  values.homeCoverTileHeight = 690;
-  values.homeRecentBooksCount = 1;
-  values.homeContinueReadingInMenu = false;
-  values.homeMenuTopOffset = 0;
-  return values;
+  ThemeMetrics metrics = LyraMetrics::values;
+  metrics.homeTopPadding = 50;
+  metrics.homeCoverHeight = 640;
+  metrics.homeCoverTileHeight = 710;
+  metrics.homeRecentBooksCount = 1;
+  metrics.homeContinueReadingInMenu = false;
+  metrics.homeMenuTopOffset = 0;
+  return metrics;
 }
 
 constexpr ThemeMetrics values = makeValues();

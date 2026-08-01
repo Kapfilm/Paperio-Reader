@@ -123,7 +123,12 @@ void HomeActivity::rebuildMenuEntries() {
   menuEntries.reserve(7);
 
   menuEntries.push_back({MenuAction::FileBrowser, StrId::STR_BROWSE_FILES, Folder});
-  menuEntries.push_back({MenuAction::Recents, StrId::STR_MENU_RECENT_BOOKS, Recent});
+  // In Minimal the recent-books grid is promoted to the second bottom button,
+  // while the file browser remains available here in the menu. Avoid showing a
+  // duplicate Recent Books entry in that theme.
+  if (!isMinimalTheme()) {
+    menuEntries.push_back({MenuAction::Recents, StrId::STR_MENU_RECENT_BOOKS, Recent});
+  }
   if (!GLOBAL_BOOKMARKS.isEmpty()) {
     menuEntries.push_back({MenuAction::GlobalBookmarks, StrId::STR_GLOBAL_BOOKMARKS, Book});
   }
@@ -792,7 +797,7 @@ void HomeActivity::loop() {
       return;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      dispatchMenuAction(MenuAction::FileBrowser);
+      dispatchMenuAction(MenuAction::Recents);
       return;
     }
     if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
@@ -931,13 +936,12 @@ void HomeActivity::render(RenderLock&&) {
     coverRectY = metrics.homeTopPadding;
     coverRectW = contentRect.width;
     coverRectH = std::min(metrics.homeCoverTileHeight, contentRect.height - metrics.homeTopPadding);
-    GUI.drawRecentBookCover(
-        renderer, Rect{coverRectX, coverRectY, coverRectW, coverRectH}, recentBooks, 0, coverRendered,
-        coverBufferStored, bufferRestored, std::bind(&HomeActivity::storeCoverBuffer, this));
+    GUI.drawRecentBookCover(renderer, Rect{coverRectX, coverRectY, coverRectW, coverRectH}, recentBooks, 0,
+                            coverRendered, coverBufferStored, bufferRestored,
+                            std::bind(&HomeActivity::storeCoverBuffer, this));
 
-    const auto labels =
-        mappedInput.mapLabels(tr(STR_MENU), tr(STR_BROWSE), tr(STR_BUTTON_SETTINGS),
-                              recentBooks.empty() ? "" : tr(STR_READ));
+    const auto labels = mappedInput.mapLabels(tr(STR_MENU), tr(STR_BOOKS), tr(STR_BUTTON_SETTINGS),
+                                              recentBooks.empty() ? "" : tr(STR_READ));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     if (!firstRenderDone) {
