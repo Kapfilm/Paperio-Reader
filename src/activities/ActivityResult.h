@@ -82,6 +82,7 @@ struct NetworkModeResult {
 
 struct FootnoteResult {
   std::string href;
+  int selectedIndex = 0;
 };
 
 struct FilePathResult {

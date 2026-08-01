@@ -17,6 +17,7 @@
 #include "../ActivityManager.h"
 #include "../util/ConfirmationActivity.h"
 #include "BookInfoActivity.h"
+#include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
@@ -27,10 +28,76 @@
 #include "util/ButtonNavigator.h"
 
 namespace {
+bool isMinimalTheme() {
+  return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::MINIMAL;
+}
+
+int gridColumns() { return isMinimalTheme() ? 2 : RecentBooksActivity::GRID_COLS; }
+
 int gridThumbWidth(int contentWidth) {
   const int margin = RecentBooksActivity::GRID_THUMB_MARGIN;
   const int cols = RecentBooksActivity::GRID_COLS;
   return (contentWidth - (cols + 1) * margin) / cols;
+}
+
+struct GridGeometry {
+  int columns;
+  int margin;
+  int slotWidth;
+  int displayThumbWidth;
+  int displayThumbHeight;
+  int storedThumbWidth;
+  int storedThumbHeight;
+  int labelHeight;
+  int rowStride;
+  int topGap;
+  int visibleRows;
+};
+
+GridGeometry gridGeometry(const GfxRenderer& renderer) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect contentRect = UITheme::getContentRect(renderer, true, true);
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
+  const int margin = RecentBooksActivity::GRID_THUMB_MARGIN;
+
+  if (isMinimalTheme()) {
+    constexpr int rows = 2;
+    constexpr int columns = 2;
+    // Edge-to-edge 2x2 cover wall: the one-pixel frames meet directly, using all
+    // available space below the header. Thumbnails are generated for the exact
+    // interior dimensions, so the 1-bit dither is still drawn 1:1.
+    const int slotWidth = contentRect.width / columns;
+    const int displayHeight = std::max(42, contentHeight / rows);
+    const int displayWidth = slotWidth;
+    return {columns,
+            0,
+            slotWidth,
+            displayWidth,
+            displayHeight,
+            std::max(1, displayWidth - 2),
+            std::max(1, displayHeight - 2),
+            0,
+            displayHeight,
+            0,
+            rows};
+  }
+
+  const int displayWidth = gridThumbWidth(contentRect.width);
+  const int displayHeight = RecentBooksActivity::GRID_CELL_HEIGHT;
+  const int labelHeight = RecentBooksActivity::GRID_LABEL_HEIGHT;
+  const int rowStride = displayHeight + labelHeight + margin;
+  return {RecentBooksActivity::GRID_COLS,
+          margin,
+          displayWidth,
+          displayWidth,
+          displayHeight,
+          RecentBooksActivity::GRID_THUMB_WIDTH,
+          RecentBooksActivity::GRID_THUMB_HEIGHT,
+          labelHeight,
+          rowStride,
+          0,
+          std::max(1, contentHeight / rowStride)};
 }
 
 std::string gridThumbPath(const std::string& coverBmpPath, int tw, int th) {
@@ -50,10 +117,11 @@ void RecentBooksActivity::loadRecentBooks() {
 }
 
 bool RecentBooksActivity::loadNextCover() {
-  // Fixed thumbnail dimensions shared with FinishedBookActivity.
-  // The cell renderer scales the BMP down to the runtime cell width for display.
-  const int tw = GRID_THUMB_WIDTH;
-  const int th = GRID_THUMB_HEIGHT;
+  const GridGeometry geometry = gridGeometry(renderer);
+  // Mini thumbnails are generated at their exact final image size and drawn 1:1.
+  // Other themes retain the shared fixed size used by FinishedBookActivity.
+  const int tw = geometry.storedThumbWidth;
+  const int th = geometry.storedThumbHeight;
 
   // ── Cover extract session tick ───────────────────────────────────────────────
   if (extractSession) {
@@ -276,7 +344,9 @@ void RecentBooksActivity::loop() {
       }
       openingBook = true;
       ReturnHint hint;
-      hint.target = ReturnTo::RecentBooks;
+      // Minimal exposes Recent Books as a main-screen shortcut, so leaving a
+      // book should return to that main screen instead of reopening the grid.
+      hint.target = isMinimalTheme() ? ReturnTo::Home : ReturnTo::RecentBooks;
       hint.selectIndex = selectorIndex;
       activityManager.replaceWithReader(recentBooks[selectorIndex].path, std::move(hint));
       return;
@@ -292,7 +362,7 @@ void RecentBooksActivity::loop() {
     if (ev.button == MappedInputManager::Button::Up && ev.type == ButtonEventManager::PressType::Short) {
       if (!recentBooks.empty()) {
         if (gridView) {
-          selectorIndex = std::max(0, selectorIndex - GRID_COLS);
+          selectorIndex = std::max(0, selectorIndex - gridColumns());
         } else {
           selectorIndex = ButtonNavigator::previousIndex(selectorIndex, listSize);
         }
@@ -305,7 +375,7 @@ void RecentBooksActivity::loop() {
     if (ev.button == MappedInputManager::Button::Down && ev.type == ButtonEventManager::PressType::Short) {
       if (!recentBooks.empty()) {
         if (gridView) {
-          selectorIndex = std::min(listSize - 1, selectorIndex + GRID_COLS);
+          selectorIndex = std::min(listSize - 1, selectorIndex + gridColumns());
         } else {
           selectorIndex = ButtonNavigator::nextIndex(selectorIndex, listSize);
         }
@@ -457,10 +527,12 @@ void RecentBooksActivity::renderListView(RenderLock&&) {
   renderer.displayBuffer();
 }
 
-void RecentBooksActivity::renderGridCell(int index, bool selected, int cellX, int cellY, int tw, int th, int labelW) {
+void RecentBooksActivity::renderGridCell(const int index, const bool selected, const int cellX, const int cellY,
+                                         const int tw, const int th, const int storedThumbWidth,
+                                         const int storedThumbHeight, const int labelHeight) {
   const auto& book = recentBooks[index];
   const int labelY = cellY + th + 3;
-  const int cellFillHeight = th + GRID_LABEL_HEIGHT + 3;
+  const int cellFillHeight = th + labelHeight + (labelHeight > 0 ? 3 : 0);
 
   if (selected) {
     renderer.fillRect(cellX, cellY, tw, cellFillHeight);
@@ -472,7 +544,7 @@ void RecentBooksActivity::renderGridCell(int index, bool selected, int cellX, in
   }
 
   if (!book.coverBmpPath.empty()) {
-    const std::string thumbPath = gridThumbPath(book.coverBmpPath, GRID_THUMB_WIDTH, GRID_THUMB_HEIGHT);
+    const std::string thumbPath = gridThumbPath(book.coverBmpPath, storedThumbWidth, storedThumbHeight);
     FsFile file;
     bool thumbDrawn = false;
     if (Storage.openFileForRead("RBA", thumbPath, file)) {
@@ -519,16 +591,22 @@ void RecentBooksActivity::renderGridCell(int index, bool selected, int cellX, in
 
   // Reading-progress overlay on the cover: bottom-edge bar while in progress,
   // folded corner when finished, nothing for unread books.
-  const int progressPercent = (index >= 0 && index < static_cast<int>(bookProgress.size())) ? bookProgress[index] : -1;
-  UITheme::drawCoverProgressIndicator(renderer, Rect{cellX, cellY, tw, th}, progressPercent);
+  if (!isMinimalTheme()) {
+    const int progressPercent =
+        (index >= 0 && index < static_cast<int>(bookProgress.size())) ? bookProgress[index] : -1;
+    UITheme::drawCoverProgressIndicator(renderer, Rect{cellX, cellY, tw, th}, progressPercent);
+  }
 
-  // Label: title line 1, author line 2; white text on black for selected, black on white otherwise
-  const bool black = !selected;
-  std::string titleStr = renderer.truncatedText(SMALL_FONT_ID, book.title.c_str(), labelW);
-  renderer.drawText(SMALL_FONT_ID, cellX + 2, labelY, titleStr.c_str(), black);
-  if (!book.author.empty()) {
-    std::string authorStr = renderer.truncatedText(SMALL_FONT_ID, book.author.c_str(), labelW);
-    renderer.drawText(SMALL_FONT_ID, cellX + 2, labelY + 17, authorStr.c_str(), black);
+  if (labelHeight > 0) {
+    // Label: title line 1, author line 2; white text on black for selected, black on white otherwise.
+    const bool black = !selected;
+    const int labelWidth = tw - 4;
+    std::string titleStr = renderer.truncatedText(SMALL_FONT_ID, book.title.c_str(), labelWidth);
+    renderer.drawText(SMALL_FONT_ID, cellX + 2, labelY, titleStr.c_str(), black);
+    if (!book.author.empty()) {
+      std::string authorStr = renderer.truncatedText(SMALL_FONT_ID, book.author.c_str(), labelWidth);
+      renderer.drawText(SMALL_FONT_ID, cellX + 2, labelY + 17, authorStr.c_str(), black);
+    }
   }
 }
 
@@ -537,27 +615,25 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
   const Rect contentRect = UITheme::getContentRect(renderer, true, true);
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
-  const int margin = GRID_THUMB_MARGIN;
-  const int tw = gridThumbWidth(contentRect.width);
-  const int th = GRID_CELL_HEIGHT;
-  const int cellHeight = th + GRID_LABEL_HEIGHT + margin;
-  const int visibleRows = std::max(1, contentHeight / cellHeight);
-  const int totalRows = (static_cast<int>(recentBooks.size()) + GRID_COLS - 1) / GRID_COLS;
-  const int selectedRow = selectorIndex / GRID_COLS;
+  const GridGeometry geometry = gridGeometry(renderer);
+  const int visibleRows = geometry.visibleRows;
+  const int totalRows =
+      (static_cast<int>(recentBooks.size()) + geometry.columns - 1) / geometry.columns;
+  const int selectedRow = selectorIndex / geometry.columns;
   const int pageStartRow = (selectedRow / visibleRows) * visibleRows;
-  const int startIndex = pageStartRow * GRID_COLS;
-  const int labelW = tw - 4;
+  const int startIndex = pageStartRow * geometry.columns;
 
   auto cellPos = [&](int i, int& cx, int& cy) {
-    const int row = (i / GRID_COLS) - pageStartRow;
-    const int col = i % GRID_COLS;
-    cx = contentRect.x + margin + col * (tw + margin);
-    cy = contentTop + row * cellHeight;
+    const int row = (i / geometry.columns) - pageStartRow;
+    const int col = i % geometry.columns;
+    cx = contentRect.x + geometry.margin + col * (geometry.slotWidth + geometry.margin) +
+         (geometry.slotWidth - geometry.displayThumbWidth) / 2;
+    cy = contentTop + geometry.topGap + row * geometry.rowStride;
   };
   LOG_DBG("RBA", "Render grid: sel=%d prev=%d start=%d pageStartRow=%d visibleRows=%d totalRows=%d", selectorIndex,
           prevSelectorIndex, startIndex, pageStartRow, visibleRows, totalRows);
   // Partial fast path: only the selection changed within the same page
-  const int prevPage = prevSelectorIndex >= 0 ? (prevSelectorIndex / GRID_COLS / visibleRows) : -1;
+  const int prevPage = prevSelectorIndex >= 0 ? (prevSelectorIndex / geometry.columns / visibleRows) : -1;
   const int curPage = selectedRow / visibleRows;
   if (!fullRedrawNeeded && prevSelectorIndex >= 0 && prevSelectorIndex != selectorIndex && prevPage == curPage) {
     // The write framebuffer holds the frame from two refreshes ago (displayBuffer()
@@ -568,9 +644,11 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
     renderer.syncWriteBufferFromDisplayed();
     int cx, cy;
     cellPos(prevSelectorIndex, cx, cy);
-    renderGridCell(prevSelectorIndex, false, cx, cy, tw, th, labelW);
+    renderGridCell(prevSelectorIndex, false, cx, cy, geometry.displayThumbWidth, geometry.displayThumbHeight,
+                   geometry.storedThumbWidth, geometry.storedThumbHeight, geometry.labelHeight);
     cellPos(selectorIndex, cx, cy);
-    renderGridCell(selectorIndex, true, cx, cy, tw, th, labelW);
+    renderGridCell(selectorIndex, true, cx, cy, geometry.displayThumbWidth, geometry.displayThumbHeight,
+                   geometry.storedThumbWidth, geometry.storedThumbHeight, geometry.labelHeight);
     prevSelectorIndex = selectorIndex;
     renderer.displayBuffer();
     return;
@@ -594,16 +672,18 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
     return;
   }
 
-  const int endIndex = std::min(startIndex + visibleRows * GRID_COLS, static_cast<int>(recentBooks.size()));
+  const int endIndex =
+      std::min(startIndex + visibleRows * geometry.columns, static_cast<int>(recentBooks.size()));
   LOG_DBG("RBA", "Full grid redraw: sel=%d prev=%d", selectorIndex, prevSelectorIndex);
   for (int i = startIndex; i < endIndex; i++) {
     int cx, cy;
     cellPos(i, cx, cy);
-    renderGridCell(i, i == selectorIndex, cx, cy, tw, th, labelW);
+    renderGridCell(i, i == selectorIndex, cx, cy, geometry.displayThumbWidth, geometry.displayThumbHeight,
+                   geometry.storedThumbWidth, geometry.storedThumbHeight, geometry.labelHeight);
   }
 
   // Scroll arrows when content spans multiple pages
-  if (totalRows > visibleRows) {
+  if (totalRows > visibleRows && !isMinimalTheme()) {
     constexpr int arrowSize = 6;
     const int centerX = contentRect.x + contentRect.width / 2;
     if (pageStartRow > 0) {
@@ -622,7 +702,7 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
   }
 
   // On X4 (taller screen) there is room for a one-line gesture hint below the grid.
-  if (!gpio.deviceIsX3()) {
+  if (!gpio.deviceIsX3() && !isMinimalTheme()) {
     const int hintY = contentRect.y + contentRect.height - metrics.verticalSpacing - 14;
     const std::string hint = std::string(tr(STR_DIR_UP)) + "+L: " + tr(STR_VIEW_GRID) + "/" + tr(STR_VIEW_LIST) +
                              "   " + tr(STR_DIR_LEFT) + "+L: " + tr(STR_REMOVE) + "   " + tr(STR_DIR_RIGHT) +

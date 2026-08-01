@@ -464,6 +464,9 @@ class EpubReaderActivity final : public Activity {
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
+  int footnoteListSpine_ = -1;
+  int footnoteListPage_ = -1;
+  int footnoteListSelectedIndex_ = 0;
   struct SavedPosition {
     int spineIndex;
     int pageNumber;
@@ -620,7 +623,8 @@ class EpubReaderActivity final : public Activity {
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
-  void startClipSelection();
+  void openClipStylePicker();
+  void startClipSelection(ClippingHighlightStyle highlightStyle);
   void drawClippingHighlights(const Page& page, int fontId, int contentTop, int marginLeft) const;
   void launchKOReaderSync(SyncLaunchMode mode = SyncLaunchMode::COMPARE);
   // Reader-close auto-push gate. Returns true if AUTO_PUSH was launched (the caller
@@ -675,6 +679,8 @@ class EpubReaderActivity final : public Activity {
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
+  int rememberedFootnoteIndex();
+  void rememberFootnoteIndex(const ActivityResult& result);
   void restoreSavedPosition();
 
  public:

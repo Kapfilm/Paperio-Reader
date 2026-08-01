@@ -43,7 +43,7 @@ class HalFile : public Print {
     return f;
   }
 
-  void flush() {}
+  void flush() override {}
   size_t getName(char*, size_t) { return 0; }
   size_t size() { return hasData_ ? backing_.size() : 0; }
   size_t fileSize() { return size(); }

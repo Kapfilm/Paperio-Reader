@@ -9,6 +9,11 @@ inline constexpr size_t CLIPPING_CHAPTER_TITLE_MAX = 256;
 inline constexpr size_t CLIPPING_TEXT_MAX = 512;
 inline constexpr uint16_t CLIPPING_MAX_PER_BOOK = 64;
 
+enum class ClippingHighlightStyle : uint8_t {
+  Marker = 0,
+  Underline = 1,
+};
+
 struct Clipping {
   uint16_t spineIndex = 0;
   uint16_t startPage = 0;
@@ -19,6 +24,7 @@ struct Clipping {
   uint16_t wordCount = 0;
   uint16_t paragraphIndex = UINT16_MAX;
   uint32_t timestamp = 0;
+  ClippingHighlightStyle highlightStyle = ClippingHighlightStyle::Marker;
   std::string chapterTitle;
   std::string text;
 };
@@ -32,7 +38,8 @@ class ClippingStore {
 
   AddResult addClipping(uint16_t spineIndex, uint16_t startPage, uint16_t endPage, uint16_t pageCount,
                         uint16_t startWordIndex, uint16_t endWordIndex, uint16_t wordCount,
-                        const char* chapterTitle, uint16_t paragraphIndex, const std::string& text);
+                        const char* chapterTitle, uint16_t paragraphIndex, const std::string& text,
+                        ClippingHighlightStyle highlightStyle);
   bool removeAt(size_t index);
   void clearAll();
 

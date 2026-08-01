@@ -27,9 +27,12 @@
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION = 60;  // bumped: TextBlock word data now serialized as one flat arena
-                                              // (offset table + NUL-terminated text blob) instead of
-                                              // length-prefixed strings and per-field arrays (v60)
+constexpr uint8_t SECTION_FILE_VERSION = 64;  // bumped: semantic/classed footnote containers start a fresh page
+                                              // v63: recognised footnote destinations began on a fresh rendered page
+                                              // v62: anchor map retained real footnote targets on <span id="...">
+                                              // v61: legacy <a name="..."> navigation targets
+                                              // v60: TextBlock word data became one flat arena
+                                              // (offset table + NUL-terminated text blob)
                                               // v59: FontSizeLadder residual dead zone (±3% renders native) changes
                                               // near-rung block metrics from v58
                                               // (v58: block sizes snap to the FontSizeLadder, uniform spans fold;

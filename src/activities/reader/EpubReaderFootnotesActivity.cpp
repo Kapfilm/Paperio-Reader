@@ -11,7 +11,8 @@
 
 void EpubReaderFootnotesActivity::onEnter() {
   Activity::onEnter();
-  selectedIndex = 0;
+  selectedIndex = footnotes.empty() ? 0 : std::clamp(selectedIndex, 0, static_cast<int>(footnotes.size()) - 1);
+  scrollOffset = selectedIndex;
   requestUpdate();
 }
 
@@ -23,6 +24,7 @@ void EpubReaderFootnotesActivity::loop() {
     if (ev.button == MappedInputManager::Button::Back && ev.type == ButtonEventManager::PressType::Short) {
       ActivityResult result;
       result.isCancelled = true;
+      result.data = FootnoteResult{"", selectedIndex};
       setResult(std::move(result));
       finish();
       return;
@@ -34,7 +36,7 @@ void EpubReaderFootnotesActivity::loop() {
     if ((ev.button == MappedInputManager::Button::Confirm || ev.button == MappedInputManager::Button::Power) &&
         ev.type == ButtonEventManager::PressType::Short) {
       if (selectedIndex >= 0 && selectedIndex < static_cast<int>(footnotes.size())) {
-        setResult(FootnoteResult{footnotes[selectedIndex].href});
+        setResult(FootnoteResult{footnotes[selectedIndex].href, selectedIndex});
         finish();
       }
       return;

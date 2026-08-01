@@ -68,7 +68,8 @@ class RecentBooksActivity final : public Activity {
   void showSelectedBookInfo();
 
   // Draws a single grid cell (used for both full render and partial selection update).
-  void renderGridCell(int index, bool selected, int cellX, int cellY, int tw, int th, int labelW);
+  void renderGridCell(int index, bool selected, int cellX, int cellY, int tw, int th, int storedThumbWidth,
+                      int storedThumbHeight, int labelHeight);
 
   void renderListView(RenderLock&&);
   void renderGridView(RenderLock&&);

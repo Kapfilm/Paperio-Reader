@@ -25,10 +25,13 @@ constexpr int kProgressLabelGap = 5;
 constexpr int kMenuPanelWidth = 384;
 constexpr int kMenuRowHeight = 64;
 constexpr int kMenuPanelTop = 210;
-constexpr int kMenuPanelRadius = 3;
+constexpr int kMenuPanelRadius = 7;
+constexpr int kMenuPanelPadding = 8;
+constexpr int kMenuIndexInset = 13;
+constexpr int kMenuIndexColumnWidth = 36;
 constexpr int kMenuSelectionTriangleWidth = 14;
 constexpr int kMenuSelectionTriangleHeight = 20;
-constexpr int kMenuSelectionTriangleInset = 30;
+constexpr int kMenuSelectionTriangleRightInset = 20;
 
 Rect coverRectForScreen(const GfxRenderer& renderer, const Rect& rect) {
   const int coverHeight = std::min(MinimalMetrics::values.homeCoverHeight, rect.height - 55);
@@ -195,24 +198,38 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
   if (buttonCount <= 0) return;
 
   const int panelWidth = std::min(kMenuPanelWidth, renderer.getScreenWidth() - 80);
-  const int panelHeight = buttonCount * kMenuRowHeight + 2;
+  const int panelHeight = buttonCount * kMenuRowHeight + kMenuPanelPadding * 2 + 2;
   const int panelX = (renderer.getScreenWidth() - panelWidth) / 2;
   const int panelY = std::max(MinimalMetrics::values.homeTopPadding, kMenuPanelTop - panelHeight / 4);
   renderer.drawRoundedRect(panelX, panelY, panelWidth, panelHeight, 1, kMenuPanelRadius, true);
 
   for (int i = 0; i < buttonCount; ++i) {
-    const int rowY = panelY + 1 + i * kMenuRowHeight;
-    if (i == selectedIndex) {
-      const int triangleX = panelX + kMenuSelectionTriangleInset;
+    const int rowX = panelX + kMenuPanelPadding;
+    const int rowWidth = panelWidth - kMenuPanelPadding * 2;
+    const int rowY = panelY + 1 + kMenuPanelPadding + i * kMenuRowHeight;
+    const bool selected = i == selectedIndex;
+    if (selected) {
+      renderer.fillRoundedRect(rowX, rowY, rowWidth, kMenuRowHeight, 3, Color::Black);
+      const int triangleX = rowX + rowWidth - kMenuSelectionTriangleRightInset - kMenuSelectionTriangleWidth;
       const int centerY = rowY + kMenuRowHeight / 2;
       const int xPoints[3] = {triangleX, triangleX, triangleX + kMenuSelectionTriangleWidth};
       const int yPoints[3] = {centerY - kMenuSelectionTriangleHeight / 2,
                               centerY + kMenuSelectionTriangleHeight / 2, centerY};
-      renderer.fillPolygon(xPoints, yPoints, 3, true);
+      renderer.fillPolygon(xPoints, yPoints, 3, false);
+    } else if (i > 0) {
+      renderer.fillRectDither(rowX, rowY, rowWidth, 1, Color::LightGray);
     }
-    const std::string label = renderer.truncatedText(UI_12_FONT_ID, buttonLabel(i).c_str(), panelWidth - 100);
-    const int labelWidth = renderer.getTextWidth(UI_12_FONT_ID, label.c_str());
-    renderer.drawText(UI_12_FONT_ID, panelX + (panelWidth - labelWidth) / 2,
-                      rowY + (kMenuRowHeight - renderer.getLineHeight(UI_12_FONT_ID)) / 2, label.c_str());
+
+    char indexLabel[4];
+    snprintf(indexLabel, sizeof(indexLabel), "%02d", i + 1);
+    const int textY = rowY + (kMenuRowHeight - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
+    renderer.drawText(SMALL_FONT_ID, rowX + kMenuIndexInset,
+                      rowY + (kMenuRowHeight - renderer.getLineHeight(SMALL_FONT_ID)) / 2, indexLabel, !selected);
+
+    const int labelX = rowX + kMenuIndexInset + kMenuIndexColumnWidth;
+    const int labelMaxWidth = rowWidth - kMenuIndexInset - kMenuIndexColumnWidth -
+                              kMenuSelectionTriangleRightInset - kMenuSelectionTriangleWidth - 8;
+    const std::string label = renderer.truncatedText(UI_12_FONT_ID, buttonLabel(i).c_str(), labelMaxWidth);
+    renderer.drawText(UI_12_FONT_ID, labelX, textY, label.c_str(), !selected);
   }
 }

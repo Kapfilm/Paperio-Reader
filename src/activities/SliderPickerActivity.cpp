@@ -58,21 +58,30 @@ void SliderPickerActivity::loop() {
       return;
     }
 
-    if ((ev.button == MappedInputManager::Button::PageBack || ev.button == MappedInputManager::Button::Left) &&
-        ev.type == ButtonEventManager::PressType::Short) {
+    if (ev.button == MappedInputManager::Button::Left && ev.type == ButtonEventManager::PressType::Short) {
       adjustValue(-kSmallStep);
       return;
     }
 
-    if ((ev.button == MappedInputManager::Button::PageForward || ev.button == MappedInputManager::Button::Right) &&
-        ev.type == ButtonEventManager::PressType::Short) {
+    if (ev.button == MappedInputManager::Button::Right && ev.type == ButtonEventManager::PressType::Short) {
       adjustValue(kSmallStep);
+      return;
+    }
+
+    // The side buttons are represented twice by ButtonEventManager (Up/PageBack and
+    // Down/PageForward). Handle only Up/Down so one physical tap applies one large step.
+    if (ev.button == MappedInputManager::Button::Up && ev.type == ButtonEventManager::PressType::Short) {
+      adjustValue(kLargeStep);
+      return;
+    }
+    if (ev.button == MappedInputManager::Button::Down && ev.type == ButtonEventManager::PressType::Short) {
+      adjustValue(-kLargeStep);
       return;
     }
   }
 
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Up}, [this] { adjustValue(kLargeStep); });
-  buttonNavigator.onPressAndContinuous({MappedInputManager::Button::Down}, [this] { adjustValue(-kLargeStep); });
+  buttonNavigator.onContinuous({MappedInputManager::Button::Up}, [this] { adjustValue(kLargeStep); });
+  buttonNavigator.onContinuous({MappedInputManager::Button::Down}, [this] { adjustValue(-kLargeStep); });
 }
 
 void SliderPickerActivity::render(RenderLock&&) {

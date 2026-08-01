@@ -96,7 +96,7 @@ inline std::vector<SettingInfo> buildSettingsList() {
   };
 
   std::vector<SettingInfo> settings;
-  settings.reserve(77);
+  settings.reserve(78);
 
   // --- Display ---
   settings.push_back(SettingInfo::Action(StrId::STR_TIME_TO_SLEEP, SettingAction::SleepTimeoutPicker)
@@ -246,6 +246,12 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Toggle(StrId::STR_INLINE_FOOTNOTE_PREVIEWS,
                                          &CrossPointSettings::inlineFootnotePreviews, "inlineFootnotePreviews",
                                          StrId::STR_CAT_READER));
+  settings.push_back(
+      SettingInfo::Enum(StrId::STR_HIGHLIGHT_STYLE, &CrossPointSettings::clippingHighlightStyle,
+                        {StrId::STR_HIGHLIGHT_MARKER, StrId::STR_HIGHLIGHT_UNDERLINE}, "clippingHighlightStyle",
+                        StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_CREATE_CLIPPING)
+          .withSelectorActivity());
 
   // --- Controls ---
   // --- Button Actions (short / double / long press per logical button) ---

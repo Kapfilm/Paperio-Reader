@@ -62,6 +62,11 @@ class Lookup {
   // returns true.
   bool find(const char* href, std::string& outText);
 
+  // True when `fragment` is one of the gathered footnote destinations in the
+  // spine this lookup was opened for. Lets the section parser retain otherwise
+  // filtered inline IDs (notably <span id="...">) only when they are real links.
+  bool containsTarget(const char* fragment) const;
+
   bool isOpen() const { return entryCount_ > 0; }
 
  private:

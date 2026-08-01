@@ -1,7 +1,3 @@
-﻿#define DEBUG_MEMORY_CONSUMPTION 1
-#define DEBUG_BACKGROUND_WORK 1
-#define DEBUG_BACKGROUND_OVERLAY 0
-
 #ifndef DEBUG_MEMORY_CONSUMPTION
 #define DEBUG_MEMORY_CONSUMPTION 0
 #endif
@@ -61,6 +57,7 @@
 #include "StarredPagesActivity.h"
 #include "activities/home/BookInfoActivity.h"
 #include "activities/settings/ReadingStatsBookDetailActivity.h"
+#include "activities/settings/SettingsSubmenuActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ScreenshotUtil.h"
@@ -1244,9 +1241,11 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           previewLookup.find(currentPageFootnotes[i].href, footnotePreviews[i]);
         }
       }
-      startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes,
-                                                                           std::move(footnotePreviews)),
+      startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(
+                                 renderer, mappedInput, currentPageFootnotes, std::move(footnotePreviews),
+                                 rememberedFootnoteIndex()),
                              [this](const ActivityResult& result) {
+                               rememberFootnoteIndex(result);
                                if (!result.isCancelled) {
                                  const auto& footnoteResult = std::get<FootnoteResult>(result.data);
                                  navigateToHref(footnoteResult.href, true);
@@ -1377,8 +1376,11 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           });
       break;
     }
-    case EpubReaderMenuActivity::MenuAction::CREATE_CLIPPING:
-      startClipSelection();
+    case EpubReaderMenuActivity::MenuAction::CREATE_CLIPPING_MARKER:
+      startClipSelection(ClippingHighlightStyle::Marker);
+      break;
+    case EpubReaderMenuActivity::MenuAction::CREATE_CLIPPING_UNDERLINE:
+      startClipSelection(ClippingHighlightStyle::Underline);
       break;
     case EpubReaderMenuActivity::MenuAction::VIEW_CLIPPINGS: {
       startActivityForResult(
@@ -3787,7 +3789,9 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
   std::string anchor;
   const auto hashPos = hrefStr.find('#');
   if (hashPos != std::string::npos && hashPos + 1 < hrefStr.size()) {
-    anchor = hrefStr.substr(hashPos + 1);
+    // XHTML IDs are stored decoded in the section anchor map. Link fragments may
+    // still contain URI escapes (for example "#note%203"), so compare like with like.
+    anchor = FsHelpers::decodeUriEscapes(hrefStr.substr(hashPos + 1));
   }
 
   // Check for same-file anchor reference (#anchor only)
@@ -3814,6 +3818,25 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
   }
   requestUpdate();
   LOG_DBG("ERS", "Navigated to spine %d for href: %s", targetSpineIndex, hrefStr.c_str());
+}
+
+int EpubReaderActivity::rememberedFootnoteIndex() {
+  const int page = section ? section->currentPage : -1;
+  if (footnoteListSpine_ != currentSpineIndex || footnoteListPage_ != page) {
+    footnoteListSpine_ = currentSpineIndex;
+    footnoteListPage_ = page;
+    footnoteListSelectedIndex_ = 0;
+  }
+  if (currentPageFootnotes.empty()) return 0;
+  footnoteListSelectedIndex_ =
+      std::clamp(footnoteListSelectedIndex_, 0, static_cast<int>(currentPageFootnotes.size()) - 1);
+  return footnoteListSelectedIndex_;
+}
+
+void EpubReaderActivity::rememberFootnoteIndex(const ActivityResult& result) {
+  if (const auto* footnote = std::get_if<FootnoteResult>(&result.data)) {
+    footnoteListSelectedIndex_ = footnote->selectedIndex;
+  }
 }
 
 void EpubReaderActivity::restoreSavedPosition() {
@@ -3972,8 +3995,37 @@ void EpubReaderActivity::openQuickOverrides() {
                          });
 }
 
-void EpubReaderActivity::startClipSelection() {
-  if (!section || !epub || section->pageCount <= 0) {
+void EpubReaderActivity::openClipStylePicker() {
+  std::vector<SettingInfo> choices;
+  choices.reserve(2);
+  choices.push_back(SettingInfo::Action(StrId::STR_HIGHLIGHT_MARKER, SettingAction::None));
+  choices.push_back(SettingInfo::Action(StrId::STR_HIGHLIGHT_UNDERLINE, SettingAction::None));
+
+  startActivityForResult(
+      std::make_unique<SettingsSubmenuActivity>(renderer, mappedInput, StrId::STR_CREATE_CLIPPING,
+                                                std::move(choices), nullptr, false),
+      [this](const ActivityResult& result) {
+        const auto* menu = std::get_if<MenuResult>(&result.data);
+        if (!menu || menu->nameId < 0) {
+          requestUpdate();
+          return;
+        }
+        switch (static_cast<StrId>(menu->nameId)) {
+          case StrId::STR_HIGHLIGHT_MARKER:
+            startClipSelection(ClippingHighlightStyle::Marker);
+            break;
+          case StrId::STR_HIGHLIGHT_UNDERLINE:
+            startClipSelection(ClippingHighlightStyle::Underline);
+            break;
+          default:
+            requestUpdate();
+            break;
+        }
+      });
+}
+
+void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlightStyle) {
+  if (!section || !epub || section->pageCount == 0) {
     requestUpdate();
     return;
   }
@@ -3983,16 +4035,55 @@ void EpubReaderActivity::startClipSelection() {
   const int readerFontId = getEffectiveReaderFontId();
   const int startPage = section->currentPage;
   std::string chapterTitle;
+  constexpr size_t MAX_SELECTABLE_WORDS_PER_PAGE = 160;
+  constexpr size_t MIN_SELECTION_HEAP_RESERVE = 12 * 1024;
+  constexpr size_t TWO_PAGE_HEAP_RESERVE = 20 * 1024;
+  auto selectionFits = [](const size_t wordCapacity, const size_t heapReserve) {
+    const size_t wordVectorBytes = sizeof(WordRef) * wordCapacity;
+    return esp_get_free_heap_size() >= wordVectorBytes + heapReserve &&
+           heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT) >= wordVectorBytes;
+  };
+
+  // Prefer the original two-page selection range, but do not reject a perfectly
+  // usable current-page selection merely because the heap cannot hold both pages.
+  // Opening the style picker can leave the small ESP heap more fragmented even
+  // after the picker itself has been destroyed.
+  int selectablePageCount = 2;
+  size_t maxSelectableWords = MAX_SELECTABLE_WORDS_PER_PAGE * selectablePageCount;
+  if (!selectionFits(maxSelectableWords, TWO_PAGE_HEAP_RESERVE)) {
+    selectablePageCount = 1;
+    maxSelectableWords = MAX_SELECTABLE_WORDS_PER_PAGE;
+  }
+
+  // As a last resort temporarily lend the secondary framebuffer's ~48-52 KB to
+  // the selector. The reader restores it on the first render after the selector
+  // closes, through recoverSecondaryBufferIfNeeded().
+  if (!selectionFits(maxSelectableWords, MIN_SELECTION_HEAP_RESERVE) && renderer.hasSecondaryBuffer() &&
+      renderer.releaseSecondaryBuffer()) {
+    secondaryBufferDegraded_ = true;
+    renderer.setSingleBufferFastDiff(true);
+    LOG_INF("CLIP", "Released secondary buffer for text selection");
+  }
+
+  if (!selectionFits(maxSelectableWords, MIN_SELECTION_HEAP_RESERVE)) {
+    const size_t wordVectorBytes = sizeof(WordRef) * maxSelectableWords;
+    LOG_ERR("CLIP", "Not enough heap for selection: need=%u free=%u contig=%u",
+            static_cast<unsigned>(wordVectorBytes), static_cast<unsigned>(esp_get_free_heap_size()),
+            static_cast<unsigned>(
+                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT)));
+    GUI.drawPopup(renderer, tr(STR_MEMORY_ERROR));
+    delay(900);
+    requestUpdate();
+    return;
+  }
 
   {
     RenderLock lock(*this);
     const int viewportHeight = std::max(0, renderer.getScreenHeight() - layout.marginTop - layout.marginBottom);
-    constexpr int SELECTABLE_PAGE_COUNT = 2;
-    constexpr size_t MAX_SELECTABLE_WORDS_PER_PAGE = 160;
-    words.reserve(MAX_SELECTABLE_WORDS_PER_PAGE * SELECTABLE_PAGE_COUNT);
+    words.reserve(maxSelectableWords);
 
     for (int relativePage = 0;
-         relativePage < SELECTABLE_PAGE_COUNT && startPage + relativePage < section->pageCount; ++relativePage) {
+         relativePage < selectablePageCount && startPage + relativePage < section->pageCount; ++relativePage) {
       section->currentPage = startPage + relativePage;
       auto page = section->loadPageFromSectionFile();
       if (!page) {
@@ -4085,13 +4176,13 @@ void EpubReaderActivity::startClipSelection() {
   startActivityForResult(
       std::make_unique<ClipSelectionActivity>(renderer, mappedInput, std::move(words), readerFontId, *section,
                                               startPage, layout.marginTop, layout.marginLeft),
-      [this, chapterTitle = std::move(chapterTitle)](const ActivityResult& result) {
+      [this, chapterTitle = std::move(chapterTitle), highlightStyle](const ActivityResult& result) {
         if (!result.isCancelled) {
           const auto& clip = std::get<ClippingResult>(result.data);
           const auto addResult = clippingStore.addClipping(
               static_cast<uint16_t>(currentSpineIndex), clip.sectionPage, clip.endSectionPage, clip.sectionPageCount,
               clip.startPageWordIndex, clip.endPageWordIndex, clip.wordCount, chapterTitle.c_str(),
-              clip.paragraphIndex, clip.text);
+              clip.paragraphIndex, clip.text, highlightStyle);
           const bool exported =
               addResult == ClippingStore::AddResult::Added &&
               ClippingsManager::appendKindleExport(epub->getTitle(), epub->getAuthor(), chapterTitle,
@@ -4109,11 +4200,13 @@ void EpubReaderActivity::startClipSelection() {
 
 void EpubReaderActivity::drawClippingHighlights(const Page& page, const int fontId, const int contentTop,
                                                 const int marginLeft) const {
-  if (!section || clippingStore.empty() || section->pageCount <= 0 || section->currentPage < 0) return;
+  if (!section || clippingStore.empty() || section->pageCount == 0 || section->currentPage < 0) return;
   const uint16_t currentPage = static_cast<uint16_t>(section->currentPage);
   const uint16_t currentPageCount = static_cast<uint16_t>(section->pageCount);
   uint16_t pageWordIndex = 0;
-  const auto isHighlighted = [&](const uint16_t wordIndex) {
+  const auto highlightState = [&](const uint16_t wordIndex, uint8_t& current, uint8_t& next) {
+    current = 0;
+    next = 0;
     for (const Clipping& clipping : clippingStore.getAll()) {
       if (clipping.spineIndex != static_cast<uint16_t>(currentSpineIndex) ||
           clipping.pageCount != currentPageCount || currentPage < clipping.startPage ||
@@ -4122,9 +4215,13 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
       }
       const uint16_t first = currentPage == clipping.startPage ? clipping.startWordIndex : 0;
       const uint16_t last = currentPage == clipping.endPage ? clipping.endWordIndex : UINT16_MAX;
-      if (wordIndex >= first && wordIndex <= last) return true;
+      const uint8_t styleBit = static_cast<uint8_t>(1U << static_cast<uint8_t>(clipping.highlightStyle));
+      if (wordIndex >= first && wordIndex <= last) current |= styleBit;
+      if (wordIndex != UINT16_MAX && static_cast<uint16_t>(wordIndex + 1) >= first &&
+          static_cast<uint16_t>(wordIndex + 1) <= last) {
+        next |= styleBit;
+      }
     }
-    return false;
   };
 
   for (const auto& element : page.elements) {
@@ -4150,28 +4247,47 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
       }
       if (!visible) continue;
 
-      const bool highlighted = isHighlighted(pageWordIndex);
+      uint8_t highlighted;
+      uint8_t nextHighlighted;
+      highlightState(pageWordIndex, highlighted, nextHighlighted);
       if (highlighted) {
         const auto style = block.wordStyle(i);
         const float scale = blockScale * (block.wordSizePct(i) / 100.0f);
         const int ascender = scale == 1.0f ? renderer.getFontAscenderSize(effectiveFontId)
                                            : renderer.getFontAscenderSizeScaled(effectiveFontId, scale);
         int wordY = contentTop + line.yPos + lineAscender - ascender;
-        int wordWidth = scale == 1.0f ? renderer.getTextWidth(effectiveFontId, text, style)
-                                      : renderer.getTextWidthScaled(effectiveFontId, text, style, scale);
+        if ((style & EpdFontFamily::SUP) != 0) {
+          wordY -= renderer.getFontAscenderSize(effectiveFontId) * 2 / 5;
+        } else if ((style & EpdFontFamily::SUB) != 0) {
+          wordY += renderer.getFontAscenderSize(effectiveFontId) / 4;
+        }
+        const int measuredWordWidth = scale == 1.0f ? renderer.getTextWidth(effectiveFontId, text, style)
+                                                    : renderer.getTextWidthScaled(effectiveFontId, text, style, scale);
+        int markerWidth = measuredWordWidth;
+        int underlineWidth = measuredWordWidth;
         if (i + 1 < block.wordCount() && block.wordXpos(i + 1) > block.wordXpos(i)) {
           const int distanceToNext = static_cast<int>(block.wordXpos(i + 1) - block.wordXpos(i));
-          wordWidth = isHighlighted(static_cast<uint16_t>(pageWordIndex + 1))
-                          ? distanceToNext
-                          : std::min(wordWidth, distanceToNext);
+          markerWidth = (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Marker))) != 0
+                            ? distanceToNext
+                            : std::min(markerWidth, distanceToNext);
+          underlineWidth =
+              (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Underline))) != 0
+                  ? distanceToNext
+                  : std::min(underlineWidth, distanceToNext);
         }
         const int wordX = marginLeft + line.xPos + block.wordXpos(i);
         const int wordHeight = std::max(renderer.getLineHeight(effectiveFontId), ascender + 4);
-        renderer.fillRectDither(wordX, wordY, wordWidth, wordHeight, Color::LightGray);
-        if (scale == 1.0f) {
-          renderer.drawText(effectiveFontId, wordX, wordY, text, true, style);
-        } else {
-          renderer.drawTextScaled(effectiveFontId, wordX, wordY, text, true, style, scale);
+        if ((highlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Marker))) != 0) {
+          renderer.fillRectDither(wordX, wordY, markerWidth, wordHeight, Color::LightGray);
+          if (scale == 1.0f) {
+            renderer.drawText(effectiveFontId, wordX, wordY, text, true, style);
+          } else {
+            renderer.drawTextScaled(effectiveFontId, wordX, wordY, text, true, style, scale);
+          }
+        }
+        if ((highlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Underline))) != 0) {
+          const int underlineY = wordY + ascender + 3;
+          renderer.drawLine(wordX, underlineY, wordX + underlineWidth, underlineY, 2, true);
         }
       }
       ++pageWordIndex;
@@ -4263,8 +4379,10 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
           navigateToHref(currentPageFootnotes[0].href, true);
         } else {
           startActivityForResult(
-              std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
+              std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes,
+                                                            std::vector<std::string>{}, rememberedFootnoteIndex()),
               [this](const ActivityResult& result) {
+                rememberFootnoteIndex(result);
                 if (!result.isCancelled) {
                   const auto& footnoteResult = std::get<FootnoteResult>(result.data);
                   navigateToHref(footnoteResult.href, true);
@@ -4403,7 +4521,7 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
       break;
     case BA::BTN_CREATE_CLIPPING:
       if (epub) {
-        startClipSelection();
+        openClipStylePicker();
       }
       break;
     case BA::BTN_FORCE_REFRESH:

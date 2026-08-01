@@ -37,8 +37,6 @@ mkdir -p "$BUILD_DIR"
 SOURCES=(
   "$ROOT_DIR/test/epub_css/CssParserTest.cpp"
   "$ROOT_DIR/lib/Epub/Epub/css/CssParser.cpp"
-  "$ROOT_DIR/lib/hal/HalStorage.cpp"
-  "$ROOT_DIR/lib/Logging/Logging.cpp"
 )
 
 CXXFLAGS=(
@@ -54,6 +52,7 @@ CXXFLAGS=(
   -I"$ROOT_DIR/test/shims"
   -I"$ROOT_DIR"
   -I"$ROOT_DIR/lib"
+  -I"$ROOT_DIR/lib/Memory"
   -I"$ROOT_DIR/lib/hal"
   -I"$ROOT_DIR/lib/Logging"
   -I"$ARDUINO_FRAMEWORK_DIR/cores/esp32"

@@ -175,6 +175,7 @@ class ChapterHtmlSlimParser final : public Print {
   int completedPageCount = 0;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
   std::string pendingAnchorId;  // deferred until after previous text block is flushed
+  bool pendingAnchorStartsPage = false;  // footnote destinations begin at viewport top
   std::vector<std::string> tocAnchors;
 
   // External printed-page labels sourced from NCX <pageList> or EPUB 3 nav page-list.

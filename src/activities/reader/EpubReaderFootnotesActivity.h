@@ -12,8 +12,11 @@ class EpubReaderFootnotesActivity final : public Activity {
   // book-level footnotes.bin when it exists); empty strings render as the plain marker.
   explicit EpubReaderFootnotesActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                        const std::vector<FootnoteEntry>& footnotes,
-                                       std::vector<std::string> previews = {})
-      : Activity("EpubReaderFootnotes", renderer, mappedInput), footnotes(footnotes), previews(std::move(previews)) {}
+                                       std::vector<std::string> previews = {}, int initialSelectedIndex = 0)
+      : Activity("EpubReaderFootnotes", renderer, mappedInput),
+        footnotes(footnotes),
+        previews(std::move(previews)),
+        selectedIndex(initialSelectedIndex) {}
 
   void onEnter() override;
   void onExit() override;
