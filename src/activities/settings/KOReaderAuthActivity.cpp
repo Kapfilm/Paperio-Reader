@@ -1,6 +1,5 @@
 #include "KOReaderAuthActivity.h"
 
-#include <FontCacheManager.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -10,22 +9,10 @@
 #include "KOReaderSyncClient.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
+#include "activities/NetworkMemoryTrim.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-
-namespace {
-// Release secondary framebuffer + font cache before TLS to free a large
-// contiguous heap block (~36 KB needed). The activity already silentRestart()s
-// on exit so the buffer never needs to be reallocated.
-void trimMemoryBeforeTls(const GfxRenderer& renderer) {
-  if (auto* cache = renderer.getFontCacheManager()) cache->clearCache();
-  if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
-    LOG_DBG("KOSync", "Released secondary framebuffer before TLS (~52 KB contiguous)");
-    renderer.setSingleBufferFastDiff(true);
-  }
-}
-}  // namespace
 
 void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
   if (!success) {
@@ -49,7 +36,6 @@ void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
     }
   }
   requestUpdateAndWait();  // show status before blocking TLS call
-  trimMemoryBeforeTls(renderer);
 
   if (mode == Mode::REGISTER) {
     performRegistration();
@@ -106,6 +92,10 @@ void KOReaderAuthActivity::performRegistration() {
 void KOReaderAuthActivity::onEnter() {
   Activity::onEnter();
 
+  // Free the heap the WiFi stack needs before it is brought up, not after —
+  // association itself is the allocation-heavy step, well ahead of TLS.
+  trimMemoryForNetworkSession(renderer, "KOSync");
+
   // Check if already connected
   if (WiFi.status() == WL_CONNECTED) {
     onWifiSelectionComplete(true);
@@ -123,8 +113,13 @@ void KOReaderAuthActivity::onExit() {
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(30);
-    silentRestart();
   }
+  // Unconditional: onEnter() released the secondary framebuffer for the network
+  // session and nothing reallocates it, so every exit path — including a
+  // cancelled WiFi selection that never brought the radio up — must reboot to
+  // restore double-buffered rendering. Land back in KOReader settings, where the
+  // user started, rather than on Home.
+  silentRestartToKOReaderSettings();
 }
 
 void KOReaderAuthActivity::render(RenderLock&&) {
