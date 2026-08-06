@@ -174,9 +174,19 @@ class ChapterHtmlSlimParser final : public Print {
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
   std::vector<std::pair<std::string, uint16_t>> anchorData;
+  // Canonical converter IDs (id123) are stored numerically while parsing. Large
+  // reference-heavy chapters otherwise spend ~28 bytes per short string anchor.
+  std::vector<std::pair<uint32_t, uint16_t>> compactIdAnchorData;
+  bool anchorRecordingDisabled = false;  // low-memory state degrades navigation instead of aborting the device
   std::string pendingAnchorId;           // deferred until after previous text block is flushed
   bool pendingAnchorStartsPage = false;  // footnote destinations begin at viewport top
   std::vector<std::string> tocAnchors;
+  // Targeted footnote preview: ignore content before this anchor, then render only
+  // previewMaxPages pages. This avoids indexing an entire notes chapter for one note.
+  std::string previewAnchor;
+  uint16_t previewMaxPages = 0;
+  bool previewAnchorFound = false;
+  bool previewStopRequested = false;
 
   // External printed-page labels sourced from NCX <pageList> or EPUB 3 nav page-list.
   // Keyed by HTML id (anchor fragment). When the parser encounters an element whose id
@@ -283,6 +293,14 @@ class ChapterHtmlSlimParser final : public Print {
   // in lockstep. Every page break MUST go through this helper; open-coded completePageFn
   // calls risk desynchronising paragraphLutPerPage and failing the size check in Section.cpp.
   void emitPage(uint32_t xhtmlByteOffset);
+  // Anchor indexing is optional metadata. On a fragmented device heap, stop before
+  // growing the vector would call the throwing global operator new.
+  bool recordAnchorSafely(const std::string& anchor, uint16_t page);
+  size_t recordedAnchorCount() const { return anchorData.size() + compactIdAnchorData.size(); }
+  bool isPreviewBuild() const { return !previewAnchor.empty() && previewMaxPages > 0; }
+  bool isScanningForPreviewAnchor() const { return isPreviewBuild() && !previewAnchorFound; }
+  void startPreviewAtAnchor();
+  void stopPreviewIfPageLimitReached();
   void recordPageBreakLabel(const std::string& label);
   // Attach the pending inline float image to `bs` and place it on the current page.
   // Clears pendingInlineImage_ on return.  No-op if pendingInlineImage_ is not active.
@@ -302,7 +320,8 @@ class ChapterHtmlSlimParser final : public Print {
       const std::function<void(std::unique_ptr<Page>)>& completePageFn, const bool embeddedStyle,
       const std::string& contentBase, const std::string& imageBasePath, const uint8_t imageRendering = 0,
       std::vector<std::string> tocAnchors = {}, const std::function<void(int)>& progressFn = nullptr,
-      const CssParser* cssParser = nullptr, EpubImageManifest* imageManifest = nullptr)
+      const CssParser* cssParser = nullptr, EpubImageManifest* imageManifest = nullptr,
+      std::string previewAnchor = {}, const uint16_t previewMaxPages = 0)
 
       : epub(epub),
         renderer(renderer),
@@ -322,6 +341,8 @@ class ChapterHtmlSlimParser final : public Print {
         contentBase(contentBase),
         imageBasePath(imageBasePath),
         tocAnchors(std::move(tocAnchors)),
+        previewAnchor(std::move(previewAnchor)),
+        previewMaxPages(previewMaxPages),
         bionicReadingEnabled(bionicReadingEnabled) {}
 
   ~ChapterHtmlSlimParser() override;
@@ -335,6 +356,7 @@ class ChapterHtmlSlimParser final : public Print {
   bool setup(size_t totalInflatedSize);
   bool finalize();
   [[nodiscard]] bool streamSucceeded() const { return !streamFailed; }
+  [[nodiscard]] bool previewComplete() const { return previewStopRequested; }
   void setInlineFootnotePreviews(FootnotePreviews::Lookup* lookup) { inlineFootnotePreviews = lookup; }
 
   // Print interface — fed by Epub::readItemContentsToStream.
@@ -344,6 +366,7 @@ class ChapterHtmlSlimParser final : public Print {
   ParsedText::LineProcessResult addLineToPage(std::shared_ptr<TextBlock> line, bool lineEndsWithHyphenatedWord,
                                               bool suppressHyphenationRetry);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
+  const std::vector<std::pair<uint32_t, uint16_t>>& getCompactIdAnchors() const { return compactIdAnchorData; }
   const std::vector<std::pair<uint16_t, std::string>>& getPageBreakLabels() const { return pageBreakLabels; }
   const std::vector<ParagraphLutEntry>& getParagraphLutPerPage() const { return paragraphLutPerPage; }
 

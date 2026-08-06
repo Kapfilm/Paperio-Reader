@@ -12,6 +12,7 @@ inline constexpr uint16_t CLIPPING_MAX_PER_BOOK = 64;
 enum class ClippingHighlightStyle : uint8_t {
   Marker = 0,
   Underline = 1,
+  BlackMarker = 2,
 };
 
 struct Clipping {

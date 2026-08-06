@@ -244,7 +244,8 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                          &CrossPointSettings::inlineFootnotePreviews, "inlineFootnotePreviews",
                                          StrId::STR_CAT_READER));
   settings.push_back(SettingInfo::Enum(StrId::STR_HIGHLIGHT_STYLE, &CrossPointSettings::clippingHighlightStyle,
-                                       {StrId::STR_HIGHLIGHT_MARKER, StrId::STR_HIGHLIGHT_UNDERLINE},
+                                       {StrId::STR_HIGHLIGHT_MARKER, StrId::STR_HIGHLIGHT_UNDERLINE,
+                                        StrId::STR_HIGHLIGHT_BLACK_MARKER},
                                        "clippingHighlightStyle", StrId::STR_CAT_READER)
                          .withSubmenu(StrId::STR_CREATE_CLIPPING)
                          .withSelectorActivity());

@@ -31,6 +31,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
     STAR_PAGE,
     CREATE_CLIPPING_MARKER,
     CREATE_CLIPPING_UNDERLINE,
+    CREATE_CLIPPING_BLACK_MARKER,
     VIEW_CLIPPINGS,
     MARK_AS_READ,
     DELETE_CACHE,

@@ -13,12 +13,97 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
+#include "Epub/Page.h"
+#include "Epub/parsers/ChapterHtmlSlimParser.h"
+#include "GfxRenderer.h"
 #include "PipelineRunner.h"
+
+// Defined by ChapterHtmlSlimParser.cpp, which is linked into this full-pipeline target.
+bool looksLikeFootnoteAnchor(const std::string& id);
+bool parseCompactGenericAnchor(const std::string& id, uint32_t& value);
 
 namespace fs = std::filesystem;
 
 namespace {
+
+TEST(EpubAnchorClassificationTest, GenericConverterIdsAreNotFootnotes) {
+  // FB2/EPUB converters commonly assign id123-style anchors to every paragraph.
+  // Classifying these as notes forces every paragraph onto a separate rendered page.
+  EXPECT_FALSE(looksLikeFootnoteAnchor("id1"));
+  EXPECT_FALSE(looksLikeFootnoteAnchor("id17705"));
+
+  EXPECT_TRUE(looksLikeFootnoteAnchor("fn7"));
+  EXPECT_TRUE(looksLikeFootnoteAnchor("note_42"));
+  EXPECT_TRUE(looksLikeFootnoteAnchor("footnote-3"));
+  EXPECT_TRUE(looksLikeFootnoteAnchor("endnote.9"));
+  EXPECT_TRUE(looksLikeFootnoteAnchor("filepos123"));
+}
+
+TEST(EpubAnchorClassificationTest, CanonicalGenericIdsCanBeStoredCompactlyWithoutChangingTheirText) {
+  uint32_t value = 0;
+  EXPECT_TRUE(parseCompactGenericAnchor("id17705", value));
+  EXPECT_EQ(value, 17705u);
+  EXPECT_TRUE(parseCompactGenericAnchor("id0", value));
+  EXPECT_EQ(value, 0u);
+
+  EXPECT_FALSE(parseCompactGenericAnchor("id017705", value));
+  EXPECT_FALSE(parseCompactGenericAnchor("id17a", value));
+  EXPECT_FALSE(parseCompactGenericAnchor("note17", value));
+  EXPECT_FALSE(parseCompactGenericAnchor("id4294967296", value));
+}
+
+std::string pageText(const Page& page) {
+  std::string text;
+  for (const auto& element : page.elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+    for (uint16_t i = 0; i < block.wordCount(); ++i) {
+      if (!text.empty()) text += ' ';
+      text += block.wordText(i);
+    }
+  }
+  return text;
+}
+
+TEST(EpubTargetedFootnotePreviewTest, StartsAtRequestedAnchorAndStopsAtPageLimit) {
+  GfxRenderer renderer;
+  std::vector<std::unique_ptr<Page>> pages;
+  const std::string xhtml =
+      "<html><body><p>BEFORE MUST NEVER APPEAR</p><div id=\"note2\"><p>SECOND note starts here and contains "
+      "enough words to fill several deliberately tiny pages for the preview page limit test.</p><p>More note text "
+      "continues after the first paragraph and should still remain inside the bounded preview.</p></div></body></html>";
+
+  ChapterHtmlSlimParser parser(
+      nullptr, renderer, 1, 1.0f, false, 0, 90, 48, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr,
+      nullptr, nullptr, "note2", 2);
+  ASSERT_TRUE(parser.setup(xhtml.size()));
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
+  ASSERT_TRUE(parser.finalize());
+  ASSERT_TRUE(parser.previewComplete());
+  ASSERT_EQ(pages.size(), 2u);
+
+  std::string rendered;
+  for (const auto& page : pages) rendered += pageText(*page) + ' ';
+  EXPECT_NE(rendered.find("SECOND"), std::string::npos);
+  EXPECT_EQ(rendered.find("BEFORE"), std::string::npos);
+}
+
+TEST(EpubTargetedFootnotePreviewTest, MissingAnchorFailsWithoutRenderingTheChapterStart) {
+  GfxRenderer renderer;
+  std::vector<std::unique_ptr<Page>> pages;
+  const std::string xhtml = "<html><body><p>Ordinary chapter text</p></body></html>";
+  ChapterHtmlSlimParser parser(
+      nullptr, renderer, 1, 1.0f, false, 0, 90, 80, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr,
+      nullptr, nullptr, "missing-note", 2);
+  ASSERT_TRUE(parser.setup(xhtml.size()));
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
+  EXPECT_FALSE(parser.finalize());
+  EXPECT_TRUE(pages.empty());
+}
 
 std::string freshCacheDir(const std::string& tag) {
   const auto dir = fs::temp_directory_path() / "epub_pipeline_test" / tag;

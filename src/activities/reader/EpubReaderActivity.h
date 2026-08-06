@@ -220,9 +220,6 @@ class EpubReaderActivity final : public Activity {
   bool forceLoadLargeImages = false;
   // Set after each render: true if the current page contains at least one placeholder image.
   bool pageHasPlaceholders = false;
-  bool showTruncatedSectionHintThisRender = false;
-  uint8_t truncatedSectionHintRendersRemaining = 0;
-  int lastWarnedTruncatedSpineIndex = -1;
   struct RenderPhaseStats {
     unsigned long prewarmMs = 0UL;
     unsigned long bwRenderMs = 0UL;
@@ -474,6 +471,8 @@ class EpubReaderActivity final : public Activity {
   static constexpr int MAX_FOOTNOTE_DEPTH = 3;
   SavedPosition savedPositions[MAX_FOOTNOTE_DEPTH] = {};
   int footnoteDepth = 0;
+  std::string pendingFootnotePreviewAnchor;
+  bool activeFootnotePreview = false;
 
   // --- render() pass dispatch (see RenderPass) ---
   // Opportunistically restore the secondary display buffer if a prior OOM degraded it.

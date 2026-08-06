@@ -203,9 +203,28 @@ bool isHeaderOrBlock(const char* name) {
 // Block-level, sectioning, and structural elements are always considered navigable.
 bool isNonNavigableInlineElement(const char* name) { return strcmp(name, "span") == 0; }
 
+// Compact only canonical id+decimal anchors. Leading zeroes are deliberately not
+// accepted because reconstructing the string at serialization time must be lossless.
+bool parseCompactGenericAnchor(const std::string& id, uint32_t& value) {
+  if (id.size() <= 2 || id[0] != 'i' || id[1] != 'd') return false;
+  if (id.size() > 3 && id[2] == '0') return false;
+
+  uint32_t parsed = 0;
+  for (size_t i = 2; i < id.size(); ++i) {
+    const char c = id[i];
+    if (c < '0' || c > '9') return false;
+    const uint32_t digit = static_cast<uint32_t>(c - '0');
+    if (parsed > (UINT32_MAX - digit) / 10) return false;
+    parsed = parsed * 10 + digit;
+  }
+  value = parsed;
+  return true;
+}
+
 // Common converter-generated footnote destinations when semantic noteref metadata
-// is absent. Keep this deliberately narrow: Kobo injects thousands of span IDs, while
-// books converted from FB2 commonly use compact targets such as id163, note42 or fn_7.
+// is absent. Keep this deliberately narrow: generic IDs such as id163 are also widely
+// generated for ordinary paragraphs and verses, so treating them as notes would force
+// nearly every paragraph onto a new page. Explicit note-like prefixes remain supported.
 bool looksLikeFootnoteAnchor(const std::string& id) {
   const auto digitsOnlyFrom = [&](size_t pos) {
     while (pos < id.size() && (id[pos] == '-' || id[pos] == '_' || id[pos] == '.')) ++pos;
@@ -215,7 +234,6 @@ bool looksLikeFootnoteAnchor(const std::string& id) {
     }
     return true;
   };
-  if (id.size() > 2 && id[0] == 'i' && id[1] == 'd' && digitsOnlyFrom(2)) return true;
   static constexpr const char* prefixes[] = {"fn", "note", "footnote", "endnote", "filepos"};
   for (const char* prefix : prefixes) {
     const size_t len = strlen(prefix);
@@ -502,6 +520,79 @@ void ChapterHtmlSlimParser::emitPage(uint32_t xhtmlByteOffset) {
   if (currentTextBlock) {
     currentTextBlock->getBlockStyle().floatZoneCount = 0;
   }
+  stopPreviewIfPageLimitReached();
+}
+
+void ChapterHtmlSlimParser::startPreviewAtAnchor() {
+  previewAnchorFound = true;
+  completedPageCount = 0;
+  currentPageNextY = 0;
+  currentPage.reset();
+  currentTextBlock.reset();
+  pendingAnchorId.clear();
+  pendingAnchorStartsPage = false;
+  anchorData.clear();
+  compactIdAnchorData.clear();
+  paragraphLutPerPage.clear();
+  recordAnchorSafely(previewAnchor, 0);
+
+  auto style = BlockStyle();
+  style.textAlignDefined = true;
+  style.alignment = (paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
+                        ? CssTextAlign::Justify
+                        : static_cast<CssTextAlign>(paragraphAlignment);
+  startNewTextBlock(style);
+  LOG_DBG("EHP", "Started targeted preview at anchor '%s'", previewAnchor.c_str());
+}
+
+void ChapterHtmlSlimParser::stopPreviewIfPageLimitReached() {
+  if (!isPreviewBuild() || !previewAnchorFound || previewStopRequested || completedPageCount < previewMaxPages) {
+    return;
+  }
+  previewStopRequested = true;
+  saxParser_.stop();
+  LOG_DBG("EHP", "Stopped targeted preview after %u pages at anchor '%s'", previewMaxPages, previewAnchor.c_str());
+}
+
+bool ChapterHtmlSlimParser::recordAnchorSafely(const std::string& anchor, const uint16_t page) {
+  if (anchor.empty() || anchorRecordingDisabled) return false;
+
+  uint32_t compactId = 0;
+  const bool useCompactId = parseCompactGenericAnchor(anchor, compactId);
+  const size_t size = useCompactId ? compactIdAnchorData.size() : anchorData.size();
+  const size_t capacity = useCompactId ? compactIdAnchorData.capacity() : anchorData.capacity();
+
+  if (size == capacity) {
+    // libstdc++ doubles vector capacity here. Its operator new terminates directly in
+    // our -fno-exceptions firmware, so a try/catch cannot recover from allocation
+    // failure. Check both aggregate and contiguous heap before entering emplace_back.
+    const size_t nextCapacity = capacity == 0 ? 1 : capacity * 2;
+    const size_t elementBytes =
+        useCompactId ? sizeof(decltype(compactIdAnchorData)::value_type) : sizeof(decltype(anchorData)::value_type);
+    const size_t vectorBytes = nextCapacity * elementBytes;
+    constexpr size_t kContiguousHeadroom = 512;  // allocator metadata/alignment and concurrent small allocations
+    constexpr size_t kAllocationHeadroom = 2 * 1024;
+    const uint32_t caps = MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT;
+    const size_t largestBlock = heap_caps_get_largest_free_block(caps);
+    const size_t freeHeap = heap_caps_get_free_size(caps);
+    if (largestBlock < vectorBytes + kContiguousHeadroom ||
+        freeHeap < vectorBytes + anchor.size() + kAllocationHeadroom) {
+      // Anchor lookup is useful but not required to render the chapter. Continuing
+      // without later anchors is preferable to an abort and a full device reboot.
+      anchorRecordingDisabled = true;
+      LOG_ERR("EHP", "Anchor index stopped at %u entries (need=%u free=%u max=%u)",
+              static_cast<unsigned>(recordedAnchorCount()), static_cast<unsigned>(vectorBytes),
+              static_cast<unsigned>(freeHeap), static_cast<unsigned>(largestBlock));
+      return false;
+    }
+  }
+
+  if (useCompactId) {
+    compactIdAnchorData.emplace_back(compactId, page);
+  } else {
+    anchorData.emplace_back(anchor, page);
+  }
+  return true;
 }
 
 void ChapterHtmlSlimParser::recordPageBreakLabel(const std::string& label) {
@@ -616,7 +707,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
             emitPage(lastBodyChildByteOffset);
           }
         }
-        anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
+        recordAnchorSafely(pendingAnchorId, static_cast<uint16_t>(completedPageCount));
         pendingAnchorId.clear();
         pendingAnchorStartsPage = false;
       }
@@ -642,7 +733,7 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   }
   // Record deferred anchor after previous block is flushed (and any TOC page break)
   if (!pendingAnchorId.empty()) {
-    anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
+    recordAnchorSafely(pendingAnchorId, static_cast<uint16_t>(completedPageCount));
     pendingAnchorId.clear();
     pendingAnchorStartsPage = false;
   }
@@ -661,6 +752,19 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   if (self->streamFailed) {
     return;
   }
+
+  if (self->isScanningForPreviewAnchor()) {
+    const char* target = getAttribute(atts, "id");
+    if ((!target || target[0] == '\0') && strcmp(name, "a") == 0) {
+      target = getAttribute(atts, "name");
+    }
+    if (!target || self->previewAnchor != target) {
+      self->depth += 1;
+      return;
+    }
+    self->startPreviewAtAnchor();
+  }
+  if (self->previewStopRequested) return;
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
@@ -762,7 +866,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     }
     self->recordPageBreakLabel(label);
     if (!navigationAnchor.empty()) {
-      self->anchorData.emplace_back(navigationAnchor, static_cast<uint16_t>(self->completedPageCount));
+      self->recordAnchorSafely(navigationAnchor, static_cast<uint16_t>(self->completedPageCount));
       self->pendingAnchorId = navigationAnchor;
       self->pendingAnchorStartsPage = isFootnoteDestination;
     }
@@ -781,7 +885,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
         std::find(self->tocAnchors.begin(), self->tocAnchors.end(), navigationAnchor) != self->tocAnchors.end();
     const bool keepInlineAnchor =
         !isNonNavigableInlineElement(name) || isGatheredFootnoteTarget || looksLikeFootnoteAnchor(navigationAnchor);
-    if (isTocAnchor || (keepInlineAnchor && self->anchorData.size() < MAX_ANCHORS_PER_CHAPTER)) {
+    if (isTocAnchor || (keepInlineAnchor && self->recordedAnchorCount() < MAX_ANCHORS_PER_CHAPTER)) {
       self->pendingAnchorId = std::move(navigationAnchor);
       self->pendingAnchorStartsPage = isFootnoteDestination;
     }
@@ -1779,6 +1883,8 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
 void ChapterHtmlSlimParser::characterData(void* userData, const char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
 
+  if (self->isScanningForPreviewAnchor() || self->previewStopRequested) return;
+
   if (self->streamFailed) {
     return;
   }
@@ -2004,6 +2110,12 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
     return;
   }
 
+  if (self->isScanningForPreviewAnchor()) {
+    self->depth -= 1;
+    return;
+  }
+  if (self->previewStopRequested) return;
+
   // Check if any style state will change after we decrement depth
   // If so, we MUST flush the partWordBuffer with the CURRENT style first
   // Note: depth hasn't been decremented yet, so we check against (depth - 1)
@@ -2211,14 +2323,16 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
 ChapterHtmlSlimParser::~ChapterHtmlSlimParser() = default;
 
 bool ChapterHtmlSlimParser::setup(const size_t totalInflatedSize) {
-  auto paragraphAlignmentBlockStyle = BlockStyle();
-  paragraphAlignmentBlockStyle.textAlignDefined = true;
-  // Resolve None sentinel to Justify for initial block (no CSS context yet)
-  const auto align = (this->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
-                         ? CssTextAlign::Justify
-                         : static_cast<CssTextAlign>(this->paragraphAlignment);
-  paragraphAlignmentBlockStyle.alignment = align;
-  startNewTextBlock(paragraphAlignmentBlockStyle);
+  if (!isPreviewBuild()) {
+    auto paragraphAlignmentBlockStyle = BlockStyle();
+    paragraphAlignmentBlockStyle.textAlignDefined = true;
+    // Resolve None sentinel to Justify for initial block (no CSS context yet)
+    const auto align = (this->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None))
+                           ? CssTextAlign::Justify
+                           : static_cast<CssTextAlign>(this->paragraphAlignment);
+    paragraphAlignmentBlockStyle.alignment = align;
+    startNewTextBlock(paragraphAlignmentBlockStyle);
+  }
 
   // Handle HTML entities (like &nbsp;) that aren't in XML spec or DTD.
   // Using DefaultHandlerExpand preserves normal entity expansion from DOCTYPE.
@@ -2322,9 +2436,15 @@ bool ChapterHtmlSlimParser::finalize() {
             (trunc & SaxParser::kVoidTagRepaired) != 0);
   }
 
+  if (isPreviewBuild() && !previewAnchorFound) {
+    LOG_ERR("EHP", "Targeted preview anchor '%s' was not found", previewAnchor.c_str());
+    streamFailed = true;
+    return false;
+  }
+
   // Process last page if there is still text. Done unconditionally so that a partial
   // success scenario still flushes whatever pages were produced.
-  if (currentTextBlock) {
+  if (currentTextBlock && !previewStopRequested) {
     makePages();
     if (!layoutFailed) {
       const bool hasFinalPageContent = currentPage && !currentPage->elements.empty();
@@ -2335,7 +2455,7 @@ bool ChapterHtmlSlimParser::finalize() {
         if (!hasFinalPageContent && completedPageCount > 0) {
           anchorPage = static_cast<uint16_t>(completedPageCount - 1);
         }
-        anchorData.push_back({std::move(pendingAnchorId), anchorPage});
+        recordAnchorSafely(pendingAnchorId, anchorPage);
         pendingAnchorId.clear();
         pendingAnchorStartsPage = false;
       }
@@ -2374,6 +2494,14 @@ int ChapterHtmlSlimParser::effectiveLineHeight(const BlockStyle& bs) const {
 ParsedText::LineProcessResult ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line,
                                                                    const bool lineEndsWithHyphenatedWord,
                                                                    const bool suppressHyphenationRetry) {
+  // layoutAndExtractLines() precomputes every line in a block before invoking this
+  // callback. Reaching the preview limit stops SAX input, but the already-running
+  // layout loop can still call us for the remaining lines. Discard those callbacks
+  // so a long note cannot append pages past the bounded preview.
+  if (previewStopRequested) {
+    return ParsedText::LineProcessResult::Accepted;
+  }
+
   // Lines carrying inline-sized words advance by the tallest word on the line
   // (microreader semantics); uniform lines keep the block line height exactly.
   int lineHeight = effectiveLineHeight(line->getBlockStyle());

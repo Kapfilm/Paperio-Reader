@@ -196,9 +196,7 @@ constexpr uint32_t BG_BUILD_BUDGET_MS = 40;
 #define RESIDENT_BUILD_ABORT_CONTIG_HEAP_BYTES (16 * 1024)
 #endif
 
-constexpr uint8_t TRUNCATED_SECTION_HINT_RENDER_COUNT = 2;
-constexpr const char* TRUNCATED_SECTION_HINT_LINE_1 = "Chapter may be truncated (low memory).";
-constexpr const char* TRUNCATED_SECTION_HINT_LINE_2 = "Try: No embedded style | No images | AA Off";
+constexpr uint16_t FOOTNOTE_PREVIEW_MAX_PAGES = 3;
 
 #ifdef ENABLE_BOOT_HEAP_DIAGNOSTICS
 // Temporary corruption tripwire: walks the entire heap and names the checkpoint that
@@ -755,9 +753,11 @@ Section::BuildParams EpubReaderActivity::makeSectionBuildParams() const {
   p.hyphenationEnabled = getEffectiveHyphenation();
   p.embeddedStyle = lastRenderStats.embeddedStyle;
   p.bionicReadingEnabled = getEffectiveBionicReading();
-  p.inlineFootnotePreviews = getEffectiveInlineFootnotePreviews();
+  p.inlineFootnotePreviews = pendingFootnotePreviewAnchor.empty() && getEffectiveInlineFootnotePreviews();
   p.imageRendering = lastRenderStats.imageRendering;
   p.fontSizeLadder = buildReaderFontSizeLadder(p.fontId);
+  p.previewAnchor = pendingFootnotePreviewAnchor;
+  p.previewMaxPages = p.previewAnchor.empty() ? 0 : FOOTNOTE_PREVIEW_MAX_PAGES;
   return p;
 }
 
@@ -771,7 +771,8 @@ void EpubReaderActivity::resetBackgroundBuild() {
 }
 
 void EpubReaderActivity::stepBackgroundSectionBuild() {
-  if (!epub || !section || readerPhase_ != ReaderPhase::READING) {
+  if (!epub || !section || readerPhase_ != ReaderPhase::READING || activeFootnotePreview ||
+      !pendingFootnotePreviewAnchor.empty()) {
     return;
   }
   // Never bake a preview-enabled section variant before footnotes.bin exists: the pages
@@ -1381,6 +1382,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     case EpubReaderMenuActivity::MenuAction::CREATE_CLIPPING_UNDERLINE:
       startClipSelection(ClippingHighlightStyle::Underline);
+      break;
+    case EpubReaderMenuActivity::MenuAction::CREATE_CLIPPING_BLACK_MARKER:
+      startClipSelection(ClippingHighlightStyle::BlackMarker);
       break;
     case EpubReaderMenuActivity::MenuAction::VIEW_CLIPPINGS: {
       startActivityForResult(std::make_unique<EpubReaderClippingsActivity>(renderer, mappedInput, clippingStore, *epub),
@@ -2001,6 +2005,22 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
   // a visible "out of bounds" frame. The forward mirror can double-advance past the end.
   RenderLock lock(*this);
 
+  // A targeted footnote preview is a small standalone view, not a real chapter
+  // position. Page within its three-page window but never cross into adjacent spines.
+  if (activeFootnotePreview) {
+    if (isForwardTurn && section->currentPage < section->pageCount - 1) {
+      section->currentPage++;
+    } else if (!isForwardTurn && section->currentPage > 0) {
+      section->currentPage--;
+    } else {
+      return false;
+    }
+    lastPageTurnTime = millis();
+    forceLoadLargeImages = false;
+    pageHasPlaceholders = false;
+    return true;
+  }
+
   // A 0-page section (permanently unparse-able chapter) has no within-chapter navigation,
   // but the user must still be able to cross spine boundaries to escape it.
   const bool hasPages = section->pageCount > 0;
@@ -2555,7 +2575,8 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
         buildParams.paragraphAlignment, buildParams.viewportWidth, buildParams.viewportHeight,
         buildParams.hyphenationEnabled, buildParams.embeddedStyle, buildParams.bionicReadingEnabled,
         buildParams.inlineFootnotePreviews, buildParams.imageRendering, nullptr,
-        /*skipEviction=*/false, buildParams.fontSizeLadder);
+        /*skipEviction=*/false, buildParams.fontSizeLadder, buildParams.previewAnchor,
+        buildParams.previewMaxPages);
   };
 
   const uint32_t createStart = millis();
@@ -2645,6 +2666,7 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   const bool embeddedStyle = lastRenderStats.embeddedStyle;
   const uint8_t imageRendering = lastRenderStats.imageRendering;
   const auto filepath = epub->getSpineItem(currentSpineIndex).href;
+  const bool buildingFootnotePreview = !pendingFootnotePreviewAnchor.empty();
   LOG_DBG("ERS", "Loading file: %s, index: %d", filepath.c_str(), currentSpineIndex);
   // Adopt the Background-B Section when entering exactly the spine it was working on: a
   // completed background build turns into a plain cache hit below, and a partial build
@@ -2652,7 +2674,7 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   // navigation the B state is stale — drop it (aborting a partial build). While a build
   // is live, loadSectionFile must be skipped: it would clobber the live write handle.
   bool resumeBackgroundBuild = false;
-  if (backgroundSection_ && backgroundBuildSpineIndex_ == currentSpineIndex) {
+  if (!buildingFootnotePreview && backgroundSection_ && backgroundBuildSpineIndex_ == currentSpineIndex) {
     resumeBackgroundBuild = backgroundSection_->hasActiveBuild();
     // Distinguish the three adopt cases for an accurate log: a live partial build (resume), a
     // B-completed section with pages (cache hit follows), or a section B only probed and parked
@@ -2681,7 +2703,9 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
       section->loadSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
                                SETTINGS.extraParagraphSpacing, getEffectiveParagraphAlignment(), viewportWidth,
                                viewportHeight, getEffectiveHyphenation(), embeddedStyle, getEffectiveBionicReading(),
-                               getEffectiveInlineFootnotePreviews(), imageRendering);
+                               !buildingFootnotePreview && getEffectiveInlineFootnotePreviews(), imageRendering,
+                               pendingFootnotePreviewAnchor,
+                               buildingFootnotePreview ? FOOTNOTE_PREVIEW_MAX_PAGES : 0);
   const bool cssFallbackRebuild = cacheHit && section->isEmbeddedStyleFallback();
   const bool needBuild = resumeBackgroundBuild || !cacheHit || cssFallbackRebuild;
 
@@ -2704,9 +2728,11 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
     // wastes). A lookup failure leaves 0 = unknown -> static floors only, the old behaviour.
     size_t inflatedSize = 0;
     epub->getSpineItemInflatedSize(currentSpineIndex, &inflatedSize);
-    const SectionBuildMode mode = (resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
-                                      ? chooseSectionBuildMode(embeddedStyle, inflatedSize)
-                                      : SectionBuildMode::Blocking;
+    const SectionBuildMode mode = buildingFootnotePreview
+                                      ? SectionBuildMode::Blocking
+                                      : ((resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
+                                             ? chooseSectionBuildMode(embeddedStyle, inflatedSize)
+                                             : SectionBuildMode::Blocking);
     const bool incremental = mode != SectionBuildMode::Blocking;
     bool runBlocking = !incremental;
 
@@ -2852,12 +2878,28 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
       renderer.restoreFontMetadata();
       readerPhase_ = ReaderPhase::READING;
       if (outcome == BuildOutcome::Failed) {
+        if (buildingFootnotePreview && footnoteDepth > 0) {
+          footnoteDepth--;
+          const SavedPosition origin = savedPositions[footnoteDepth];
+          LOG_ERR("ERS", "Targeted footnote preview failed; restoring spine %d page %d", origin.spineIndex,
+                  origin.pageNumber);
+          pendingFootnotePreviewAnchor.clear();
+          activeFootnotePreview = false;
+          currentSpineIndex = origin.spineIndex;
+          navTarget = NavigationTarget::makePage(origin.pageNumber);
+          section.reset();
+          requestUpdate();
+          return false;
+        }
         if (cssFallbackRebuild) {
           LOG_ERR("ERS", "Failed to rebuild CSS section cache; keeping fallback");
           section->loadSectionFile(getEffectiveReaderFontId(), getEffectiveReaderLineCompression(),
                                    SETTINGS.extraParagraphSpacing, getEffectiveParagraphAlignment(), viewportWidth,
                                    viewportHeight, getEffectiveHyphenation(), embeddedStyle,
-                                   getEffectiveBionicReading(), getEffectiveInlineFootnotePreviews(), imageRendering);
+                                   getEffectiveBionicReading(),
+                                   !buildingFootnotePreview && getEffectiveInlineFootnotePreviews(), imageRendering,
+                                   pendingFootnotePreviewAnchor,
+                                   buildingFootnotePreview ? FOOTNOTE_PREVIEW_MAX_PAGES : 0);
         } else {
           LOG_ERR("ERS", "Failed to build section; showing empty chapter");
           // Do NOT reset section: leave it alive with pageCount=0 so getRenderPass()
@@ -2879,10 +2921,11 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   coldOpenHalfRefreshArmed_ = false;
   lastRenderStats.sectionLoadMs = millis() - sectionStart;
 
-  if (section->isTruncatedCache() && currentSpineIndex != lastWarnedTruncatedSpineIndex) {
-    lastWarnedTruncatedSpineIndex = currentSpineIndex;
-    truncatedSectionHintRendersRemaining = TRUNCATED_SECTION_HINT_RENDER_COUNT;
-    LOG_INF("ERS", "Section %d is truncated; showing mitigation hint", currentSpineIndex);
+  if (section->isTruncatedCache()) {
+    // A partial cache is still usable and is the expected low-memory fallback for
+    // unusually large chapters. Keep the diagnostic in the serial log, but do not
+    // cover the first lines of the book with a transient on-page warning on every open.
+    LOG_INF("ERS", "Section %d uses a truncated low-memory cache", currentSpineIndex);
   }
 
   // Section is ready (cache hit, blocking build, or a tiny C build that finished in one slice):
@@ -2894,6 +2937,8 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   navTarget.resolveInto(*section, currentSpineIndex);
   LOG_DBG("ERS", "resolveInto result: currentPage=%d", (int)section->currentPage);
   navTarget = NavigationTarget::makePage(section->currentPage);
+  activeFootnotePreview = buildingFootnotePreview;
+  pendingFootnotePreviewAnchor.clear();
   forceLoadLargeImages = false;
   pageHasPlaceholders = false;
   return true;
@@ -2946,15 +2991,10 @@ void EpubReaderActivity::renderNormalPass(RenderLock& lock, const RenderLayout& 
     lastRenderStats.spineIndex = currentSpineIndex;
     lastRenderStats.pageIndex = section->currentPage;
     lastRenderStats.pageCount = section->pageCount;
-    showTruncatedSectionHintThisRender = truncatedSectionHintRendersRemaining > 0;
-
     const auto start = millis();
     renderContents(lock, std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom,
                    orientedMarginLeft);
     lastRenderStats.requestRenderMs = millis() - start;
-    if (truncatedSectionHintRendersRemaining > 0) {
-      truncatedSectionHintRendersRemaining--;
-    }
     LOG_DBG("ERS", "Rendered page in %dms", lastRenderStats.requestRenderMs);
     checkHeapIntegrity("after_page_render");
   }
@@ -2972,10 +3012,12 @@ void EpubReaderActivity::renderNormalPass(RenderLock& lock, const RenderLayout& 
       return;
     }
 
-    pendingProgressSave.spineIndex = currentSpineIndex;
-    pendingProgressSave.page = section->currentPage;
-    pendingProgressSave.pageCount = section->pageCount;
-    pendingProgressSave.pending.store(true, std::memory_order_release);
+    if (!activeFootnotePreview) {
+      pendingProgressSave.spineIndex = currentSpineIndex;
+      pendingProgressSave.page = section->currentPage;
+      pendingProgressSave.pageCount = section->pageCount;
+      pendingProgressSave.pending.store(true, std::memory_order_release);
+    }
     lastRenderStats.freeHeapAfter = esp_get_free_heap_size();
     // Avoid heap walk in the hot render path; largest free block is sampled in index lifecycle logs.
     lastRenderStats.largestFreeBlockAfter = 0;
@@ -3089,8 +3131,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   lastRenderStats.freeHeapBefore = esp_get_free_heap_size();
   // Avoid heap walk in the hot render path; largest free block is sampled in index lifecycle logs.
   lastRenderStats.largestFreeBlockBefore = 0;
-  showTruncatedSectionHintThisRender = false;
-
   // Hold off a pure pre-render while a deferred AA pass is still owed for the
   // CURRENT page. The pre-render writes the next page into frameBuffer, but the
   // deferred AA's cleanup (cleanupGrayscaleWithPreviousBuffer) ends by copying
@@ -3368,23 +3408,6 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   backgroundAGlyph_ = '-';
 #endif
   renderStatusBar();
-  if (showTruncatedSectionHintThisRender) {
-    const int hintX = orientedMarginLeft + 4;
-    const int hintY1 = contentTop + 4;
-    const int hintY2 = hintY1 + 20;
-    const int maxWidth = std::max(0, renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight - 8);
-    // Clear a dedicated band so the hint stays readable over any page content.
-    const int boxX = hintX - 2;
-    const int boxY = hintY1 - 2;
-    const int boxW = maxWidth + 4;
-    const int boxH = 44;
-    renderer.fillRect(boxX, boxY, boxW, boxH, false);
-    renderer.drawRect(boxX, boxY, boxW, boxH, true);
-    const std::string line1 = renderer.truncatedText(UI_10_FONT_ID, TRUNCATED_SECTION_HINT_LINE_1, maxWidth);
-    const std::string line2 = renderer.truncatedText(UI_10_FONT_ID, TRUNCATED_SECTION_HINT_LINE_2, maxWidth);
-    renderer.drawText(UI_10_FONT_ID, hintX, hintY1, line1.c_str(), true, EpdFontFamily::BOLD);
-    renderer.drawText(UI_10_FONT_ID, hintX, hintY2, line2.c_str(), true);
-  }
   fcm->logStats("bw_render");
   const auto tBwRender = millis();
   logReaderMemSnapshot("after_bw_render");
@@ -3808,9 +3831,13 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
     return;
   }
 
+  const bool useTargetedPreview = savePosition && !anchor.empty() && targetSpineIndex != currentSpineIndex;
+
   {
     RenderLock lock(*this);
     navTarget = anchor.empty() ? NavigationTarget::makePage(0) : NavigationTarget::makeAnchor(std::move(anchor));
+    pendingFootnotePreviewAnchor = useTargetedPreview ? navTarget.anchorStr : std::string{};
+    activeFootnotePreview = false;
     currentSpineIndex = targetSpineIndex;
     section.reset();
   }
@@ -3845,6 +3872,8 @@ void EpubReaderActivity::restoreSavedPosition() {
 
   {
     RenderLock lock(*this);
+    pendingFootnotePreviewAnchor.clear();
+    activeFootnotePreview = false;
     currentSpineIndex = pos.spineIndex;
     navTarget = NavigationTarget::makePage(pos.pageNumber);
     section.reset();
@@ -3995,9 +4024,10 @@ void EpubReaderActivity::openQuickOverrides() {
 
 void EpubReaderActivity::openClipStylePicker() {
   std::vector<SettingInfo> choices;
-  choices.reserve(2);
+  choices.reserve(3);
   choices.push_back(SettingInfo::Action(StrId::STR_HIGHLIGHT_MARKER, SettingAction::None));
   choices.push_back(SettingInfo::Action(StrId::STR_HIGHLIGHT_UNDERLINE, SettingAction::None));
+  choices.push_back(SettingInfo::Action(StrId::STR_HIGHLIGHT_BLACK_MARKER, SettingAction::None));
 
   startActivityForResult(std::make_unique<SettingsSubmenuActivity>(renderer, mappedInput, StrId::STR_CREATE_CLIPPING,
                                                                    std::move(choices), nullptr, false),
@@ -4013,6 +4043,9 @@ void EpubReaderActivity::openClipStylePicker() {
                                break;
                              case StrId::STR_HIGHLIGHT_UNDERLINE:
                                startClipSelection(ClippingHighlightStyle::Underline);
+                               break;
+                             case StrId::STR_HIGHLIGHT_BLACK_MARKER:
+                               startClipSelection(ClippingHighlightStyle::BlackMarker);
                                break;
                              default:
                                requestUpdate();
@@ -4258,6 +4291,7 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
                                                     : renderer.getTextWidthScaled(effectiveFontId, text, style, scale);
         int markerWidth = measuredWordWidth;
         int underlineWidth = measuredWordWidth;
+        int blackMarkerWidth = measuredWordWidth;
         if (i + 1 < block.wordCount() && block.wordXpos(i + 1) > block.wordXpos(i)) {
           const int distanceToNext = static_cast<int>(block.wordXpos(i + 1) - block.wordXpos(i));
           markerWidth = (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Marker))) != 0
@@ -4266,6 +4300,10 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
           underlineWidth = (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Underline))) != 0
                                ? distanceToNext
                                : std::min(underlineWidth, distanceToNext);
+          blackMarkerWidth =
+              (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::BlackMarker))) != 0
+                  ? distanceToNext
+                  : std::min(blackMarkerWidth, distanceToNext);
         }
         const int wordX = marginLeft + line.xPos + block.wordXpos(i);
         const int wordHeight = std::max(renderer.getLineHeight(effectiveFontId), ascender + 4);
@@ -4277,9 +4315,22 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
             renderer.drawTextScaled(effectiveFontId, wordX, wordY, text, true, style, scale);
           }
         }
+        const bool hasBlackMarker =
+            (highlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::BlackMarker))) != 0;
+        if (hasBlackMarker) {
+          // Solid inverse highlight: repaint the word cell black, then cut the
+          // glyphs back out in white. Extending to the next selected word keeps
+          // inter-word spaces black and produces one continuous marker stroke.
+          renderer.fillRect(wordX, wordY, blackMarkerWidth, wordHeight, true);
+          if (scale == 1.0f) {
+            renderer.drawText(effectiveFontId, wordX, wordY, text, false, style);
+          } else {
+            renderer.drawTextScaled(effectiveFontId, wordX, wordY, text, false, style, scale);
+          }
+        }
         if ((highlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Underline))) != 0) {
           const int underlineY = wordY + ascender + 3;
-          renderer.drawLine(wordX, underlineY, wordX + underlineWidth, underlineY, 2, true);
+          renderer.drawLine(wordX, underlineY, wordX + underlineWidth, underlineY, 2, !hasBlackMarker);
         }
       }
       ++pageWordIndex;

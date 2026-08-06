@@ -27,7 +27,7 @@
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION = 64;  // bumped: semantic/classed footnote containers start a fresh page
+constexpr uint8_t SECTION_FILE_VERSION = 65;  // compact generic anchors; invalidate low-memory partial caches
                                               // v63: recognised footnote destinations began on a fresh rendered page
                                               // v62: anchor map retained real footnote targets on <span id="...">
                                               // v61: legacy <a name="..."> navigation targets
@@ -136,7 +136,8 @@ uint32_t fnv1a(const uint8_t* data, size_t length) {
 uint32_t Section::calculatePropertyHash(int fontId, float lineCompression, bool extraParagraphSpacing,
                                         uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
                                         bool hyphenationEnabled, bool embeddedStyle, bool bionicReadingEnabled,
-                                        bool inlineFootnotePreviews, uint8_t imageRendering) {
+                                        bool inlineFootnotePreviews, uint8_t imageRendering,
+                                        const std::string& previewAnchor, const uint16_t previewMaxPages) {
   uint8_t buffer[64];
   size_t offset = 0;
 
@@ -160,7 +161,19 @@ uint32_t Section::calculatePropertyHash(int fontId, float lineCompression, bool 
   }
   append(&imageRendering, sizeof(imageRendering));
 
-  return fnv1a(buffer, offset);
+  uint32_t hash = fnv1a(buffer, offset);
+  if (!previewAnchor.empty() && previewMaxPages > 0) {
+    for (const unsigned char c : previewAnchor) {
+      hash ^= c;
+      hash *= FNV_PRIME;
+    }
+    const auto* limitBytes = reinterpret_cast<const uint8_t*>(&previewMaxPages);
+    for (size_t i = 0; i < sizeof(previewMaxPages); ++i) {
+      hash ^= limitBytes[i];
+      hash *= FNV_PRIME;
+    }
+  }
+  return hash;
 }
 
 std::string Section::getSectionFilePath(uint32_t propertyHash) const {
@@ -306,12 +319,14 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
                               const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                               const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                               const bool bionicReadingEnabled, const bool inlineFootnotePreviews,
-                              const uint8_t imageRendering) {
+                              const uint8_t imageRendering, const std::string& previewAnchor,
+                              const uint16_t previewMaxPages) {
   truncatedCache = false;
   embeddedStyleFallback = false;
   uint32_t propertyHash = calculatePropertyHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment,
                                                 viewportWidth, viewportHeight, hyphenationEnabled, embeddedStyle,
-                                                bionicReadingEnabled, inlineFootnotePreviews, imageRendering);
+                                                bionicReadingEnabled, inlineFootnotePreviews, imageRendering,
+                                                previewAnchor, previewMaxPages);
   filePath = getSectionFilePath(propertyHash);
 
   bool usingEmbeddedStyleFallback = false;
@@ -320,7 +335,8 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     if (embeddedStyle) {
       const uint32_t fallbackHash = calculatePropertyHash(
           fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth, viewportHeight,
-          hyphenationEnabled, false, bionicReadingEnabled, inlineFootnotePreviews, imageRendering);
+          hyphenationEnabled, false, bionicReadingEnabled, inlineFootnotePreviews, imageRendering, previewAnchor,
+          previewMaxPages);
       const std::string fallbackPath = getSectionFilePath(fallbackHash);
       if (Storage.openFileForRead("SCT", fallbackPath, file)) {
         filePath = fallbackPath;
@@ -597,7 +613,8 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   const BuildParams& p = st.params;
   st.propertyHash = calculatePropertyHash(p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment,
                                           p.viewportWidth, p.viewportHeight, p.hyphenationEnabled, p.embeddedStyle,
-                                          p.bionicReadingEnabled, p.inlineFootnotePreviews, p.imageRendering);
+                                          p.bionicReadingEnabled, p.inlineFootnotePreviews, p.imageRendering,
+                                          p.previewAnchor, p.previewMaxPages);
   filePath = getSectionFilePath(st.propertyHash);
 
   st.localPath = epub->getSpineItem(spineIndex).href;
@@ -702,7 +719,7 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
       p.viewportHeight, p.hyphenationEnabled, p.bionicReadingEnabled,
       [this, &st](std::unique_ptr<Page> page) { st.lut.emplace_back(this->onPageComplete(std::move(page))); },
       p.embeddedStyle, st.contentBase, st.imageBasePath, p.imageRendering, std::move(tocAnchors), st.progressFn,
-      st.cssParser, epub->getImageManifest());
+      st.cssParser, epub->getImageManifest(), p.previewAnchor, p.previewMaxPages);
   st.visitor->setExternalPageBreakAnchors(std::move(externalPageBreakAnchors));
   st.visitor->setFontSizeLadder(p.fontSizeLadder);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
@@ -906,11 +923,14 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
           streamFailed = true;
           break;
         }
+        if (st.visitor->previewComplete()) {
+          break;
+        }
         if (overBudget()) {
           return yieldSlice();
         }
       }
-      if (!streamFailed && st.tempBytesFed != st.inflatedSize) {
+      if (!streamFailed && !st.visitor->previewComplete() && st.tempBytesFed != st.inflatedSize) {
         LOG_ERR("SCT", "Extracted size mismatch (expected %u, fed %u)", static_cast<uint32_t>(st.inflatedSize),
                 static_cast<uint32_t>(st.tempBytesFed));
         streamFailed = true;
@@ -927,8 +947,11 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
           streamFailed = true;
           break;
         }
+        if (st.visitor->previewComplete()) {
+          break;
+        }
       }
-      if (!streamFailed && st.reader->bytesProduced() != st.inflatedSize) {
+      if (!streamFailed && !st.visitor->previewComplete() && st.reader->bytesProduced() != st.inflatedSize) {
         LOG_ERR("SCT", "Decompressed size mismatch (expected %u, got %u)", static_cast<uint32_t>(st.inflatedSize),
                 static_cast<uint32_t>(st.reader->bytesProduced()));
         streamFailed = true;
@@ -1038,8 +1061,14 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   // Write anchor-to-page map for fragment navigation (TOC + footnote targets)
   const uint32_t anchorMapOffset = file.position();
   const auto& anchors = visitor.getAnchors();
-  serialization::writePod(file, static_cast<uint16_t>(anchors.size()));
+  const auto& compactIdAnchors = visitor.getCompactIdAnchors();
+  serialization::writePod(file, static_cast<uint16_t>(anchors.size() + compactIdAnchors.size()));
   for (const auto& [anchor, page] : anchors) {
+    serialization::writeString(file, anchor);
+    serialization::writePod(file, page);
+  }
+  for (const auto& [numericId, page] : compactIdAnchors) {
+    const std::string anchor = "id" + std::to_string(numericId);
     serialization::writeString(file, anchor);
     serialization::writePod(file, page);
   }
@@ -1142,7 +1171,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                                 const bool bionicReadingEnabled, const bool inlineFootnotePreviews,
                                 const uint8_t imageRendering, const std::function<void(int)>& progressFn,
-                                const bool skipEviction, const FontSizeLadder& fontSizeLadder) {
+                                const bool skipEviction, const FontSizeLadder& fontSizeLadder,
+                                const std::string& previewAnchor, const uint16_t previewMaxPages) {
   if (!skipEviction) {
     evictOldVariants();
   }
@@ -1160,6 +1190,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   params.inlineFootnotePreviews = inlineFootnotePreviews;
   params.imageRendering = imageRendering;
   params.fontSizeLadder = fontSizeLadder;
+  params.previewAnchor = previewAnchor;
+  params.previewMaxPages = previewMaxPages;
 
   // Run-to-completion path: pump the incremental build with no time budget. budgetMs == 0
   // never yields mid-parse, so the only More this loop sees is the restart after a
@@ -1227,7 +1259,8 @@ Section::BuildStep Section::stepSectionBuild(const BuildParams& params, const ui
   const uint32_t requestedHash = calculatePropertyHash(
       params.fontId, params.lineCompression, params.extraParagraphSpacing, params.paragraphAlignment,
       params.viewportWidth, params.viewportHeight, params.hyphenationEnabled, params.embeddedStyle,
-      params.bionicReadingEnabled, params.inlineFootnotePreviews, params.imageRendering);
+      params.bionicReadingEnabled, params.inlineFootnotePreviews, params.imageRendering, params.previewAnchor,
+      params.previewMaxPages);
   // A live partial build is only resumable for the exact variant it was started for;
   // when the request changed (font/margins/...) the partial cache is the wrong file.
   if (buildState_ && buildState_->requestedHash != requestedHash) {
