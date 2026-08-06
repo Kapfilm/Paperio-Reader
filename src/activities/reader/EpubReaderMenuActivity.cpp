@@ -93,7 +93,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
 
 void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPages, bool hasPrintedPages,
                                             bool hasClippings) {
-  menuItems.reserve(23);
+  menuItems.reserve(24);
 
   // --- Navigation ---
   menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_NAVIGATION));
@@ -114,6 +114,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
       SettingInfo::Action(StrId::STR_HIGHLIGHT_MARKER, SettingAction::None).withSubmenu(StrId::STR_CREATE_CLIPPING));
   menuItems.push_back(
       SettingInfo::Action(StrId::STR_HIGHLIGHT_UNDERLINE, SettingAction::None).withSubmenu(StrId::STR_CREATE_CLIPPING));
+  menuItems.push_back(SettingInfo::Action(StrId::STR_HIGHLIGHT_BLACK_MARKER, SettingAction::None)
+                          .withSubmenu(StrId::STR_CREATE_CLIPPING));
   if (hasClippings) {
     menuItems.push_back(SettingInfo::Action(StrId::STR_CLIPPINGS, SettingAction::None));
   }
@@ -388,6 +390,8 @@ EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForNameId(StrId
       return MenuAction::CREATE_CLIPPING_MARKER;
     case StrId::STR_HIGHLIGHT_UNDERLINE:
       return MenuAction::CREATE_CLIPPING_UNDERLINE;
+    case StrId::STR_HIGHLIGHT_BLACK_MARKER:
+      return MenuAction::CREATE_CLIPPING_BLACK_MARKER;
     case StrId::STR_CLIPPINGS:
       return MenuAction::VIEW_CLIPPINGS;
     case StrId::STR_FOOTNOTES:

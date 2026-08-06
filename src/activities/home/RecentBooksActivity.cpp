@@ -608,6 +608,21 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
       renderer.drawText(SMALL_FONT_ID, cellX + 2, labelY + 17, authorStr.c_str(), black);
     }
   }
+
+  if (selected && isMinimalTheme()) {
+    // Covers touch edge-to-edge in Minimal, so the old one-pixel inverse frame
+    // disappeared into both pale and dark artwork. A black/white double frame
+    // remains visible against either extreme and does not require another icon,
+    // label, or heap allocation.
+    constexpr int selectionOuterWidth = 7;
+    constexpr int selectionInnerWidth = 4;
+    for (int inset = 0; inset < selectionOuterWidth; ++inset) {
+      renderer.drawRect(cellX + inset, cellY + inset, tw - inset * 2, th - inset * 2, false);
+    }
+    for (int inset = 0; inset < selectionInnerWidth; ++inset) {
+      renderer.drawRect(cellX + inset, cellY + inset, tw - inset * 2, th - inset * 2, true);
+    }
+  }
 }
 
 void RecentBooksActivity::renderGridView(RenderLock&&) {

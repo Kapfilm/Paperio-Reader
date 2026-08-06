@@ -152,7 +152,7 @@ bool ClippingStore::readFromFile() {
     if (version >= 3) {
       uint8_t highlightStyle = 0;
       if (!readPodChecked(file, highlightStyle) ||
-          highlightStyle > static_cast<uint8_t>(ClippingHighlightStyle::Underline)) {
+          highlightStyle > static_cast<uint8_t>(ClippingHighlightStyle::BlackMarker)) {
         LOG_ERR("CLIP", "Invalid clipping highlight style at record %u", i);
         clippings.clear();
         file.close();
