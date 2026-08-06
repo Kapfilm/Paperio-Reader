@@ -29,8 +29,13 @@
 #define BQ27220_SOC_REG 0x2C     // StateOfCharge() command code (%)
 #define BQ27220_CUR_REG 0x0C     // Current() command code (signed mA)
 #define BQ27220_VOLT_REG 0x08    // Voltage() command code (mV)
-#define BQ27220_FLAGS_REG 0x0A   // BatteryStatus() / Flags() command code (bit0=DSG)
-#define BQ27220_FLAG_DSG 0x0001  // DSG bit: 1 = discharging, 0 = charging or at rest
+#define BQ27220_FLAGS_REG 0x0A   // BatteryStatus() / Flags() command code (bit0=DSG, bit9=FC)
+#define BQ27220_FLAG_DSG 0x0001  // DSG bit: 1 = discharging, 0 = charging OR merely at rest
+#define BQ27220_FLAG_FC 0x0200   // FC bit: 1 = fully charged (only latches while on the charger)
+// Minimum Current() reading (mA, positive = into the battery) that counts as
+// "on the charger". A small guard band above 0 keeps gauge noise around rest
+// from being read as charging.
+#define USB_CHARGE_CURRENT_MIN_MA 5
 
 // Analog DS3231 RTC I2C
 #define I2C_ADDR_DS3231 0x68  // RTC I2C address
@@ -152,13 +157,9 @@ class HalGPIO {
   // the 5 ms debounce being fooled by mechanical switch bounce during release.
   void waitForStablePowerRelease();
 
-  // Setup wake up GPIO and enter deep sleep
-  void startDeepSleep();
-
-  // Verify power button was held long enough after wakeup.
-  // If verification fails, enters deep sleep and does not return.
-  // Should only be called when wakeup reason is PowerButton.
-  void verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed);
+  // Verify the raw power button remains held until requiredDurationMs after boot.
+  // Call as early as possible so cold-boot initialization cannot hide a short press.
+  bool verifyPowerButtonWakeup(uint16_t requiredDurationMs);
 
   // Check if USB is connected
   bool isUsbConnected() const;

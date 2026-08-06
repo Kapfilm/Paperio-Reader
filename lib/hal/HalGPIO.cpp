@@ -373,71 +373,37 @@ void HalGPIO::waitForStablePowerRelease() {
   LOG_DBG("GPIO", "Power button stable-released after %lu ms", millis() - waitStart);
 }
 
-void HalGPIO::startDeepSleep() {
-  LOG_DBG("GPIO", "startDeepSleep: waiting for power button release (isPressed=%d, rawPin=%d)",
-          inputMgr.isPressed(BTN_POWER), digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
-  waitForStablePowerRelease();
-  // Arm the wakeup trigger *after* the button is released
-  esp_deep_sleep_enable_gpio_wakeup(1ULL << InputManager::POWER_BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
-  LOG_DBG("GPIO", "startDeepSleep: entering deep sleep now");
-  // Enter Deep Sleep
-  esp_deep_sleep_start();
-}
-
-void HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed) {
-  // The wakeup reason was already confirmed as a power button press before this is called,
-  // so we know a real press occurred. When short presses are allowed, nothing more to verify.
-  if (shortPressAllowed) {
-    LOG_DBG("GPIO", "verifyPowerButtonWakeup: shortPressAllowed, skipping hold verification");
-    return;
-  }
-
-  // Calibrate: subtract boot time already elapsed, assuming button held since boot.
-  // Never collapse to less than BOUNCE_TOLERANCE_MS so the hold loop always has time to
-  // sample the button and detect a release (early release = unintentional tap).
+bool HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs) {
   constexpr unsigned long BOUNCE_TOLERANCE_MS = 100;
-  const uint16_t calibration = millis();
-  const uint16_t calibratedDuration =
-      (calibration < requiredDurationMs) ? (requiredDurationMs - calibration) : BOUNCE_TOLERANCE_MS;
-  LOG_DBG("GPIO", "verifyPowerButtonWakeup: requiredMs=%u, calibration=%u, calibratedMs=%u", requiredDurationMs,
-          calibration, calibratedDuration);
+  constexpr unsigned long POLL_INTERVAL_MS = 10;
 
-  const auto start = millis();
-  inputMgr.update();
-  // inputMgr.isPressed() may take up to ~500ms to return correct state after boot
-  while (!inputMgr.isPressed(BTN_POWER) && millis() - start < 1000) {
-    delay(10);
-    inputMgr.update();
+  // requiredDurationMs is compared against millis() directly — time since app start, NOT time
+  // since this call. That is deliberate: the press that caused the wake began before setup() ran,
+  // so boot time counts toward the hold rather than being charged to the user twice. The caveat
+  // is that millis() starts at app init and so excludes the ~200-300 ms bootloader, making the
+  // real-world hold needed that much longer than the configured value. Erring long is the safe
+  // direction — the failure mode being guarded against is a stray tap waking the device.
+  //
+  // Must be called before any long-running init (it is the first statement of setup()) so a short
+  // press cannot be hidden by boot work: a released button is detected below and returns
+  // immediately, which is also why running this on every boot costs nothing on non-button resets.
+  pinMode(InputManager::POWER_BUTTON_PIN, INPUT_PULLUP);
+  if (digitalRead(InputManager::POWER_BUTTON_PIN) != LOW) {
+    return false;
   }
-  LOG_DBG("GPIO", "verifyPowerButtonWakeup: initial detect took %lu ms, isPressed=%d, rawPin=%d", millis() - start,
-          inputMgr.isPressed(BTN_POWER), digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
 
-  if (inputMgr.isPressed(BTN_POWER)) {
-    // Monitor the hold for calibratedDuration, tolerating brief bounces up to BOUNCE_TOLERANCE_MS.
-    // Early release beyond the bounce window means an unintentional tap — go back to sleep.
-    unsigned long lastSeenPressed = millis();
-    const auto holdStart = millis();
-    unsigned long bounceCount = 0;
-
-    while (millis() - holdStart < calibratedDuration) {
-      delay(10);
-      inputMgr.update();
-      if (inputMgr.isPressed(BTN_POWER)) {
-        if (millis() - lastSeenPressed > 20) {
-          bounceCount++;
-        }
-        lastSeenPressed = millis();
-      } else if (millis() - lastSeenPressed >= BOUNCE_TOLERANCE_MS) {
-        LOG_DBG("GPIO", "verifyPowerButtonWakeup: released early after %lu ms (bounces=%lu), going to sleep",
-                millis() - holdStart, bounceCount);
-        startDeepSleep();
+  unsigned long lastSeenPressed = millis();
+  while (true) {
+    const unsigned long now = millis();
+    if (digitalRead(InputManager::POWER_BUTTON_PIN) == LOW) {
+      lastSeenPressed = now;
+      if (now >= requiredDurationMs) {
+        return true;
       }
+    } else if (now - lastSeenPressed >= BOUNCE_TOLERANCE_MS) {
+      return false;
     }
-    LOG_DBG("GPIO", "verifyPowerButtonWakeup: hold verified after %lu ms (bounces=%lu), proceeding with boot",
-            millis() - holdStart, bounceCount);
-  } else {
-    LOG_DBG("GPIO", "verifyPowerButtonWakeup: button not pressed after 1s wait, going to sleep");
-    startDeepSleep();
+    delay(POLL_INTERVAL_MS);
   }
 }
 
@@ -445,19 +411,27 @@ bool HalGPIO::isUsbConnected() const {
   if (deviceIsX3()) {
     // X3: GPIO20 is repurposed as I2C SDA, so the X4 pin-level USB detect is
     // unusable here — the I2C pull-ups would always report HIGH. Probe the
-    // BQ27220 fuel gauge instead. Using just Current() mis-reports "not
-    // connected" when the battery is full (current ~= 0 mA); combine it with
-    // the Flags() DSG bit so we report true whenever the charger is present
-    // (DSG=0 means charging or fully charged, not discharging).
+    // BQ27220 fuel gauge instead.
+    //
+    // Current() is the primary signal: it is signed, and current flowing INTO
+    // the battery (positive, above a noise floor) only happens on a charger.
+    // DSG alone must NOT be trusted as "charger present": the gauge clears DSG
+    // whenever the pack isn't actively discharging above its detection
+    // threshold, which includes plain idle/relaxation on battery. Treating
+    // DSG=0 as connected made the UI latch to the charging bolt shortly after
+    // unplugging and never recover (issue #86). FC (fully charged) is the one
+    // resting state that does imply a charger, since it only latches while
+    // topped off on the charger, so it stays as a secondary signal.
     for (uint8_t attempt = 0; attempt < 2; ++attempt) {
       uint16_t flags = 0;
       if (X3GPIO::readI2CReg16LE(I2C_ADDR_BQ27220, BQ27220_FLAGS_REG, &flags)) {
-        if ((flags & BQ27220_FLAG_DSG) == 0) {
-          return true;
+        const bool discharging = (flags & BQ27220_FLAG_DSG) != 0;
+        if (!discharging && (flags & BQ27220_FLAG_FC) != 0) {
+          return true;  // topped off on the charger
         }
         int16_t currentMa = 0;
-        if (X3GPIO::readBQ27220CurrentMA(&currentMa) && currentMa > 0) {
-          return true;
+        if (X3GPIO::readBQ27220CurrentMA(&currentMa) && currentMa > USB_CHARGE_CURRENT_MIN_MA) {
+          return true;  // measurable current into the battery
         }
         return false;
       }
@@ -493,8 +467,17 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
   LOG_DBG("GPIO", "getWakeupReason: wakeupCause=%d, resetReason=%d, usbConnected=%d", static_cast<int>(wakeupCause),
           static_cast<int>(resetReason), usbConnected);
 
+  // A GPIO deep-sleep wake means POWER_BUTTON_PIN was pulled LOW, which is a button press by
+  // definition — whatever the power source. This clause used to also require usbConnected, on the
+  // premise that on battery the MCU is fully powered down so every wake arrives as POWERON.
+  // HalPowerManager::startDeepSleep(keepClockAlive=true) broke that premise: with the clock
+  // enabled on X4 (enterDeepSleep's keepLpAlive) GPIO13 is held HIGH, the MCU stays powered
+  // through sleep, and a battery wake arrives as GPIO+DEEPSLEEP with no USB. That combination
+  // matched nothing and fell through to Other, so setup() skipped the hold verification entirely
+  // and any tap woke the device. Plugging USB does not pull this pin low, so the AfterUSBPower
+  // case below (POWERON + USB) is unaffected.
   if ((wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && !usbConnected) ||
-      (wakeupCause == ESP_SLEEP_WAKEUP_GPIO && resetReason == ESP_RST_DEEPSLEEP && usbConnected)) {
+      (wakeupCause == ESP_SLEEP_WAKEUP_GPIO && resetReason == ESP_RST_DEEPSLEEP)) {
     return WakeupReason::PowerButton;
   }
   if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_UNKNOWN && usbConnected) {
