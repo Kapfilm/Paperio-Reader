@@ -36,10 +36,10 @@ std::string extractHostFromUrl(const std::string& url) {
 // clock (ASN_BEFORE_DATE_E), and expired ones (ASN_AFTER_DATE_E). The
 // ESP32-C3 has no battery-backed RTC, so cold-boot clocks default to 1970
 // (or, if HalClock restored from NVS, a stale "last known" time that may
-// still predate the cert's notBefore). Fix it once per process before the
-// first https request by running SNTP — WiFi is already up by the time
-// runGet() is called, so this is essentially free. Subsequent calls reuse
-// whatever the first attempt produced.
+// still predate the cert's notBefore). Refresh an unset or approximate clock
+// with SNTP before HTTPS. A successful sync makes later calls cheap; a failed
+// sync is deliberately retried by the next HTTPS request (notably the strict
+// OTA firmware download after the release-metadata request).
 constexpr time_t MIN_PLAUSIBLE_EPOCH = 1735689600;  // 2025-01-01 00:00:00 UTC
 // Upper bound: a clock far in the future also fails cert notAfter checks. Our
 // curated roots' latest notAfter is 2038; cap at 2037 so a wildly-wrong future
@@ -51,25 +51,14 @@ bool clockPlausibleForTls() {
 }
 
 bool ensureClockForTls() {
-  static bool attempted = false;
-  if (attempted) return clockPlausibleForTls();
-  attempted = true;
-
-  // A plausible epoch is sufficient for TLS cert-date validation even if
-  // HalClock flags it "approximate" (restored from NVS on this RTC-less C3):
-  // wolfSSL's notBefore/notAfter check passes for any time within the certs'
-  // validity window, so an approximate-but-in-range clock verifies fine. This
-  // avoids a 5 s SNTP round-trip (and its intermittent timeouts) on every cold
-  // start when NVS already holds a good-enough time. Only sync when the clock
-  // is genuinely unset or out of the plausible range.
-  if (clockPlausibleForTls()) {
-    if (HalClock::isApproximate()) {
-      LOG_INF("HTTP", "Clock approximate but plausible (epoch %ld); skipping SNTP for TLS",
-              static_cast<long>(time(nullptr)));
-    }
+  // An approximate NVS/RTC value can be broadly plausible yet still predate a
+  // newly issued server certificate. Treat only an authoritative NTP clock as
+  // ready for certificate-date verification.
+  if (clockPlausibleForTls() && !HalClock::isApproximate()) {
     return true;
   }
-  LOG_INF("HTTP", "Clock unset/implausible (epoch %ld); running SNTP before TLS", static_cast<long>(time(nullptr)));
+  LOG_INF("HTTP", "Clock %s (epoch %ld); running SNTP before TLS",
+          HalClock::isApproximate() ? "approximate" : "unset/implausible", static_cast<long>(time(nullptr)));
   char err[64] = {0};
   if (!HalClock::syncNtp(err, sizeof(err), SETTINGS.ntpServer)) {
     LOG_ERR("HTTP", "SNTP sync failed: %s — TLS verification may fail until clock is set", err);
