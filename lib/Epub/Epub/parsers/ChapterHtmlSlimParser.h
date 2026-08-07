@@ -23,6 +23,7 @@
 
 class Page;
 class PageImage;  // forward declaration — Page.h included in .cpp
+class PageLine;
 class GfxRenderer;
 class Epub;
 
@@ -72,6 +73,28 @@ class ChapterHtmlSlimParser final : public Print {
   PendingInlineImage pendingInlineImage_;         // active=true when a float-context image is deferred
   std::shared_ptr<PageImage> deferredPageImage_;  // the PageImage whose yPos needs updating
 
+  // Drop cap: a left-floated span with a large font-size at the very start of a
+  // paragraph (<p><span class="first-letter">A</span>ll ...). The letter is captured
+  // while the span is open, then rendered as its own top-aligned PageLine with a
+  // FloatZone so the paragraph's first lines wrap beside it — the same mechanism
+  // used for left-floated inline images.
+  static constexpr float kDropCapMinMultiplier = 1.95f;  // spans below this render inline
+  static constexpr float kDropCapMaxMultiplier = 4.0f;   // ≈3 text lines tall
+  static constexpr int16_t kDropCapGapPx = 6;            // horizontal gap between cap and text
+  struct PendingDropCap {
+    bool active = false;      // true while capturing the span's text
+    int depth = 0;            // parser depth of the drop-cap span (pre-increment)
+    float multiplier = 1.0f;  // composed font-size multiplier relative to the body font
+    EpdFontFamily::Style style = EpdFontFamily::REGULAR;
+    char text[16] = {};  // drop caps are 1 glyph, occasionally with a leading quote
+    int textLen = 0;
+  };
+  PendingDropCap pendingDropCap_;
+  std::shared_ptr<PageLine> deferredDropCapLine_;  // the cap PageLine whose yPos needs updating
+  // Offset from the paragraph's first-line top to the cap PageLine's yPos, so the cap's
+  // INK top (not its leading-padded ascender top) aligns with the first line's ink top.
+  int16_t dropCapYAdjust_ = 0;
+
   // Active float occupying the current page. A floated image never crosses a page
   // boundary (attachPendingFloatImage page-breaks first if it would not fit), so the
   // float lives entirely within one page. While currentPageNextY is above
@@ -94,12 +117,24 @@ class ChapterHtmlSlimParser final : public Print {
   // exactly the FontDecompressor's four page slots. The first block to resolve off-body
   // claims the slot; blocks that would need a different font keep the scale fallback.
   int32_t auxFontId_ = 0;
+  // EPUBs often set their running prose to a nominal CSS size such as 10pt,
+  // 87%, or 0.875em. The reader's selected font size is our body size. Root
+  // (html/body) sizes are normalized as inherited context; the main-text
+  // baseline comes from tag-level paragraph/list rules so prose maps to 1.0
+  // and headings/notes remain proportional to that prose size.
+  float rootFontSizeBaseline_ = 1.0f;
+  bool hasRootFontSizeBaseline_ = false;
+  float mainTextFontSizeBaseline_ = 1.0f;
+  bool hasMainTextFontSizeBaseline_ = false;
   float lineCompression;
   bool extraParagraphSpacing;
   uint8_t paragraphAlignment;
   uint16_t viewportWidth;
   uint16_t viewportHeight;
   bool hyphenationEnabled;
+  // When true, widen the per-word font-size dead zone (±10% snaps publisher <span font-size:0.92em>
+  // body wrappers back to native size); when false, only a tight ±3% dead zone is applied.
+  bool fontSizeNormalization;
   const CssParser* cssParser;
   EpubImageManifest* imageManifest;
   bool embeddedStyle;
@@ -170,6 +205,17 @@ class ChapterHtmlSlimParser final : public Print {
     bool suppressMarker = false;  // true when list-style-type: none
   };
   std::vector<ListEntry> listStack;
+
+  // Ancestor block widths set via an explicit CSS `width` (e.g. a
+  // <div style="width:100px"> wrapper). A percentage image width resolves against the
+  // innermost such width, so a width:100% image inside a narrow box stays small
+  // (matches KOReader) instead of filling the viewport. depth = parser depth at push
+  // (pre-increment); popped in endElement when that scope closes.
+  struct ContainerWidthEntry {
+    int depth;
+    int16_t width;
+  };
+  std::vector<ContainerWidthEntry> containerWidthStack_;
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
@@ -273,6 +319,9 @@ class ChapterHtmlSlimParser final : public Print {
   // Apply kSupSubDefaultSizePct when the entry resolves to sup/sub. Call BEFORE
   // applyCssFontSizeToEntry so publisher CSS (e.g. `.sup { font-size: 0.7em }`) wins.
   static void applySupSubDefaultSize(StyleStackEntry& entry);
+  void initializeFontSizeBaseline();
+  void observeFontSizeBaseline(const char* tagName, const CssStyle& cssStyle);
+  CssStyle normalizeFontSizeForElement(const char* tagName, const CssStyle& cssStyle) const;
   bool ensureHeapForTextLayout(const char* phase);
   void startNewTextBlock(const BlockStyle& blockStyle);
   bool flushPartWordBuffer();
@@ -305,6 +354,13 @@ class ChapterHtmlSlimParser final : public Print {
   // Attach the pending inline float image to `bs` and place it on the current page.
   // Clears pendingInlineImage_ on return.  No-op if pendingInlineImage_ is not active.
   void attachPendingFloatImage(BlockStyle& bs);
+  // Begin drop-cap capture when a left-floated large-font inline element opens at the
+  // start of an empty paragraph. Returns true when capture started (the element must
+  // then not push an inline style entry).
+  bool tryStartDropCapCapture(const CssStyle& cssStyle);
+  // Place the captured drop cap: one-word PageLine on the current page plus a FloatZone
+  // on the paragraph's block style. Falls back to an inline word when the cap is unusable.
+  void finalizePendingDropCap();
   // XML callbacks
   static void startElement(void* userData, const char* name, const char** atts);
   static void characterData(void* userData, const char* s, int len);
@@ -316,7 +372,8 @@ class ChapterHtmlSlimParser final : public Print {
   explicit ChapterHtmlSlimParser(
       std::shared_ptr<Epub> epub, GfxRenderer& renderer, const int fontId, const float lineCompression,
       const bool extraParagraphSpacing, const uint8_t paragraphAlignment, const uint16_t viewportWidth,
-      const uint16_t viewportHeight, const bool hyphenationEnabled, const bool bionicReadingEnabled,
+      const uint16_t viewportHeight, const bool hyphenationEnabled, const bool fontSizeNormalization,
+      const bool bionicReadingEnabled,
       const std::function<void(std::unique_ptr<Page>)>& completePageFn, const bool embeddedStyle,
       const std::string& contentBase, const std::string& imageBasePath, const uint8_t imageRendering = 0,
       std::vector<std::string> tocAnchors = {}, const std::function<void(int)>& progressFn = nullptr,
@@ -334,6 +391,7 @@ class ChapterHtmlSlimParser final : public Print {
         viewportWidth(viewportWidth),
         viewportHeight(viewportHeight),
         hyphenationEnabled(hyphenationEnabled),
+        fontSizeNormalization(fontSizeNormalization),
         cssParser(cssParser),
         imageManifest(imageManifest),
         embeddedStyle(embeddedStyle),
