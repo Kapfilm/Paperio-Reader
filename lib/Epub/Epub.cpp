@@ -10,12 +10,16 @@
 #include <PngToBmpConverter.h>
 #include <Serialization.h>
 #include <ZipFile.h>
+#include <esp_system.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <optional>
 
+#include "Epub/HashUtils.h"
 #include "Epub/ImageFormatDetector.h"
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
@@ -766,6 +770,57 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   return true;
 }
 
+bool Epub::loadForCover() {
+  // Cover-only load: get coverItemHref WITHOUT building the spine/TOC book.bin (which, on a huge
+  // book, is both slow and the site of the large manifest-index build). Used by RecentBooks / Home
+  // cover thumbnails so showing a thumbnail never triggers a full-book parse.
+  bookMetadataCache.reset(new BookMetadataCache(cachePath));
+  cssParser.reset(new CssParser(cachePath));  // constructed for API symmetry; not parsed here
+
+  // Fast path: a book.bin already exists — it carries coverItemHref, no OPF parse needed.
+  if (bookMetadataCache->load()) {
+    return true;
+  }
+
+  // No cache: metadata-only OPF parse. OpfCacheMode::Disabled passes a null cache to ContentOpfParser,
+  // so NO manifest item index / .items.bin / spine cache is built — only title/author/coverItemHref
+  // are extracted. This is the whole point: a 1732-spine book contributes no giant index here.
+  if (!parseContentOpf(bookMetadataCache->coreMetadata, OpfCacheMode::Disabled)) {
+    LOG_INF("EBP", "loadForCover: content.opf parse failed for %s", filepath.c_str());
+    return false;
+  }
+  if (bookMetadataCache->coreMetadata.coverItemHref.empty()) {
+    return false;  // no discoverable cover — caller shows a placeholder
+  }
+  // Mark loaded so ensureCoverImageCached()'s isLoaded() gate passes. Spine/TOC stay empty — the
+  // caller uses only the cover path (documented on loadForCover / markCoverMetadataLoaded).
+  bookMetadataCache->markCoverMetadataLoaded();
+  return true;
+}
+
+bool Epub::loadForMetadata() {
+  // Metadata-only load: see the header for why this exists (issue #104 — the series-sequel scan used
+  // to full-load every EPUB in the folder). Structured exactly like loadForCover(); the only
+  // difference is which field the caller goes on to read, so neither marks the other's data valid.
+  bookMetadataCache.reset(new BookMetadataCache(cachePath));
+  cssParser.reset(new CssParser(cachePath));  // constructed for API symmetry; not parsed here
+
+  // Fast path: an existing book.bin already carries title/author/series, no OPF parse needed.
+  if (bookMetadataCache->load()) {
+    return true;
+  }
+
+  // No cache: metadata-only OPF parse. OpfCacheMode::Disabled passes a null cache to
+  // ContentOpfParser, so no manifest item index / .items.bin / spine cache is built.
+  if (!parseContentOpf(bookMetadataCache->coreMetadata, OpfCacheMode::Disabled)) {
+    LOG_INF("EBP", "loadForMetadata: content.opf parse failed for %s", filepath.c_str());
+    return false;
+  }
+  // Mark loaded for API symmetry with loadForCover(); spine/TOC stay empty and must not be used.
+  bookMetadataCache->markCoverMetadataLoaded();
+  return true;
+}
+
 bool Epub::clearCache(const bool preserveThumbs) const {
   if (!Storage.exists(cachePath.c_str())) {
     LOG_DBG("EPB", "Cache does not exist, no action needed");
@@ -1291,6 +1346,85 @@ bool Epub::getItemSize(const std::string& itemHref, size_t* size) const {
   ZipFile zip(filepath);
   primeZip(zip);
   const bool ok = zip.getInflatedFileSize(path.c_str(), size);
+  adoptZipDetails(zip);
+  return ok;
+}
+
+void Epub::ensureSpineStats() const {
+  if (spineStatsResolved_) return;
+  spineStatsResolved_ = true;  // one attempt per book instance; on failure fall back to scans
+
+  const int spineCount = getSpineItemsCount();
+  if (spineCount <= 0) return;
+
+  // Heap gate: the deque needs ~sizeof(FileStatSlim) per spine plus a transient targets deque
+  // of the same order during the walk. Require comfortable headroom so a genuinely low heap
+  // falls back to per-spine scans (correct, slower) instead of aborting under -fno-exceptions.
+  const size_t perSpine = sizeof(ZipFile::FileStatSlim) + sizeof(ZipFile::SizeTarget);
+  const size_t needed = static_cast<size_t>(spineCount) * perSpine + 32u * 1024u;
+  if (esp_get_free_heap_size() < needed) {
+    LOG_INF("EBP", "spine-stat cache skipped (need %lu, free %lu) — falling back to per-spine scans",
+            static_cast<unsigned long>(needed), static_cast<unsigned long>(esp_get_free_heap_size()));
+    return;
+  }
+
+  ZipFile zip(filepath);
+  primeZip(zip);
+
+  // Build sorted (hash,len)->spineIndex targets, one central-directory walk resolves all stats.
+  std::deque<ZipFile::SizeTarget> targets;
+  targets.resize(spineCount);
+  std::string pathScratch;
+  for (int i = 0; i < spineCount; i++) {
+    // Hrefs are already URI-decoded in the metadata cache; normalise to match the raw
+    // central-directory names fillFileStats hashes (same keying fillUncompressedSizes uses).
+    FsHelpers::normalisePath(getSpineItem(i).href, pathScratch);
+    ZipFile::SizeTarget t;
+    t.hash = HashUtils::fnvHash64(pathScratch.c_str(), pathScratch.size());
+    t.len = static_cast<uint16_t>(pathScratch.size());
+    t.index = static_cast<uint16_t>(i);
+    targets[i] = t;
+  }
+  std::sort(targets.begin(), targets.end(), [](const ZipFile::SizeTarget& a, const ZipFile::SizeTarget& b) {
+    return a.hash < b.hash || (a.hash == b.hash && a.len < b.len);
+  });
+
+  spineStats_.assign(spineCount, ZipFile::FileStatSlim{});
+  const int matched = zip.fillFileStats(targets, spineStats_);
+  adoptZipDetails(zip);
+  targets.clear();
+  targets.shrink_to_fit();
+
+  if (matched != spineCount) {
+    // Some spines didn't match the batch walk (hash mismatch / odd names). Keep the cache — the
+    // matched entries still short-circuit; unmatched ones (localHeaderOffset==0) fall back per-call.
+    LOG_INF("EBP", "spine-stat cache matched %d/%d — unmatched spines fall back to per-spine scans", matched,
+            spineCount);
+  }
+  spineStatsUsable_ = matched > 0;
+}
+
+bool Epub::getSpineItemStat(const int spineIndex, ZipFile::FileStatSlim* out) const {
+  if (!out || spineIndex < 0) return false;
+  ensureSpineStats();
+
+  if (spineStatsUsable_ && spineIndex < static_cast<int>(spineStats_.size())) {
+    const ZipFile::FileStatSlim& s = spineStats_[spineIndex];
+    // A matched entry has a non-zero local-header offset. Offset 0 is the archive's FIRST local
+    // header — in an EPUB that is always the uncompressed `mimetype` entry (spec-mandated first,
+    // STORED), never a spine XHTML, so 0 unambiguously means "unmatched in the batch walk" here.
+    // A false 0 would only cost this one spine a fallback scan (still correct), not a wrong result.
+    if (s.localHeaderOffset != 0) {
+      *out = s;
+      return true;
+    }
+  }
+
+  // Fallback: single linear scan for this spine (cache disabled or this spine unmatched).
+  ZipFile zip(filepath);
+  primeZip(zip);
+  const std::string entryPath = FsHelpers::normalisePath(getSpineItem(spineIndex).href);
+  const bool ok = zip.loadFileStatSlim(entryPath.c_str(), out);
   adoptZipDetails(zip);
   return ok;
 }

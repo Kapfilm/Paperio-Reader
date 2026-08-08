@@ -2,6 +2,7 @@
 
 #include <Print.h>
 
+#include <deque>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -65,7 +66,28 @@ class Epub {
   mutable uint16_t zipTotalEntries_ = 0;
   mutable bool zipDetailsCached_ = false;
 
+  // Per-book cache of each spine entry's ZIP central-directory stat, resolved in ONE
+  // central-directory walk (fillFileStats) the first time any spine stat is requested.
+  // Without it, every spine open re-runs a linear central-directory scan — on a book that
+  // interleaves ~1600 image entries with the XHTML spines (e.g. King's Avatar) that scan
+  // walks hundreds-to-thousands of entries and dominated the compile (~215 ms/spine,
+  // measured). Deque (not vector): ~14 B/spine, ~24 KB at 1732 spines — a vector would demand
+  // that as one contiguous block and abort on a fragmented heap under -fno-exceptions.
+  // Best-effort: on OOM the deque stays empty and getSpineItemStat falls back to a per-call
+  // linear scan (correct, just slow). In-memory only — content.bin is the durable cache, so
+  // this is cheap to rebuild and never persisted.
+  mutable std::deque<ZipFile::FileStatSlim> spineStats_;
+  mutable bool spineStatsResolved_ = false;
+  mutable bool spineStatsUsable_ = false;
+  void ensureSpineStats() const;
+
  public:
+  // Resolve a spine entry's ZIP central-directory stat via the per-book cache (one
+  // central-directory walk for the whole book, then O(1) per spine). Falls back to a single
+  // linear loadFileStatSlim scan if the cache couldn't be built (OOM) or the spine wasn't
+  // matched in the batch walk. Returns false only if the entry can't be found at all.
+  bool getSpineItemStat(int spineIndex, ZipFile::FileStatSlim* out) const;
+
   // Seed a fresh ZipFile over this book with the cached EOCD details (no-op
   // until the first adopt). Public so Section's EntryReader benefits too.
   void primeZip(ZipFile& zip) const;
@@ -90,6 +112,27 @@ class Epub {
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false);
+
+  // Lightweight load for COVER thumbnails only: populate the cover image reference WITHOUT building
+  // the spine/TOC book.bin. Uses book.bin if it already exists; otherwise does a metadata-only OPF
+  // parse (OpfCacheMode::Disabled — no manifest item index, no .items.bin), which for a huge book
+  // (e.g. 1732 spines) avoids both the cost and the fragile large-index build of a full load(). After
+  // this, only the cover path is valid (getCoverImageCachePath / generateThumbBmp / cover extraction)
+  // — the spine/TOC accessors are NOT populated. Returns false if the cover reference can't be found.
+  bool loadForCover();
+
+  // Lightweight load for CATALOGUE METADATA only (title/author/series/seriesIndex/language), WITHOUT
+  // building the spine/TOC book.bin. Same rationale and mechanism as loadForCover(): uses book.bin if
+  // it already exists, otherwise does a metadata-only OPF parse (OpfCacheMode::Disabled — no manifest
+  // item index, no .items.bin). After this, ONLY the metadata accessors above are valid; the spine/TOC
+  // accessors and the cover path are NOT populated.
+  //
+  // Exists because scanning a folder for a series sequel must read series metadata from every EPUB in
+  // it. Doing that with full load() calls meant one manifest/spine index build per candidate, run from
+  // inside the reader with its heap still committed — the finished-book reboot on a large series folder
+  // (issue #104). Cheap enough to call in a loop; still not free (one OPF parse per call), so callers
+  // scanning many books should bound the candidate set first.
+  bool loadForMetadata();
 
   // True when opening the book will trigger the (multi-second) first-open index
   // build inside load(): the spine/TOC cache (book.bin) or the compiled CSS rules
