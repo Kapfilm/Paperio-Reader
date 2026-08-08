@@ -9,6 +9,7 @@ class SdCardFont;
 #include <atomic>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -70,6 +71,63 @@ class GfxRenderer {
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
   // as before, concentrated in a single pointer instead of four fields.
   mutable FontCacheManager* fontCacheManager_ = nullptr;
+
+  // --- Scaled-glyph mask cache ----------------------------------------------
+  // Text drawn at a scale != 1.0 — i.e. every word of any book whose stylesheet
+  // puts a font-size on body text, which is most of them — is resampled per
+  // destination pixel by renderCharAtScale(). Uncached, that resample runs once
+  // per glyph *occurrence*: ~500 times a page against ~40 distinct glyphs.
+  // Measured 2026-08-02 (X4, "A Scandalous Deception", body text at 0.92em):
+  // 303 ms for the page's BW pass with the scaling, 39 ms with it off.
+  //
+  // Caching the resampled 1-bit coverage mask makes the resample once per
+  // distinct (glyph, scale, selector) and lets renderGlyphFastBW() — the same
+  // 8-pixel-chunk blitter unscaled text uses — draw every occurrence.
+  //
+  // Budget: 80 x 16B table + 3.5 KB arena ≈ 4.75 KB, two allocations made lazily
+  // on the first scaled glyph and released by releaseScaledGlyphCache(). It is
+  // a bump allocator that resets wholesale when full: no per-glyph allocation,
+  // nothing to fragment, and a page whose working set overflows the arena
+  // degrades toward the uncached path instead of growing.
+  //
+  // Not internally synchronised: it is written only from glyph rasterisation,
+  // which every caller (render task, loop-task pre-render, deferred AA) already
+  // serialises behind RenderLock — the same lock that protects the framebuffer
+  // these masks are blitted into.
+  //
+  // Keyed by (font, codepoint, scale, sel), NOT by EpdGlyph address: SD-card
+  // fonts rebuild their glyph array every page and serve overflow codepoints
+  // from an 8-entry ring, so the same address means different glyphs over time.
+  // The resampled pixels are a pure function of this key, which makes it both
+  // stable and exact. Style is deliberately absent: EpdFontFamily::getData() and
+  // getGlyph() both resolve through getFont(style), so the EpdFontData pointer
+  // already identifies the variant.
+  struct ScaledGlyphEntry {
+    const void* fontData;  // EpdFontData for the style (stable per font object)
+    uint32_t scaleBits;    // exact float bits of the scale factor (no quantisation)
+    uint16_t cp;           // codepoint; above the BMP renders uncached (see alloc)
+    uint16_t offset;       // byte offset into scaledGlyphArena_
+    uint8_t sel;           // minRaw2Bit (scale < 1) or drawMask (scale >= 1)
+    uint8_t w;
+    uint8_t h;
+  };
+  // Keeps the documented budget honest if a field is ever added.
+  static_assert(sizeof(ScaledGlyphEntry) <= 16, "scaled-glyph entry grew; update the cache budget comment");
+  // Sized from measurement, not guesswork: a page of this corpus needs 45-58
+  // distinct renditions (three font groups x ~40 glyphs, per the prewarm logs)
+  // averaging ~40 bytes of mask each. 48 entries reset on every pass — the table,
+  // not the arena, was the binding constraint.
+  static constexpr uint8_t SCALED_GLYPH_MAX_ENTRIES = 80;
+  static constexpr uint16_t SCALED_GLYPH_ARENA_BYTES = 3584;
+  // One outsized glyph (a large heading) must not evict a page's whole body-text
+  // working set, so anything above this renders uncached.
+  static constexpr uint16_t SCALED_GLYPH_MAX_MASK_BYTES = 512;
+  mutable std::unique_ptr<ScaledGlyphEntry[]> scaledGlyphEntries_;
+  mutable std::unique_ptr<uint8_t[]> scaledGlyphArena_;
+  mutable uint8_t scaledGlyphCount_ = 0;
+  mutable uint16_t scaledGlyphUsed_ = 0;
+  mutable bool scaledGlyphOom_ = false;  // arena allocation failed; do not retry every glyph
+
   mutable std::atomic<unsigned int> refreshOverride = REFRESH_OVERRIDE_NONE;
   // Atomically consume a pending setNextDisplayRefreshMode() override: if one is set, clear it
   // and return its mode; otherwise return `requested`. Shared by displayBuffer() and
@@ -111,14 +169,28 @@ class GfxRenderer {
   // Setup
   void begin();  // must be called right after display.begin()
   void insertFont(int fontId, EpdFontFamily font);
-  void removeFont(int fontId) { fontMap.erase(fontId); }
+  void removeFont(int fontId) {
+    fontMap.erase(fontId);
+    invalidateScaledGlyphCache();
+  }
   void setFontCacheManager(FontCacheManager* m) { fontCacheManager_ = m; }
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
   bool isFontCacheScanning() const;
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
-  void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
-  void unregisterSdCardFont(int fontId) { sdCardFonts_.erase(fontId); }
-  void clearSdCardFonts() { sdCardFonts_.clear(); }
+  // Each of these can retire an EpdFontData a cached scaled mask is keyed on, so
+  // they all drop the cache (see ScaledGlyphEntry).
+  void registerSdCardFont(int fontId, SdCardFont* font) {
+    sdCardFonts_[fontId] = font;
+    invalidateScaledGlyphCache();
+  }
+  void unregisterSdCardFont(int fontId) {
+    sdCardFonts_.erase(fontId);
+    invalidateScaledGlyphCache();
+  }
+  void clearSdCardFonts() {
+    sdCardFonts_.clear();
+    invalidateScaledGlyphCache();
+  }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
 
@@ -314,7 +386,32 @@ class GfxRenderer {
     unsigned long planesMs = 0;   // LSB render+copy + MSB render+copy
     unsigned long displayMs = 0;  // displayGrayBuffer() waveform
     unsigned long restoreMs = 0;  // cleanupGrayscaleWithPreviousBuffer() SPI write
+    bool aborted = false;         // dropped at the mid-pass abort point; no gray flush happened
   };
+
+  // Both plane passes below take a shouldAbort predicate, evaluated once at the last point
+  // where the pass can still be dropped without the user seeing anything: after the LSB plane
+  // has been rendered into the framebuffer but before the first grayscale byte reaches the
+  // controller. Aborting there costs only the framebuffer reseed that the normal tail performs
+  // anyway, and gives back the MSB render, both plane writes and the gray flush — which is the
+  // whole net cost of anti-aliasing. Pass a predicate that answers "is this page already on its
+  // way out"; return false to always complete.
+
+  // Abandon a grayscale pass without flushing it, and report it as aborted. Reseeds the
+  // framebuffer and controller baseline from the previous-frame slot, exactly as a completed
+  // pass's tail does. Valid at either gate: plane data may already sit in controller RAM, but
+  // only displayGrayBuffer() runs the gray waveform, so nothing has reached the panel and the
+  // BW page stays displayed.
+  GrayscaleTimings abandonGrayscalePass(const unsigned long planesMs) {
+    GrayscaleTimings t;
+    t.planesMs = planesMs;
+    const unsigned long tAbort = millis();
+    setRenderMode(BW);
+    cleanupGrayscaleWithPreviousBuffer();
+    t.restoreMs = millis() - tAbort;
+    t.aborted = true;
+    return t;
+  }
 
   // Render both grayscale planes sequentially into the BW framebuffer, streaming
   // each plane to the controller immediately after rendering it. No extra allocation
@@ -332,19 +429,29 @@ class GfxRenderer {
   // Returns wall-clock timings for each of the three phases.
   //
   // Signature: void renderFn(RenderMode mode)
-  template <typename RenderFn>
-  GrayscaleTimings renderGrayscalePlanesSequential(RenderFn renderFn) {
+  template <typename RenderFn, typename AbortFn>
+  GrayscaleTimings renderGrayscalePlanesSequential(RenderFn renderFn, AbortFn shouldAbort) {
     GrayscaleTimings t;
     const unsigned long t0 = millis();
 
     clearScreen(0x00);
     setRenderMode(GRAYSCALE_LSB);
     renderFn(GRAYSCALE_LSB);
+    if (shouldAbort()) {
+      return abandonGrayscalePass(millis() - t0);
+    }
     copyGrayscaleLsbBuffers();
 
     clearScreen(0x00);
     setRenderMode(GRAYSCALE_MSB);
     renderFn(GRAYSCALE_MSB);
+    // The MSB render is as long as the LSB one and can bail just as late, so it needs its own
+    // gate: without it a plane abandoned part-way was still copied and flushed, putting a
+    // half-drawn overlay on screen (seen on X3 as a COMPLETED pass with planes=545ms against a
+    // normal ~890ms). Checked before the copy so no partial plane even reaches the controller.
+    if (shouldAbort()) {
+      return abandonGrayscalePass(millis() - t0);
+    }
     copyGrayscaleMsbBuffers();
 
     const unsigned long t1 = millis();
@@ -378,8 +485,8 @@ class GfxRenderer {
   // Caller contract: an async refresh MUST be in flight, and the glyphs the
   // renderFn draws must already be prewarmed (a cache miss would issue SD reads
   // — allowed — but a display/SPI call in renderFn is not).
-  template <typename RenderFn>
-  GrayscaleTimings renderGrayscalePlanesInterleaved(RenderFn renderFn) {
+  template <typename RenderFn, typename AbortFn>
+  GrayscaleTimings renderGrayscalePlanesInterleaved(RenderFn renderFn, AbortFn shouldAbort) {
     GrayscaleTimings t;
     const unsigned long t0 = millis();
 
@@ -392,10 +499,23 @@ class GfxRenderer {
     display.finishDisplayAsync();
     const unsigned long tWaveDone = millis();
 
+    // Abort point. This is the ideal place for it on the interleaved path: the BW page is now
+    // fully on screen, and the LSB render just spent was paid for out of the waveform wait
+    // rather than out of the page-turn budget — so dropping the pass here reclaims the entire
+    // net cost of the AA and forfeits nothing that was actually charged to the user.
+    if (shouldAbort()) {
+      return abandonGrayscalePass(tLsbDone - t0);
+    }
+
     copyGrayscaleLsbBuffers();
     clearScreen(0x00);
     setRenderMode(GRAYSCALE_MSB);
     renderFn(GRAYSCALE_MSB);
+    // Second gate, same reason as in the sequential pass: an MSB render that bailed part-way
+    // must never be copied or flushed. Checked before the copy.
+    if (shouldAbort()) {
+      return abandonGrayscalePass((tLsbDone - t0) + (millis() - tWaveDone));
+    }
     copyGrayscaleMsbBuffers();
 
     const unsigned long t1 = millis();
@@ -454,6 +574,29 @@ class GfxRenderer {
   // Font helpers
   const uint8_t* getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const;
 
+  // Scaled-glyph mask cache (see ScaledGlyphEntry). Public only because the glyph
+  // pipeline lives in free functions in GfxRenderer.cpp; treat as internal.
+  // find returns the cached mask for an exact key match, alloc reserves a zeroed
+  // mask of w*h bits for the caller to fill, or nullptr when the glyph is too
+  // large to cache or the arena could not be allocated.
+  const uint8_t* findScaledGlyphMask(const void* fontData, uint32_t cp, float scale, uint8_t sel, int w, int h) const;
+  uint8_t* allocScaledGlyphMask(const void* fontData, uint32_t cp, float scale, uint8_t sel, int w, int h) const;
+
+  // Drop every cached mask, keeping the arena. MUST run whenever a font is added
+  // or removed: entries are keyed by EpdFontData address, which a later font
+  // object could reuse.
+  void invalidateScaledGlyphCache() const {
+    scaledGlyphCount_ = 0;
+    scaledGlyphUsed_ = 0;
+  }
+  // Give the ~4 KB arena back. The cache re-allocates lazily if rendering resumes.
+  void releaseScaledGlyphCache() const {
+    scaledGlyphEntries_.reset();
+    scaledGlyphArena_.reset();
+    scaledGlyphOom_ = false;
+    invalidateScaledGlyphCache();
+  }
+
   // Low level functions
   uint8_t* getFrameBuffer() const;
   size_t getBufferSize() const;
@@ -466,6 +609,7 @@ class GfxRenderer {
   void releaseFrameBuffers() {
     display.releaseBuffers();
     frameBuffer = nullptr;
+    releaseScaledGlyphCache();
   }
 
   // Release both display buffers and install a caller-owned scratch buffer as
@@ -476,6 +620,7 @@ class GfxRenderer {
   bool releaseFrameBuffersWithScratch(uint8_t* scratch, size_t scratchSize) {
     if (!scratch || scratchSize < static_cast<size_t>(panelWidthBytes) * panelHeight) return false;
     display.releaseBuffers();
+    releaseScaledGlyphCache();
     memset(scratch, 0, scratchSize);
     frameBuffer = scratch;
     return true;
