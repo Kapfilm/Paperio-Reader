@@ -38,8 +38,9 @@ std::string extractHostFromUrl(const std::string& url) {
 // (or, if HalClock restored from NVS, a stale "last known" time that may
 // still predate the cert's notBefore). Refresh an unset or approximate clock
 // with SNTP before HTTPS. A successful sync makes later calls cheap; a failed
-// sync is deliberately retried by the next HTTPS request (notably the strict
-// OTA firmware download after the release-metadata request).
+// sync is deliberately retried by the next HTTPS request. If it remains
+// unavailable, SecureClient can ignore only certificate validity-window
+// errors while still verifying the CA chain, signatures, and hostname.
 constexpr time_t MIN_PLAUSIBLE_EPOCH = 1735689600;  // 2025-01-01 00:00:00 UTC
 // Upper bound: a clock far in the future also fails cert notAfter checks. Our
 // curated roots' latest notAfter is 2038; cap at 2037 so a wildly-wrong future
@@ -61,7 +62,7 @@ bool ensureClockForTls() {
           HalClock::isApproximate() ? "approximate" : "unset/implausible", static_cast<long>(time(nullptr)));
   char err[64] = {0};
   if (!HalClock::syncNtp(err, sizeof(err), SETTINGS.ntpServer)) {
-    LOG_ERR("HTTP", "SNTP sync failed: %s — TLS verification may fail until clock is set", err);
+    LOG_ERR("HTTP", "SNTP sync failed: %s — allowing certificate date errors only", err);
     return false;
   }
   LOG_INF("HTTP", "SNTP sync complete; epoch now %ld", static_cast<long>(time(nullptr)));
@@ -89,12 +90,13 @@ bool isRedirect(int status) {
 // Runs once per http call (or once per session for reused sessions): logs
 // heap stats and ensures the wall clock is set so TLS cert-date validation
 // can succeed. Shared by both TLS backends.
-void logPreCallContext(const std::string& url) {
+bool logPreCallContext(const std::string& url) {
   LOG_DBG("HTTP", "Heap free: %u, largest block: %u", esp_get_free_heap_size(),
           heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
   if (url.compare(0, 8, "https://") == 0) {
-    ensureClockForTls();
+    return ensureClockForTls();
   }
+  return true;
 }
 
 // One-shot streaming GET over SecureNet (wolfSSL). Fills the Sink and emits
@@ -103,7 +105,7 @@ void logPreCallContext(const std::string& url) {
 // (except where the caller disables it, e.g. OTA).
 HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::string& username,
                                            const std::string& password, Sink& sink, bool allowInsecureFallback) {
-  logPreCallContext(url);
+  const bool clockReady = logPreCallContext(url);
   const unsigned long startMs = millis();
   LOG_DBG("HTTP", "Phase start @%lums heap=%u largest=%u", millis() - startMs, esp_get_free_heap_size(),
           heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
@@ -111,6 +113,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   crosspoint::SecureHttpClient http;
   http.setCACert(CROSSPOINT_ROOTS_PEM);
   http.setAllowInsecureFallback(allowInsecureFallback);
+  http.setAllowCertificateDateErrors(!clockReady);
   http.setTimeout(HTTP_TIMEOUT_MS);
   http.setUserAgent("WitchReader-ESP32-" CROSSPOINT_VERSION);
   if (!username.empty() && !password.empty()) {
@@ -189,14 +192,15 @@ HttpDownloader::DownloadError runGetSecureOnSession(HttpDownloader::Session& ses
                                                     const std::string& username, const std::string& password,
                                                     Sink& sink, bool allowInsecureFallback) {
   auto* impl = session.impl();
+  const bool clockReady = logPreCallContext(url);
   if (!impl->http) {
-    logPreCallContext(url);
     impl->http = std::make_unique<crosspoint::SecureHttpClient>();
     impl->http->setCACert(CROSSPOINT_ROOTS_PEM);
     impl->http->setTimeout(HTTP_TIMEOUT_MS);
     impl->http->setUserAgent("WitchReader-ESP32-" CROSSPOINT_VERSION);
   }
   impl->http->setAllowInsecureFallback(allowInsecureFallback);
+  impl->http->setAllowCertificateDateErrors(!clockReady);
   impl->http->clearHeaders();
   if (!username.empty() && !password.empty()) {
     impl->http->setBasicAuth(username, password);

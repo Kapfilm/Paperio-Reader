@@ -76,6 +76,19 @@ bool isVerificationError(int err) {
       return false;
   }
 }
+
+// wolfSSL invokes this only when peer verification reports a failure. Accept
+// precisely the two validity-window errors and leave every chain, signature,
+// trust-anchor, and hostname error untouched. SecureClient installs the
+// callback only for requests whose caller could not obtain trustworthy time.
+int allowCertificateDateErrors(int preverify, WOLFSSL_X509_STORE_CTX* store) {
+  if (preverify == 0 && store != nullptr &&
+      (store->error == ASN_BEFORE_DATE_E || store->error == ASN_AFTER_DATE_E)) {
+    LOG_INF("TLS", "Ignoring certificate date error %d; CA chain and hostname remain verified", store->error);
+    return 1;
+  }
+  return preverify;
+}
 }  // namespace
 
 // One handshake attempt at a fixed verification level and TLS method.
@@ -97,7 +110,8 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
       stop();
       return 0;
     }
-    wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_PEER, nullptr);
+    wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_PEER,
+                           _allowCertificateDateErrors ? allowCertificateDateErrors : nullptr);
   } else {
     wolfSSL_CTX_set_verify(ctx, WOLFSSL_VERIFY_NONE, nullptr);
   }
