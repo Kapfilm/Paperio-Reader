@@ -90,6 +90,10 @@ static float rtcDriftScale = 1.0f;
 
 static unsigned long lastPeriodicUpdateMs = 0;
 static constexpr unsigned long PERIODIC_UPDATE_INTERVAL_MS = 10UL * 60UL * 1000UL;
+static constexpr time_t NTP_AUTO_SYNC_INTERVAL_S = 24 * 60 * 60;
+static constexpr unsigned long NTP_AUTO_RETRY_INTERVAL_MS = 30UL * 60UL * 1000UL;
+static unsigned long lastAutoSyncAttemptMs = 0;
+static bool autoSyncAttempted = false;
 
 struct TimeZoneEntry {
   const char* tz;
@@ -561,6 +565,30 @@ bool syncNtp(char* errorBuf, size_t errorBufSize, const char* preferredServer) {
 
 bool syncNtp(const char* preferredServer) { return syncNtp(nullptr, 0, preferredServer); }
 
+bool syncNtpIfDue(const char* preferredServer) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+
+  const time_t current = now();
+  const time_t lastSync = nvsReadSyncTime();
+  const bool due = isApproximate() || current <= 0 || lastSync <= 0 || current < lastSync ||
+                   current - lastSync >= NTP_AUTO_SYNC_INTERVAL_S;
+  if (!due) {
+    return true;
+  }
+
+  const unsigned long nowMs = millis();
+  if (autoSyncAttempted && nowMs - lastAutoSyncAttemptMs < NTP_AUTO_RETRY_INTERVAL_MS) {
+    return false;
+  }
+  autoSyncAttempted = true;
+  lastAutoSyncAttemptMs = nowMs;
+  LOG_INF("CLK", "Automatic NTP refresh (approx=%d, age=%lld s)", isApproximate() ? 1 : 0,
+          lastSync > 0 && current > 0 ? static_cast<long long>(current - lastSync) : -1LL);
+  return syncNtp(preferredServer);
+}
+
 void saveBeforeSleep(bool keepLpAlive) {
   if (!isSynced()) {
     return;
@@ -669,18 +697,26 @@ time_t now() {
   return time(nullptr);
 }
 
-void updatePeriodic() {
+void updatePeriodic(const char* preferredServer) {
+  const unsigned long nowMs = millis();
+  if (nowMs - lastPeriodicUpdateMs < PERIODIC_UPDATE_INTERVAL_MS) {
+    return;
+  }
+  lastPeriodicUpdateMs = nowMs;
+
+  // Never power the radio for clock maintenance. If another activity already
+  // connected it, use that opportunity for the daily/after-sleep refresh.
+  if (WiFi.status() == WL_CONNECTED) {
+    syncNtpIfDue(preferredServer);
+  }
+
   // DS3231 (if present) has priority, synchronize the system time
   // every 10 minutes directly against the RTC, instead of calculating.
   if (initExternalRTC()) {
-    unsigned long nowMs = millis();
-    if (nowMs - lastPeriodicUpdateMs >= PERIODIC_UPDATE_INTERVAL_MS) {
-      time_t rtcTime = readExternalRTC();
-      if (rtcTime > 1577836800) {  // Check if time is after 2020 (plausible timestamp)
-        lastPeriodicUpdateMs = nowMs;
-        setSystemClock(rtcTime);
-        LOG_DBG("CLK", "Systemtime has been taken from DS3231");
-      }
+    time_t rtcTime = readExternalRTC();
+    if (rtcTime > 1577836800) {  // Check if time is after 2020 (plausible timestamp)
+      setSystemClock(rtcTime);
+      LOG_DBG("CLK", "Systemtime has been taken from DS3231");
     }
     return;
   }
@@ -688,11 +724,6 @@ void updatePeriodic() {
   if (!isSynced()) {
     return;
   }
-  unsigned long nowMs = millis();
-  if (nowMs - lastPeriodicUpdateMs < PERIODIC_UPDATE_INTERVAL_MS) {
-    return;
-  }
-  lastPeriodicUpdateMs = nowMs;
 
   // Compute temperature-corrected elapsed time since last baseline and apply
   // only the drift delta (correction - raw) to the system clock. The kernel
@@ -770,9 +801,9 @@ void formatLogTime(char* buf, size_t bufSize) {
   snprintf(buf, bufSize, "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
 }
 
-void wifiOff(bool skipNtpSync) {
-  if (!skipNtpSync && isApproximate() && WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED) {
-    syncNtp();
+void wifiOff(bool skipNtpSync, const char* preferredServer) {
+  if (!skipNtpSync && WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED) {
+    syncNtpIfDue(preferredServer);
   }
   if (esp_sntp_enabled()) {
     esp_sntp_stop();

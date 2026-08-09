@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -11,6 +12,7 @@
 #include <cstring>
 
 #include "MappedInputManager.h"
+#include "CrossPointSettings.h"
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
 #include "activities/NetworkMemoryTrim.h"
@@ -53,8 +55,7 @@ void FontDownloadActivity::onExit() {
   // [project-font-download-heap-stash]). A reboot here gives the next
   // activity a pristine heap.
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
-    delay(30);
+    HalClock::wifiOff(false, SETTINGS.ntpServer);
   }
   silentRestart();
 }

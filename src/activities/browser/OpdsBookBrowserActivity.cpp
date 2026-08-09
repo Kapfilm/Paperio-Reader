@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <Epub.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <JpegToBmpConverter.h>
@@ -280,8 +281,7 @@ void OpdsBookBrowserActivity::onExit() {
   Storage.remove("/.tmp_opds_cache.dat");
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
-    delay(30);
+    HalClock::wifiOff(false, SETTINGS.ntpServer);
     silentRestart();
   }
 }

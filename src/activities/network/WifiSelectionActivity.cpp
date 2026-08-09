@@ -145,8 +145,7 @@ void WifiSelectionActivity::onExit() {
 
   if (shutdownWifiOnExit && WiFi.getMode() != WIFI_MODE_NULL) {
     LOG_DBG("WIFI", "Standalone selector exit: shutting WiFi down...");
-    WiFi.disconnect(true, false);
-    WiFi.mode(WIFI_OFF);
+    HalClock::wifiOff(false, SETTINGS.ntpServer);
     LOG_DBG("WIFI", "Free heap after WiFi shutdown: %d bytes", ESP.getFreeHeap());
   }
 

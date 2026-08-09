@@ -1,6 +1,7 @@
 #include "WeatherActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <WeatherClient.h>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "MappedInputManager.h"
+#include "CrossPointSettings.h"
 #include "SilentRestart.h"
 #include "WeatherSettingsActivity.h"
 #include "activities/NetworkMemoryTrim.h"
@@ -225,8 +227,7 @@ void WeatherActivity::onExit() {
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
-    delay(30);
+    HalClock::wifiOff(false, SETTINGS.ntpServer);
     silentRestart();
   }
 }

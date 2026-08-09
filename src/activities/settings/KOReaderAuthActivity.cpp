@@ -1,11 +1,13 @@
 #include "KOReaderAuthActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <WiFi.h>
 
 #include "KOReaderCredentialStore.h"
+#include "CrossPointSettings.h"
 #include "KOReaderSyncClient.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
@@ -111,8 +113,7 @@ void KOReaderAuthActivity::onExit() {
   Activity::onExit();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
-    delay(30);
+    HalClock::wifiOff(false, SETTINGS.ntpServer);
   }
   // Unconditional: onEnter() released the secondary framebuffer for the network
   // session and nothing reallocates it, so every exit path — including a

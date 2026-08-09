@@ -413,6 +413,9 @@ void enterDeepSleep(bool fromTimeout = false) {
   // On X3 the DS3231 keeps time independently, so there's no need to keep the MCU
   // powered during deep sleep for LP timer preservation.
   const bool keepLpAlive = SETTINGS.useClock && !gpio.deviceIsX3();
+  if (SETTINGS.useClock && WiFi.status() == WL_CONNECTED) {
+    HalClock::syncNtpIfDue(SETTINGS.ntpServer);
+  }
   HalClock::saveBeforeSleep(keepLpAlive);
   // If sleeping from a running reader the book loaded successfully, so the boot-loop
   // guard count is no longer needed. Reset it now because onExit() is never called
@@ -943,7 +946,7 @@ void loop() {
 
   gpio.update();
   buttonEventManager.update();
-  HalClock::updatePeriodic();
+  HalClock::updatePeriodic(SETTINGS.ntpServer);
   halTiltSensor.update(static_cast<CrossPointTiltPageTurn::Value>(SETTINGS.tiltPageTurn),
                        static_cast<CrossPointOrientation::Value>(SETTINGS.orientation),
                        activityManager.isReaderActivity());

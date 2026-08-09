@@ -2,11 +2,13 @@
 
 #include <ESPmDNS.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <I18n.h>
 #include <WiFi.h>
 #include <esp_task_wdt.h>
 
 #include "MappedInputManager.h"
+#include "CrossPointSettings.h"
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
@@ -64,8 +66,7 @@ void CalibreConnectActivity::onExit() {
   MDNS.end();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
-    delay(30);
+    HalClock::wifiOff(false, SETTINGS.ntpServer);
     silentRestart();
   }
 }

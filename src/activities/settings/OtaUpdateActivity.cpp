@@ -1,10 +1,12 @@
 #include "OtaUpdateActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <I18n.h>
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
+#include "CrossPointSettings.h"
 #include "SilentRestart.h"
 #include "activities/NetworkMemoryTrim.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -83,8 +85,7 @@ void OtaUpdateActivity::onExit() {
   Activity::onExit();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    WiFi.disconnect(false);
-    delay(30);
+    HalClock::wifiOff(false, SETTINGS.ntpServer);
   }
   // onEnter() always releases the secondary framebuffer before WiFi starts.
   // Restart even when WiFi selection was cancelled and already turned the

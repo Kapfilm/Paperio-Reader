@@ -62,12 +62,17 @@ time_t now();
 bool isSynced();
 
 /// Periodic callback (called from main loop) to compensate temperature-induced
-/// RTC drift while the device is awake.  Runs at a 10-minute interval.
-/// Computes the drift delta since the last baseline using the temperature
-/// model and nudges the system clock by only that delta (the kernel clock
-/// already advanced the raw amount).  Drift state is persisted to NVS only
-/// in saveBeforeSleep() to minimise flash wear.
-void updatePeriodic();
+/// RTC drift while the device is awake. Runs at a 10-minute interval. When
+/// WiFi is already connected it also refreshes stale/approximate time through
+/// NTP; it never enables WiFi on its own. `preferredServer` behaves as in
+/// syncNtp().
+void updatePeriodic(const char* preferredServer = nullptr);
+
+/// Refresh through NTP only when the current time is approximate, has never
+/// been synced, or the last authoritative sync is at least 24 hours old.
+/// WiFi must already be connected. Failed automatic attempts are throttled to
+/// once per 30 minutes while the device remains awake.
+bool syncNtpIfDue(const char* preferredServer = nullptr);
 
 /// True if the last restore was from a backup (not NTP) — i.e. the clock
 /// may have drifted.  Cleared on NTP sync.
@@ -87,10 +92,10 @@ void formatTime(char* buf, size_t bufSize, bool use24h);
 /// synced, or an empty string if not.
 void formatLogTime(char* buf, size_t bufSize);
 
-/// Tear down WiFi cleanly.  When skipNtpSync is false (default) and the
-/// clock is approximate, performs an opportunistic NTP sync before
-/// disconnecting — essentially free since we already have a connection.
-void wifiOff(bool skipNtpSync = false);
+/// Tear down WiFi cleanly. When skipNtpSync is false (default), performs a
+/// due NTP refresh before disconnecting — essentially free since WiFi is
+/// already connected. `preferredServer` behaves as in syncNtp().
+void wifiOff(bool skipNtpSync = false, const char* preferredServer = nullptr);
 
 /// Apply a Unix timestamp (e.g., from a hotspot client upload).
 /// Only updates system clock if SNTP is not active (clock not synced from network).

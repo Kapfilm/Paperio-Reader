@@ -3,6 +3,7 @@
 #include <DNSServer.h>
 #include <ESPmDNS.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <I18n.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -11,6 +12,7 @@
 #include <cstddef>
 
 #include "MappedInputManager.h"
+#include "CrossPointSettings.h"
 #include "NetworkModeSelectionActivity.h"
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
@@ -89,7 +91,7 @@ void CrossPointWebServerActivity::onExit() {
     if (isApMode) {
       WiFi.softAPdisconnect(true);
     } else {
-      WiFi.disconnect(false);
+      HalClock::wifiOff(false, SETTINGS.ntpServer);
     }
     delay(30);
     silentRestart();
