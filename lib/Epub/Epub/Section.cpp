@@ -30,7 +30,8 @@
 #include "parsers/ChapterHtmlSlimParser.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION = 69;  // near-body font-size normalization
+constexpr uint8_t SECTION_FILE_VERSION = 70;  // retain up to 32 footnote/cross-reference links per rendered page
+                                              // v69: near-body font-size normalization
                                               // v68: main-text font-size baseline normalization
                                               // v67: drop-cap float zones and ink-metric placement
                                               // v66: resident TextBlock stores render-only BlockStyle slice

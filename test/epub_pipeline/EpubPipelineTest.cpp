@@ -54,6 +54,20 @@ TEST(EpubAnchorClassificationTest, CanonicalGenericIdsCanBeStoredCompactlyWithou
   EXPECT_FALSE(parseCompactGenericAnchor("id4294967296", value));
 }
 
+TEST(EpubFootnoteCapacityTest, RetainsReferenceHeavyBibleVerse) {
+  Page page;
+  for (int i = 0; i < 40; ++i) {
+    const std::string number = std::to_string(i + 1);
+    const std::string href = "chapter.xhtml#id" + std::to_string(1000 + i);
+    page.addFootnote(number.c_str(), href.c_str());
+  }
+
+  ASSERT_EQ(page.footnotes.size(), Page::MAX_FOOTNOTES_PER_PAGE);
+  EXPECT_EQ(page.footnotes.size(), 32u);
+  EXPECT_STREQ(page.footnotes.back().number, "32");
+  EXPECT_STREQ(page.footnotes.back().href, "chapter.xhtml#id1031");
+}
+
 std::string pageText(const Page& page) {
   std::string text;
   for (const auto& element : page.elements) {
@@ -103,6 +117,28 @@ TEST(EpubTargetedFootnotePreviewTest, MissingAnchorFailsWithoutRenderingTheChapt
   ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
   EXPECT_FALSE(parser.finalize());
   EXPECT_TRUE(pages.empty());
+}
+
+TEST(EpubTargetedFootnotePreviewTest, GenericSameFileBibleAnchorStartsAtTop) {
+  GfxRenderer renderer;
+  std::vector<std::unique_ptr<Page>> pages;
+  const std::string xhtml =
+      "<html><body><p id=\"id100\">Earlier verse must be skipped.</p>"
+      "<p id=\"id19645\">Requested Bible verse starts here.</p>"
+      "<p id=\"id19644\">Following verse remains available.</p></body></html>";
+
+  ChapterHtmlSlimParser parser(
+      nullptr, renderer, 1, 1.0f, false, 0, 240, 120, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr,
+      nullptr, nullptr, "id19645", 3);
+  ASSERT_TRUE(parser.setup(xhtml.size()));
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
+  ASSERT_TRUE(parser.finalize());
+  ASSERT_FALSE(pages.empty());
+
+  const std::string rendered = pageText(*pages.front());
+  EXPECT_EQ(rendered.find("Earlier"), std::string::npos);
+  EXPECT_EQ(rendered.find("Requested"), 0u);
 }
 
 std::string freshCacheDir(const std::string& tag) {

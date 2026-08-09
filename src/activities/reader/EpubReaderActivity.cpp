@@ -4187,7 +4187,13 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
     return;
   }
 
-  const bool useTargetedPreview = savePosition && !anchor.empty() && targetSpineIndex != currentSpineIndex;
+  // Footnote/cross-reference navigation must behave identically whether the target
+  // lives in another XHTML file or later in the current one. Large reference works
+  // (notably Bibles) contain thousands of explicit same-file hrefs; routing those
+  // through the full section anchor map made them land mid-page and made an anchor
+  // miss fall back to page 0. A bounded targeted build starts every selected target
+  // at the top and does not depend on the chapter-wide anchor index.
+  const bool useTargetedPreview = savePosition && !anchor.empty();
 
   {
     RenderLock lock(*this);

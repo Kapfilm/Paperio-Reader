@@ -129,7 +129,10 @@ class Page {
   // the list of block index and line numbers on this page
   std::vector<std::shared_ptr<PageElement>> elements;
   std::vector<FootnoteEntry> footnotes;
-  static constexpr uint16_t MAX_FOOTNOTES_PER_PAGE = 16;
+  // Reference-heavy books (notably Bibles with parallel passages) can carry
+  // more than 16 links in a single verse. 32 keeps every observed reference
+  // while bounding the worst-case page metadata to 4 KiB.
+  static constexpr uint16_t MAX_FOOTNOTES_PER_PAGE = 32;
 
   void addFootnote(const char* number, const char* href) {
     if (footnotes.size() >= MAX_FOOTNOTES_PER_PAGE) return;  // Cap per-page footnotes
