@@ -786,6 +786,24 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   const int barMarginRight = fillMargin ? 0 : orientedMarginRight;
   const int progressBarMaxWidth = screenWidth - barMarginLeft - barMarginRight;
 
+  auto drawPageBookmark = [&]() {
+    if (!isStarred) return;
+
+    // A compact ribbon anchored to the top-right corner of the readable area.
+    // Keep the dimensions fixed so it stays clearly recognisable at every font
+    // size without consuming an entire line of text.
+    constexpr int bookmarkWidth = 28;
+    constexpr int bookmarkHeight = 48;
+    constexpr int notchDepth = 12;
+    const int bookmarkX = screenWidth - orientedMarginRight - bookmarkWidth;
+    const int bookmarkY = orientedMarginTop + paddingBottom;
+    const int centerX = bookmarkX + bookmarkWidth / 2;
+    const int xPoints[5] = {bookmarkX, bookmarkX + bookmarkWidth, bookmarkX + bookmarkWidth, centerX, bookmarkX};
+    const int yPoints[5] = {bookmarkY, bookmarkY, bookmarkY + bookmarkHeight,
+                            bookmarkY + bookmarkHeight - notchDepth, bookmarkY + bookmarkHeight};
+    renderer.fillPolygon(xPoints, yPoints, 5, true);
+  };
+
   auto drawEdgeProgressBar = [&](const uint8_t progressBar, const uint8_t thickness, const bool topEdge) {
     const int barHeight = progressBarPixelHeight(progressBar, thickness, metrics);
     if (barHeight <= 0) {
@@ -808,6 +826,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
                               SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE ||
                               (SETTINGS.useClock && SETTINGS.statusBarClock) || !printedPageLabel.empty();
   if (!hasStatusItems) {
+    drawPageBookmark();
     return;
   }
 
@@ -884,10 +903,9 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
         screenWidth - (metrics.statusBarHorizontalMargin * 2) - orientedMarginLeft - orientedMarginRight;
 
     const int batterySize = SETTINGS.statusBarBattery ? (showBatteryPercentage ? 50 : 20) : 0;
-    const int starReserve = isStarred ? (renderer.getTextWidth(SMALL_FONT_ID, "*") + 6) : 0;
     const int clockSize = clockTextWidth > 0 ? clockTextWidth + 8 : 0;
     const int titleMarginLeft = batterySize + clockSize + 30;
-    const int titleMarginRight = progressTextWidth + starReserve + 30;
+    const int titleMarginRight = progressTextWidth + 30;
 
     // Attempt to center title on the screen, but if title is too wide then later we will center it within the
     // available space.
@@ -911,19 +929,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
                       textY, title.c_str());
   }
 
-  // Draw star indicator between title and progress text
-  if (isStarred) {
-    const int starWidth = renderer.getTextWidth(SMALL_FONT_ID, "*");
-    int starX;
-    if (progressTextWidth > 0) {
-      // Place star just left of the progress text with a small gap
-      starX = screenWidth - metrics.statusBarHorizontalMargin - orientedMarginRight - progressTextWidth - starWidth - 6;
-    } else {
-      // No progress text, place star at right edge
-      starX = screenWidth - metrics.statusBarHorizontalMargin - orientedMarginRight - starWidth;
-    }
-    renderer.drawText(SMALL_FONT_ID, starX, textY, "*");
-  }
+  drawPageBookmark();
 }
 
 void BaseTheme::drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label) const {

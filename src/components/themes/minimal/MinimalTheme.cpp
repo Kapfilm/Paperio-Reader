@@ -32,6 +32,10 @@ constexpr int kMenuIndexColumnWidth = 36;
 constexpr int kMenuSelectionTriangleWidth = 14;
 constexpr int kMenuSelectionTriangleHeight = 20;
 constexpr int kMenuSelectionTriangleRightInset = 20;
+constexpr int kListHorizontalPadding = 8;
+constexpr int kListIconSize = 24;
+constexpr int kMainMenuIconSize = 32;
+constexpr int kMaxListValueWidth = 200;
 
 Rect coverRectForScreen(const GfxRenderer& renderer, const Rect& rect) {
   const int coverHeight = std::min(MinimalMetrics::values.homeCoverHeight, rect.height - 55);
@@ -226,4 +230,144 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
     const std::string label = renderer.truncatedText(UI_12_FONT_ID, buttonLabel(i).c_str(), labelMaxWidth);
     renderer.drawText(UI_12_FONT_ID, labelX, textY, label.c_str(), !selected);
   }
+}
+
+void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
+                            const std::function<std::string(int index)>& rowTitle,
+                            const std::function<std::string(int index)>& rowSubtitle,
+                            const std::function<UIIcon(int index)>& rowIcon,
+                            const std::function<std::string(int index)>& rowValue, bool highlightValue) const {
+  const int rowHeight =
+      rowSubtitle != nullptr ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  const int pageItems = rect.height / rowHeight;
+  if (pageItems <= 0 || itemCount <= 0) return;
+
+  const int totalPages = (itemCount + pageItems - 1) / pageItems;
+  if (totalPages > 1) {
+    const int scrollAreaHeight = rect.height;
+    const int scrollBarHeight = scrollAreaHeight * pageItems / itemCount;
+    const int currentPage = selectedIndex / pageItems;
+    const int scrollBarY = rect.y + (scrollAreaHeight - scrollBarHeight) * currentPage / (totalPages - 1);
+    const int scrollBarX = rect.x + rect.width - LyraMetrics::values.scrollBarRightOffset;
+    renderer.drawLine(scrollBarX, rect.y, scrollBarX, rect.y + scrollAreaHeight, true);
+    renderer.fillRect(scrollBarX - LyraMetrics::values.scrollBarWidth, scrollBarY,
+                      LyraMetrics::values.scrollBarWidth, scrollBarHeight, true);
+  }
+
+  const bool selectedIsSeparator =
+      selectedIndex >= 0 && selectedIndex < itemCount && rowTitle != nullptr &&
+      UITheme::isSeparatorTitle(rowTitle(selectedIndex));
+  const int contentWidth =
+      rect.width -
+      (totalPages > 1 ? LyraMetrics::values.scrollBarWidth + LyraMetrics::values.scrollBarRightOffset : 1);
+
+  if (selectedIndex >= 0 && !selectedIsSeparator) {
+    renderer.fillRoundedRect(
+        rect.x + LyraMetrics::values.contentSidePadding, rect.y + selectedIndex % pageItems * rowHeight,
+        contentWidth - LyraMetrics::values.contentSidePadding * 2, rowHeight, kButtonCornerRadius, Color::Black);
+  }
+
+  int textX = rect.x + LyraMetrics::values.contentSidePadding + kListHorizontalPadding;
+  int textWidth = contentWidth - LyraMetrics::values.contentSidePadding * 2 - kListHorizontalPadding * 2;
+  int iconSize = 0;
+  int iconY = 0;
+  if (rowIcon != nullptr) {
+    iconSize = rowSubtitle != nullptr ? kMainMenuIconSize : kListIconSize;
+    iconY = (rowHeight - iconSize) / 2;
+    textX += iconSize + kListHorizontalPadding;
+    textWidth -= iconSize + kListHorizontalPadding;
+  }
+
+  const int pageStartIndex = selectedIndex / pageItems * pageItems;
+  for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; ++i) {
+    const int itemY = rect.y + i % pageItems * rowHeight;
+    const bool selected = i == selectedIndex;
+    int rowTextWidth = textWidth;
+
+    int valueWidth = 0;
+    std::string valueText;
+    if (rowValue != nullptr) {
+      valueText = renderer.truncatedText(UI_10_FONT_ID, rowValue(i).c_str(), kMaxListValueWidth);
+      valueWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str()) + kListHorizontalPadding;
+      rowTextWidth -= valueWidth;
+    }
+
+    auto itemName = rowTitle(i);
+    if (UITheme::isSeparatorTitle(itemName)) {
+      itemName = UITheme::stripSeparatorTitle(itemName);
+      drawListSeparator(renderer,
+                        Rect{rect.x + LyraMetrics::values.contentSidePadding, itemY,
+                             contentWidth - LyraMetrics::values.contentSidePadding * 2, rowHeight},
+                        textX, rowTextWidth, itemName);
+      continue;
+    }
+
+    const auto item = renderer.truncatedText(UI_10_FONT_ID, itemName.c_str(), rowTextWidth);
+    renderer.drawText(UI_10_FONT_ID, textX, itemY + 7, item.c_str(), !selected);
+
+    if (rowIcon != nullptr) {
+      int renderSize = iconSize;
+      const uint8_t* iconBitmap = iconForName(rowIcon(i), renderSize);
+      if (iconBitmap == nullptr && rowSubtitle != nullptr) {
+        renderSize = kListIconSize;
+        iconBitmap = iconForName(rowIcon(i), renderSize);
+      }
+      if (iconBitmap != nullptr) {
+        const int iconX = rect.x + LyraMetrics::values.contentSidePadding + kListHorizontalPadding;
+        if (selected) {
+          renderer.drawIconInverted(iconBitmap, iconX, itemY + iconY, renderSize, renderSize);
+        } else {
+          renderer.drawIcon(iconBitmap, iconX, itemY + iconY, renderSize, renderSize);
+        }
+      }
+    }
+
+    if (rowSubtitle != nullptr) {
+      std::string subtitleText = rowSubtitle(i);
+      const auto newline = subtitleText.find('\n');
+      if (newline != std::string::npos) {
+        const auto line1 =
+            renderer.truncatedText(SMALL_FONT_ID, subtitleText.substr(0, newline).c_str(), rowTextWidth);
+        const auto line2 =
+            renderer.truncatedText(SMALL_FONT_ID, subtitleText.substr(newline + 1).c_str(), rowTextWidth);
+        renderer.drawText(SMALL_FONT_ID, textX, itemY + 24, line1.c_str(), !selected);
+        renderer.drawText(SMALL_FONT_ID, textX, itemY + 40, line2.c_str(), !selected);
+      } else {
+        const auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
+        renderer.drawText(SMALL_FONT_ID, textX, itemY + 30, subtitle.c_str(), !selected);
+      }
+    }
+
+    if (!valueText.empty()) {
+      if (selected && highlightValue) {
+        renderer.fillRoundedRect(
+            rect.x + contentWidth - LyraMetrics::values.contentSidePadding - kListHorizontalPadding - valueWidth,
+            itemY, valueWidth + kListHorizontalPadding, rowHeight, kButtonCornerRadius, Color::Black);
+      }
+      renderer.drawText(UI_10_FONT_ID,
+                        rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueWidth, itemY + 6,
+                        valueText.c_str(), !selected);
+    }
+  }
+}
+
+void MinimalTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
+                              bool selected) const {
+  int currentX = rect.x + LyraMetrics::values.contentSidePadding;
+  for (const auto& tab : tabs) {
+    const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR);
+    if (tab.selected) {
+      if (selected) {
+        renderer.fillRoundedRect(currentX, rect.y + 1, textWidth + 2 * kListHorizontalPadding, rect.height - 4,
+                                 kButtonCornerRadius, Color::Black);
+      } else {
+        renderer.drawRoundedRect(currentX, rect.y, textWidth + 2 * kListHorizontalPadding, rect.height - 3, 1,
+                                 kButtonCornerRadius, true);
+      }
+    }
+    renderer.drawText(UI_10_FONT_ID, currentX + kListHorizontalPadding, rect.y + 6, tab.label,
+                      !(tab.selected && selected), EpdFontFamily::REGULAR);
+    currentX += textWidth + LyraMetrics::values.tabSpacing + 2 * kListHorizontalPadding;
+  }
+  renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
 }
