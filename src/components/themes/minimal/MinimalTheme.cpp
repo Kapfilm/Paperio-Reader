@@ -2,6 +2,7 @@
 
 #include <Bitmap.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalStorage.h>
 #include <I18n.h>
 
@@ -105,6 +106,12 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, cons
   drawBatteryRight(
       renderer, Rect{batteryX, rect.y + 5, MinimalMetrics::values.batteryWidth, MinimalMetrics::values.batteryHeight},
       showPercentage);
+
+  if (SETTINGS.useClock) {
+    char clockStr[16];
+    HalClock::formatTime(clockStr, sizeof(clockStr), !SETTINGS.clockFormat12h);
+    renderer.drawText(SMALL_FONT_ID, rect.x + MinimalMetrics::values.contentSidePadding, rect.y + 5, clockStr);
+  }
 
   if (title != nullptr) {
     constexpr int titleInset = 12;
