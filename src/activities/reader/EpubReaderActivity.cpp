@@ -1834,8 +1834,8 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
   applyBookReaderOverrides(embeddedStyleOverride, imageRenderingOverride, fontFamilyOverride, sdFontFamilyOverride,
                            fontSizeOverride, static_cast<int8_t>(bionicReadingOverride ? 1 : 0),
                            paragraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
-                           bookFontSizeNormalizationOverride, bookGuideDotsOverride,
-                           bookInlineFootnotePreviewsOverride, bookLineHeightPercentOverride);
+                           bookFontSizeNormalizationOverride, bookGuideDotsOverride, bookInlineFootnotePreviewsOverride,
+                           bookLineHeightPercentOverride);
 }
 
 void EpubReaderActivity::applyBookReaderOverrides(
@@ -2766,9 +2766,10 @@ EpubReaderActivity::SectionBuildMode EpubReaderActivity::chooseSectionBuildMode(
 EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const RenderLayout& layout,
                                                                          const bool embeddedStyle,
                                                                          const uint8_t imageRendering) {
+  const bool buildingFootnotePreview = !pendingFootnotePreviewAnchor.empty();
   // Use a cleaner waveform for the indexing popup right after image pages; a FAST popup refresh
   // can leave visible bleed on X3 transitioning image -> text.
-  if (pendingHalfRefreshAfterImagePage && SETTINGS.halfRefreshAfterImagePage) {
+  if (!buildingFootnotePreview && pendingHalfRefreshAfterImagePage && SETTINGS.halfRefreshAfterImagePage) {
     renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
     pendingHalfRefreshAfterImagePage = false;
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
@@ -2778,7 +2779,12 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
   // would set frameBuffer = null and crash subsequent rendering. Drawing it here also makes the
   // popup the fast-refresh baseline on the in-place path — the panel shows the popup, and the
   // first page diffs popup → page cleanly with no ghosting.
-  GUI.drawPopup(renderer, tr(STR_INDEXING));
+  // A targeted preview is short and immediately replaces the current page. Painting
+  // an indexing popup first caused two e-ink updates for one footnote and was the
+  // visible black/white flash reported on reference-heavy books.
+  if (!buildingFootnotePreview) {
+    GUI.drawPopup(renderer, tr(STR_INDEXING));
+  }
 
   // Reset cumulative SD font metadata cache so this section starts fresh.
   renderer.clearFontAccumulation();
@@ -2851,7 +2857,7 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
   // warmAllImageCaches writes pixels into the framebuffer as a side effect; clearScreen()
   // follows. In-place builds skip this — images decode lazily at first render, where
   // renderContents releases + reallocs the buffer per image page on demand.
-  if (createOk && released) {
+  if (createOk && released && !buildingFootnotePreview) {
     const bool indexForceLoad = forceLoadLargeImages || !SETTINGS.largeImagePlaceholder;
     const uint32_t warmStart = millis();
     section->warmAllImageCaches(0, 0, indexForceLoad, /*monochromeOutput=*/true);
@@ -2984,11 +2990,10 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
     // wastes). A lookup failure leaves 0 = unknown -> static floors only, the old behaviour.
     size_t inflatedSize = 0;
     epub->getSpineItemInflatedSize(currentSpineIndex, &inflatedSize);
-    const SectionBuildMode mode = buildingFootnotePreview
-                                      ? SectionBuildMode::Blocking
-                                      : ((resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
-                                             ? chooseSectionBuildMode(embeddedStyle, inflatedSize)
-                                             : SectionBuildMode::Blocking);
+    const SectionBuildMode mode = buildingFootnotePreview ? SectionBuildMode::Blocking
+                                                          : ((resumeBackgroundBuild || !cacheHit) && !cssFallbackRebuild
+                                                                 ? chooseSectionBuildMode(embeddedStyle, inflatedSize)
+                                                                 : SectionBuildMode::Blocking);
     const bool incremental = mode != SectionBuildMode::Blocking;
     bool runBlocking = !incremental;
 
@@ -4187,13 +4192,10 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
     return;
   }
 
-  // Footnote/cross-reference navigation must behave identically whether the target
-  // lives in another XHTML file or later in the current one. Large reference works
-  // (notably Bibles) contain thousands of explicit same-file hrefs; routing those
-  // through the full section anchor map made them land mid-page and made an anchor
-  // miss fall back to page 0. A bounded targeted build starts every selected target
-  // at the top and does not depend on the chapter-wide anchor index.
-  const bool useTargetedPreview = savePosition && !anchor.empty();
+  // Same-spine links already have an anchor map in the loaded section, so rebuilding
+  // a separate preview wastes time and adds an avoidable e-ink refresh. Keep the
+  // bounded targeted build for cross-file notes, matching CrossInk's button flow.
+  const bool useTargetedPreview = savePosition && !anchor.empty() && targetSpineIndex != currentSpineIndex;
 
   {
     RenderLock lock(*this);
@@ -4673,10 +4675,9 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
           underlineWidth = (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::Underline))) != 0
                                ? distanceToNext
                                : std::min(underlineWidth, distanceToNext);
-          blackMarkerWidth =
-              (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::BlackMarker))) != 0
-                  ? distanceToNext
-                  : std::min(blackMarkerWidth, distanceToNext);
+          blackMarkerWidth = (nextHighlighted & (1U << static_cast<uint8_t>(ClippingHighlightStyle::BlackMarker))) != 0
+                                 ? distanceToNext
+                                 : std::min(blackMarkerWidth, distanceToNext);
         }
         const int wordX = marginLeft + line.xPos + block.wordXpos(i);
         const int wordHeight = std::max(renderer.getLineHeight(effectiveFontId), ascender + 4);
@@ -4742,10 +4743,10 @@ void EpubReaderActivity::openReaderMenu() {
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !currentPageFootnotes.empty(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
           bookSdFontFamilyOverride, bookFontSizeOverride, bookLineHeightPercentOverride, SETTINGS.textDarkness,
-          getEffectiveBionicReading(),
-          bookGuideDotsOverride, bookParagraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
-          bookFontSizeNormalizationOverride, bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(),
-          isCurrentPageStarred, hasPrintedPages, !clippingStore.empty()),
+          getEffectiveBionicReading(), bookGuideDotsOverride, bookParagraphAlignmentOverride,
+          bookTextAntiAliasingOverride, bookHyphenationOverride, bookFontSizeNormalizationOverride,
+          bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages,
+          !clippingStore.empty()),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);

@@ -623,6 +623,28 @@ void ChapterHtmlSlimParser::startPreviewAtAnchor() {
   LOG_DBG("EHP", "Started targeted preview at anchor '%s'", previewAnchor.c_str());
 }
 
+bool ChapterHtmlSlimParser::handlePreviewScanStart(const char* name, const char** atts) {
+  previewElementOrdinal += 1;
+  if (previewStartOrdinal != 0 && previewElementOrdinal == previewStartOrdinal) {
+    startPreviewAtAnchor();
+    return false;
+  }
+
+  // Fall back to the exact anchor when the locator could not resolve an enclosing
+  // block, or when malformed input made the two streaming passes disagree.
+  const char* target = getAttribute(atts, "id");
+  if ((!target || target[0] == '\0') && strcmp(name, "a") == 0) {
+    target = getAttribute(atts, "name");
+  }
+  if (target && previewAnchor == target) {
+    startPreviewAtAnchor();
+    return false;
+  }
+
+  depth += 1;
+  return true;
+}
+
 void ChapterHtmlSlimParser::stopPreviewIfPageLimitReached() {
   if (!isPreviewBuild() || !previewAnchorFound || previewStopRequested || completedPageCount < previewMaxPages) {
     return;
@@ -993,15 +1015,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   }
 
   if (self->isScanningForPreviewAnchor()) {
-    const char* target = getAttribute(atts, "id");
-    if ((!target || target[0] == '\0') && strcmp(name, "a") == 0) {
-      target = getAttribute(atts, "name");
-    }
-    if (!target || self->previewAnchor != target) {
-      self->depth += 1;
-      return;
-    }
-    self->startPreviewAtAnchor();
+    if (self->handlePreviewScanStart(name, atts)) return;
   }
   if (self->previewStopRequested) return;
 

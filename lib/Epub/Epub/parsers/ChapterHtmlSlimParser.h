@@ -233,6 +233,8 @@ class ChapterHtmlSlimParser final : public Print {
   uint16_t previewMaxPages = 0;
   bool previewAnchorFound = false;
   bool previewStopRequested = false;
+  uint32_t previewStartOrdinal = 0;
+  uint32_t previewElementOrdinal = 0;
 
   // External printed-page labels sourced from NCX <pageList> or EPUB 3 nav page-list.
   // Keyed by HTML id (anchor fragment). When the parser encounters an element whose id
@@ -348,6 +350,7 @@ class ChapterHtmlSlimParser final : public Print {
   size_t recordedAnchorCount() const { return anchorData.size() + compactIdAnchorData.size(); }
   bool isPreviewBuild() const { return !previewAnchor.empty() && previewMaxPages > 0; }
   bool isScanningForPreviewAnchor() const { return isPreviewBuild() && !previewAnchorFound; }
+  bool handlePreviewScanStart(const char* name, const char** atts);
   void startPreviewAtAnchor();
   void stopPreviewIfPageLimitReached();
   void recordPageBreakLabel(const std::string& label);
@@ -373,12 +376,11 @@ class ChapterHtmlSlimParser final : public Print {
       std::shared_ptr<Epub> epub, GfxRenderer& renderer, const int fontId, const float lineCompression,
       const bool extraParagraphSpacing, const uint8_t paragraphAlignment, const uint16_t viewportWidth,
       const uint16_t viewportHeight, const bool hyphenationEnabled, const bool fontSizeNormalization,
-      const bool bionicReadingEnabled,
-      const std::function<void(std::unique_ptr<Page>)>& completePageFn, const bool embeddedStyle,
-      const std::string& contentBase, const std::string& imageBasePath, const uint8_t imageRendering = 0,
-      std::vector<std::string> tocAnchors = {}, const std::function<void(int)>& progressFn = nullptr,
-      const CssParser* cssParser = nullptr, EpubImageManifest* imageManifest = nullptr,
-      std::string previewAnchor = {}, const uint16_t previewMaxPages = 0)
+      const bool bionicReadingEnabled, const std::function<void(std::unique_ptr<Page>)>& completePageFn,
+      const bool embeddedStyle, const std::string& contentBase, const std::string& imageBasePath,
+      const uint8_t imageRendering = 0, std::vector<std::string> tocAnchors = {},
+      const std::function<void(int)>& progressFn = nullptr, const CssParser* cssParser = nullptr,
+      EpubImageManifest* imageManifest = nullptr, std::string previewAnchor = {}, const uint16_t previewMaxPages = 0)
 
       : epub(epub),
         renderer(renderer),
@@ -415,6 +417,7 @@ class ChapterHtmlSlimParser final : public Print {
   bool finalize();
   [[nodiscard]] bool streamSucceeded() const { return !streamFailed; }
   [[nodiscard]] bool previewComplete() const { return previewStopRequested; }
+  void setPreviewStartOrdinal(const uint32_t ordinal) { previewStartOrdinal = ordinal; }
   void setInlineFootnotePreviews(FootnotePreviews::Lookup* lookup) { inlineFootnotePreviews = lookup; }
 
   // Print interface — fed by Epub::readItemContentsToStream.

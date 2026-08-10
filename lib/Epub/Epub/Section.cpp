@@ -28,6 +28,7 @@
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
+#include "parsers/PreviewBlockLocator.h"
 
 namespace {
 constexpr uint8_t SECTION_FILE_VERSION = 70;  // retain up to 32 footnote/cross-reference links per rendered page
@@ -131,6 +132,15 @@ constexpr size_t SCT_PARSE_ARENA_BYTES = 10 * 1024;
 // variants, leaving the much more common preview-off section caches untouched.
 constexpr uint8_t INLINE_FOOTNOTE_PREVIEW_LAYOUT_VERSION = 2;
 
+bool isPreviewBlockTag(const char* name) {
+  static constexpr const char* tags[] = {"h1", "h2", "h3",  "h4", "h5",         "h6",
+                                         "p",  "li", "div", "br", "blockquote", "pre"};
+  for (const char* tag : tags) {
+    if (strcmp(name, tag) == 0) return true;
+  }
+  return false;
+}
+
 uint32_t fnv1a(const uint8_t* data, size_t length) {
   uint32_t hash = FNV_OFFSET_BASIS;
   for (size_t i = 0; i < length; ++i) {
@@ -139,6 +149,8 @@ uint32_t fnv1a(const uint8_t* data, size_t length) {
   }
   return hash;
 }
+
+bool isTargetedPreview(const Section::BuildParams& p) { return !p.previewAnchor.empty() && p.previewMaxPages > 0; }
 }  // namespace
 
 uint32_t Section::calculatePropertyHash(const BuildParams& p) {
@@ -181,9 +193,9 @@ uint32_t Section::calculatePropertyHash(const BuildParams& p) {
   return hash;
 }
 
-std::string Section::getSectionFilePath(uint32_t propertyHash) const {
-  char buf[32];
-  snprintf(buf, sizeof(buf), "%d_%08x", spineIndex, propertyHash);
+std::string Section::getSectionFilePath(const uint32_t propertyHash, const bool previewVariant) const {
+  char buf[36];
+  snprintf(buf, sizeof(buf), previewVariant ? "%d_p_%08x" : "%d_%08x", spineIndex, propertyHash);
   return epub->getCachePath() + "/sections/" + buf + ".bin";
 }
 
@@ -205,9 +217,13 @@ struct SectionVariant {
   uint16_t time;
 };
 
-void Section::evictOldVariants() const {
-  // We keep up to 5 most recently accessed/modified variants to prevent SD card bloat
-  constexpr size_t MAX_VARIANTS = 5;
+void Section::evictOldVariants(const bool previewVariant) const {
+  // Keep layout-setting variants and targeted footnote previews in separate LRU
+  // groups. Previously they evicted each other, so a note could rebuild (and flash)
+  // again after only a few other links or setting combinations were opened.
+  constexpr size_t MAX_LAYOUT_VARIANTS = 5;
+  constexpr size_t MAX_PREVIEW_VARIANTS = 16;
+  const size_t maxVariants = previewVariant ? MAX_PREVIEW_VARIANTS : MAX_LAYOUT_VARIANTS;
 
   std::string sectionsDir = epub->getCachePath() + "/sections";
   auto files = Storage.listFiles(sectionsDir.c_str(), 100);
@@ -215,18 +231,24 @@ void Section::evictOldVariants() const {
   std::vector<SectionVariant> variants;
 
   // Find all cache variants belonging to this spineIndex
-  char prefix[16];
+  char prefix[20];
+  char previewPrefix[20];
   snprintf(prefix, sizeof(prefix), "%d_", spineIndex);
+  snprintf(previewPrefix, sizeof(previewPrefix), "%d_p_", spineIndex);
 
   for (const auto& file : files) {
     if (!file.startsWith(prefix) || !file.endsWith(".bin")) continue;
+    const bool isPreviewFile = file.startsWith(previewPrefix);
+    if (isPreviewFile != previewVariant) continue;
     uint16_t md = 0, mt = 0;
     HalFile hf = Storage.open((sectionsDir + "/" + file.c_str()).c_str(), O_RDONLY);
     if (hf) hf.getModifyDateTime(&md, &mt);
     variants.push_back({file.c_str(), md, mt});
   }
 
-  if (variants.size() <= MAX_VARIANTS) return;
+  // Eviction runs immediately before a missing variant is created, so leave one
+  // slot free and keep the post-build population at the advertised limit.
+  if (variants.size() < maxVariants) return;
 
   // Sort descending by modified date and time
   std::sort(variants.begin(), variants.end(), [](const SectionVariant& a, const SectionVariant& b) {
@@ -234,15 +256,14 @@ void Section::evictOldVariants() const {
     return a.time > b.time;
   });
 
-  // Delete everything after MAX_VARIANTS limit
-  for (size_t i = MAX_VARIANTS; i < variants.size(); ++i) {
+  for (size_t i = maxVariants - 1; i < variants.size(); ++i) {
     std::string targetPath = sectionsDir + "/" + variants[i].filename;
     Storage.remove(targetPath.c_str());
     LOG_DBG("SCT", "Evicted old section cache: %s", targetPath.c_str());
 
     // Extract the hash to also clean up associated images
     // Filename format: spineIndex_hash.bin
-    size_t underscore = variants[i].filename.find('_');
+    size_t underscore = variants[i].filename.rfind('_');
     size_t dot = variants[i].filename.find('.');
     if (underscore != std::string::npos && dot != std::string::npos && dot > underscore) {
       std::string hashStr = variants[i].filename.substr(underscore + 1, dot - underscore - 1);
@@ -324,7 +345,8 @@ bool Section::loadSectionFile(const BuildParams& p) {
   truncatedCache = false;
   embeddedStyleFallback = false;
   uint32_t propertyHash = calculatePropertyHash(p);
-  filePath = getSectionFilePath(propertyHash);
+  const bool previewVariant = isTargetedPreview(p);
+  filePath = getSectionFilePath(propertyHash, previewVariant);
 
   bool usingEmbeddedStyleFallback = false;
   if (!Storage.openFileForRead("SCT", filePath, file)) {
@@ -333,7 +355,7 @@ bool Section::loadSectionFile(const BuildParams& p) {
       BuildParams noCss = p;
       noCss.embeddedStyle = false;
       const uint32_t fallbackHash = calculatePropertyHash(noCss);
-      const std::string fallbackPath = getSectionFilePath(fallbackHash);
+      const std::string fallbackPath = getSectionFilePath(fallbackHash, previewVariant);
       if (Storage.openFileForRead("SCT", fallbackPath, file)) {
         filePath = fallbackPath;
         usingEmbeddedStyleFallback = true;
@@ -579,6 +601,7 @@ struct Section::BuildState {
   // extra SD round-trip.
   bool useTempExtract = false;
   bool extractDone = false;
+  bool previewBlockScanDone = false;
   // True when tempPath is the book-keyed HTML cache opened for READ (reused, not produced this
   // build): phase (a) is skipped and the cache is kept on cleanup rather than deleted.
   bool reusedHtml = false;
@@ -613,7 +636,7 @@ Section::~Section() { abortSectionBuild(); }
 Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   const BuildParams& p = st.params;
   st.propertyHash = calculatePropertyHash(p);
-  filePath = getSectionFilePath(st.propertyHash);
+  filePath = getSectionFilePath(st.propertyHash, isTargetedPreview(p));
 
   st.localPath = epub->getSpineItem(spineIndex).href;
   LOG_INF("SCT", "createSectionFile spine=%d start: %s (free=%lu)", spineIndex, st.localPath.c_str(),
@@ -931,6 +954,40 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
     }
   }
 
+  // CrossInk-compatible targeted-preview prepass: resolve an inline anchor to
+  // its enclosing paragraph/block before the real layout pass. The decompressed
+  // XHTML is already cached on SD, and preview builds are blocking, so this adds
+  // no extra ZIP state and only reuses the existing 1 KB arena buffer.
+  if (!streamFailed && st.useTempExtract && st.extractDone && !st.previewBlockScanDone &&
+      !st.params.previewAnchor.empty() && st.params.previewMaxPages > 0) {
+    PreviewBlockLocator locator(st.params.previewAnchor.c_str(), isPreviewBlockTag);
+    bool scanOk = locator.ok();
+    while (scanOk && !locator.done()) {
+      const int n = st.tempFile.read(st.chunkBuf, PARSE_CHUNK_BYTES);
+      if (n < 0) {
+        scanOk = false;
+        break;
+      }
+      if (n == 0) break;
+      scanOk = locator.feed(st.chunkBuf, static_cast<size_t>(n));
+    }
+    if (scanOk && !locator.done()) scanOk = locator.finalize();
+    const uint32_t previewStartOrdinal = scanOk ? locator.startOrdinal() : 0;
+    st.visitor->setPreviewStartOrdinal(previewStartOrdinal);
+    if (previewStartOrdinal != 0) {
+      LOG_DBG("SCT", "Preview anchor '%s' begins at element #%u", st.params.previewAnchor.c_str(),
+              static_cast<unsigned>(previewStartOrdinal));
+    } else {
+      LOG_DBG("SCT", "Preview block not resolved for '%s'; using exact anchor", st.params.previewAnchor.c_str());
+    }
+    if (!st.tempFile.seek(0)) {
+      LOG_ERR("SCT", "Failed to rewind XHTML after preview block scan");
+      streamFailed = true;
+    }
+    st.tempBytesFed = 0;
+    st.previewBlockScanDone = true;
+  }
+
   // Phase (b): feed the visitor — from the temp file (sliced path, no ZIP state live)
   // or straight from the inflate stream (blocking path). Inline footnote previews need
   // no prepass here: the visitor resolves them against the book-level footnotes.bin
@@ -1226,7 +1283,7 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
 bool Section::createSectionFile(const BuildParams& p, const std::function<void(int)>& progressFn,
                                 const bool skipEviction) {
   if (!skipEviction) {
-    evictOldVariants();
+    evictOldVariants(isTargetedPreview(p));
   }
 
   // Run-to-completion path: pump the incremental build with no time budget. budgetMs == 0
@@ -1302,7 +1359,7 @@ Section::BuildStep Section::stepSectionBuild(const BuildParams& params, const ui
 
   if (!buildState_) {
     if (!skipEviction) {
-      evictOldVariants();
+      evictOldVariants(isTargetedPreview(params));
     }
     if (!startBuild(params, progressFn, requestedHash)) {
       return BuildStep::Failed;
