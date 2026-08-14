@@ -322,6 +322,9 @@ void EpubReaderActivity::onEnter() {
   // the long-standing "heap may be corrupt after image decode failures" note below).
   checkHeapIntegrity("reader_onEnter");
   secondaryBufferDegraded_ = !renderer.hasSecondaryBuffer();
+  if (secondaryBufferDegraded_ && !renderer.isX3()) {
+    renderer.setSingleBufferFastDiff(true);
+  }
   // Cold open: arm the dramatic-transition HALF for the first section entry only (cleared by any
   // non-incremental entry in buildSection). Also clear any stale post-popup HALF left armed if the
   // previous reader session was abandoned mid-build.
@@ -2497,6 +2500,13 @@ void EpubReaderActivity::recoverSecondaryBufferIfNeeded() {
       LOG_INF("ERS", "Secondary display buffer restored; re-enabling normal refresh/AA paths");
     } else {
       const uint32_t freeHeap = esp_get_free_heap_size();
+      // X4 can safely keep differential page turns against the controller's
+      // retained RED plane while the host-side secondary buffer is unavailable.
+      // The old FULL-per-action fallback caused a black flash on every input
+      // until a sleep/reboot defragmented the heap.
+      if (!renderer.isX3()) {
+        renderer.setSingleBufferFastDiff(true);
+      }
       // Safe to walk the heap here (unlike the post-index OOM path): this is a routine
       // render-start recovery, not the aftermath of decode failures under pressure.
       const uint32_t contigHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
@@ -2875,6 +2885,9 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
     if (!reallocSecondaryEvictingCaches()) {
       LOG_ERR("ERS", "Failed to reallocate secondary display buffer — display quality degraded");
       secondaryBufferDegraded_ = true;
+      if (!renderer.isX3()) {
+        renderer.setSingleBufferFastDiff(true);
+      }
       const uint32_t freeAfterIndex = esp_get_free_heap_size();
       // Do NOT call heap_caps_get_largest_free_block here: the heap may be corrupt after image
       // decode failures under pressure, and walking the TLSF free-block list on a corrupt heap
@@ -3633,6 +3646,9 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     if (!reallocSecondaryEvictingCaches()) {
       LOG_ERR("ERS", "Failed to reallocate secondary buffer after image warm — display quality degraded");
       secondaryBufferDegraded_ = true;
+      if (!renderer.isX3()) {
+        renderer.setSingleBufferFastDiff(true);
+      }
       const uint32_t freeAfterWarm = esp_get_free_heap_size();
       // See the matching comment in compileSectionCache: do not walk the TLSF free-block
       // list here either, for the same post-decode-failure corruption risk.
@@ -3699,11 +3715,10 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   // trigger blocks through the waveform exactly as before.
   HalDisplay::RefreshMode pageRefreshMode;
   if (secondaryBufferDegraded_) {
-    // FULL_REFRESH already gives a clean baseline, same goal as forceHalfRefreshAfterPopup_;
-    // consume it here too so it doesn't carry over and force an unrelated later page to HALF.
-    forceHalfRefreshAfterPopup_ = false;
-    pageRefreshMode = HalDisplay::FULL_REFRESH;
-    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    // The controller retains the previous frame in RED RAM, so X4 can continue
+    // normal FAST turns in single-buffer mode. Keep the user's periodic HALF
+    // cadence for ghost clearing instead of flashing FULL on every action.
+    pageRefreshMode = ReaderUtils::nextRefreshCycleMode(pagesUntilFullRefresh);
   } else if (forceRefreshModeNextRender_ >= 0) {
     // Manual force-refresh button: apply the requested mode for this one render. A manual refresh
     // gives its own clean baseline, so consume any armed post-popup HALF too rather than letting it
@@ -3956,8 +3971,7 @@ void EpubReaderActivity::displayPreRenderedPage(const Page& page, const int orie
   const bool forceHalfRefreshThisPage = pendingHalfRefreshAfterImagePage && SETTINGS.halfRefreshAfterImagePage;
   pendingHalfRefreshAfterImagePage = false;
   if (secondaryBufferDegraded_) {
-    renderer.displayBuffer(HalDisplay::FULL_REFRESH);
-    pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
   } else if (forceHalfRefreshThisPage) {
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();

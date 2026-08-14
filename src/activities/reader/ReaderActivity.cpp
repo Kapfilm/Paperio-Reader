@@ -184,7 +184,7 @@ std::string ReaderActivity::bookCacheDir(const std::string& bookPath) {
 }
 
 std::string ReaderActivity::convertSidecarToBmp(const std::string& cacheDir, const std::string& sidecarPath, int width,
-                                                int height, const std::string& fileName) {
+                                                int height, const std::string& fileName, bool crop) {
   if (!Storage.exists(cacheDir.c_str())) Storage.mkdir(cacheDir.c_str());
   const std::string bmpPath = cacheDir + "/" + fileName;
   if (Storage.exists(bmpPath.c_str())) {
@@ -208,9 +208,9 @@ std::string ReaderActivity::convertSidecarToBmp(const std::string& cacheDir, con
 
   bool ok = false;
   if (FsHelpers::hasJpgExtension(sidecarPath)) {
-    ok = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, dst, width, height);
+    ok = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, dst, width, height, crop);
   } else if (FsHelpers::hasPngExtension(sidecarPath)) {
-    ok = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, dst, width, height);
+    ok = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, dst, width, height, crop);
   } else if (FsHelpers::hasBmpExtension(sidecarPath)) {
     // Verbatim copy is only usable when the sidecar already fits the slot: the themes
     // draw thumbs 1:1, and an oversized BMP would be rescaled at draw time, aliasing
@@ -376,7 +376,7 @@ void healStaleEpubSentinel(const std::string& bookPath, const std::string& thumb
 }
 }  // namespace
 
-ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, int height) {
+ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, int height, bool crop) {
   const std::string dir = bookCacheDir(bookPath);
   const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
   const std::string file = dir + "/" + name;
@@ -389,7 +389,7 @@ ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int wi
     // A sidecar may have changed since the sentinel was written — clear it so the
     // sidecar conversion runs fresh.
     if (Storage.exists(file.c_str())) Storage.remove(file.c_str());
-    const std::string result = convertSidecarToBmp(dir, sidecar, width, height, name);
+    const std::string result = convertSidecarToBmp(dir, sidecar, width, height, name, crop);
     LOG_DBG("COVER", "convertSidecarToBmp(%dx%d) sidecar=%s result=%s", width, height, sidecar.c_str(),
             result.empty() ? "FAILED" : result.c_str());
     if (!result.empty()) return ThumbResult::Ok;
@@ -414,7 +414,7 @@ ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int wi
     // a crash site). allowExtract=false: decode only an already-cached cover.img; the sliced
     // beginCoverExtractSession owns the (potentially multi-second) ZIP inflate.
     if (!epub.loadForCover()) return ThumbResult::TransientFail;
-    return epub.generateThumbBmp(width, height, /*allowExtract=*/false);
+    return epub.generateThumbBmp(width, height, /*allowExtract=*/false, crop);
   }
   if (FsHelpers::hasXtcExtension(bookPath)) {
     Xtc xtc(bookPath, "/.crosspoint");
@@ -478,7 +478,7 @@ namespace {
 // funnel through here to avoid duplicating the sidecar/cover.img source selection and setup.
 std::unique_ptr<PngDecodeSession> beginPngThumbSessionImpl(const std::string& bookPath, int width, int height,
                                                            const std::string& name,
-                                                           ReaderActivity::PngThumbFiles& filesOut) {
+                                                           ReaderActivity::PngThumbFiles& filesOut, bool crop) {
   const std::string dir = ReaderActivity::bookCacheDir(bookPath);
   const std::string bmpPath = dir + "/" + name;
 
@@ -527,7 +527,7 @@ std::unique_ptr<PngDecodeSession> beginPngThumbSessionImpl(const std::string& bo
   }
 
   auto session = std::unique_ptr<PngDecodeSession>(new PngDecodeSession());
-  if (!session->begin(filesOut.src, filesOut.dst, width, height)) {
+  if (!session->begin(filesOut.src, filesOut.dst, width, height, crop)) {
     filesOut.src.close();
     filesOut.dst.close();
     // Leave 0-byte sentinel so we don't retry if the failure is permanent (e.g. PNG too large).
@@ -546,16 +546,17 @@ std::unique_ptr<PngDecodeSession> beginPngThumbSessionImpl(const std::string& bo
 }  // namespace
 
 std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int width,
-                                                                       int height, PngThumbFiles& filesOut) {
+                                                                       int height, PngThumbFiles& filesOut,
+                                                                       bool crop) {
   const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
-  return beginPngThumbSessionImpl(bookPath, width, height, name, filesOut);
+  return beginPngThumbSessionImpl(bookPath, width, height, name, filesOut, crop);
 }
 
 std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int height,
                                                                        PngThumbFiles& filesOut) {
   // Single-height thumbs scale to height*0.6 wide (mirrors the synchronous single-height decode).
   const std::string name = "thumb_" + std::to_string(height) + ".bmp";
-  return beginPngThumbSessionImpl(bookPath, height * 6 / 10, height, name, filesOut);
+  return beginPngThumbSessionImpl(bookPath, height * 6 / 10, height, name, filesOut, true);
 }
 
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {

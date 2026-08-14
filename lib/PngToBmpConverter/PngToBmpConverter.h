@@ -99,5 +99,6 @@ class PngToBmpConverter {
   // grayscale8Bit: see JpegToBmpConverter::jpegFileToBmpStream.
   static bool pngFileToBmpStream(FsFile& pngFile, Print& bmpOut, bool crop = true, bool grayscale8Bit = false);
   static bool pngFileToBmpStreamWithSize(FsFile& pngFile, Print& bmpOut, int targetMaxWidth, int targetMaxHeight);
-  static bool pngFileTo1BitBmpStreamWithSize(FsFile& pngFile, Print& bmpOut, int targetMaxWidth, int targetMaxHeight);
+  static bool pngFileTo1BitBmpStreamWithSize(FsFile& pngFile, Print& bmpOut, int targetMaxWidth, int targetMaxHeight,
+                                             bool crop = true);
 };

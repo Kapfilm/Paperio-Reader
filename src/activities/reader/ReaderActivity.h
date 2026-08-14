@@ -47,7 +47,7 @@ class ReaderActivity final : public Activity {
   // tell a structural absence (no cover / unsupported — safe to record permanently) from a
   // transient failure (retry next pass/boot). A sidecar image beside the book, when present and
   // convertible, always yields Ok and clears any stale sentinel first.
-  static ThumbResult ensureCoverThumb(const std::string& bookPath, int width, int height);
+  static ThumbResult ensureCoverThumb(const std::string& bookPath, int width, int height, bool crop = true);
   static ThumbResult ensureCoverThumb(const std::string& bookPath, int height);
   // True only if a cover thumbnail BMP exists AND holds all its declared pixel rows. A thumbnail
   // whose write was interrupted (reboot/abort mid-decode) is left truncated on the SD card; it
@@ -114,7 +114,7 @@ class ReaderActivity final : public Activity {
   // alive until the session completes and then close them.
   // On failure (nullptr return), the thumb file is left as a 0-byte sentinel.
   static std::unique_ptr<PngDecodeSession> beginPngThumbSession(const std::string& bookPath, int width, int height,
-                                                                PngThumbFiles& filesOut);
+                                                                PngThumbFiles& filesOut, bool crop = true);
 
   // Single-height variant: writes the "thumb_<H>.bmp" form used by the non-carousel themes, at
   // width = H*0.6 (matching the synchronous single-height decode). Same contract as above.
@@ -124,7 +124,7 @@ class ReaderActivity final : public Activity {
   // Render a sidecar image (or copy a sidecar BMP) into a scaled 1-bit BMP at
   // "<cacheDir>/<fileName>". Returns the written path, or "" on failure.
   static std::string convertSidecarToBmp(const std::string& cacheDir, const std::string& sidecarPath, int width,
-                                         int height, const std::string& fileName);
+                                         int height, const std::string& fileName, bool crop = true);
 
   explicit ReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialBookPath)
       : Activity("Reader", renderer, mappedInput), initialBookPath(std::move(initialBookPath)) {}

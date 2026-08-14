@@ -179,7 +179,7 @@ class Epub {
   // WITHOUT a sentinel so the next pass — or the next boot — retries; the caller (HomeActivity)
   // owns a session-scoped counter that promotes a repeatedly-transient book to a sentinel.
   ThumbResult generateThumbBmp(int height, bool allowExtract = true) const;
-  ThumbResult generateThumbBmp(int width, int height, bool allowExtract = true) const;
+  ThumbResult generateThumbBmp(int width, int height, bool allowExtract = true, bool crop = true) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
   bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize) const;

@@ -64,22 +64,27 @@ GridGeometry gridGeometry(const GfxRenderer& renderer) {
   if (isMinimalTheme()) {
     constexpr int rows = 2;
     constexpr int columns = 2;
-    // Edge-to-edge 2x2 cover wall: the one-pixel frames meet directly, using all
-    // available space below the header. Thumbnails are generated for the exact
-    // interior dimensions, so the 1-bit dither is still drawn 1:1.
-    const int slotWidth = contentRect.width / columns;
-    const int displayHeight = std::max(42, contentHeight / rows);
+    constexpr int outerMargin = 12;
+    constexpr int cellGap = 12;
+    constexpr int labelHeight = 0;
+    constexpr int coverHorizontalInset = 6;
+    constexpr int coverVerticalInset = 4;
+    // Cover-only 2x2 grid: contain-mode thumbnails use the space formerly
+    // reserved for titles and progress while keeping their original aspect ratio.
+    const int slotWidth = (contentRect.width - outerMargin * 2 - cellGap) / columns;
+    const int cellHeight = std::max(84, (contentHeight - outerMargin * 2 - cellGap) / rows);
+    const int displayHeight = std::max(42, cellHeight - labelHeight - 3);
     const int displayWidth = slotWidth;
     return {columns,
-            0,
+            cellGap,
             slotWidth,
             displayWidth,
             displayHeight,
-            std::max(1, displayWidth - 2),
-            std::max(1, displayHeight - 2),
-            0,
-            displayHeight,
-            0,
+            std::max(1, displayWidth - coverHorizontalInset * 2),
+            std::max(1, displayHeight - coverVerticalInset * 2),
+            labelHeight,
+            cellHeight + cellGap,
+            outerMargin,
             rows};
   }
 
@@ -118,10 +123,11 @@ void RecentBooksActivity::loadRecentBooks() {
 
 bool RecentBooksActivity::loadNextCover() {
   const GridGeometry geometry = gridGeometry(renderer);
-  // Mini thumbnails are generated at their exact final image size and drawn 1:1.
-  // Other themes retain the shared fixed size used by FinishedBookActivity.
+  // Mini thumbnails fit inside their final artwork box and are drawn 1:1.
+  // Other themes retain the shared cropped size used by FinishedBookActivity.
   const int tw = geometry.storedThumbWidth;
   const int th = geometry.storedThumbHeight;
+  const bool cropCover = !isMinimalTheme();
 
   // ── Cover extract session tick ───────────────────────────────────────────────
   if (extractSession) {
@@ -191,11 +197,11 @@ bool RecentBooksActivity::loadNextCover() {
     // resolved cover — no re-opening the EPUB three times per scan to rediscover it has no cover.
     const bool valid = ReaderActivity::isCoverThumbComplete(thumbPath, tw, th);
     if (!valid) {
-      const bool ok = (ReaderActivity::ensureCoverThumb(book.path, tw, th) == ThumbResult::Ok);
+      const bool ok = (ReaderActivity::ensureCoverThumb(book.path, tw, th, cropCover) == ThumbResult::Ok);
       const bool wasPostFailure = pngSessionFailed;
       pngSessionFailed = false;  // consumed
       if (!ok && !wasPostFailure) {
-        pngSession = ReaderActivity::beginPngThumbSession(book.path, tw, th, pngSessionFiles);
+        pngSession = ReaderActivity::beginPngThumbSession(book.path, tw, th, pngSessionFiles, cropCover);
         if (pngSession) {
           LOG_DBG("RBA", "Started PNG session for %s (%u rows)", book.path.c_str(), pngSession->totalRows());
           return false;
@@ -531,10 +537,18 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
                                          const int tw, const int th, const int storedThumbWidth,
                                          const int storedThumbHeight, const int labelHeight) {
   const auto& book = recentBooks[index];
+  const bool minimal = isMinimalTheme();
   const int labelY = cellY + th + 3;
   const int cellFillHeight = th + labelHeight + (labelHeight > 0 ? 3 : 0);
+  int renderedCoverX = 0;
+  int renderedCoverY = 0;
+  int renderedCoverWidth = 0;
+  int renderedCoverHeight = 0;
 
-  if (selected) {
+  if (minimal) {
+    // Selection in Minimal is an outline; never invert the card or its cover.
+    renderer.fillRect(cellX, cellY, tw, cellFillHeight, false);
+  } else if (selected) {
     renderer.fillRect(cellX, cellY, tw, cellFillHeight);
     renderer.drawRect(cellX, cellY, tw, th, false);
   } else {
@@ -571,6 +585,13 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
           // shows through in the surrounding space.
           renderer.fillRect(cellX + offsetX, cellY + offsetY, rendW, rendH, false);
           renderer.drawBitmap1Bit(bmp, cellX + offsetX, cellY + offsetY, rendW, rendH);
+          renderedCoverX = cellX + offsetX;
+          renderedCoverY = cellY + offsetY;
+          renderedCoverWidth = rendW;
+          renderedCoverHeight = rendH;
+          if (minimal && !selected) {
+            renderer.drawRect(cellX + offsetX - 1, cellY + offsetY - 1, rendW + 2, rendH + 2, true);
+          }
           thumbDrawn = true;
         }
       }
@@ -591,7 +612,7 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
 
   // Reading-progress overlay on the cover: bottom-edge bar while in progress,
   // folded corner when finished, nothing for unread books.
-  if (!isMinimalTheme()) {
+  if (!minimal) {
     const int progressPercent =
         (index >= 0 && index < static_cast<int>(bookProgress.size())) ? bookProgress[index] : -1;
     UITheme::drawCoverProgressIndicator(renderer, Rect{cellX, cellY, tw, th}, progressPercent);
@@ -599,29 +620,30 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
 
   if (labelHeight > 0) {
     // Label: title line 1, author line 2; white text on black for selected, black on white otherwise.
-    const bool black = !selected;
-    const int labelWidth = tw - 4;
+    const bool black = minimal || !selected;
+    const int textInset = minimal ? 8 : 2;
+    const int labelWidth = tw - textInset * 2;
     std::string titleStr = renderer.truncatedText(SMALL_FONT_ID, book.title.c_str(), labelWidth);
-    renderer.drawText(SMALL_FONT_ID, cellX + 2, labelY, titleStr.c_str(), black);
-    if (!book.author.empty()) {
+    renderer.drawText(SMALL_FONT_ID, cellX + textInset, labelY, titleStr.c_str(), black);
+    if (!minimal && !book.author.empty()) {
       std::string authorStr = renderer.truncatedText(SMALL_FONT_ID, book.author.c_str(), labelWidth);
-      renderer.drawText(SMALL_FONT_ID, cellX + 2, labelY + 17, authorStr.c_str(), black);
+      renderer.drawText(SMALL_FONT_ID, cellX + textInset, labelY + 17, authorStr.c_str(), black);
     }
   }
 
-  if (selected && isMinimalTheme()) {
-    // Covers touch edge-to-edge in Minimal, so the old one-pixel inverse frame
-    // disappeared into both pale and dark artwork. A black/white double frame
-    // remains visible against either extreme and does not require another icon,
-    // label, or heap allocation.
-    constexpr int selectionOuterWidth = 7;
-    constexpr int selectionInnerWidth = 4;
-    for (int inset = 0; inset < selectionOuterWidth; ++inset) {
-      renderer.drawRect(cellX + inset, cellY + inset, tw - inset * 2, th - inset * 2, false);
-    }
-    for (int inset = 0; inset < selectionInnerWidth; ++inset) {
-      renderer.drawRect(cellX + inset, cellY + inset, tw - inset * 2, th - inset * 2, true);
-    }
+  if (selected && minimal && renderedCoverWidth > 0 && renderedCoverHeight > 0) {
+    // One continuous two-pixel stripe, tight against the actual contained
+    // artwork. It follows narrow and wide covers instead of framing the cell.
+    constexpr int selectionWidth = 2;
+    const int frameX = renderedCoverX - selectionWidth;
+    const int frameY = renderedCoverY - selectionWidth;
+    const int frameWidth = renderedCoverWidth + selectionWidth * 2;
+    const int frameHeight = renderedCoverHeight + selectionWidth * 2;
+    renderer.fillRect(frameX, frameY, frameWidth, selectionWidth);
+    renderer.fillRect(frameX, frameY + frameHeight - selectionWidth, frameWidth, selectionWidth);
+    renderer.fillRect(frameX, frameY + selectionWidth, selectionWidth, frameHeight - selectionWidth * 2);
+    renderer.fillRect(frameX + frameWidth - selectionWidth, frameY + selectionWidth, selectionWidth,
+                      frameHeight - selectionWidth * 2);
   }
 }
 
@@ -640,7 +662,8 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
   auto cellPos = [&](int i, int& cx, int& cy) {
     const int row = (i / geometry.columns) - pageStartRow;
     const int col = i % geometry.columns;
-    cx = contentRect.x + geometry.margin + col * (geometry.slotWidth + geometry.margin) +
+    const int outerMargin = isMinimalTheme() ? geometry.topGap : geometry.margin;
+    cx = contentRect.x + outerMargin + col * (geometry.slotWidth + geometry.margin) +
          (geometry.slotWidth - geometry.displayThumbWidth) / 2;
     cy = contentTop + geometry.topGap + row * geometry.rowStride;
   };
