@@ -274,6 +274,9 @@ class CrossPointSettings {
   uint8_t txtFontFamily = NOTOSANS;
   char txtSdFontFamilyName[32] = "";
   uint8_t txtFontSize = MEDIUM;
+  // Active StarDict folder under /dictionaries. Empty enables automatic
+  // language-aware lookup across all installed dictionaries.
+  char dictionaryName[128] = "";
   uint8_t lineSpacing = NORMAL;  // migration only; new saves use lineHeightPercent
   uint8_t lineHeightPercent = 95;
   uint8_t paragraphAlignment = JUSTIFIED;
@@ -402,6 +405,8 @@ class CrossPointSettings {
     BTN_QUICK_OVERRIDES,
     BTN_IGNORE,
     BTN_CREATE_CLIPPING,
+    BTN_DICTIONARY_LOOKUP,
+    BTN_DICTIONARY_SELECT,
     BUTTON_ACTION_COUNT
   };
 

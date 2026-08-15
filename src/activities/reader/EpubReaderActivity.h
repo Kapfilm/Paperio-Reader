@@ -667,7 +667,8 @@ class EpubReaderActivity final : public Activity {
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   void openClipStylePicker();
-  void startClipSelection(ClippingHighlightStyle highlightStyle);
+  void openDictionarySelection();
+  void startClipSelection(ClippingHighlightStyle highlightStyle, bool dictionaryLookup = false);
   void drawClippingHighlights(const Page& page, int fontId, int contentTop, int marginLeft) const;
   void launchKOReaderSync(SyncLaunchMode mode = SyncLaunchMode::COMPARE);
   // Reader-close auto-push gate. Returns true if AUTO_PUSH was launched (the caller

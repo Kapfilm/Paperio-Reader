@@ -1223,6 +1223,8 @@ void loop() {
         case BA::BTN_CYCLE_ORIENTATION:
         case BA::BTN_QUICK_OVERRIDES:
         case BA::BTN_CREATE_CLIPPING:
+        case BA::BTN_DICTIONARY_LOOKUP:
+        case BA::BTN_DICTIONARY_SELECT:
           return true;
         default:  // BTN_GO_HOME / BTN_SLEEP / BTN_FORCE_*_REFRESH / BTN_OPEN_BOOKMARKS / BTN_IGNORE are global
           return false;
@@ -1321,6 +1323,12 @@ void loop() {
           break;
         case BA::BTN_CREATE_CLIPPING:
           activityManager.dispatchButtonAction(BA::BTN_CREATE_CLIPPING);
+          break;
+        case BA::BTN_DICTIONARY_LOOKUP:
+          activityManager.dispatchButtonAction(BA::BTN_DICTIONARY_LOOKUP);
+          break;
+        case BA::BTN_DICTIONARY_SELECT:
+          activityManager.dispatchButtonAction(BA::BTN_DICTIONARY_SELECT);
           break;
         case BA::BTN_IGNORE:
           // Explicit "do nothing": swallow the event so neither a global action nor the
