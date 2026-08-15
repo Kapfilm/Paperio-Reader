@@ -229,6 +229,9 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
   if (s.txtSdFontFamilyName[0] != '\0') {
     doc["txtSdFontFamilyName"] = s.txtSdFontFamilyName;
   }
+  if (s.dictionaryName[0] != '\0') {
+    doc["dictionaryName"] = s.dictionaryName;
+  }
   doc["moveFinishedBooksToCompleted"] = s.moveFinishedBooksToCompleted;
   doc["removeFinishedBooksFromRecents"] = s.removeFinishedBooksFromRecents;
   doc["sleepTimeoutMinutes"] = s.sleepTimeoutMinutes;
@@ -396,6 +399,9 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
   const char* txtSfn = doc["txtSdFontFamilyName"] | "";
   strncpy(s.txtSdFontFamilyName, txtSfn, sizeof(s.txtSdFontFamilyName) - 1);
   s.txtSdFontFamilyName[sizeof(s.txtSdFontFamilyName) - 1] = '\0';
+  const char* dictionaryName = doc["dictionaryName"] | "";
+  strncpy(s.dictionaryName, dictionaryName, sizeof(s.dictionaryName) - 1);
+  s.dictionaryName[sizeof(s.dictionaryName) - 1] = '\0';
   s.moveFinishedBooksToCompleted = doc["moveFinishedBooksToCompleted"] | (uint8_t)0;
   s.removeFinishedBooksFromRecents = doc["removeFinishedBooksFromRecents"] | (uint8_t)0;
 

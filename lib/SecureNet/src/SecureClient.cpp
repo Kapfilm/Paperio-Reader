@@ -82,8 +82,7 @@ bool isVerificationError(int err) {
 // trust-anchor, and hostname error untouched. SecureClient installs the
 // callback only for requests whose caller could not obtain trustworthy time.
 int allowCertificateDateErrors(int preverify, WOLFSSL_X509_STORE_CTX* store) {
-  if (preverify == 0 && store != nullptr &&
-      (store->error == ASN_BEFORE_DATE_E || store->error == ASN_AFTER_DATE_E)) {
+  if (preverify == 0 && store != nullptr && (store->error == ASN_BEFORE_DATE_E || store->error == ASN_AFTER_DATE_E)) {
     LOG_INF("TLS", "Ignoring certificate date error %d; CA chain and hostname remain verified", store->error);
     return 1;
   }

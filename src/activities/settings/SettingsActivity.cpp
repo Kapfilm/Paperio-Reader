@@ -18,6 +18,13 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+namespace {
+std::string activeDictionaryName(void*) {
+  return SETTINGS.dictionaryName[0] == '\0' ? std::string(tr(STR_DICT_AUTOMATIC))
+                                            : std::string(SETTINGS.dictionaryName);
+}
+}  // namespace
+
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
 
@@ -136,6 +143,9 @@ void SettingsActivity::onEnter() {
 
   addToMoved(readerSettings, lastReaderSub,
              SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  addToMoved(readerSettings, lastReaderSub,
+             SettingInfo::Action(StrId::STR_DICTIONARY, SettingAction::DictionarySelection)
+                 .withDisplayGetter(activeDictionaryName));
 
   addToMoved(systemSettings, lastSystemSub, SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   addToMoved(systemSettings, lastSystemSub,

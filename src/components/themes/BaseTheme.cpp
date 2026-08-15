@@ -799,8 +799,8 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     const int bookmarkY = orientedMarginTop + paddingBottom;
     const int centerX = bookmarkX + bookmarkWidth / 2;
     const int xPoints[5] = {bookmarkX, bookmarkX + bookmarkWidth, bookmarkX + bookmarkWidth, centerX, bookmarkX};
-    const int yPoints[5] = {bookmarkY, bookmarkY, bookmarkY + bookmarkHeight,
-                            bookmarkY + bookmarkHeight - notchDepth, bookmarkY + bookmarkHeight};
+    const int yPoints[5] = {bookmarkY, bookmarkY, bookmarkY + bookmarkHeight, bookmarkY + bookmarkHeight - notchDepth,
+                            bookmarkY + bookmarkHeight};
     renderer.fillPolygon(xPoints, yPoints, 5, true);
   };
 

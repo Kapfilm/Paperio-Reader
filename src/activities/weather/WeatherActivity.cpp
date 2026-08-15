@@ -14,8 +14,8 @@
 #include <ctime>
 #include <vector>
 
-#include "MappedInputManager.h"
 #include "CrossPointSettings.h"
+#include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "WeatherSettingsActivity.h"
 #include "activities/NetworkMemoryTrim.h"

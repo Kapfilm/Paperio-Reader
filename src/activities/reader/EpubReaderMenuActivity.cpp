@@ -67,8 +67,8 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const uint8_t initialTextDarkness, const bool initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
     const int8_t initialParagraphAlignmentOverride, const int8_t initialTextAntiAliasingOverride,
     const int8_t initialHyphenationOverride, const int8_t initialFontSizeNormalizationOverride,
-    const int8_t initialInlineFootnotePreviewsOverride,
-    const bool hasStarredPages, const bool isCurrentPageStarred, const bool hasPrintedPages, const bool hasClippings)
+    const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages, const bool isCurrentPageStarred,
+    const bool hasPrintedPages, const bool hasClippings)
     : MenuListActivity("EpubReaderMenu", renderer, mappedInput),
       currentPageStarred(isCurrentPageStarred),
       pendingOrientation(currentOrientation),
@@ -95,7 +95,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
 
 void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPages, bool hasPrintedPages,
                                             bool hasClippings) {
-  menuItems.reserve(24);
+  menuItems.reserve(26);
 
   // --- Navigation ---
   menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_NAVIGATION));
@@ -104,6 +104,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   if (hasPrintedPages) {
     menuItems.push_back(SettingInfo::Action(StrId::STR_GO_TO_PRINTED_PAGE, SettingAction::None));
   }
+  menuItems.push_back(SettingInfo::Action(StrId::STR_LOOKUP, SettingAction::None));
+  menuItems.push_back(SettingInfo::Action(StrId::STR_SELECT_DICTIONARY, SettingAction::None));
 
   // Bookmarks, footnotes
   menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_BOOKMARKS));
@@ -398,6 +400,10 @@ EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForNameId(StrId
       return MenuAction::GO_TO_PERCENT;
     case StrId::STR_GO_TO_PRINTED_PAGE:
       return MenuAction::GO_TO_PRINTED_PAGE;
+    case StrId::STR_LOOKUP:
+      return MenuAction::DICTIONARY;
+    case StrId::STR_SELECT_DICTIONARY:
+      return MenuAction::SELECT_DICTIONARY;
     case StrId::STR_STARRED_PAGES:
       return MenuAction::STARRED_PAGES;
     case StrId::STR_STAR_PAGE:
@@ -538,6 +544,11 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
   // Star page: reflect current page's star state
   if (item.nameId == StrId::STR_STAR_PAGE) {
     return currentPageStarred ? std::string(tr(STR_STATE_ON)) : std::string(tr(STR_STATE_OFF));
+  }
+
+  if (item.nameId == StrId::STR_SELECT_DICTIONARY) {
+    return SETTINGS.dictionaryName[0] == '\0' ? std::string(tr(STR_DICT_AUTOMATIC))
+                                              : std::string(SETTINGS.dictionaryName);
   }
 
   if (item.nameId == StrId::STR_LINE_SPACING) {

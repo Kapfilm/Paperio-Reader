@@ -5,8 +5,8 @@
 #include <I18n.h>
 #include <WiFi.h>
 
-#include "MappedInputManager.h"
 #include "CrossPointSettings.h"
+#include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "activities/NetworkMemoryTrim.h"
 #include "activities/network/WifiSelectionActivity.h"

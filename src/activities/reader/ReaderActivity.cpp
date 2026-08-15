@@ -546,8 +546,7 @@ std::unique_ptr<PngDecodeSession> beginPngThumbSessionImpl(const std::string& bo
 }  // namespace
 
 std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int width,
-                                                                       int height, PngThumbFiles& filesOut,
-                                                                       bool crop) {
+                                                                       int height, PngThumbFiles& filesOut, bool crop) {
   const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
   return beginPngThumbSessionImpl(bookPath, width, height, name, filesOut, crop);
 }

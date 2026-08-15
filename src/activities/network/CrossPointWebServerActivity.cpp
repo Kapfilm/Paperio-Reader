@@ -11,8 +11,8 @@
 
 #include <cstddef>
 
-#include "MappedInputManager.h"
 #include "CrossPointSettings.h"
+#include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"

@@ -10,7 +10,8 @@
 class ClipSelectionActivity final : public Activity {
  public:
   ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::vector<WordRef> words, int fontId,
-                        Section& section, int startPage, int marginTop, int marginLeft);
+                        Section& section, int startPage, int marginTop, int marginLeft,
+                        bool singleWordSelection = false);
 
   void onEnter() override;
   void onExit() override;
@@ -29,6 +30,7 @@ class ClipSelectionActivity final : public Activity {
   int displayedRelativePage = 0;
   int cursor = 0;
   int selectionStart = -1;
+  bool singleWordSelection = false;
 
   bool renderBasePage(int relativePage);
   void moveCursor(int next);

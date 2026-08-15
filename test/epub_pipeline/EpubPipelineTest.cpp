@@ -90,9 +90,9 @@ TEST(EpubTargetedFootnotePreviewTest, StartsAtRequestedAnchorAndStopsAtPageLimit
       "continues after the first paragraph and should still remain inside the bounded preview.</p></div></body></html>";
 
   ChapterHtmlSlimParser parser(
-      nullptr, renderer, 1, 1.0f, false, 0, 90, 48, false, false,
-      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr,
-      nullptr, nullptr, "note2", 2);
+      nullptr, renderer, 1, 1.0f, false, 0, 90, 48, false, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr, nullptr,
+      nullptr, "note2", 2);
   ASSERT_TRUE(parser.setup(xhtml.size()));
   ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
   ASSERT_TRUE(parser.finalize());
@@ -110,9 +110,9 @@ TEST(EpubTargetedFootnotePreviewTest, MissingAnchorFailsWithoutRenderingTheChapt
   std::vector<std::unique_ptr<Page>> pages;
   const std::string xhtml = "<html><body><p>Ordinary chapter text</p></body></html>";
   ChapterHtmlSlimParser parser(
-      nullptr, renderer, 1, 1.0f, false, 0, 90, 80, false, false,
-      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr,
-      nullptr, nullptr, "missing-note", 2);
+      nullptr, renderer, 1, 1.0f, false, 0, 90, 80, false, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr, nullptr,
+      nullptr, "missing-note", 2);
   ASSERT_TRUE(parser.setup(xhtml.size()));
   ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
   EXPECT_FALSE(parser.finalize());
@@ -128,9 +128,9 @@ TEST(EpubTargetedFootnotePreviewTest, GenericSameFileBibleAnchorStartsAtTop) {
       "<p id=\"id19644\">Following verse remains available.</p></body></html>";
 
   ChapterHtmlSlimParser parser(
-      nullptr, renderer, 1, 1.0f, false, 0, 240, 120, false, false,
-      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr,
-      nullptr, nullptr, "id19645", 3);
+      nullptr, renderer, 1, 1.0f, false, 0, 240, 120, false, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr, nullptr,
+      nullptr, "id19645", 3);
   ASSERT_TRUE(parser.setup(xhtml.size()));
   ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
   ASSERT_TRUE(parser.finalize());

@@ -7,6 +7,7 @@
 #include <Logging.h>
 
 #include <algorithm>
+#include <climits>
 #include <cstdlib>
 
 #include "MappedInputManager.h"
@@ -16,14 +17,16 @@
 
 ClipSelectionActivity::ClipSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                              std::vector<WordRef> words, const int fontId, Section& section,
-                                             const int startPage, const int marginTop, const int marginLeft)
+                                             const int startPage, const int marginTop, const int marginLeft,
+                                             const bool singleWordSelection)
     : Activity("ClipSelection", renderer, mappedInput),
       words(std::move(words)),
       fontId(fontId),
       section(section),
       startPage(startPage),
       marginTop(marginTop),
-      marginLeft(marginLeft) {}
+      marginLeft(marginLeft),
+      singleWordSelection(singleWordSelection) {}
 
 void ClipSelectionActivity::onEnter() {
   Activity::onEnter();
@@ -36,6 +39,25 @@ void ClipSelectionActivity::onEnter() {
     return;
   }
   savedSectionPage = section.currentPage;
+  if (singleWordSelection) {
+    // Match CrossPoint's dictionary UX: begin on the middle row, at the word
+    // nearest the horizontal centre, rather than at the page's first word.
+    const int centerX = renderer.getScreenWidth() / 2;
+    const int centerY = renderer.getScreenHeight() / 2;
+    int bestVerticalDistance = INT_MAX;
+    int bestHorizontalDistance = INT_MAX;
+    for (int i = 0; i < static_cast<int>(words.size()); ++i) {
+      if (words[i].pageIndex != 0) continue;
+      const int verticalDistance = std::abs(words[i].y + words[i].h / 2 - centerY);
+      const int horizontalDistance = std::abs(words[i].x + words[i].w / 2 - centerX);
+      if (verticalDistance < bestVerticalDistance ||
+          (verticalDistance == bestVerticalDistance && horizontalDistance < bestHorizontalDistance)) {
+        cursor = i;
+        bestVerticalDistance = verticalDistance;
+        bestHorizontalDistance = horizontalDistance;
+      }
+    }
+  }
   requestUpdate();
 }
 
@@ -105,6 +127,12 @@ void ClipSelectionActivity::moveCursorByLine(const int direction) {
 }
 
 void ClipSelectionActivity::confirmSelection() {
+  if (singleWordSelection) {
+    auto result = ClipTextBuilder::build(words, cursor, cursor, startPage, section.pageCount);
+    setResult(std::move(result));
+    finish();
+    return;
+  }
   if (selectionStart < 0) {
     selectionStart = cursor;
     requestUpdate();
@@ -203,7 +231,7 @@ void ClipSelectionActivity::render(RenderLock&&) {
   }
   if (words[cursor].pageIndex == displayedRelativePage) drawWord(words[cursor], true);
 
-  const char* confirm = selectionStart < 0 ? tr(STR_SELECT) : tr(STR_DONE);
+  const char* confirm = singleWordSelection ? tr(STR_LOOKUP) : (selectionStart < 0 ? tr(STR_SELECT) : tr(STR_DONE));
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirm, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();

@@ -43,7 +43,7 @@ class ChunkedResponse {
       server->sendContent(data, len);
       return;
     }
-    memcpy(buffer.get() + used, data, len);
+    memcpy(&buffer[used], data, len);
     used += len;
   }
 

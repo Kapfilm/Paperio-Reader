@@ -84,7 +84,9 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                                StrId::STR_BTN_ACT_CYCLE_ORIENTATION,
                                                StrId::STR_BTN_ACT_QUICK_OVERRIDES,
                                                StrId::STR_BTN_ACT_IGNORE,
-                                               StrId::STR_BTN_ACT_CREATE_CLIPPING};
+                                               StrId::STR_BTN_ACT_CREATE_CLIPPING,
+                                               StrId::STR_BTN_ACT_DICTIONARY_LOOKUP,
+                                               StrId::STR_BTN_ACT_SELECT_DICTIONARY};
 
   // Prepend the per-button default action to the shared options list.
   auto makeBtnActionOptions = [&](StrId defaultAction) {

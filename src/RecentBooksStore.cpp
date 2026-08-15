@@ -117,9 +117,8 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
   const std::string sdOverride = (fontFamilyOverride >= 0) ? std::string() : it->sdFontFamilyOverride;
   return setReaderOverrides(path, embeddedStyleOverride, imageRenderingOverride, fontFamilyOverride, sdOverride,
                             fontSizeOverride, it->bionicReadingOverride, it->paragraphAlignmentOverride,
-                            it->textAntiAliasingOverride, it->hyphenationOverride,
-                            it->fontSizeNormalizationOverride, it->guideDotsOverride,
-                            it->inlineFootnotePreviewsOverride, it->lineHeightPercentOverride);
+                            it->textAntiAliasingOverride, it->hyphenationOverride, it->fontSizeNormalizationOverride,
+                            it->guideDotsOverride, it->inlineFootnotePreviewsOverride, it->lineHeightPercentOverride);
 }
 
 bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t embeddedStyleOverride,
@@ -162,9 +161,8 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
   const std::string sdOverride = (fontFamilyOverride >= 0) ? std::string() : it->sdFontFamilyOverride;
   return setReaderOverrides(path, embeddedStyleOverride, imageRenderingOverride, fontFamilyOverride, sdOverride,
                             fontSizeOverride, bionicReadingOverride, it->paragraphAlignmentOverride,
-                            it->textAntiAliasingOverride, it->hyphenationOverride,
-                            it->fontSizeNormalizationOverride, it->guideDotsOverride,
-                            it->inlineFootnotePreviewsOverride, it->lineHeightPercentOverride);
+                            it->textAntiAliasingOverride, it->hyphenationOverride, it->fontSizeNormalizationOverride,
+                            it->guideDotsOverride, it->inlineFootnotePreviewsOverride, it->lineHeightPercentOverride);
 }
 
 bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t embeddedStyleOverride,

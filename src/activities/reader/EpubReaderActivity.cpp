@@ -36,6 +36,7 @@
 #include "ClipSelectionActivity.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "DictionaryDefinitionActivity.h"
 #include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderClippingsActivity.h"
 #include "EpubReaderFootnotesActivity.h"
@@ -57,6 +58,7 @@
 #include "StarredPagesActivity.h"
 #include "WordRef.h"
 #include "activities/home/BookInfoActivity.h"
+#include "activities/settings/DictionarySelectionActivity.h"
 #include "activities/settings/ReadingStatsBookDetailActivity.h"
 #include "activities/settings/SettingsSubmenuActivity.h"
 #include "clippings/ClippingsManager.h"
@@ -1404,6 +1406,12 @@ void EpubReaderActivity::jumpToPercent(int percent) {
 
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
   switch (action) {
+    case EpubReaderMenuActivity::MenuAction::DICTIONARY:
+      startClipSelection(ClippingHighlightStyle::Marker, true);
+      break;
+    case EpubReaderMenuActivity::MenuAction::SELECT_DICTIONARY:
+      openDictionarySelection();
+      break;
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
       const int spineIdx = currentSpineIndex;
       const int tocIdx = section ? section->getTocIndexForPage(section->currentPage)
@@ -4442,11 +4450,25 @@ void EpubReaderActivity::openClipStylePicker() {
                          });
 }
 
-void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlightStyle) {
+void EpubReaderActivity::openDictionarySelection() {
+  startActivityForResult(std::make_unique<DictionarySelectionActivity>(renderer, mappedInput),
+                         [this](const ActivityResult&) {
+                           SETTINGS.saveToFile();
+                           requestUpdate();
+                         });
+}
+
+void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlightStyle, const bool dictionaryLookup) {
   if (!section || !epub || section->pageCount == 0) {
     requestUpdate();
     return;
   }
+
+  // Background-B may currently be building inside the lent secondary framebuffer.
+  // A child activity does not run this reader's recoverSecondaryBufferIfNeeded(), so
+  // return the block before entering the dictionary flow instead of leaving ~48-52 KB
+  // unavailable for DictZip's 32 KB inflate ring.
+  if (dictionaryLookup) endBackgroundBorrow();
 
   std::vector<WordRef> words;
   const RenderLayout layout = computeRenderLayout();
@@ -4466,7 +4488,7 @@ void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlig
   // usable current-page selection merely because the heap cannot hold both pages.
   // Opening the style picker can leave the small ESP heap more fragmented even
   // after the picker itself has been destroyed.
-  int selectablePageCount = 2;
+  int selectablePageCount = dictionaryLookup ? 1 : 2;
   size_t maxSelectableWords = MAX_SELECTABLE_WORDS_PER_PAGE * selectablePageCount;
   if (!selectionFits(maxSelectableWords, TWO_PAGE_HEAP_RESERVE)) {
     selectablePageCount = 1;
@@ -4592,10 +4614,28 @@ void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlig
 
   startActivityForResult(
       std::make_unique<ClipSelectionActivity>(renderer, mappedInput, std::move(words), readerFontId, *section,
-                                              startPage, layout.marginTop, layout.marginLeft),
-      [this, chapterTitle = std::move(chapterTitle), highlightStyle](const ActivityResult& result) {
+                                              startPage, layout.marginTop, layout.marginLeft, dictionaryLookup),
+      [this, chapterTitle = std::move(chapterTitle), highlightStyle, dictionaryLookup](const ActivityResult& result) {
         if (!result.isCancelled) {
           const auto& clip = std::get<ClippingResult>(result.data);
+          if (dictionaryLookup) {
+            // StarDict articles are extracted before they are copied into the definition
+            // string.  Temporarily release the secondary display buffer so the extractor
+            // and large articles both get a contiguous allocation.  The reader owns the
+            // degraded flag and restores the buffer on its first render after this child
+            // activity closes.
+            if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
+              secondaryBufferDegraded_ = true;
+              renderer.setSingleBufferFastDiff(true);
+              LOG_INF(
+                  "DICT", "Released secondary buffer for lookup: free=%lu contig=%lu",
+                  static_cast<unsigned long>(esp_get_free_heap_size()),
+                  static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT)));
+            }
+            startActivityForResult(std::make_unique<DictionaryDefinitionActivity>(renderer, mappedInput, clip.text),
+                                   [this](const ActivityResult&) { requestUpdate(); });
+            return;
+          }
           const auto addResult = clippingStore.addClipping(
               static_cast<uint16_t>(currentSpineIndex), clip.sectionPage, clip.endSectionPage, clip.sectionPageCount,
               clip.startPageWordIndex, clip.endPageWordIndex, clip.wordCount, chapterTitle.c_str(), clip.paragraphIndex,
@@ -4954,6 +4994,14 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
       if (epub) {
         openClipStylePicker();
       }
+      break;
+    case BA::BTN_DICTIONARY_LOOKUP:
+      if (epub) {
+        startClipSelection(ClippingHighlightStyle::Marker, true);
+      }
+      break;
+    case BA::BTN_DICTIONARY_SELECT:
+      if (epub) openDictionarySelection();
       break;
     case BA::BTN_FORCE_REFRESH:
     case BA::BTN_FORCE_FAST_REFRESH:
