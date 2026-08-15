@@ -22,6 +22,7 @@ set(PIPELINE_SOURCES
   ${REPO_ROOT}/lib/Epub/Epub/parsers/ContentOpfParser.cpp
   ${REPO_ROOT}/lib/Epub/Epub/parsers/PageListSink.cpp
   ${REPO_ROOT}/lib/Epub/Epub/parsers/PageMapParser.cpp
+  ${REPO_ROOT}/lib/Epub/Epub/parsers/PreviewBlockLocator.cpp
   ${REPO_ROOT}/lib/Epub/Epub/parsers/TocNavParser.cpp
   ${REPO_ROOT}/lib/Epub/Epub/parsers/TocNcxParser.cpp
   ${REPO_ROOT}/lib/Epub/Epub/blocks/TextBlock.cpp
