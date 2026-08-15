@@ -257,16 +257,14 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
     const int scrollBarY = rect.y + (scrollAreaHeight - scrollBarHeight) * currentPage / (totalPages - 1);
     const int scrollBarX = rect.x + rect.width - LyraMetrics::values.scrollBarRightOffset;
     renderer.drawLine(scrollBarX, rect.y, scrollBarX, rect.y + scrollAreaHeight, true);
-    renderer.fillRect(scrollBarX - LyraMetrics::values.scrollBarWidth, scrollBarY,
-                      LyraMetrics::values.scrollBarWidth, scrollBarHeight, true);
+    renderer.fillRect(scrollBarX - LyraMetrics::values.scrollBarWidth, scrollBarY, LyraMetrics::values.scrollBarWidth,
+                      scrollBarHeight, true);
   }
 
-  const bool selectedIsSeparator =
-      selectedIndex >= 0 && selectedIndex < itemCount && rowTitle != nullptr &&
-      UITheme::isSeparatorTitle(rowTitle(selectedIndex));
+  const bool selectedIsSeparator = selectedIndex >= 0 && selectedIndex < itemCount && rowTitle != nullptr &&
+                                   UITheme::isSeparatorTitle(rowTitle(selectedIndex));
   const int contentWidth =
-      rect.width -
-      (totalPages > 1 ? LyraMetrics::values.scrollBarWidth + LyraMetrics::values.scrollBarRightOffset : 1);
+      rect.width - (totalPages > 1 ? LyraMetrics::values.scrollBarWidth + LyraMetrics::values.scrollBarRightOffset : 1);
 
   if (selectedIndex >= 0 && !selectedIsSeparator) {
     renderer.fillRoundedRect(
@@ -333,8 +331,7 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
       std::string subtitleText = rowSubtitle(i);
       const auto newline = subtitleText.find('\n');
       if (newline != std::string::npos) {
-        const auto line1 =
-            renderer.truncatedText(SMALL_FONT_ID, subtitleText.substr(0, newline).c_str(), rowTextWidth);
+        const auto line1 = renderer.truncatedText(SMALL_FONT_ID, subtitleText.substr(0, newline).c_str(), rowTextWidth);
         const auto line2 =
             renderer.truncatedText(SMALL_FONT_ID, subtitleText.substr(newline + 1).c_str(), rowTextWidth);
         renderer.drawText(SMALL_FONT_ID, textX, itemY + 24, line1.c_str(), !selected);
@@ -348,12 +345,11 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
     if (!valueText.empty()) {
       if (selected && highlightValue) {
         renderer.fillRoundedRect(
-            rect.x + contentWidth - LyraMetrics::values.contentSidePadding - kListHorizontalPadding - valueWidth,
-            itemY, valueWidth + kListHorizontalPadding, rowHeight, kButtonCornerRadius, Color::Black);
+            rect.x + contentWidth - LyraMetrics::values.contentSidePadding - kListHorizontalPadding - valueWidth, itemY,
+            valueWidth + kListHorizontalPadding, rowHeight, kButtonCornerRadius, Color::Black);
       }
-      renderer.drawText(UI_10_FONT_ID,
-                        rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueWidth, itemY + 6,
-                        valueText.c_str(), !selected);
+      renderer.drawText(UI_10_FONT_ID, rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueWidth,
+                        itemY + 6, valueText.c_str(), !selected);
     }
   }
 }

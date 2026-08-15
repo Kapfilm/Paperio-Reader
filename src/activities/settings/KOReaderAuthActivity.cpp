@@ -6,8 +6,8 @@
 #include <Logging.h>
 #include <WiFi.h>
 
-#include "KOReaderCredentialStore.h"
 #include "CrossPointSettings.h"
+#include "KOReaderCredentialStore.h"
 #include "KOReaderSyncClient.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"

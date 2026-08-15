@@ -11,8 +11,8 @@
 #include <algorithm>
 #include <cstring>
 
-#include "MappedInputManager.h"
 #include "CrossPointSettings.h"
+#include "MappedInputManager.h"
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
 #include "activities/NetworkMemoryTrim.h"

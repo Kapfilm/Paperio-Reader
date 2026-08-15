@@ -7,8 +7,8 @@
 #include <WiFi.h>
 #include <esp_task_wdt.h>
 
-#include "MappedInputManager.h"
 #include "CrossPointSettings.h"
+#include "MappedInputManager.h"
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"

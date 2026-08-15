@@ -91,8 +91,8 @@ TEST(EpubTargetedFootnotePreviewTest, StartsAtRequestedAnchorAndStopsAtPageLimit
 
   ChapterHtmlSlimParser parser(
       nullptr, renderer, 1, 1.0f, false, 0, 90, 48, false, false,
-      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr,
-      nullptr, nullptr, "note2", 2);
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr, nullptr,
+      nullptr, "note2", 2);
   ASSERT_TRUE(parser.setup(xhtml.size()));
   ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
   ASSERT_TRUE(parser.finalize());
@@ -111,8 +111,8 @@ TEST(EpubTargetedFootnotePreviewTest, MissingAnchorFailsWithoutRenderingTheChapt
   const std::string xhtml = "<html><body><p>Ordinary chapter text</p></body></html>";
   ChapterHtmlSlimParser parser(
       nullptr, renderer, 1, 1.0f, false, 0, 90, 80, false, false,
-      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr,
-      nullptr, nullptr, "missing-note", 2);
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr, nullptr,
+      nullptr, "missing-note", 2);
   ASSERT_TRUE(parser.setup(xhtml.size()));
   ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
   EXPECT_FALSE(parser.finalize());
@@ -129,8 +129,8 @@ TEST(EpubTargetedFootnotePreviewTest, GenericSameFileBibleAnchorStartsAtTop) {
 
   ChapterHtmlSlimParser parser(
       nullptr, renderer, 1, 1.0f, false, 0, 240, 120, false, false,
-      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr,
-      nullptr, nullptr, "id19645", 3);
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr, nullptr,
+      nullptr, "id19645", 3);
   ASSERT_TRUE(parser.setup(xhtml.size()));
   ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
   ASSERT_TRUE(parser.finalize());
