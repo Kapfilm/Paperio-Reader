@@ -231,8 +231,8 @@ Legend: ✅ supported · ⚠️ partial / basic · ❌ not supported.
 | Weather panel (Open-Meteo, forecast, 48h graph) | ✅ from Home menu | ❌ |
 | Timezone auto-detect (IP geolocation + DST) | ✅ | ⚠️ l offset picker |
 | Time sync (NTP) | ✅ | ✅ (X3) |
-| Sleep screens: transparent overlay over reader page | ✅ | ❌ |
-| Sleep screens: PNG with alpha | ✅ | ❌ BMP only |
+| Sleep screens: transparent overlay over reader page | ✅ | ✅ since 1.6.0rc |
+| Sleep screens: PNG/BMP with alpha | ✅ | ✅ since 1.6.0rc |
 | Sleep screens: info overlay (title/chapter/page/percent) | ✅ | ❌ |
 | Sleep screens: sequential image pick | ✅ | ⚠️ random only |
 | KOReader sync | ✅ auto bidirectional, on-device settings, differential refresh | ⚠️ proper sync + automatic resolution, no on-device registration |

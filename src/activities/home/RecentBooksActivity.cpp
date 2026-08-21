@@ -108,6 +108,16 @@ GridGeometry gridGeometry(const GfxRenderer& renderer) {
 std::string gridThumbPath(const std::string& coverBmpPath, int tw, int th) {
   return UITheme::getCoverThumbPath(coverBmpPath, tw, th);
 }
+
+bool thumbHasExactSize(const std::string& path, int width, int height) {
+  FsFile file;
+  if (!Storage.openFileForRead("RBA", path, file)) return false;
+  Bitmap bitmap(file);
+  const bool exact = bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.isComplete() &&
+                     bitmap.getWidth() == width && bitmap.getHeight() == height;
+  file.close();
+  return exact;
+}
 }  // namespace
 
 void RecentBooksActivity::loadRecentBooks() {
@@ -123,11 +133,12 @@ void RecentBooksActivity::loadRecentBooks() {
 
 bool RecentBooksActivity::loadNextCover() {
   const GridGeometry geometry = gridGeometry(renderer);
-  // Mini thumbnails fit inside their final artwork box and are drawn 1:1.
-  // Other themes retain the shared cropped size used by FinishedBookActivity.
+  // Generate the artwork at its final dimensions. In Mini this deliberately
+  // center-crops unusual aspect ratios so every tile has the same clean cover
+  // rectangle while the existing 2x2 structure remains unchanged.
   const int tw = geometry.storedThumbWidth;
   const int th = geometry.storedThumbHeight;
-  const bool cropCover = !isMinimalTheme();
+  const bool cropCover = true;
 
   // ── Cover extract session tick ───────────────────────────────────────────────
   if (extractSession) {
@@ -195,7 +206,14 @@ bool RecentBooksActivity::loadNextCover() {
     // (aliasing the dither into a grid) — regenerate both. A no-cover book's placeholder BMP
     // (written below) is also a complete exact-size BMP, so it passes here and is treated as a
     // resolved cover — no re-opening the EPUB three times per scan to rediscover it has no cover.
-    const bool valid = ReaderActivity::isCoverThumbComplete(thumbPath, tw, th);
+    bool valid = ReaderActivity::isCoverThumbComplete(thumbPath, tw, th);
+    // Older Mini builds used contain mode and intentionally accepted smaller
+    // thumbnails. Remove those once so they are regenerated as uniform tiles.
+    if (valid && isMinimalTheme() && !thumbHasExactSize(thumbPath, tw, th)) {
+      LOG_DBG("RBA", "Mini thumb is not exact %dx%d — regenerating: %s", tw, th, thumbPath.c_str());
+      Storage.remove(thumbPath.c_str());
+      valid = false;
+    }
     if (!valid) {
       const bool ok = (ReaderActivity::ensureCoverThumb(book.path, tw, th, cropCover) == ThumbResult::Ok);
       const bool wasPostFailure = pngSessionFailed;

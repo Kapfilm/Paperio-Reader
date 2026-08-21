@@ -291,7 +291,8 @@ class CrossPointSettings {
   uint8_t halfRefreshAfterImagePage = 1;
   uint8_t hyphenationEnabled = 0;
   // Snap near-body font sizes (within ±10% of the body size) to plain body text, so publisher
-  // wrappers like <span style="font-size:0.92em"> around whole paragraphs render native. Default on.
+  // sizing renders native — both inline wrappers like <span style="font-size:0.92em"> around whole
+  // paragraphs and a size stated on the block itself (p.body { font-size: 1.1em }). Default on.
   uint8_t fontSizeNormalization = 1;
 
   // Reader screen margin settings
@@ -442,7 +443,11 @@ class CrossPointSettings {
   // Get singleton instance
   static CrossPointSettings& getInstance() { return instance; }
 
+  // Sleep is measured from the press edge while the firmware is already running.
   static constexpr uint16_t getPowerButtonDuration() { return 400; }
+  // Wake begins in ROM/bootloader before setup() can observe the press, so use a
+  // separate shorter threshold without changing the press-to-sleep gesture.
+  static constexpr uint16_t getPowerWakeHoldDuration() { return 300; }
   int getReaderFontId() const;
   int getTxtReaderFontId() const;
   // Pure built-in lookup (size enum + family enum -> font ID). Independent of

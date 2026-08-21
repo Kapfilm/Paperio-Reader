@@ -287,6 +287,9 @@ static bool loadSleepFrameBuffer() {
 // Set near the end of setup() so a wake-press held a bit too long does not bounce straight
 // back into deep sleep before the user sees the page.
 static unsigned long allowSleepAt = 0;
+// Swallow the still-held wake press and its release bounce without delaying setup().
+static bool bootPowerReleasePending = false;
+static unsigned long bootPowerHighSince = 0;
 
 static void logStartupMemory(const char* stage) {
   const uint32_t freeHeap = esp_get_free_heap_size();
@@ -388,8 +391,25 @@ static void logBootTrace() {
 static void logBootSummary() {
   LOG_INF("BOOT", "Wake gate: %s (decided at %u ms, gate saw the press for %u ms, required %u ms)",
           HalGPIO::wakeVerdictName(bootWakeCheck.verdict), bootWakeCheck.decidedAtMs, bootWakeCheck.heldMs,
-          CrossPointSettings::getPowerButtonDuration());
+          CrossPointSettings::getPowerWakeHoldDuration());
   logBootTrace();
+}
+
+static void serviceBootPowerRelease() {
+  if (!bootPowerReleasePending) return;
+  constexpr unsigned long RELEASE_STABLE_MS = 200;
+  const unsigned long now = millis();
+  if (digitalRead(InputManager::POWER_BUTTON_PIN) == HIGH) {
+    if (bootPowerHighSince == 0) bootPowerHighSince = now;
+  } else {
+    bootPowerHighSince = 0;
+  }
+  buttonEventManager.drain();
+  if (bootPowerHighSince != 0 && now - bootPowerHighSince >= RELEASE_STABLE_MS) {
+    bootPowerReleasePending = false;
+    markBootPhase(BootPhase::PowerRelease);
+    LOG_DBG("MAIN", "Wake press released at %lu ms (boot was not blocked on it)", now);
+  }
 }
 
 // Enter deep sleep mode. fromTimeout=true marks an auto-sleep (gates "Quick Resume on Timeout").
@@ -582,7 +602,8 @@ void setup() {
   // whichever press type(s) the user configured to put the device to sleep.
   SETTINGS.loadStartupFromNvs();
   markBootPhase(BootPhase::NvsSettings);
-  bootWakeCheck = gpio.verifyPowerButtonWakeup(wakeGestureFromSettings(), CrossPointSettings::getPowerButtonDuration());
+  bootWakeCheck =
+      gpio.verifyPowerButtonWakeup(wakeGestureFromSettings(), CrossPointSettings::getPowerWakeHoldDuration());
   markBootPhase(BootPhase::WakeGate);
 
   // print_errors=true: the corrupt block's address and overwritten values go to the
@@ -696,7 +717,7 @@ void setup() {
   // answer "why did nothing happen when I pressed power".
   LOG_INF("BOOT", "Wake gate: %s (decided at %u ms, gate saw the press for %u ms, required %u ms)",
           HalGPIO::wakeVerdictName(bootWakeCheck.verdict), bootWakeCheck.decidedAtMs, bootWakeCheck.heldMs,
-          CrossPointSettings::getPowerButtonDuration());
+          CrossPointSettings::getPowerWakeHoldDuration());
   LOG_DBG("MAIN", "Wakeup reason: %d, millis=%lu, rawPowerPin=%d", static_cast<int>(wakeupReason), millis(),
           digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
 #ifdef ENABLE_BOOT_HEAP_DIAGNOSTICS
@@ -861,9 +882,22 @@ void setup() {
   markBootPhase(BootPhase::FirstPaint);
 
   HalClock::restore();
+  // Split checkpoints: two boots of the same firmware differed by 14780 B of free heap and, far
+  // more importantly, by largest8 65524 vs 26612 at after_activity_route — and the only thing
+  // that differed was the reading-stats file (1 book / 110 s vs 36 books / 100788 s). Boot min
+  // free was 30044 against 69932, so the load also peaks ~40 KB transiently. That contig gap is
+  // what decides whether a big chapter's section build finishes or aborts, so it needs to be
+  // attributable to one of these three stores rather than inferred across boots.
+  logStartupMemory("before_stores");
   RECENT_BOOKS.loadFromFile();
+  logStartupMemory("after_recent_books");
   GLOBAL_BOOKMARKS.load();
-  READING_STATS.loadFromFile();
+  logStartupMemory("after_bookmarks");
+  // READING_STATS is deliberately NOT loaded here. Nothing on the reading path needs the history
+  // — the session tracker accumulates in its own members and only touches the store at book exit
+  // — while keeping it resident cost, measured on X4 with 36 books, ~15 KB of heap and dropped
+  // largest8 from 65524 to 26612 before the first book was even opened. Consumers load it for
+  // the duration they need it (ReadingStatsStore::ScopedLoad) and release it after.
   markBootPhase(BootPhase::StoreLoad);
 
   if (recoveryFirmwareMode) {
@@ -910,15 +944,12 @@ void setup() {
   markBootPhase(BootPhase::ActivityRoute);
   logStartupMemory("after_activity_route");
 
-  // Ensure we're not still holding the power button before leaving setup.
-  // waitForStablePowerRelease protects against switch bounce that might register as a false double-press.
+  // Keep the leftover wake press away from the normal event system, but do not
+  // hold up the first visible page while waiting for the user to release it.
   // Skip on silent reboot: the firmware triggered the restart, so the button isn't held.
   if (!isSilentReboot) {
-    gpio.waitForStablePowerRelease();
-    // Stamped after the wait, so `rel` minus `route` is how long the user kept holding
-    // past the point the device was ready — the other half of the "how long should I
-    // hold this?" question.
-    markBootPhase(BootPhase::PowerRelease);
+    bootPowerReleasePending = true;
+    bootPowerHighSince = 0;
   }
   // All boot-time power-button handling (which drives inputMgr.update() directly)
   // is done — hand button sampling to the background sampler so presses are caught
@@ -946,6 +977,7 @@ void loop() {
 
   gpio.update();
   buttonEventManager.update();
+  serviceBootPowerRelease();
   HalClock::updatePeriodic(SETTINGS.ntpServer);
   halTiltSensor.update(static_cast<CrossPointTiltPageTurn::Value>(SETTINGS.tiltPageTurn),
                        static_cast<CrossPointOrientation::Value>(SETTINGS.orientation),
@@ -1038,7 +1070,14 @@ void loop() {
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity() ||
+  // isAnyPressed() alongside the edge checks: a button that is DOWN produces no press/release
+  // edges, so an edge-only test reads a held finger as an idle device. With IDLE_DOWNCLOCK_MS at
+  // 500 ms and ButtonEventManager's long-press at 1000 ms, every long press used to cross the
+  // idle threshold mid-hold — the CPU dropped to 10 MHz and the action the long press triggered
+  // then ran there. Harmless for most actions, fatal for one: a long press that brings WiFi up
+  // (reader -> KOReader sync) reached WiFi.begin() at 10 MHz and wedged. Holding a button is
+  // user activity by any reasonable reading, so count it as such.
+  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.isAnyPressed() || halTiltSensor.hadActivity() ||
       activityManager.preventAutoSleep()) {
     lastActivityTime = millis();         // Reset inactivity timer
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
@@ -1186,7 +1225,9 @@ void loop() {
             case ButtonEventManager::PressType::Double:
               return SETTINGS.btnDoublePower;
             case ButtonEventManager::PressType::Long:
-              return SETTINGS.btnLongPower;
+              // The dedicated 400 ms hold-to-sleep timer consumes this press
+              // before the generic 1000 ms long-press event can be dispatched.
+              break;
           }
           break;
         default:

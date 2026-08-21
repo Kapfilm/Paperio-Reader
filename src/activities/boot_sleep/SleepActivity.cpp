@@ -5,6 +5,7 @@
 #include <Epub/converters/DirectPixelWriter.h>
 #include <Epub/converters/PixelCache.h>
 #include <Epub/converters/PngToFramebufferConverter.h>
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -17,6 +18,9 @@
 #include <esp_system.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <new>
 
@@ -30,6 +34,136 @@
 #include "images/MoonIcon.h"
 
 namespace {
+
+constexpr uint8_t MIN_VISIBLE_OVERLAY_ALPHA = 8;
+
+struct OverlayBmpInfo {
+  int width = 0;
+  int height = 0;
+  bool topDown = false;
+  uint32_t dataOffset = 0;
+  uint32_t rowBytes = 0;
+};
+
+uint16_t readOverlayLE16(FsFile& file) {
+  const int c0 = file.read();
+  const int c1 = file.read();
+  if (c0 < 0 || c1 < 0) return 0;
+  return static_cast<uint16_t>(static_cast<uint8_t>(c0)) |
+         (static_cast<uint16_t>(static_cast<uint8_t>(c1)) << 8);
+}
+
+uint32_t readOverlayLE32(FsFile& file) {
+  const int c0 = file.read();
+  const int c1 = file.read();
+  const int c2 = file.read();
+  const int c3 = file.read();
+  if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) return 0;
+  return static_cast<uint32_t>(static_cast<uint8_t>(c0)) |
+         (static_cast<uint32_t>(static_cast<uint8_t>(c1)) << 8) |
+         (static_cast<uint32_t>(static_cast<uint8_t>(c2)) << 16) |
+         (static_cast<uint32_t>(static_cast<uint8_t>(c3)) << 24);
+}
+
+bool parseTransparentOverlayBmp(FsFile& file, OverlayBmpInfo& info) {
+  if (!file || !file.seek(0) || readOverlayLE16(file) != 0x4D42) return false;
+
+  if (!file.seekCur(8)) return false;
+  info.dataOffset = readOverlayLE32(file);
+  const uint32_t dibSize = readOverlayLE32(file);
+  if (dibSize < 40) return false;
+
+  info.width = static_cast<int32_t>(readOverlayLE32(file));
+  const int32_t rawHeight = static_cast<int32_t>(readOverlayLE32(file));
+  if (rawHeight == std::numeric_limits<int32_t>::min()) return false;
+  info.topDown = rawHeight < 0;
+  info.height = info.topDown ? -rawHeight : rawHeight;
+
+  const uint16_t planes = readOverlayLE16(file);
+  const uint16_t bitsPerPixel = readOverlayLE16(file);
+  const uint32_t compression = readOverlayLE32(file);
+  if (planes != 1 || bitsPerPixel != 32 || (compression != 0 && compression != 3)) return false;
+
+  constexpr int MAX_OVERLAY_WIDTH = 2048;
+  constexpr int MAX_OVERLAY_HEIGHT = 3072;
+  if (info.width <= 0 || info.height <= 0 || info.width > MAX_OVERLAY_WIDTH || info.height > MAX_OVERLAY_HEIGHT) {
+    return false;
+  }
+
+  info.rowBytes = static_cast<uint32_t>(info.width) * 4u;
+  const uint64_t requiredSize = static_cast<uint64_t>(info.dataOffset) +
+                                static_cast<uint64_t>(info.rowBytes) * static_cast<uint64_t>(info.height);
+  return requiredSize <= file.size() && file.seek(info.dataOffset);
+}
+
+uint8_t overlayAlphaThreshold(const int x, const int y) {
+  static constexpr uint8_t BAYER_4X4[16] = {0, 128, 32, 160, 192, 64, 224, 96,
+                                            48, 176, 16, 144, 240, 112, 208, 80};
+  return BAYER_4X4[((y & 0x03) << 2) | (x & 0x03)];
+}
+
+enum class TransparentBmpResult : uint8_t { Rendered, NotTransparent, Error };
+
+TransparentBmpResult renderTransparentOverlayBmp(FsFile& file, const OverlayBmpInfo& info,
+                                                  const GfxRenderer& renderer) {
+  auto row = makeUniqueNoThrow<uint8_t[]>(info.rowBytes);
+  if (!row) {
+    LOG_ERR("SLP", "Not enough heap for transparent BMP row (%u bytes)", static_cast<unsigned>(info.rowBytes));
+    return TransparentBmpResult::Error;
+  }
+
+  // A fully opaque 32-bit BMP remains a legacy white-is-transparent overlay.
+  // Only switch to alpha compositing when the file actually contains alpha.
+  bool hasVisiblePixel = false;
+  bool hasTransparentPixel = false;
+  if (!file.seek(info.dataOffset)) return TransparentBmpResult::Error;
+  for (int sourceY = 0; sourceY < info.height; sourceY++) {
+    if (file.read(row.get(), info.rowBytes) != static_cast<int>(info.rowBytes)) {
+      return TransparentBmpResult::Error;
+    }
+    for (int sourceX = 0; sourceX < info.width; sourceX++) {
+      const uint8_t alpha = row[static_cast<size_t>(sourceX) * 4u + 3u];
+      hasVisiblePixel |= alpha >= MIN_VISIBLE_OVERLAY_ALPHA;
+      hasTransparentPixel |= alpha < 255;
+      if (hasVisiblePixel && hasTransparentPixel) break;
+    }
+    if (hasVisiblePixel && hasTransparentPixel) break;
+  }
+  if (!hasVisiblePixel || !hasTransparentPixel) return TransparentBmpResult::NotTransparent;
+
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  const float scale = std::min(1.0f, std::min(static_cast<float>(pageWidth) / info.width,
+                                             static_cast<float>(pageHeight) / info.height));
+  const int destinationWidth = std::max(1, static_cast<int>(std::floor(info.width * scale)));
+  const int destinationHeight = std::max(1, static_cast<int>(std::floor(info.height * scale)));
+  const int destinationX = (pageWidth - destinationWidth) / 2;
+  const int destinationY = (pageHeight - destinationHeight) / 2;
+
+  if (!file.seek(info.dataOffset)) return TransparentBmpResult::Error;
+  for (int fileY = 0; fileY < info.height; fileY++) {
+    if (file.read(row.get(), info.rowBytes) != static_cast<int>(info.rowBytes)) {
+      LOG_ERR("SLP", "Short read in transparent BMP row %d", fileY);
+      return TransparentBmpResult::Error;
+    }
+    const int sourceY = info.topDown ? fileY : info.height - 1 - fileY;
+    const int outY = destinationY + static_cast<int>(std::floor(sourceY * scale));
+    if (outY < 0 || outY >= pageHeight) continue;
+
+    for (int sourceX = 0; sourceX < info.width; sourceX++) {
+      const int outX = destinationX + static_cast<int>(std::floor(sourceX * scale));
+      if (outX < 0 || outX >= pageWidth) continue;
+      const uint8_t* pixel = row.get() + static_cast<size_t>(sourceX) * 4u;
+      const uint8_t alpha = pixel[3];
+      if (alpha < MIN_VISIBLE_OVERLAY_ALPHA || alpha <= overlayAlphaThreshold(outX, outY)) continue;
+
+      const uint8_t luminance = static_cast<uint8_t>((77u * pixel[2] + 150u * pixel[1] + 29u * pixel[0]) >> 8);
+      renderer.drawPixel(outX, outY, luminance < 128);
+    }
+  }
+
+  return TransparentBmpResult::Rendered;
+}
 
 // Sidecar cache for a rendered sleep image: "/sleep/foo.png" -> "/sleep/.foo.png.f3.pxc".
 //
@@ -319,9 +453,10 @@ bool renderPngSleepScreen(const std::string& filename, GfxRenderer& renderer, co
 // Collects full paths of valid image files from /.sleep and /sleep, with no preference between
 // the two directories. BMP files are validated by parsing their headers; invalid BMPs are skipped.
 // When allowPng is true, .png files are also accepted (PNG validation happens later at decode time).
-std::vector<std::string> collectSleepImages(bool allowPng) {
+std::vector<std::string> collectSleepImages(bool allowPng, const char* firstDir = "/.sleep",
+                                            const char* secondDir = "/sleep") {
   std::vector<std::string> files;
-  for (const char* sleepDir : {"/.sleep", "/sleep"}) {
+  for (const char* sleepDir : {firstDir, secondDir}) {
     auto dir = Storage.open(sleepDir);
     if (!dir || !dir.isDirectory()) {
       if (dir) dir.close();
@@ -888,6 +1023,12 @@ void SleepActivity::renderOverlaySleepScreen() const {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
 
+  // PNG decoding and a 32-bit BMP scanline need a contiguous allocation. SD
+  // fonts are not used on the final overlay, so release their page caches first.
+  if (auto* fontCache = renderer.getFontCacheManager()) {
+    fontCache->clearCache();
+  }
+
   // Step 1: Ensure the frame buffer contains the reader page.
   // When coming from a reader activity the frame buffer already holds the page.
   // When coming from a non-reader activity we re-render it from the saved progress.
@@ -910,11 +1051,27 @@ void SleepActivity::renderOverlaySleepScreen() const {
   }
 
   // Step 2: Load the overlay image using the same selection logic as renderCustomSleepScreen.
-  // BMP: white pixels are skipped (transparent via drawBitmap), black pixels composited on top.
-  // PNG: pixels with alpha < 128 are skipped; opaque pixels are drawn with their grayscale value.
+  // BMP: 32-bit BGRA files use their real alpha channel; legacy BMPs retain
+  // white-is-transparent behavior. PNG uses its per-pixel alpha channel.
   auto tryDrawOverlay = [&](const std::string& filename) -> bool {
     FsFile file;
     if (!Storage.openFileForRead("SLP", filename, file)) return false;
+
+    OverlayBmpInfo overlayInfo;
+    if (parseTransparentOverlayBmp(file, overlayInfo)) {
+      const auto result = renderTransparentOverlayBmp(file, overlayInfo, renderer);
+      if (result == TransparentBmpResult::Rendered) {
+        LOG_DBG("SLP", "Rendered transparent BGRA sleep overlay: %s", filename.c_str());
+        file.close();
+        return true;
+      }
+      if (result == TransparentBmpResult::Error) {
+        file.close();
+        return false;
+      }
+      file.seek(0);
+    }
+
     Bitmap bitmap(file, true);
     if (bitmap.parseHeaders() != BmpReaderError::Ok) {
       file.close();
@@ -1001,7 +1158,9 @@ void SleepActivity::renderOverlaySleepScreen() const {
       int srcX = 0, error = 0;
       for (int dx = 0; dx < dstW; dx++) {
         const int outX = dstX + dx;
-        if (outX >= 0 && outX < pageWidth && alphaRow[srcX] >= 128) {
+        const uint8_t alpha = alphaRow[srcX];
+        if (outX >= 0 && outX < pageWidth && alpha >= MIN_VISIBLE_OVERLAY_ALPHA &&
+            alpha > overlayAlphaThreshold(outX, destY)) {
           renderer.drawPixel(outX, destY, grayRow[srcX] < 128);  // true = black, false = white
         }
         // Bresenham-style X stepping (handles downscaling; 1:1 when srcW == dstW)
@@ -1018,12 +1177,16 @@ void SleepActivity::renderOverlaySleepScreen() const {
     return ok;
   };
 
-  // Collect images from both /.sleep and /sleep directories (no preference between them).
-  // Accepts both .bmp and .png files; .bmp headers are validated during the scan.
-  bool overlayDrawn = false;
-  const auto files = collectSleepImages(/*allowPng=*/true);
+  // Dedicated names keep transparent art separate from ordinary full-screen
+  // wallpapers. Fall back to the legacy /.sleep, /sleep and /sleep.* locations
+  // so existing cards keep working unchanged.
+  bool overlayDrawn = tryDrawOverlay("/sleep-overlay.bmp");
+  if (!overlayDrawn) overlayDrawn = tryDrawPngOverlay("/sleep-overlay.png");
+
+  auto files = collectSleepImages(/*allowPng=*/true, "/.sleep-overlay", "/sleep-overlay");
+  if (files.empty()) files = collectSleepImages(/*allowPng=*/true);
   const auto numFiles = files.size();
-  if (numFiles > 0) {
+  if (!overlayDrawn && numFiles > 0) {
     const auto pickedIndex = pickSleepImageIndex(numFiles);
     APP_STATE.lastSleepImage = pickedIndex;
     APP_STATE.saveToFile();

@@ -4,6 +4,7 @@
 #include <ESPmDNS.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
+#include <HalPowerManager.h>
 #include <I18n.h>
 #include <Memory.h>
 #include <WiFi.h>
@@ -130,6 +131,7 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   if (mode == NetworkMode::JOIN_NETWORK) {
     // STA mode - launch WiFi selection
     LOG_DBG("WEBACT", "Turning on WiFi (STA mode)...");
+    powerManager.ensureFullSpeedForRadio();  // WiFi needs >=80 MHz; see HalPowerManager
     WiFi.mode(WIFI_STA);
 
     state = WebServerActivityState::WIFI_SELECTION;
@@ -197,6 +199,7 @@ void CrossPointWebServerActivity::startAccessPoint() {
   LOG_DBG("WEBACT", "Free heap before AP start: %d bytes", ESP.getFreeHeap());
 
   // Configure and start the AP
+  powerManager.ensureFullSpeedForRadio();  // WiFi needs >=80 MHz; see HalPowerManager
   WiFi.mode(WIFI_AP);
   delay(100);
 

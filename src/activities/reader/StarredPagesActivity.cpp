@@ -96,15 +96,13 @@ void StarredPagesActivity::loop() {
       return;
     }
 
-    if (totalItems > 0 &&
-        (ev.button == MappedInputManager::Button::PageBack || ev.button == MappedInputManager::Button::Left) &&
+    if (totalItems > 0 && ev.button == MappedInputManager::Button::Left &&
         ev.type == ButtonEventManager::PressType::Short) {
       startRename();
       return;
     }
 
-    if (totalItems > 0 &&
-        (ev.button == MappedInputManager::Button::PageForward || ev.button == MappedInputManager::Button::Right) &&
+    if (totalItems > 0 && ev.button == MappedInputManager::Button::Right &&
         ev.type == ButtonEventManager::PressType::Short) {
       deleteSelected();
       return;
@@ -113,8 +111,13 @@ void StarredPagesActivity::loop() {
 
   if (totalItems == 0) return;
 
-  buttonNavigator.onNextList(selectorIndex, totalItems, [this] { requestUpdate(); });
-  buttonNavigator.onPreviousList(selectorIndex, totalItems, [this] { requestUpdate(); });
+  // PageBack/PageForward are aliases of the physical Up/Down side buttons.
+  // Keep list navigation on Up/Down only so those presses cannot also trigger
+  // the Left/Right rename and delete actions shown on the front-button strip.
+  buttonNavigator.onNextList({MappedInputManager::Button::Down}, selectorIndex, totalItems,
+                             [this] { requestUpdate(); });
+  buttonNavigator.onPreviousList({MappedInputManager::Button::Up}, selectorIndex, totalItems,
+                                 [this] { requestUpdate(); });
 }
 
 void StarredPagesActivity::render(RenderLock&&) {

@@ -63,6 +63,20 @@ constexpr size_t MAX_ANCHORS_PER_CHAPTER = 1024;
 #define EHP_TEXT_LAYOUT_HARD_MIN_MAX_ALLOC (6 * 1024)
 #endif
 
+// Reading an image header straight out of the ZIP (ImageDecoderFactory::getDimensionsFromZipEntry)
+// spins up a ~32 KB inflate ring. That is the ONLY allocation in image handling large enough to
+// threaten a parse, so it is the only thing gated on heap — see the image branch in startElement.
+// Sized ring + slack rather than reusing the text-layout floors, which are far too permissive for
+// a 32 KB request and were never chosen with one in mind.
+#ifndef EHP_IMAGE_HEADER_MIN_FREE_HEAP
+#define EHP_IMAGE_HEADER_MIN_FREE_HEAP (40 * 1024)
+#endif
+#ifndef EHP_IMAGE_HEADER_MIN_MAX_ALLOC
+#define EHP_IMAGE_HEADER_MIN_MAX_ALLOC (34 * 1024)
+#endif
+constexpr size_t MIN_FREE_HEAP_FOR_IMAGE_HEADER = EHP_IMAGE_HEADER_MIN_FREE_HEAP;
+constexpr size_t MIN_MAX_ALLOC_FOR_IMAGE_HEADER = EHP_IMAGE_HEADER_MIN_MAX_ALLOC;
+
 constexpr size_t MIN_FREE_HEAP_FOR_TEXT_LAYOUT = EHP_TEXT_LAYOUT_SOFT_MIN_FREE_HEAP;
 constexpr size_t MIN_MAX_ALLOC_FOR_TEXT_LAYOUT = EHP_TEXT_LAYOUT_SOFT_MIN_MAX_ALLOC;
 constexpr size_t MIN_FREE_HEAP_FOR_TEXT_LAYOUT_HARD = EHP_TEXT_LAYOUT_HARD_MIN_FREE_HEAP;
@@ -289,6 +303,15 @@ bool isZeroHeightSpacerParagraph(const char* name, const std::string& styleAttr)
   return hasZeroHeight && hasZeroMargin && hasZeroBorder;
 }
 
+namespace {
+// Half-width, in percent, of the "this is really body text" band around 100%.
+// Wide when font-size normalization is on (publisher near-body sizing snaps to native
+// glyphs), otherwise a tight float-rounding cleanup. Shared by the per-word channel
+// (updateEffectiveInlineStyle) and the block channel (normalizeFontSizeForElement) so a
+// publisher's near-body size is treated the same whichever one it arrives on.
+constexpr int nearBodyDeadZonePct(const bool normalizationEnabled) { return normalizationEnabled ? 10 : 3; }
+}  // namespace
+
 // Update effective bold/italic/underline based on block style and inline style stack
 void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   // Start with block-level styles
@@ -350,7 +373,7 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   // outside the band and survive. Deliberate <10% per-word gradients lose their faintest
   // steps, an accepted trade for body-text comfort. When disabled, only a tight ±3% band
   // is applied (float-rounding cleanup), so publisher near-body wrappers are preserved.
-  const int deadZone = fontSizeNormalization ? 10 : 3;
+  const int deadZone = nearBodyDeadZonePct(fontSizeNormalization);
   if (sizePct >= 100 - deadZone && sizePct <= 100 + deadZone) {
     sizePct = 100;
   }
@@ -437,8 +460,30 @@ CssStyle ChapterHtmlSlimParser::normalizeFontSizeForElement(const char* tagName,
   if (hasRootFontSizeBaseline_ && isRootFontSizeElement(tagName)) {
     normalized.fontSizeMultiplier = 1.0f;
   }
-  if (hasMainTextFontSizeBaseline_ && isHeaderOrBlock(tagName) && strcmp(tagName, "br") != 0) {
+  const bool blockLevel = isHeaderOrBlock(tagName) && strcmp(tagName, "br") != 0;
+  if (hasMainTextFontSizeBaseline_ && blockLevel) {
     normalized.fontSizeMultiplier /= mainTextFontSizeBaseline_;
+  }
+  // Block twin of the per-word near-body snap in updateEffectiveInlineStyle. The same
+  // publisher sizing arrives either as a <span style="font-size:1.1em"> wrapping the
+  // paragraph or as the paragraph's own class (`p.body { font-size: 1.1em }`), and the
+  // two must land identically — otherwise a whole book's prose renders as resampled
+  // glyphs (or, via FontSizeLadder, on the wrong sibling font) with normalization on.
+  // Applied here, on the element's own size, so a nested run keeps its size relative to
+  // the now-body block: a 0.8 footnote span inside a 1.1 paragraph resolves to 0.8, not
+  // 0.88. Headings are exempt: a heading is meant to stand apart from the prose, so the
+  // size its author gave it is kept even when the margin is slim — the point of the band
+  // is to spare BODY text a scale nobody asked for, not to flatten the page's hierarchy.
+  // (The main-text baseline division above still applies to them, as it always has.)
+  if (blockLevel && !matches(tagName, HEADER_TAGS, NUM_HEADER_TAGS)) {
+    const int deadZone = nearBodyDeadZonePct(fontSizeNormalization);
+    // Rounded to integer percent like the per-word channel (applyCssFontSizeToEntry), so the
+    // same declared size lands the same side of the band edge on either channel — a float
+    // 1.1em multiplies out a hair either side of 110.
+    const int pct = static_cast<int>(normalized.fontSizeMultiplier * 100.0f + 0.5f);
+    if (pct >= 100 - deadZone && pct <= 100 + deadZone) {
+      normalized.fontSizeMultiplier = 1.0f;
+    }
   }
   return normalized;
 }
@@ -456,7 +501,13 @@ bool ChapterHtmlSlimParser::ensureHeapForTextLayout(const char* phase) {
   // Soft low-memory zone: keep parsing in degraded mode and only hard-abort when
   // both free and contiguous heap fall to critical levels.
   if (freeHeap >= MIN_FREE_HEAP_FOR_TEXT_LAYOUT_HARD && maxAllocHeap >= MIN_MAX_ALLOC_FOR_TEXT_LAYOUT_HARD) {
-    lowMemoryImageFallback = true;
+    // Deliberately does NOT latch image handling off any more. This gate trips on a transient dip
+    // — and trips often, because the soft floor (12 * 1024) is a value the allocator can never
+    // report: every largest-free-block it returns is 512k - 12, so the neighbours are 12276 and
+    // 12788 and the effective floor is the latter. A single 12-bytes-short reading used to
+    // disable images for the REST OF THE CHAPTER, and because the parse writes the section cache,
+    // that alt-text stood in for every later image until the cache was invalidated. Image cost is
+    // now judged where it is actually incurred (heapAllowsImageHeaderRead).
     LOG_DBG("EHP", "Low heap (%u free, %u max alloc) before %s; continuing in degraded mode", freeHeap, maxAllocHeap,
             phase);
     return true;
@@ -467,6 +518,17 @@ bool ChapterHtmlSlimParser::ensureHeapForTextLayout(const char* phase) {
   layoutFailed = true;
   saxParser_.stop();
   return false;
+}
+
+bool ChapterHtmlSlimParser::heapAllowsImageHeaderRead() const {
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t maxAllocHeap = ESP.getMaxAllocHeap();
+  const bool ok = freeHeap >= MIN_FREE_HEAP_FOR_IMAGE_HEADER && maxAllocHeap >= MIN_MAX_ALLOC_FOR_IMAGE_HEADER;
+  if (!ok) {
+    LOG_DBG("EHP", "Skipping ZIP image-header read (%u free, %u max alloc); image falls back to alt text", freeHeap,
+            maxAllocHeap);
+  }
+  return ok;
 }
 
 // flush the contents of partWordBuffer to currentTextBlock
@@ -1401,11 +1463,6 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
       if (!src.empty() && self->imageRendering != 1) {
         LOG_DBG("EHP", "Found image: src=%s", src.c_str());
 
-        if (self->lowMemoryImageFallback) {
-          handleImageFallback();
-          return;
-        }
-
         {
           // Resolve the image path relative to the HTML file
           std::string resolvedPath = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(self->contentBase + src));
@@ -1439,7 +1496,10 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                 dimsOk = true;
               }
             }
-            if (!dimsOk) {
+            if (!dimsOk && self->heapAllowsImageHeaderRead()) {
+              // Only reached when neither the tag nor the manifest could supply dimensions. On
+              // refusal dimsOk stays false and the code below already falls through to
+              // handleImageFallback(), so a tight heap degrades exactly this image and no other.
               dimsOk = ImageDecoderFactory::getDimensionsFromZipEntry(self->epub->getPath(), resolvedPath, dims);
             }
             if (dimsOk) {
@@ -1477,14 +1537,23 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
                 }
 
                 if (hasCssHeight && hasCssWidth && dims.width > 0 && dims.height > 0) {
-                  // Both CSS height and width set: resolve both, then clamp to
-                  // current container preserving requested ratio.
+                  // Both CSS height and width set: resolve both, fit the image inside that box,
+                  // then clamp to the current container.
                   displayHeight = static_cast<int>(
                       imgStyle.imageHeight.toPixels(emSize, static_cast<float>(self->viewportHeight)) + 0.5f);
                   displayWidth =
                       static_cast<int>(imgStyle.imageWidth.toPixels(emSize, static_cast<float>(containerWidth)) + 0.5f);
                   if (displayHeight < 1) displayHeight = 1;
                   if (displayWidth < 1) displayWidth = 1;
+                  // A browser stretches the image to fill a box of a different ratio. We
+                  // deliberately do not: the decoders scale each axis independently and would
+                  // honour it, so a stylesheet we only partly understand (no min-/max-width, no
+                  // box model) could hand us a box that squashes the picture. Fit inside the
+                  // requested box and keep the source ratio.
+                  const float boxScale = std::min(static_cast<float>(displayWidth) / dims.width,
+                                                  static_cast<float>(displayHeight) / dims.height);
+                  displayWidth = std::max(1, static_cast<int>(dims.width * boxScale + 0.5f));
+                  displayHeight = std::max(1, static_cast<int>(dims.height * boxScale + 0.5f));
                   if (displayWidth > containerWidth || displayHeight > self->viewportHeight) {
                     float scaleX =
                         (displayWidth > containerWidth) ? static_cast<float>(containerWidth) / displayWidth : 1.0f;

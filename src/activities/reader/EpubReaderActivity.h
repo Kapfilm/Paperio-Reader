@@ -174,6 +174,9 @@ class EpubReaderActivity final : public Activity {
   bool backgroundBorrowActive_ = false;
   std::unique_ptr<Section> section = nullptr;
   int currentSpineIndex = 0;
+  // While a section is loaded, this target follows the page currently on screen.
+  // That keeps any cache rebuild or low-memory retry from returning to the page
+  // where the chapter was first entered.
   NavigationTarget navTarget;
   int pagesUntilFullRefresh =
       1;  // initialized to freq in onEnter(); 1 triggers HALF on first render if somehow not reset
@@ -362,6 +365,11 @@ class EpubReaderActivity final : public Activity {
   // never produce a pre-render) doesn't re-trigger the pass every idle tick.
   int preRenderRearmSpine_ = -1;
   int preRenderRearmPage_ = -1;
+  // Escalation state for a page that fails to deserialize from the section cache.
+  // First retry keeps the cache, second retry rebuilds it, third stops the loop.
+  int pageLoadFailSpine_ = -1;
+  int pageLoadFailPage_ = -1;
+  uint8_t pageLoadFailStage_ = 0;
   // One-shot-per-target probe/settle latch so idle ticks don't re-hit the SD every loop:
   //   Probe    — not yet checked whether the target's cache already exists
   //   WaitHeap — cache missing; waiting for the heap gates to pass (rechecked each tick)
@@ -454,6 +462,13 @@ class EpubReaderActivity final : public Activity {
   bool pendingScreenshot = false;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool finishedBookActivityStarted_ = false;
+  // Armed by renderFinishedBookPass() (render task), consumed by loop() (loop task). The launch
+  // itself must not run on the render task: it ends in pushActivity(), which writes
+  // ActivityManager's pendingActivity/pendingAction — and loop() reads and std::move()s those
+  // with no lock at all, because the invariant they rely on is "only the loop task touches
+  // them", not "the render lock covers them". A unique_ptr assigned from one task while another
+  // moves it is a double-free waiting to happen.
+  bool finishedBookLaunchPending_ = false;
   ReaderUtils::InputDrainGuard inputDrainGuard;
   bool automaticPageTurnActive = false;
   // Pages turned in the current reader session. Used to gate auto-push-on-close: a brief
@@ -518,8 +533,11 @@ class EpubReaderActivity final : public Activity {
   RenderLayout computeRenderLayout() const;
   // Select which pass this render() invocation should run, from pending flags + reader state.
   RenderPass classifyRenderPass() const;
-  // FinishedBook pass: transition to the finished-book flow. Consumes the lock.
-  void renderFinishedBookPass(RenderLock& lock, int spineCount);
+  // FinishedBook pass: arm the transition to the finished-book flow. Runs under the render
+  // lock and keeps it; the launch itself is deferred to the loop task (see the pair below).
+  void renderFinishedBookPass(int spineCount);
+  // Loop-task half of renderFinishedBookPass(): performs the launch it armed.
+  void serviceFinishedBookLaunch();
   // PreRender pass (Background A): render the next page's content into the framebuffer only.
   void renderPreRenderPass(const RenderLayout& layout);
   // BufferDisplay pass: framebuffer already holds the next page; add status bar + flush.
@@ -714,6 +732,7 @@ class EpubReaderActivity final : public Activity {
   bool getEffectiveInlineFootnotePreviews() const;
   int getEffectiveReaderFontId() const;
   float getEffectiveReaderLineCompression() const;
+  void anchorNavTargetToCurrentPage();
   bool stepPageState(bool isForwardTurn);
   void pageTurn(bool isForwardTurn);
 #if ENABLE_BENCHMARKS
@@ -736,6 +755,28 @@ class EpubReaderActivity final : public Activity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&& lock) override;
+
+  // Hands Background-B's borrow back before a child activity (the reader menu and everything
+  // reachable from it) is pushed on top.
+  //
+  // While a child is on top the stack keeps this object alive but stops calling loop(), so B
+  // makes no progress — yet it still holds the display's secondary framebuffer as its build
+  // arena. With no differential baseline the driver promotes every FAST refresh to HALF
+  // (FreeInkDisplay::resolveRefreshMode), so each of the child's redraws costs ~1700 ms instead
+  // of ~500. Measured X4 2026-08-19: four consecutive menu redraws at 1755 ms each, back to
+  // 476 ms on the first refresh after the borrow was returned.
+  //
+  // Nothing is lost. This is the same endBackgroundBorrow() the first render after the overlay
+  // closes would call anyway (via recoverSecondaryBufferIfNeeded), only earlier — and it was
+  // frozen for the whole overlay regardless. A build still in flight is discarded and re-probed
+  // exactly as it would have been; a COMPLETED one survives for buildSection() to adopt, which
+  // is why this is not resetBackgroundBuild().
+  //
+  // Background-C is deliberately left alone: it builds the section the reader is waiting on, the
+  // buffer is released (not borrowed) to give that build headroom, and reclaiming it here would
+  // starve a build the user is actively waiting for. That case still degrades refreshes, and the
+  // DISP log now says so out loud.
+  void startActivityForResult(std::unique_ptr<Activity>&& activity, ActivityResultHandler resultHandler) override;
   bool isReaderActivity() const override { return true; }
   bool preventAutoSleep() override { return section && section->hasActiveBuild(); }
   // Hold full speed while a section build is in flight. A build only ever runs during reader

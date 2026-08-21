@@ -658,6 +658,11 @@ void HomeActivity::restoreSecondaryBuffer(bool callerHoldsRenderLock) {
 void HomeActivity::onEnter() {
   Activity::onEnter();
 
+  // The Lyra themes print a pace-based ETA badge on each recent book (UITheme::bookEtaSuffix),
+  // which is the one reading-stats consumer outside the settings screens. Load the history for
+  // as long as Home is on screen and release it on the way out — the reader must not inherit it,
+  // since that ~15 KB and its effect on the largest free block is what starves a section build.
+  statsLoad_.emplace();
   hasOpdsServers = OPDS_STORE.hasServers();
 
   selectorIndex = 0;
@@ -712,6 +717,7 @@ void HomeActivity::onEnter() {
 
 void HomeActivity::onExit() {
   Activity::onExit();
+  statsLoad_.reset();
   freeCoverBuffer();
   UITheme::getInstance().getMutableTheme().invalidateFrameCache();
   // Never hand the next activity a degraded display: if we exit mid-load (e.g. the

@@ -284,6 +284,10 @@ bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return (snapReleased_ & (
 
 bool HalGPIO::wasAnyReleased() const { return snapReleased_ != 0; }
 
+bool HalGPIO::isAnyPressed() const { return snapState_ != 0; }
+
+bool HalGPIO::isDebouncePending() const { return inputMgr.isDebouncePending(); }
+
 unsigned long HalGPIO::getHeldTime() const { return samplerRunning_ ? heldTimeSnapshot_ : inputMgr.getHeldTime(); }
 
 void HalGPIO::waitForStablePowerRelease() {
@@ -367,6 +371,10 @@ const char* HalGPIO::wakeVerdictName(WakeVerdict verdict) {
 
 HalGPIO::WakeCheck HalGPIO::verifyPowerButtonWakeup(WakeGestures gestures, uint16_t requiredDurationMs) {
   constexpr unsigned long BOUNCE_TOLERANCE_MS = 100;
+  // A second deliberate press can arrive well before the longer release
+  // confirmation window. Keep the decisions separate so a quick double-click
+  // is not misread as one continuous press.
+  constexpr unsigned long RELEASE_DEBOUNCE_MS = 30;
   constexpr unsigned long POLL_INTERVAL_MS = 10;
   // Mirrors ButtonEventManager::DOUBLE_WINDOW_MS so a double-click-to-sleep gesture
   // wakes on the same cadence it was configured with.
@@ -400,28 +408,31 @@ HalGPIO::WakeCheck HalGPIO::verifyPowerButtonWakeup(WakeGestures gestures, uint1
   // followed by a second press within DOUBLE_WINDOW_MS is a double click; otherwise it's
   // a short tap. Whichever it turns out to be, accept it only if that gesture is enabled.
   unsigned long lastSeenPressed = millis();
+  unsigned long releaseSeenAt = 0;
   while (true) {
     const unsigned long now = millis();
+    const uint16_t heldMs = stamp(lastSeenPressed - gateStart);
     if (digitalRead(InputManager::POWER_BUTTON_PIN) == LOW) {
+      if (releaseSeenAt != 0) {
+        if (gestures.doubleClick && now - releaseSeenAt >= RELEASE_DEBOUNCE_MS) {
+          return {WakeVerdict::DoubleClick, stamp(now), heldMs};
+        }
+        releaseSeenAt = 0;
+      }
       lastSeenPressed = now;
       if (gestures.longHold && now >= requiredDurationMs) {
         return {WakeVerdict::LongHold, stamp(now), stamp(now - gateStart)};
       }
-    } else if (now - lastSeenPressed >= BOUNCE_TOLERANCE_MS) {
-      // Released before the long-hold threshold. A double-click gesture gets one more
-      // chance: a second press within the window after this release.
-      const uint16_t heldMs = stamp(lastSeenPressed - gateStart);
+    } else {
+      if (releaseSeenAt == 0) releaseSeenAt = now;
+      const unsigned long releasedFor = now - releaseSeenAt;
       if (!gestures.doubleClick) {
-        return {WakeVerdict::ReleasedEarly, stamp(now), heldMs};
-      }
-      const unsigned long releaseTime = now;
-      while (millis() - releaseTime < DOUBLE_WINDOW_MS) {
-        if (digitalRead(InputManager::POWER_BUTTON_PIN) == LOW) {
-          return {WakeVerdict::DoubleClick, stamp(millis()), heldMs};
+        if (releasedFor >= BOUNCE_TOLERANCE_MS) {
+          return {WakeVerdict::ReleasedEarly, stamp(now), heldMs};
         }
-        delay(POLL_INTERVAL_MS);
+      } else if (releasedFor >= DOUBLE_WINDOW_MS) {
+        return {WakeVerdict::NoSecondPress, stamp(now), heldMs};
       }
-      return {WakeVerdict::NoSecondPress, stamp(millis()), heldMs};
     }
     delay(POLL_INTERVAL_MS);
   }

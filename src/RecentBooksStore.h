@@ -53,6 +53,11 @@ class RecentBooksStore {
   friend bool JsonSettingsIO::loadRecentBooks(RecentBooksStore&, const char*);
 
  public:
+  // Mini displays a 2x2 paged grid. Keep four complete pages in memory and
+  // on disk; this shared limit prevents loading from silently truncating the
+  // history to a different size than addBook().
+  static constexpr int MAX_RECENT_BOOKS = 16;
+
   ~RecentBooksStore() = default;
 
   // Get singleton instance

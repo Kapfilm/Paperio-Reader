@@ -353,8 +353,8 @@ CssLength CssParser::interpretLength(const std::string& val) {
   return result;
 }
 
-bool CssParser::tryInterpretLength(const std::string& val, CssLength& out) {
-  const std::string v = normalized(val);
+bool CssParser::tryInterpretLength(const std::string_view val, CssLength& out) {
+  const std::string v = normalized(std::string(val));
   if (v.empty()) {
     out = CssLength{};
     return false;
@@ -392,6 +392,22 @@ bool CssParser::tryInterpretLength(const std::string& val, CssLength& out) {
 
   out = CssLength{numericValue, unit};
   return true;
+}
+
+bool CssParser::interpretImageSize(const std::string_view v, CssLength& out) {
+  if (tryInterpretLength(v, out)) return true;
+
+  // `auto` has to CLEAR a length set earlier in the cascade, not be dropped as unparseable.
+  // `img { height: 100%; ...; height: auto; width: 100% }` is a common EPUB idiom (it is what
+  // sent us here): ignoring the `auto` left the 100% standing, so a wide picture got an image
+  // box the full height of the viewport and only the top of it was ever drawn.
+  // inherit is excluded on purpose: width/height are not inherited properties, so it is not
+  // equivalent to auto and we keep ignoring it.
+  if (v == "auto" || v == "initial" || v == "unset" || v == "revert") {
+    out = CssLength{0.0f, CssUnit::Auto};
+    return true;
+  }
+  return false;
 }
 
 // Declaration parsing
@@ -466,13 +482,13 @@ void CssParser::parseDeclarationIntoStyle(const std::string& decl, CssStyle& sty
     }
   } else if (propNameBuf == "height") {
     CssLength len;
-    if (tryInterpretLength(propValueBuf, len)) {
+    if (interpretImageSize(stripTrailingImportant(propValueBuf), len)) {
       style.imageHeight = len;
       style.defined.imageHeight = 1;
     }
   } else if (propNameBuf == "width") {
     CssLength len;
-    if (tryInterpretLength(propValueBuf, len)) {
+    if (interpretImageSize(stripTrailingImportant(propValueBuf), len)) {
       style.imageWidth = len;
       style.defined.imageWidth = 1;
     }

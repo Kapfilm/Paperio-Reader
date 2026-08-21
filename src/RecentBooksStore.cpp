@@ -11,7 +11,6 @@
 
 namespace {
 constexpr char RECENT_BOOKS_FILE_JSON[] = "/.crosspoint/recent.json";
-constexpr int MAX_RECENT_BOOKS = 10;
 }  // namespace
 
 RecentBooksStore RecentBooksStore::instance;
@@ -45,8 +44,8 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
   recentBooks.insert(recentBooks.begin(), std::move(newBook));
 
   // Trim to max size
-  if (recentBooks.size() > MAX_RECENT_BOOKS) {
-    recentBooks.resize(MAX_RECENT_BOOKS);
+  if (recentBooks.size() > RecentBooksStore::MAX_RECENT_BOOKS) {
+    recentBooks.resize(RecentBooksStore::MAX_RECENT_BOOKS);
   }
 
   saveToFile();

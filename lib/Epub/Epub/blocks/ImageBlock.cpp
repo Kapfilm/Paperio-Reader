@@ -1,5 +1,6 @@
 #include "ImageBlock.h"
 
+#include <BuildArena.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -41,7 +42,14 @@ bool ImageBlock::ensureExtracted() const {
   }
   LOG_DBG("IMG", "Lazy-extracting image: %s -> %s", epubEntryPath_.c_str(), imagePath.c_str());
   Epub epub(epubFilePath_, "/.crosspoint");
-  if (!epub.extractItemToFile(epubEntryPath_, imagePath)) {
+  // Extraction runs inside the reader's warm pass, which has already borrowed the secondary
+  // framebuffer as image_scratch for the decoders — but the ZIP inflate ring was the one 32 KB
+  // contiguous block in the image path still taken from the heap, and it is the first to fail
+  // when the heap is fragmented. Device-measured on X4 at contig=13300: every image on the page
+  // logged "Failed to init inflate reader" and rendered as nothing at all. The extract finishes
+  // and gives the block back before the decode starts, so the two never overlap in the arena.
+  BuildArena* const arena = image_scratch::canServe(Epub::EXTRACT_ARENA_BYTES) ? image_scratch::get() : nullptr;
+  if (!epub.extractItemToFile(epubEntryPath_, imagePath, arena)) {
     LOG_ERR("IMG", "Lazy extraction failed: %s", epubEntryPath_.c_str());
     return false;
   }
@@ -50,6 +58,25 @@ bool ImageBlock::ensureExtracted() const {
 }
 
 bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str()); }
+
+namespace image_scratch {
+namespace {
+BuildArena* g_arena = nullptr;
+}
+
+BuildArena* get() { return g_arena; }
+void set(BuildArena* arena) { g_arena = arena; }
+
+bool canServe(const size_t bytes) {
+  if (!g_arena || !g_arena->valid()) return false;
+  const size_t used = g_arena->used();
+  const size_t capacity = g_arena->capacity();
+  if (used >= capacity) return false;
+  const size_t remaining = capacity - used;
+  constexpr size_t ALIGN_SLACK = alignof(std::max_align_t);
+  return remaining >= bytes && remaining - bytes >= ALIGN_SLACK;
+}
+}  // namespace image_scratch
 
 namespace {
 

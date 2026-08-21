@@ -363,7 +363,7 @@ The **Sleep Screen** setting controls what is displayed when the device goes to 
 | **Custom** | A custom image from the SD card (see below). Falls back to **Dark** if no custom image is found. |
 | **Cover** | The cover of the currently open book. Falls back to **Dark** if no book is open. |
 | **Cover + Custom** | The cover of the currently open book. Falls back to **Custom** behavior if no book is open. |
-| **Page Overlay** | A transparent PNG composited over the current reader page — book content shows through the alpha channel. |
+| **Page Overlay** | A transparent PNG or 32-bit BGRA BMP composited over the current reader page — book content shows through the alpha channel. |
 | **Quick Resume** | A minimal screen; waking the device returns to reading immediately. |
 | **None** | A blank screen. |
 
@@ -385,9 +385,16 @@ To use custom sleep images, set the sleep screen mode to **Custom** or **Cover +
 - **Multiple Images (recommended):** Create a `.sleep` directory in the root of the SD card and place any number of `.bmp` or `.png` images inside. (A directory named `sleep` is also accepted as a fallback.)
 - **Single Image:** Place a file named `sleep.bmp` in the root directory. Used as fallback if no valid images are found in the `.sleep`/`sleep` directory.
 
+For transparent overlays, select **Page Overlay** and use one of these locations:
+
+- **Single overlay:** `/sleep-overlay.png` or `/sleep-overlay.bmp`.
+- **Multiple overlays:** `/.sleep-overlay` (recommended) or `/sleep-overlay`.
+- Existing transparent images in `/.sleep`, `/sleep`, `/sleep.png`, and `/sleep.bmp` remain supported for compatibility.
+
 > [!TIP]
 > For best results:
-> - Use PNG (with alpha channel for Page Overlay mode) or uncompressed BMP files with 24-bit color depth.
+> - For **Page Overlay**, use a PNG with alpha or an uncompressed 32-bit BGRA BMP. Partial alpha is dithered for the E-Ink panel.
+> - For ordinary **Custom** screens, use PNG or an uncompressed 24-bit BMP.
 > - Use a resolution of 480×800 pixels to match the device's screen resolution.
 
 ---

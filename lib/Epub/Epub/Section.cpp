@@ -26,12 +26,15 @@
 #include "Epub/css/CssParser.h"
 #include "FootnotePreviews.h"
 #include "Page.h"
+#include "blocks/ImageBlock.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 #include "parsers/PreviewBlockLocator.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION = 70;  // retain up to 32 footnote/cross-reference links per rendered page
+constexpr uint8_t SECTION_FILE_VERSION = 72;  // near-body block-level CSS font-size normalization
+                                              // v71: image boxes honour `auto` and keep the source aspect ratio
+                                              // v70: retain up to 32 footnote/cross-reference links per rendered page
                                               // v69: near-body font-size normalization
                                               // v68: main-text font-size baseline normalization
                                               // v67: drop-cap float zones and ink-metric placement
@@ -1515,9 +1518,26 @@ std::unique_ptr<Page> Section::loadPageFromActiveBuild(const uint16_t pageIndex)
   return page;
 }
 
+static constexpr size_t WARM_PASS_SCRATCH_BYTES = 32 * 1024 + 2 * 4096 + 256;
+
 void Section::warmAllImageCaches(const int xOffset, const int yOffset, const bool forceLoad,
                                  const bool monochromeOutput) {
   if (pageCount == 0) return;
+
+  BuildArena* lent = (externalScratch_ && externalScratch_->valid() && !hasActiveBuild()) ? externalScratch_ : nullptr;
+  std::unique_ptr<BuildArena> owned;
+  if (!lent) {
+    owned = makeUniqueNoThrow<BuildArena>(WARM_PASS_SCRATCH_BYTES);
+    if (!owned || !owned->valid()) {
+      owned.reset();
+      LOG_DBG("SCT", "warmAllImageCaches: no scratch arena (%u bytes); decoding from heap",
+              static_cast<uint32_t>(WARM_PASS_SCRATCH_BYTES));
+    }
+  }
+  BuildArena* scratchArena = lent ? lent : owned.get();
+  if (scratchArena) scratchArena->reset();
+  image_scratch::ScopedArena scratchScope(scratchArena);
+
   const int savedPage = currentPage;
   int warmed = 0;
   for (int p = 0; p < static_cast<int>(pageCount); ++p) {
@@ -1532,7 +1552,10 @@ void Section::warmAllImageCaches(const int xOffset, const int yOffset, const boo
   }
   currentPage = savedPage;
   if (warmed > 0) {
-    LOG_DBG("SCT", "warmAllImageCaches: warmed %d page(s) with images", warmed);
+    LOG_DBG("SCT", "warmAllImageCaches: warmed %d page(s) with images (scratch src=%s highWater=%u failedAlloc=%u)",
+            warmed, lent ? "lent" : (owned ? "heap" : "none"),
+            scratchArena ? static_cast<uint32_t>(scratchArena->highWater()) : 0u,
+            scratchArena ? static_cast<uint32_t>(scratchArena->failedAllocSize()) : 0u);
   }
 }
 

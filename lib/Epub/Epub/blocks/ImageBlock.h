@@ -6,6 +6,27 @@
 
 #include "Block.h"
 
+class BuildArena;
+
+// Shared, best-effort scratch arena used while warming a group of images.
+// Decoders and EPUB extraction fall back to the heap when no arena is installed.
+namespace image_scratch {
+BuildArena* get();
+void set(BuildArena* arena);
+bool canServe(size_t bytes);
+
+class ScopedArena {
+ public:
+  explicit ScopedArena(BuildArena* arena) : previous_(get()) { set(arena); }
+  ~ScopedArena() { set(previous_); }
+  ScopedArena(const ScopedArena&) = delete;
+  ScopedArena& operator=(const ScopedArena&) = delete;
+
+ private:
+  BuildArena* previous_;
+};
+}  // namespace image_scratch
+
 // Source pixel area above which an image is considered "large" and rendered
 // as a placeholder until the user explicitly requests it.
 // 800x600 covers most full-page illustrations that take >1s to dither on ESP32.
