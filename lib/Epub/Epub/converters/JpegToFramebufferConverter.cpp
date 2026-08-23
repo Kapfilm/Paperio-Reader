@@ -440,6 +440,12 @@ constexpr int32_t FP_MASK = FP_ONE - 1;
 // matching the engine's callback contract.
 int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int blockY, int validW, int blockH,
                   int stride) {
+  // Baseline JPEGs arrive one MCU block at a time. This is the smallest safe
+  // cancellation boundary and keeps an idle prewarm from delaying a button press.
+  if (CooperativeAbort::shouldAbortLongTask()) {
+    CooperativeAbort::markAborted();
+    return 0;
+  }
   JpegContext* ctx = &ctxRef;
 
   // Feed the interrupt WDT every block — large JPEGs can take many seconds.

@@ -155,6 +155,20 @@ bool PageTableFragment::hasUncachedImages(const bool forceLoad, const bool monoc
   return false;
 }
 
+bool PageTableFragment::warmFirstCellImage(GfxRenderer& renderer, const bool forceLoad,
+                                           const bool monochromeOutput) const {
+  for (const auto& row : rows) {
+    for (const auto& cell : row.cells) {
+      if (!cell.image || cell.image->wouldShowPlaceholder(forceLoad, monochromeOutput)) continue;
+      const bool cached = monochromeOutput ? cell.image->hasPixelCache() : cell.image->hasGrayscaleCache();
+      if (cached) continue;
+      cell.image->render(renderer, 0, 0, forceLoad, monochromeOutput);
+      return true;
+    }
+  }
+  return false;
+}
+
 void PageTableFragment::warmCellImages(GfxRenderer& renderer, const bool forceLoad, const bool monochromeOutput) const {
   for (const auto& row : rows) {
     for (const auto& cell : row.cells) {
@@ -315,6 +329,29 @@ void Page::warmImageCaches(GfxRenderer& renderer, const int xOffset, const int y
     static_cast<PageImage&>(*element).renderWithForceLoad(renderer, xOffset, yOffset, forceLoadLargeImages,
                                                           monochromeOutput);
   }
+}
+
+bool Page::warmFirstImageCache(GfxRenderer& renderer, const int xOffset, const int yOffset,
+                               const bool forceLoadLargeImages, const bool monochromeOutput) const {
+  for (auto& element : elements) {
+    if (CooperativeAbort::shouldAbortLongTask()) return false;
+    if (element->getTag() == TAG_PageTable) {
+      if (static_cast<const PageTableFragment&>(*element).warmFirstCellImage(renderer, forceLoadLargeImages,
+                                                                            monochromeOutput)) {
+        return true;
+      }
+      continue;
+    }
+    if (element->getTag() != TAG_PageImage) continue;
+    const auto& ib = static_cast<const PageImage&>(*element).getImageBlock();
+    if (ib.wouldShowPlaceholder(forceLoadLargeImages, monochromeOutput)) continue;
+    const bool cached = monochromeOutput ? ib.hasPixelCache() : ib.hasGrayscaleCache();
+    if (cached) continue;
+    static_cast<PageImage&>(*element).renderWithForceLoad(renderer, xOffset, yOffset, forceLoadLargeImages,
+                                                          monochromeOutput);
+    return true;
+  }
+  return false;
 }
 
 bool Page::hasPlaceholderImages(const bool forceLoadLargeImages, const bool monochromeOutput) const {

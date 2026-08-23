@@ -183,7 +183,8 @@ class Epub {
   ThumbResult generateThumbBmp(int width, int height, bool allowExtract = true, bool crop = true) const;
   uint8_t* readItemContentsToBytes(const std::string& itemHref, size_t* size = nullptr,
                                    bool trailingNullByte = false) const;
-  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize) const;
+  bool readItemContentsToStream(const std::string& itemHref, Print& out, size_t chunkSize,
+                                bool abortable = false) const;
   // Read up to maxBytes decompressed bytes from a ZIP entry — no SD write, header-only use.
   size_t readItemHeaderBytes(const std::string& itemHref, uint8_t* outBuf, size_t maxBytes) const;
   // Arena bytes one extractItemToFile() needs to keep its inflate ring off the heap:

@@ -13,6 +13,7 @@
 
 #include "EpubReaderActivity.h"
 
+#include <CooperativeAbort.h>
 #include <Epub/FootnotePreviews.h>
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
@@ -123,6 +124,11 @@ constexpr int PAGE_TURN_LABELS[] = {1, 1, 3, 6, 12};
 // reserves, and leaves X3 (which enters at 53-55 KB) ~10 KB of margin instead of ~2. The
 // transient is also held under RenderLock, so no other reader work can allocate into the dip.
 constexpr uint32_t PRE_RENDER_MIN_FREE_HEAP_BYTES = 44 * 1024;
+// Idle image warming deliberately keeps both display buffers resident. Start
+// only with enough total and contiguous headroom for a single streaming decoder;
+// a miss merely leaves the normal foreground image path unchanged.
+constexpr uint32_t BG_IMAGE_WARM_MIN_FREE_HEAP_BYTES = 64 * 1024;
+constexpr uint32_t BG_IMAGE_WARM_MIN_CONTIG_HEAP_BYTES = 28 * 1024;
 
 // Background B (next-section pre-build) heap gates. Unlike the foreground indexing path,
 // B runs with the secondary framebuffer live (~52 KB less headroom). Refuse rather than
@@ -2799,6 +2805,36 @@ void EpubReaderActivity::renderPreRenderPass(const RenderLayout& layout) {
     bgCounters_.aCompletes++;
 #endif
     LOG_DBG("ERS", "Pre-rendered page %d/%d in %lums", nextPage, section->pageCount - 1, preRenderDuration);
+  } else if (p && p->hasImages() && !buildActive) {
+    // Image pages cannot use the framebuffer pre-render fast path, but this same
+    // idle pass can safely prepare ONE nearest image cache. Keep the secondary
+    // framebuffer resident (no visible refresh or baseline change) and decline
+    // under pressure rather than disturbing the foreground reader.
+    const bool forceLoad = forceLoadLargeImages || !SETTINGS.largeImagePlaceholder;
+    if (p->hasUncachedImages(forceLoad, /*monochromeOutput=*/true) &&
+        !CooperativeAbort::shouldAbortLongTask()) {
+      const uint32_t warmFree = esp_get_free_heap_size();
+      const uint32_t warmContig = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
+      if (warmFree >= BG_IMAGE_WARM_MIN_FREE_HEAP_BYTES && warmContig >= BG_IMAGE_WARM_MIN_CONTIG_HEAP_BYTES) {
+        const int viewportHeight = std::max(0, renderer.getScreenHeight() - layout.marginTop - layout.marginBottom);
+        const int contentTop = layout.marginTop + getImageOnlyPageYOffset(*p, viewportHeight);
+        CooperativeAbort::clearAborted();
+        imageProcessingActive_ = true;
+        const unsigned long warmStart = millis();
+        const bool attempted = p->warmFirstImageCache(renderer, layout.marginLeft, contentTop, forceLoad,
+                                                       /*monochromeOutput=*/true);
+        const bool aborted = CooperativeAbort::consumeAborted();
+        imageProcessingActive_ = false;
+        renderer.clearScreen();  // decoder output is scratch; only its .pxc cache is retained
+        if (attempted) {
+          LOG_DBG("ERS", "Background image warm page=%d %s in %lums", nextPage,
+                  aborted ? "cancelled" : "finished", millis() - warmStart);
+        }
+      } else {
+        LOG_DBG("ERS", "Background image warm skipped: free=%lu contig=%lu",
+                static_cast<unsigned long>(warmFree), static_cast<unsigned long>(warmContig));
+      }
+    }
   }
   checkHeapIntegrity("after_prerender");
 }

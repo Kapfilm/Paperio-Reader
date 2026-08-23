@@ -118,6 +118,9 @@ class PageTableFragment final : public PageElement {
   // In-cell graphics participate in the Page-level image passes below.
   bool hasImages() const;
   bool hasUncachedImages(bool forceLoad, bool monochromeOutput) const;
+  // Warm at most one missing cell-image cache. Returns true when an image was
+  // attempted, even if cooperative cancellation stopped its decoder.
+  bool warmFirstCellImage(GfxRenderer& renderer, bool forceLoad, bool monochromeOutput) const;
   // Decode any missing cell-image pixel caches. Position is irrelevant to the cache
   // (it is position-independent); images are warmed at the origin and the framebuffer
   // garbage is discarded by the caller's clearScreen(), mirroring the Page warm pass.
@@ -169,6 +172,11 @@ class Page {
   // monochromeOutput selects which cache variant to warm (BW or grayscale).
   void warmImageCaches(GfxRenderer& renderer, int xOffset, int yOffset, bool forceLoadLargeImages,
                        bool monochromeOutput = true) const;
+  // Decode at most the first eligible uncached image on this page. This bounded
+  // variant is used only by the idle next-page warmer; unlike warmImageCaches it
+  // never walks on to a second image after completing or cancelling the first.
+  bool warmFirstImageCache(GfxRenderer& renderer, int xOffset, int yOffset, bool forceLoadLargeImages,
+                           bool monochromeOutput = true) const;
   bool hasPlaceholderImages(bool forceLoadLargeImages, bool monochromeOutput) const;
   bool allImagesArePlaceholders(bool forceLoadLargeImages, bool monochromeOutput) const;
   bool serialize(FsFile& file) const;

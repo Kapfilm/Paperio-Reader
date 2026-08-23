@@ -1,6 +1,7 @@
 #include "PngToFramebufferConverter.h"
 
 #include <BitmapHelpers.h>
+#include <CooperativeAbort.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -299,11 +300,23 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
   // later view (and before PixelCache::FILL_BYTE that fill was black). Pulling also makes an
   // upscale replicate rows instead of leaving gaps between them.
   for (int dstY = 0; dstY < dstHeight; dstY++) {
+    if (CooperativeAbort::shouldAbortLongTask()) {
+      LOG_DBG("PNG", "Aborting framebuffer decode at row %d for pending input", dstY);
+      CooperativeAbort::markAborted();
+      ok = false;
+      break;
+    }
     const int outY = config.y + dstY;
     if (outY >= screenHeight) break;
 
     const int wantSrcY = (int)((int64_t)dstY * srcHeight / dstHeight);
     while (decodedSrcY < wantSrcY) {
+      if (CooperativeAbort::shouldAbortLongTask()) {
+        LOG_DBG("PNG", "Aborting framebuffer inflate at source row %d for pending input", decodedSrcY + 1);
+        CooperativeAbort::markAborted();
+        ok = false;
+        break;
+      }
       // Only the row about to be drawn needs its pixels. The ones a downscale collapses still
       // have to be inflated — DEFLATE is sequential — but not converted.
       const bool needPixels = (decodedSrcY + 1 == wantSrcY);

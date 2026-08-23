@@ -32,7 +32,16 @@ bool isMinimalTheme() {
   return static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme) == CrossPointSettings::UI_THEME::MINIMAL;
 }
 
-int gridColumns() { return isMinimalTheme() ? 2 : RecentBooksActivity::GRID_COLS; }
+bool isLyraTheme() {
+  const auto theme = static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme);
+  return theme == CrossPointSettings::UI_THEME::LYRA || theme == CrossPointSettings::UI_THEME::LYRA_3_COVERS ||
+         theme == CrossPointSettings::UI_THEME::LYRA_CAROUSEL;
+}
+
+// Mini and every Lyra variant share the same cover-only 2x2 recent-books grid.
+bool usesCompactCoverGrid() { return isMinimalTheme() || isLyraTheme(); }
+
+int gridColumns() { return usesCompactCoverGrid() ? 2 : RecentBooksActivity::GRID_COLS; }
 
 int gridThumbWidth(int contentWidth) {
   const int margin = RecentBooksActivity::GRID_THUMB_MARGIN;
@@ -61,14 +70,17 @@ GridGeometry gridGeometry(const GfxRenderer& renderer) {
   const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
   const int margin = RecentBooksActivity::GRID_THUMB_MARGIN;
 
-  if (isMinimalTheme()) {
+  if (usesCompactCoverGrid()) {
     constexpr int rows = 2;
     constexpr int columns = 2;
     constexpr int outerMargin = 12;
     constexpr int cellGap = 12;
     constexpr int labelHeight = 0;
-    constexpr int coverHorizontalInset = 6;
-    constexpr int coverVerticalInset = 4;
+    // These dimensions intentionally differ from the previous Mini crop cache,
+    // so the first visit generates fresh contain-mode thumbnails instead of
+    // replaying already-cropped files from 2.24-Kf.
+    constexpr int coverHorizontalInset = 7;
+    constexpr int coverVerticalInset = 5;
     // Cover-only 2x2 grid: contain-mode thumbnails use the space formerly
     // reserved for titles and progress while keeping their original aspect ratio.
     const int slotWidth = (contentRect.width - outerMargin * 2 - cellGap) / columns;
@@ -109,15 +121,6 @@ std::string gridThumbPath(const std::string& coverBmpPath, int tw, int th) {
   return UITheme::getCoverThumbPath(coverBmpPath, tw, th);
 }
 
-bool thumbHasExactSize(const std::string& path, int width, int height) {
-  FsFile file;
-  if (!Storage.openFileForRead("RBA", path, file)) return false;
-  Bitmap bitmap(file);
-  const bool exact = bitmap.parseHeaders() == BmpReaderError::Ok && bitmap.isComplete() &&
-                     bitmap.getWidth() == width && bitmap.getHeight() == height;
-  file.close();
-  return exact;
-}
 }  // namespace
 
 void RecentBooksActivity::loadRecentBooks() {
@@ -133,12 +136,12 @@ void RecentBooksActivity::loadRecentBooks() {
 
 bool RecentBooksActivity::loadNextCover() {
   const GridGeometry geometry = gridGeometry(renderer);
-  // Generate the artwork at its final dimensions. In Mini this deliberately
-  // center-crops unusual aspect ratios so every tile has the same clean cover
-  // rectangle while the existing 2x2 structure remains unchanged.
+  // Mini and Lyra use a fixed 2x2 outer frame, but the artwork is fitted inside
+  // it with its original aspect ratio. This keeps every tile the same size
+  // without cutting off wide, narrow, or unusually proportioned covers.
   const int tw = geometry.storedThumbWidth;
   const int th = geometry.storedThumbHeight;
-  const bool cropCover = true;
+  const bool cropCover = !usesCompactCoverGrid();
 
   // ── Cover extract session tick ───────────────────────────────────────────────
   if (extractSession) {
@@ -207,13 +210,6 @@ bool RecentBooksActivity::loadNextCover() {
     // (written below) is also a complete exact-size BMP, so it passes here and is treated as a
     // resolved cover — no re-opening the EPUB three times per scan to rediscover it has no cover.
     bool valid = ReaderActivity::isCoverThumbComplete(thumbPath, tw, th);
-    // Older Mini builds used contain mode and intentionally accepted smaller
-    // thumbnails. Remove those once so they are regenerated as uniform tiles.
-    if (valid && isMinimalTheme() && !thumbHasExactSize(thumbPath, tw, th)) {
-      LOG_DBG("RBA", "Mini thumb is not exact %dx%d — regenerating: %s", tw, th, thumbPath.c_str());
-      Storage.remove(thumbPath.c_str());
-      valid = false;
-    }
     if (!valid) {
       const bool ok = (ReaderActivity::ensureCoverThumb(book.path, tw, th, cropCover) == ThumbResult::Ok);
       const bool wasPostFailure = pngSessionFailed;
@@ -555,16 +551,12 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
                                          const int tw, const int th, const int storedThumbWidth,
                                          const int storedThumbHeight, const int labelHeight) {
   const auto& book = recentBooks[index];
-  const bool minimal = isMinimalTheme();
+  const bool compact = usesCompactCoverGrid();
   const int labelY = cellY + th + 3;
   const int cellFillHeight = th + labelHeight + (labelHeight > 0 ? 3 : 0);
-  int renderedCoverX = 0;
-  int renderedCoverY = 0;
-  int renderedCoverWidth = 0;
-  int renderedCoverHeight = 0;
 
-  if (minimal) {
-    // Selection in Minimal is an outline; never invert the card or its cover.
+  if (compact) {
+    // Selection in Mini/Lyra is an outline; never invert the card or its cover.
     renderer.fillRect(cellX, cellY, tw, cellFillHeight, false);
   } else if (selected) {
     renderer.fillRect(cellX, cellY, tw, cellFillHeight);
@@ -603,13 +595,6 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
           // shows through in the surrounding space.
           renderer.fillRect(cellX + offsetX, cellY + offsetY, rendW, rendH, false);
           renderer.drawBitmap1Bit(bmp, cellX + offsetX, cellY + offsetY, rendW, rendH);
-          renderedCoverX = cellX + offsetX;
-          renderedCoverY = cellY + offsetY;
-          renderedCoverWidth = rendW;
-          renderedCoverHeight = rendH;
-          if (minimal && !selected) {
-            renderer.drawRect(cellX + offsetX - 1, cellY + offsetY - 1, rendW + 2, rendH + 2, true);
-          }
           thumbDrawn = true;
         }
       }
@@ -630,7 +615,7 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
 
   // Reading-progress overlay on the cover: bottom-edge bar while in progress,
   // folded corner when finished, nothing for unread books.
-  if (!minimal) {
+  if (!compact) {
     const int progressPercent =
         (index >= 0 && index < static_cast<int>(bookProgress.size())) ? bookProgress[index] : -1;
     UITheme::drawCoverProgressIndicator(renderer, Rect{cellX, cellY, tw, th}, progressPercent);
@@ -638,25 +623,31 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
 
   if (labelHeight > 0) {
     // Label: title line 1, author line 2; white text on black for selected, black on white otherwise.
-    const bool black = minimal || !selected;
-    const int textInset = minimal ? 8 : 2;
+    const bool black = compact || !selected;
+    const int textInset = compact ? 8 : 2;
     const int labelWidth = tw - textInset * 2;
     std::string titleStr = renderer.truncatedText(SMALL_FONT_ID, book.title.c_str(), labelWidth);
     renderer.drawText(SMALL_FONT_ID, cellX + textInset, labelY, titleStr.c_str(), black);
-    if (!minimal && !book.author.empty()) {
+    if (!compact && !book.author.empty()) {
       std::string authorStr = renderer.truncatedText(SMALL_FONT_ID, book.author.c_str(), labelWidth);
       renderer.drawText(SMALL_FONT_ID, cellX + textInset, labelY + 17, authorStr.c_str(), black);
     }
   }
 
-  if (selected && minimal && renderedCoverWidth > 0 && renderedCoverHeight > 0) {
-    // One continuous two-pixel stripe, tight against the actual contained
-    // artwork. It follows narrow and wide covers instead of framing the cell.
+  if (compact) {
+    // The frame is always the same size; only the artwork inside it changes
+    // proportions. This gives narrow and wide originals an orderly 2x2 layout
+    // without stretching or cropping them.
+    renderer.drawRect(cellX, cellY, tw, th, true);
+  }
+
+  if (selected && compact) {
+    // One continuous two-pixel selection stripe around the uniform outer frame.
     constexpr int selectionWidth = 2;
-    const int frameX = renderedCoverX - selectionWidth;
-    const int frameY = renderedCoverY - selectionWidth;
-    const int frameWidth = renderedCoverWidth + selectionWidth * 2;
-    const int frameHeight = renderedCoverHeight + selectionWidth * 2;
+    const int frameX = cellX;
+    const int frameY = cellY;
+    const int frameWidth = tw;
+    const int frameHeight = th;
     renderer.fillRect(frameX, frameY, frameWidth, selectionWidth);
     renderer.fillRect(frameX, frameY + frameHeight - selectionWidth, frameWidth, selectionWidth);
     renderer.fillRect(frameX, frameY + selectionWidth, selectionWidth, frameHeight - selectionWidth * 2);
@@ -680,7 +671,7 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
   auto cellPos = [&](int i, int& cx, int& cy) {
     const int row = (i / geometry.columns) - pageStartRow;
     const int col = i % geometry.columns;
-    const int outerMargin = isMinimalTheme() ? geometry.topGap : geometry.margin;
+    const int outerMargin = usesCompactCoverGrid() ? geometry.topGap : geometry.margin;
     cx = contentRect.x + outerMargin + col * (geometry.slotWidth + geometry.margin) +
          (geometry.slotWidth - geometry.displayThumbWidth) / 2;
     cy = contentTop + geometry.topGap + row * geometry.rowStride;
@@ -737,7 +728,7 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
   }
 
   // Scroll arrows when content spans multiple pages
-  if (totalRows > visibleRows && !isMinimalTheme()) {
+  if (totalRows > visibleRows && !usesCompactCoverGrid()) {
     constexpr int arrowSize = 6;
     const int centerX = contentRect.x + contentRect.width / 2;
     if (pageStartRow > 0) {
@@ -756,7 +747,7 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
   }
 
   // On X4 (taller screen) there is room for a one-line gesture hint below the grid.
-  if (!gpio.deviceIsX3() && !isMinimalTheme()) {
+  if (!gpio.deviceIsX3() && !usesCompactCoverGrid()) {
     const int hintY = contentRect.y + contentRect.height - metrics.verticalSpacing - 14;
     const std::string hint = std::string(tr(STR_DIR_UP)) + "+L: " + tr(STR_VIEW_GRID) + "/" + tr(STR_VIEW_LIST) +
                              "   " + tr(STR_DIR_LEFT) + "+L: " + tr(STR_REMOVE) + "   " + tr(STR_DIR_RIGHT) +

@@ -30,6 +30,33 @@
 
 namespace {
 
+// Restrict cooperative cancellation to lazy image extraction. ZipFile remains
+// a generic reader (metadata/CSS parsing must not abort because a button happens
+// to be queued); this sink checks once per decompressed output chunk instead.
+class AbortablePrint final : public Print {
+ public:
+  explicit AbortablePrint(Print& target) : target_(target) {}
+
+  size_t write(const uint8_t value) override {
+    if (shouldAbort()) return 0;
+    return target_.write(value);
+  }
+
+  size_t write(const uint8_t* buffer, const size_t size) override {
+    if (shouldAbort()) return 0;
+    return target_.write(buffer, size);
+  }
+
+ private:
+  Print& target_;
+
+  static bool shouldAbort() {
+    if (!CooperativeAbort::shouldAbortLongTask()) return false;
+    CooperativeAbort::markAborted();
+    return true;
+  }
+};
+
 // Wrapper around ImageFormatDetector that reads from file and seeks to origin
 ImageFormatDetector::Format detectCoverImageFormat(FsFile& imageFile) {
   if (!imageFile || !imageFile.seek(0)) {
@@ -1311,7 +1338,8 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
   return content;
 }
 
-bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize) const {
+bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, const size_t chunkSize,
+                                    const bool abortable) const {
   if (itemHref.empty()) {
     LOG_DBG("EBP", "Failed to read item, empty href");
     return false;
@@ -1320,7 +1348,9 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
   const std::string path = FsHelpers::normalisePath(itemHref);
   ZipFile zip(filepath);
   primeZip(zip);
-  const bool ok = zip.readFileToStream(path.c_str(), out, chunkSize);
+  AbortablePrint abortableOut(out);
+  Print& sink = abortable ? static_cast<Print&>(abortableOut) : out;
+  const bool ok = zip.readFileToStream(path.c_str(), sink, chunkSize);
   adoptZipDetails(zip);
   return ok;
 }
@@ -1353,6 +1383,10 @@ bool Epub::readItemContentsToStreamWithArena(const std::string& itemHref, Print&
   uint8_t buffer[512];
   bool done = false;
   while (!done) {
+    if (CooperativeAbort::shouldAbortLongTask()) {
+      CooperativeAbort::markAborted();
+      return false;
+    }
     size_t produced = 0;
     if (!reader.step(buffer, sizeof(buffer), &produced, &done)) {
       LOG_ERR("EBP", "Arena extract failed mid-stream: %s", path.c_str());
@@ -1373,7 +1407,7 @@ bool Epub::extractItemToFileOnce(const std::string& itemHref, const std::string&
     return false;
   }
   const bool ok = arena ? readItemContentsToStreamWithArena(itemHref, destFile, arena)
-                        : readItemContentsToStream(itemHref, destFile, 1024);
+                        : readItemContentsToStream(itemHref, destFile, 1024, /*abortable=*/true);
   destFile.flush();
   destFile.close();
   if (!ok) Storage.remove(destPath.c_str());
@@ -1384,6 +1418,7 @@ bool Epub::extractItemToFile(const std::string& itemHref, const std::string& des
   if (itemHref.empty() || destPath.empty()) return false;
   if (arena) {
     if (extractItemToFileOnce(itemHref, destPath, arena)) return true;
+    if (CooperativeAbort::wasAborted()) return false;
     // EntryReader does NOT fall back to the heap once it has been given an arena — a short
     // arena just makes open() fail. Retry on the heap so passing one can only ever add a way
     // to succeed. extractItemToFileOnce() removed the partial file, so this starts clean.
