@@ -63,14 +63,26 @@ def get_git_branch(project_dir: str) -> str:
 def get_version_string(project_dir: str) -> (str, str):
     env_name = os.environ.get("CROSSPOINT_NAME")
     env_version = os.environ.get("CROSSPOINT_VERSION")
-    if env_version:
-        return env_name.strip('"'), env_version.strip('"')
     base_name, base_version = get_base_version(project_dir)
+    resolved_name = env_name.strip('"') if env_name else base_name
+    if env_version:
+        return resolved_name, env_version.strip('"')
+
+    # PlatformIO pre-scripts do not automatically export CPP defines to one
+    # another. Honour the same CI variables as git_branch.py so the embedded
+    # web interface reports the exact firmware release/RC version too.
+    release_version = os.environ.get("CROSSPOINT_RELEASE_VERSION")
+    if release_version:
+        return resolved_name, release_version.strip('"')
+    rc_version = os.environ.get("CROSSPOINT_RC_VERSION")
+    if rc_version:
+        return resolved_name, rc_version.strip('"')
+
     pioenv = os.environ.get("PIOENV", "default")
     if pioenv == "default":
         branch = get_git_branch(project_dir)
-        return base_name, f"{base_version}-dev+{branch}"
-    return base_name, base_version
+        return resolved_name, f"{base_version}-dev+{branch}"
+    return resolved_name, base_version
 
 
 def replace_placeholders(html: str, replacements: dict) -> str:

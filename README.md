@@ -1,310 +1,49 @@
-# Witch(hunt) Reader
+# <img src="assets/ptipo-reader-robot.png" width="42" height="42" alt="PtiPo robot"> PtiPo Reader
 
-> [!IMPORTANT]
-> ## Форк Kapfilm (`Kf`)
->
-> Это пользовательский форк [Witch Reader](https://github.com/jpirnay/witchhunt-reader)
-> для XTEINK X3/X4. Он сохраняет возможности исходной прошивки и добавляет работу
-> с важными фрагментами текста в EPUB.
->
-> **Что добавлено и изменено в Kf-форке:**
->
-> ### Новое в 2.21.12-Kf
->
-> - в теме **«Мини»** недавние книги показаны аккуратной сеткой 2×2 только из
->   увеличенных обложек — без названий и шкал чтения;
-> - обложки JPEG и PNG целиком вписываются в доступное место с сохранением
->   пропорций, без обрезки и растягивания;
-> - выбранная книга выделяется одной сплошной рамкой точно по краю обложки;
-> - на X4 устранено постоянное чёрное мигание после тяжёлых EPUB и переходов по
->   сноскам, когда прошивке временно не удаётся восстановить второй буфер экрана;
-> - повтор синхронизации времени после сетевой ошибки больше не удерживает
->   блокировку отрисовки и не приводит к зависанию интерфейса.
->
-> ### Новое в 2.21.10-Kf
->
-> - устранены чёрные мигания при переходе по сноскам и параллельным местам:
->   внутриглавные ссылки используют готовую карту якорей без повторной индексации;
-> - для короткого адресного предпросмотра больше не показывается промежуточное
->   полноэкранное окно «Индексирование» и не выполняется лишний прогрев изображений;
-> - если якорь расположен внутри строки, примечание открывается с начала содержащего
->   его абзаца, как в CrossInk 1.5;
-> - кэши предпросмотра отделены от обычных вариантов разметки, поэтому недавно
->   открытые сноски не вытесняются после нескольких переходов или изменений настроек;
-> - сохранена совместимость с современными `id` и устаревшими `<a name="…">`;
-> - исправлен базовый номер версии локальных и release-candidate сборок Kf-форка.
->
-> ### Новое в 2.21.9-Kf
->
-> - при отметке страницы в верхнем правом углу чтения появляется заметная
->   визуальная закладка-лента; она отображается при любом размере шрифта;
-> - в теме **«Мини»** выбранные строки получили контрастную чёрную подсветку,
->   а активная вкладка больше не закрывается серой заливкой;
-> - часы добавлены в левую часть главного экрана темы «Мини»;
-> - реализован разумный режим точного времени: прошивка корректирует ход часов
->   и обновляет время по NTP не чаще раза в сутки, используя уже активное
->   соединение Wi-Fi и не включая радио специально;
-> - после сна и во время сетевых операций просроченное или приблизительное
->   время синхронизируется автоматически;
-> - улучшена работа со сносками и параллельными местами в больших EPUB, включая
->   Библию: сохраняется до 32 ссылок на странице, а выбранная ссылка внутри той
->   же главы открывается вверху отдельной страницы;
-> - устранены переходы к началу главы при обработке насыщенных ссылками страниц.
->
-> ### Выделение текста
->
-> - три вида выделения: серый маркер, подчёркивание и чёрный маркер с белым текстом;
-> - разные виды выделения можно одновременно использовать в одной книге;
-> - выбор вида выделения непосредственно в меню ридера и перед запуском
->   назначаемого действия **«Выделить текст»**;
-> - выделение текста сплошным маркером, включая промежутки между словами;
-> - выбор начала и конца фрагмента с перемещением боковыми кнопками по строкам;
-> - продолжение выделения текста на следующей странице книги;
-> - сохранение нескольких выделений отдельно для каждой книги;
-> - раздел **«Выделения»** с полным многострочным текстом, удалением и переходом
->   к сохранённому месту;
-> - последовательный список всех выделений с полными заголовками глав и
->   восстановлением слов, разорванных переносом;
-> - точный переход к странице и позиции выделенного текста, а не к началу главы;
-> - назначаемое действие **«Выделить текст»** в настройках управления;
-> - оптимизированное хранение и отображение больших списков выделений;
-> - адаптивное выделение при нехватке памяти: две страницы при достаточном
->   объёме памяти или текущая страница в экономном режиме.
->
-> ### Сноски и навигация
->
-> - переход по номеру сноски открывает именно выбранное примечание;
-> - примечание начинается вверху отдельной страницы, а не среди соседних сносок;
-> - для сносок в отдельном файле создаётся экономный адресный предпросмотр до трёх
->   страниц с возвратом к исходному месту чтения;
-> - поддержаны современные EPUB-якоря, старые `<a name="…">` и распространённые
->   обозначения сносок из EPUB, преобразованных из FB2;
-> - список примечаний запоминает выбранный номер при возврате к той же странице;
-> - URI-кодированные якоря корректно сопоставляются с целями внутри EPUB.
->
-> ### Чтение и шрифты
->
-> - настраиваемый межстрочный интервал от **70% до 200%**: передние кнопки
->   изменяют значение на 1%, боковые — на 10%;
-> - отдельное переопределение межстрочного интервала для каждой книги с
->   возможностью вернуться к глобальному значению;
-> - размер Noto Sans **18** («Очень большой») в общих настройках и в
->   переопределениях книги;
-> - встроенный Noto Sans в размерах 12, 14, 16 и 18;
-> - удалены неиспользуемые Bookerly и Noto Sans 10 для уменьшения прошивки;
-> - исправлено отображение Noto Sans среднего и большого размера.
->
-> ### Интерфейс и стабильность
->
-> - тема интерфейса **«Мини»**, перенесённая из
->   [CrossInk](https://github.com/uxjulia/CrossInk);
-> - карточное меню темы «Мини» с нумерацией, разделителями и контрастным
->   выделением выбранного пункта;
-> - увеличенная обложка текущей книги на основном экране темы «Мини»;
-> - раздел недавних книг в виде крупной сетки **2×2** на всю ширину экрана:
->   без подписей и шкал прогресса, с качественными обложками и прокруткой вниз;
-> - выбранная книга в сетке темы «Мини» отмечается контрастной двойной рамкой;
-> - нижняя кнопка **«Книги»** открывает недавние книги, а файловый браузер
->   остаётся доступен в меню;
-> - выход из книги, открытой из недавних в теме «Мини», возвращает на основной экран;
-> - исправлены наложения заголовков, вкладок и системной информации в теме «Мини»;
-> - убраны лишние стрелки перед названием левой нижней кнопки во всех раскладках;
-> - длинные подписи кнопок сокращены только там, где они не помещались;
-> - исправлен двойной шаг боковых кнопок в числовых настройках;
-> - устранена ложная ошибка памяти при выборе маркера или подчёркивания;
-> - диагностическое предупреждение об усечённой главе больше не закрывает первые
->   строки книги при каждом открытии;
-> - исправлена перезагрузка прошивки при выходе из списка Wi-Fi-сетей;
-> - сохранено родное название прошивки, суффикс `Kf` добавляется к номеру версии;
->
-> ### Обновления
->
-> - собственные OTA-обновления из релизов `Kapfilm/witchhunt-reader`;
-> - автоматическая сборка и публикация `firmware.bin` для новых версий `*-Kf`.
->
-> **Скачать прошивку:** [последний релиз](https://github.com/Kapfilm/witchhunt-reader/releases/latest)
-> · [firmware.bin](https://github.com/Kapfilm/witchhunt-reader/releases/latest/download/firmware.bin)
->
-> Последнюю версию Kf необходимо установить вручную один раз. После этого следующие
-> версии форка можно устанавливать штатно по Wi-Fi.
+Прошивка для электронных книг **XTEINK X3 и X4**.
 
-This firmware is based on the [crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader) for the XTEINK X3/X4, a great piece of software by Dave Allie and others.
+Версия **1.0** полностью сохраняет возможности проверенного релиза
+`2.24.3-Kf`, но начинает новую линейку PtiPo Reader без суффикса `Kf`.
 
+## Возможности
 
-# What this reader does differently
-- Speed - rendering should be *fast*
-- CSS layout - a lot of effort have gone into rendering 
-- Memory - where others fail Witch Reader still works
-- Proper KOReader Snychronisation
-- Additional sleep screens support (information overlay, transparent pictures over current reader screen)
-- Clock-Support for X4 and X3
-- Weather information panel
-- Multiple under-the-hood performance improvements
-- Book information screen
-- Markdown-support
-- WiFi captive portal support
-- Supporting ~~strikethrough~~, superscript / subscript and tables
-- Support for used defined actions on double-click / long-click per button 
-- Background preprocessing of sections, so hopefully you will see fewer of the infamous "Indexing" messages
-- A lot of smaller quality of life improvements 
+- EPUB, TXT, XTC/XTC-H и Markdown.
+- Быстрый рендеринг, фоновая индексация и осторожный прогрев ближайшего изображения.
+- Сноски, оглавление, переходы по ссылкам и возврат к месту чтения.
+- CSS, таблицы, плавающие изображения, переносы, надстрочный и подстрочный текст.
+- Пользовательские шрифты и единое окно настроек текста с живым предпросмотром.
+- Темы Mini и Lyra; недавние книги и библиотека с сеткой обложек 2×2.
+- Закладки, именованные страницы, выделения и общий список закладок всех книг.
+- Статистика чтения, часы, погода и синхронизация KOReader.
+- Настраиваемые короткие, двойные и долгие нажатия кнопок.
+- Прозрачные заставки сна, информационный слой и белый фон быстрого и полного сна.
+- Wi-Fi, веб-доступ к файлам, установка прошивки с SD-карты и обновление по воздуху.
 
-# What this reader doesn't
-* Great UI design is not necessarily/obviously not a forte of mine, so if you look for a polished look and feel, I would recommend going e.g. to [CrossInk](https://github.com/uxjulia/crossink), a great piece of work by uxJulia
-* Support for CJK (Chinese Japanese Korean) - look at https://github.com/aBER0724/crosspoint-reader-cjk
-* Right-to-left rendering support (Hebrew, Arabic) - choose the original [CrossPoint](https://github.com/crosspoint-reader/crosspoint-reader) firmware
-* The most memory efficient reader might still be [MicroReader](https://github.com/CidVonHighwind/microreader) by CidVonHighwind
+## Установка и обновление
 
-All of them have their strengths and constraints (as has Witch reader), so they deserve a testrun before you decide which one is right for you
+Первую версию PtiPo Reader установите вручную файлом `firmware.bin`.
+Последующие версии можно устанавливать на устройстве через:
 
+`Настройки → Система → Обновление прошивки`
 
-# Feature comparison with CrossPoint
+- [Последний релиз](https://github.com/Kapfilm/witchhunt-reader/releases/latest)
+- [Скачать firmware.bin](https://github.com/Kapfilm/witchhunt-reader/releases/latest/download/firmware.bin)
 
-A feature-by-feature comparison of **Witch Reader** against its ancestor,
-**[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)**, focused on what
-a user actually sees and does on the device.
+## Сборка
 
-> **Snapshot of 2026-06-19.** Both projects are under active and dynamic development, so individual
-> rows may change quickly — treat this as a point-in-time picture rather than a guarantee. The
-> entries were verified against the current source of both projects rather than commit history,
-> since the two have effectively diverged.
+```sh
+pio run -e gh_release
+```
 
-Legend: ✅ supported · ⚠️ partial / basic · ❌ not supported.
+Релиз создаётся тегом с номером версии, например `1.0`. GitHub Actions собирает
+и прикладывает `firmware.bin`; этот же файл используется для OTA-обновления.
 
-## Rendering & Typography
+## Основа проекта
 
-| Feature | Witch Reader | CrossPoint |
-| --- | :---: | :---: |
-| Floating images / text wrap around figures | ✅ left/right float, text wraps beside figure | ❌ falls back to block placement |
-| Tables | ✅ real grid (colspan, header cells, multi-column) | ⚠️ flattened to text ("Row X, Cell Y:") |
-| Images inside tables | ✅ | ❌ |
-| Small-caps (`font-variant`) | ✅ | ❌ |
-| Strikethrough (`line-through`) | ✅ rendered | ❌ parsed but never drawn |
-| Superscript / subscript | ✅ | ✅ |
-| Underline | ✅ | ✅ |
-| CSS `line-height` | ✅ | ❌ |
-| CSS `font-size` scaling (em/rem/%) | ✅ | ❌ |
-| CSS margin collapsing | ✅ proper collapsing | ✅ proper collapsing |
-| GIF images | ✅ custom decoder | ❌ JPEG + PNG only |
-| JPEG / PNG decode | ✅ TJpgDec (IRAM) + uzlib PNG | ✅ JPEGDEC + PNGdec |
-| Large-image placeholders & tall-image cropping | ✅ | ❌ |
-| Grayscale image caches | ✅ | ⚠️ minimal |
-| Heading fonts (h1–h3) | ✅ crisp taller real fonts | ⚠️ single font size per block |
-| Horizontal rules | ✅ | ✅ |
-| Hyphenation (9 languages) | ✅ | ✅ |
-| Bionic / focus reading | ✅ | ✅ |
-| Anti-aliasing toggle | ✅ (+ fast AA, max-darkness mode) | ✅ |
-| Markdown (`.md`) rendering | ✅ headings, tables, HR, code, lists, TOC | ❌ shown as raw plain text |
-| **Right-to-left / BiDi (Hebrew, Arabic)** | ❌ **not supported** | ✅ full BiDi + Hebrew font + CSS `direction` |
-| Drop caps | ✅ float-zone initials, top-aligned | ❌ |
+PtiPo Reader продолжает проверенную кодовую базу
+[Witch Reader](https://github.com/jpirnay/witchhunt-reader), основанную на
+[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader), и
+использует [FreeInk SDK](https://github.com/Free-Ink/freeink-sdk).
 
-## Reading Experience, Library & Navigation
-
-| Feature | Witch Reader | CrossPoint |
-| --- | :---: | :---: |
-| Background prerendering | ✅  | ❌ |
-| Background indexing | ✅ (up to 3 sections ahead during reading pauses, not obstructing the reading experience) | ⚠️ (next section during the last 5 pages, partially blocking the reader) |
-| Custom fonts | ✅  | ✅ |
-| Sizes per font family | 4 | 3 |
-| SD font rendering | ✅ on-demand glyph from memory | ⚠️ on demand-glyph from SD-card |  
-| File browser sorting (name / date / size / type, asc/desc) | ✅ | ❌ name-only, fixed |
-| File context menu (open, mark-read, info, set sleep screen, flash `.bin`…) | ✅ | ❌ open / delete only |
-| Large-folder handling (SD-backed index, bounded RAM) | ✅ | ❌ all in RAM |
-| Cover carousel home view | ✅ | ❌ |
-| Cover-grid Recent Books view | ✅ | ❌ plain text list |
-| Book Info screen (metadata, cover, paged description) | ✅ | ❌ |
-| Global (cross-book) bookmarks | ✅ jump into any book at a page | ❌ |
-| Named starred pages | ✅ custom names | ⚠️ unnamed progress snapshots |
-| Reading statistics (streaks, time, pages/min, per-book ETA, sparkline) | ✅ | ❌ |
-| Interactive "finished book" flow (open next, series detection, move folder) | ✅ | ⚠️ passive screen |
-| Jump to printed page | ✅ | ❌ |
-| Jump to percent | ✅ | ✅ |
-| Quick per-book overrides while reading (font, images, hyphenation, bionic…) | ✅ | ❌ |
-| Footnotes | ✅ richer navigation, inline expansion | ✅ |
-| TOC / chapter selection | ✅ | ✅ |
-| Browser breadcrumb footer + continuous page-jump | ❌ dropped | ✅ |
-
-## System, Settings, Network & Input
-
-| Feature | Witch Reader | CrossPoint |
-| --- | :---: | :---: |
-| Clock on X4 | ✅ software clock (X3 **and** X4) | ❌ X3 only (DS3231 hardware RTC) |
-| Weather panel (Open-Meteo, forecast, 48h graph) | ✅ from Home menu | ❌ |
-| Timezone auto-detect (IP geolocation + DST) | ✅ | ⚠️ l offset picker |
-| Time sync (NTP) | ✅ | ✅ (X3) |
-| Sleep screens: transparent overlay over reader page | ✅ | ✅ since 1.6.0rc |
-| Sleep screens: PNG/BMP with alpha | ✅ | ✅ since 1.6.0rc |
-| Sleep screens: info overlay (title/chapter/page/percent) | ✅ | ❌ |
-| Sleep screens: sequential image pick | ✅ | ⚠️ random only |
-| KOReader sync | ✅ auto bidirectional, on-device settings, differential refresh | ⚠️ proper sync + automatic resolution, no on-device registration |
-| Per-button custom actions (23 actions × short/double/long) | ✅ + overview screen | ❌ physical remap + a few toggles |
-| Captive-portal login (client detect + QR to authorize) | ✅ | ❌ AP-side only |
-| System information screen | ✅ | ❌ |
-| OTA / SD firmware update | ✅ | ✅ |
-| Categorized settings submenus | ✅ | ⚠️ flat list |
-| OPDS / Calibre / web upload | ✅ (+ format badges, signal widget, streaming) | ✅ |
-| USB file transfer (serial protocol, Calibre plugin, `serial_cmd.py`) | ✅ wire-compatible with MicroReader | ❌ |
-| USB file manager plugin (Total/Double Commander WFX, [x4-filemanager-plugin](https://github.com/jpirnay/x4-filemanager-plugin)) | ✅ | ❌ |
-| Memory management | ✅ lean libraries, more on demand memory | ⚠️ limited memory management |
-
-## At a glance
-
-**Choose Witch Reader for:** speed, richer CSS and typography (floats, real tables, small-caps,
-strikethrough, line-height), GIF and better image handling, Markdown, a weather panel, a clock on
-the X4, reading statistics, global bookmarks, a cover carousel, fully customizable per-button
-gestures, automatic KOReader sync, and a deeper settings/system surface.
-
-**Choose CrossPoint for:** right-to-left languages (Hebrew / Arabic) — the one user-facing
-capability Witch Reader genuinely lacks — plus  a
-couple of small browser-navigation conveniences. It is also the leaner, simpler codebase.
-
-# Rendering comparisons
-Rendering examples from [Alice in Wonderland](https://www.gutenberg.org/ebooks/28885)
-| Item 	|Witch Reader |	Micro Reader 1) 2) | CrossPoint |	Stock |
-| --- | --- | --- | --- | --- |
-| Floating images 1 | <img src="docs/images/comparison/01_leftfig.png">  | <img src="docs/images/comparison/01_leftfig_mr.png"> | <img src="docs/images/comparison/01_leftfig_cpr.png">   |    |
-| Floating images 2 | <img src="docs/images/comparison/02_rightfig.png">  | <img src="docs/images/comparison/02_rightfig_mr.png">   | <img src="docs/images/comparison/02_rightfig_cpr.png">   |    |
-| CSS Rendering | <img src="docs/images/comparison/03_render.png"> <br> <img width="480" height="800" alt="screen" src="https://github.com/user-attachments/assets/ee11c062-b3cf-4543-8954-7e45f77ba772" /> | <img src="docs/images/comparison/03_render_mr.png">  | <img src="docs/images/comparison/03_render_cpr.png"> |    |
-| Graphics | <img src="docs/images/comparison/04_graphic.png">  | <img src="docs/images/comparison/04_graphic_mr.png">  | <img src="docs/images/comparison/04_graphic_cpr.png">  |    |
-| Images in tables | <img src="docs/images/comparison/05_tablegraphic.png">  | <img src="docs/images/comparison/05_tablegraphic_mr.png">  | <img src="docs/images/comparison/05_tablegraphic_cpr.png">  |    |
-
-1) Apologies for the poor image quality of the microreader screenshots, i needed to make photos with my mobile, as I couldn't figure out how to create screenshots from within the reader
-   
-2) The Rendering of the Mouse poem in MicroReader is even more refined, it manages to deal with different font sizes, too
-
-# Attributions
-If in doubt consider all the work being done here based on the work of others - especially crosspoint reader (as the ancestor of this version) and microreader have been a great source of inspiration.
-
-## Project ancestry & inspiration
-- **crosspoint-reader** by Dave Allie and others — the direct ancestor this firmware is forked from. https://github.com/crosspoint-reader/crosspoint-reader (MIT).
-- **MicroReader** by CidVonHighwind — a source of inspiration, and still the most memory-efficient reader for the X4. https://github.com/CidVonHighwind/microreader
-  - The **USB serial file transfer** feature ([`lib/SerialTransfer`](lib/SerialTransfer), `SerialTransferActivity`) is a clean-room, wire-compatible reimplementation of MicroReader's serial protocol — independently written from its `tools/serial_cmd.py`, with no firmware code copied — so MicroReader's host tools (its Calibre device plugin and `serial_cmd.py`) work against this firmware too. Full credit to CidVonHighwind for the original protocol and host tooling.
-- **FreeInk SDK** - the shared X3/X4 hardware/display/utility libraries, included as a submodule. https://github.com/Free-Ink/freeink-sdk (to which we contributed our buffer memory management, the split display update cycle and some other goodies we previously had in our own sdk, see below)
-- **CrossPoint XDK** (No longer used, but ancestry) — the shared X3/X4 hardware/display/utility libraries, included as a submodule. https://github.com/jpirnay/crosspoint-xdk (modified fork of https://github.com/crosspoint-reader/community-sdk ).
-
-## Vendored third-party components (`lib/`)
-These are bundled directly in the repository. Each retains its upstream copyright header in source.
-
-- **TJpgDec — Tiny JPEG Decompressor** by ChaN (R0.03) — baseline-JPEG decode engine for the EPUB image path. http://elm-chan.org/fsw/tjpgd/ — Copyright (C) 2021 ChaN, BSD-1-Clause. Vendored under [`lib/TJpgDec`](lib/TJpgDec); modified from upstream in `tjpgdcnf.h` (config + the `JD_FASTPATH` IRAM macro) and `tjpgd.c` (the `JD_FASTPATH` annotations on the hot decode functions, plus a `BYTECLIP` clamp on the grayscale output path fixing an upstream wrap-around bug — black speckle in high-contrast covers when `JD_FASTDECODE≥1`); `tjpgd.h` is verbatim.
-- **yxml** by Yoran Heling — the XML/HTML SAX parser backend (`SaxParser`), used by the EPUB and OPDS parsers. https://dev.yorhel.nl/yxml — Copyright (c) 2013-2014 Yoran Heling, MIT. Vendored under [`lib/SaxParser`](lib/SaxParser).
-- **uzlib** by Joergen Ibsen and Paul Sokolovsky — tiny DEFLATE/inflate, used for ZIP/EPUB extraction and PNG inflate. https://github.com/pfalcon/uzlib — Copyright (c) 2003 Joergen Ibsen, (c) 2014-2018 Paul Sokolovsky, zlib license. Vendored under [`lib/uzlib`](lib/uzlib).
-- **QR-Code-generator (qrcodegen)** by Project Nayuki — QR code generation. https://github.com/nayuki/QR-Code-generator — Copyright (c) Project Nayuki, MIT. Vendored under [`lib/QRCode`](lib/QRCode).
-
-## External libraries (PlatformIO `lib_deps`)
-Pulled from the PlatformIO registry at build time.
-
-- **ArduinoJson** by Benoît Blanchon — JSON parsing/serialization. https://github.com/bblanchon/ArduinoJson — MIT.
-- **arduinoWebSockets** by Markus Sattler — WebSocket client (KOReader sync). https://github.com/Links2004/arduinoWebSockets — LGPL-2.1.
-
-# Why this name
-Originally this fork was called CrossPoint++ - it had a small userbase and then I made an honest mistake by reusing the crosspoint fork, providing ample reference in the PRs and the release notes of code origin and authorship but was losing the github commit author information in the progress when I copied code over instead of taking the tedious (and correct) way of cherrypicking the original commit and post-cleanup effort.
-
-Another crosspoint developer approached me pointing this flaw out and I agreed to change the future integration work. What I did not care for was that persons attitude and way of communicating, and I told him so.
-
-Then all hell broke lose, ending up in insults, harassment and plain lies in other forums without even caring for feedback (a good cause for any lawsuit for slander). So I took the repo down and just continued the development for my own benefit.
-
-Still I wanted others to benefit from my progress, so here we are again:
-
-Witch(hunt) Reader (name for obvious reasons) 
-
-- So if you are one of those who felt poorly appreciated: please accept my apologies, that was never my intent, and I have taken a lot of effort to replace code / to properly attribute the origin of code or ideas
-- If you are one of those who felt the need to raise a witchhunt, to lie, to libel: just go away - trolls aren't welcome here or more clearly: F*** OFF
+Проект распространяется по лицензии [MIT](LICENSE). Авторские уведомления и
+лицензии используемых компонентов сохранены в исходном коде.
