@@ -2,8 +2,7 @@
 
 Прошивка для электронных книг **XTEINK X3 и X4**.
 
-Версия **1.0** полностью сохраняет возможности проверенного релиза
-`2.24.3-Kf`, но начинает новую линейку PtiPo Reader без суффикса `Kf`.
+Текущая стабильная версия — **1.0**.
 
 ## Возможности
 
@@ -26,8 +25,8 @@
 
 `Настройки → Система → Обновление прошивки`
 
-- [Последний релиз](https://github.com/Kapfilm/witchhunt-reader/releases/latest)
-- [Скачать firmware.bin](https://github.com/Kapfilm/witchhunt-reader/releases/latest/download/firmware.bin)
+- [Последний релиз](https://github.com/Kapfilm/PtiPo-Reader/releases/latest)
+- [Скачать firmware.bin](https://github.com/Kapfilm/PtiPo-Reader/releases/latest/download/firmware.bin)
 
 ## Сборка
 
