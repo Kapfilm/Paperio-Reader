@@ -52,6 +52,10 @@ jobs:
           name: Witch Reader ${{ github.ref_name }}
           generate_release_notes: true
           make_latest: true
+          # A hardware-tested firmware.bin may already be attached manually.
+          # Keep it byte-for-byte intact instead of replacing it with the CI
+          # build, whose release flags can change e-ink sleep timing.
+          overwrite_files: false
           files: |
             .pio/build/gh_release/bootloader.bin
             .pio/build/gh_release/firmware.bin
