@@ -31,6 +31,9 @@ class SdCardFontSystem {
   void ensureLoaded(GfxRenderer& renderer, const char* familyName, uint8_t fontSizeEnum,
                     const std::function<void()>& onColdLoad = {});
 
+  /// Load a font only for the settings preview, without writing flash cache.
+  void ensureLoadedForPreview(GfxRenderer& renderer, const char* familyName, uint8_t fontSizeEnum);
+
   /// Resolve an SD card font ID from family name + fontSize enum.
   /// Returns 0 if not found. Used by CrossPointSettings::getReaderFontId().
   int resolveFontId(const char* familyName, uint8_t fontSizeEnum) const;

@@ -183,6 +183,45 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
 
   loadedFamilyName_ = family.name;
   loadedPointSize_ = selected->pointSize;
+  previewLoad_ = false;
+  return true;
+}
+
+bool SdCardFontManager::loadFamilyPreview(const SdCardFontFamilyInfo& family, GfxRenderer& renderer,
+                                          uint8_t targetPtSize) {
+  if (!renderer_) renderer_ = &renderer;
+  if (!loadedFamilyName_.empty()) unloadAll(renderer);
+
+  const SdCardFontFileInfo* selected = family.pickClosestSize(targetPtSize);
+  if (!selected) {
+    LOG_ERR("SDMGR", "Family %s has no files to preview", family.name.c_str());
+    return false;
+  }
+
+  auto* font = new (std::nothrow) SdCardFont();
+  if (!font) return false;
+  if (!font->load(selected->path.c_str())) {
+    LOG_ERR("SDMGR", "Failed to load preview %s", selected->path.c_str());
+    delete font;
+    return false;
+  }
+
+  const int fontId = computeFontId(font->contentHash(), family.name.c_str(), selected->pointSize);
+  if (renderer.getFontMap().count(fontId) != 0) {
+    LOG_ERR("SDMGR", "Preview font ID %d collides with an existing font", fontId);
+    delete font;
+    return false;
+  }
+
+  renderer.registerSdCardFont(fontId, font);
+  loaded_.push_back({font, fontId, selected->pointSize});
+  EpdFontFamily fontFamily(font->getEpdFont(0), font->getEpdFont(1), font->getEpdFont(2), font->getEpdFont(3));
+  renderer.insertFont(fontId, fontFamily);
+
+  loadedFamilyName_ = family.name;
+  loadedPointSize_ = selected->pointSize;
+  previewLoad_ = true;
+  LOG_DBG("SDMGR", "Preview loaded directly from SD: %s@%u", family.name.c_str(), selected->pointSize);
   return true;
 }
 
@@ -196,6 +235,7 @@ void SdCardFontManager::unloadAll(GfxRenderer& renderer) {
   loaded_.clear();
   loadedFamilyName_.clear();
   loadedPointSize_ = 0;
+  previewLoad_ = false;
   if (FlashFontPartition::isMapped()) FlashFontPartition::unmap();
 }
 

@@ -2,6 +2,9 @@
 
 #include <GfxRenderer.h>
 
+#include <cstdint>
+#include <string>
+
 #include "../Activity.h"
 #include "util/ButtonNavigator.h"
 
@@ -23,9 +26,15 @@ class FontSelectionActivity final : public Activity {
 
  private:
   void handleSelection();
+  void loadPreview(int index);
+  void restoreActiveFont();
+  void renderPreviewPane(int top, int height, int fontId, const char* fontName) const;
+  uint8_t targetFontSize() const;
 
   ButtonNavigator buttonNavigator;
   int selectedIndex = 0;
+  int previewIndex = 0;
+  int previewFontId = 0;
   uint8_t fontCount = 0;
   Target target;
 };

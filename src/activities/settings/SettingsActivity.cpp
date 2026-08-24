@@ -23,6 +23,20 @@ std::string activeDictionaryName(void*) {
   return SETTINGS.dictionaryName[0] == '\0' ? std::string(tr(STR_DICT_AUTOMATIC))
                                             : std::string(SETTINGS.dictionaryName);
 }
+
+bool isUnifiedTextSetting(const SettingInfo& setting) {
+  if (!setting.key) return false;
+  static constexpr const char* keys[] = {
+      "fontFamily",          "fontSize",          "textAntiAliasing",    "fastAntiAliasingV2",
+      "textDarkness",        "paragraphAlignment", "embeddedStyle",       "hyphenationEnabled",
+      "fontSizeNormalization", "screenMargin",     "lineHeightPercent",    "extraParagraphSpacing",
+      "bionicReading",
+  };
+  for (const char* key : keys) {
+    if (std::strcmp(setting.key, key) == 0) return true;
+  }
+  return false;
+}
 }  // namespace
 
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
@@ -82,8 +96,14 @@ void SettingsActivity::onEnter() {
     insertedFontDownload = true;
   };
 
+  addToMoved(readerSettings, lastReaderSub,
+             std::move(SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings)
+                           .withSubcategory(StrId::STR_MENU_READER_FONT)));
+  insertFontDownloadBelowFontSection();
+
   for (const auto& setting : getSettingsList()) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
+    if (setting.category == StrId::STR_CAT_READER && isUnifiedTextSetting(setting)) continue;
     if (setting.category == StrId::STR_CAT_SYSTEM &&
         (setting.nameId == StrId::STR_USE_CLOCK || setting.nameId == StrId::STR_CLOCK_FORMAT ||
          setting.nameId == StrId::STR_TIMEZONE)) {

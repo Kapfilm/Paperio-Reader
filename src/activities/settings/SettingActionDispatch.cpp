@@ -20,6 +20,7 @@
 #include "SwitchToUsbDriveActivity.h"
 #include "SyncTimeActivity.h"
 #include "SystemInformationActivity.h"
+#include "TextSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/weather/WeatherSettingsActivity.h"
 
@@ -50,6 +51,8 @@ std::unique_ptr<Activity> createActivityForAction(SettingAction action, GfxRende
       return std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput);
     case SettingAction::SwitchToUsbDrive:
       return std::make_unique<SwitchToUsbDriveActivity>(renderer, mappedInput);
+    case SettingAction::TextSettings:
+      return std::make_unique<TextSettingsActivity>(renderer, mappedInput);
     case SettingAction::Language:
       return std::make_unique<LanguageSelectActivity>(renderer, mappedInput);
     case SettingAction::Weather:

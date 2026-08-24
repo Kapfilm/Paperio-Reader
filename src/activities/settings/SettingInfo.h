@@ -36,6 +36,7 @@ enum class SettingAction {
   RefreshFrequencyPicker,
   DictionarySelection,
   SwitchToUsbDrive,
+  TextSettings,
   Submenu,
 };
 

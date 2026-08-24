@@ -37,6 +37,14 @@ namespace {
 
 constexpr uint8_t MIN_VISIBLE_OVERLAY_ALPHA = 8;
 
+// X4's HALF waveform visibly inverts the whole panel three times. Always use
+// the differential FAST waveform for its final sleep frame; SleepActivity
+// independently forces panel power-off, so sleep quality no longer depends on
+// a persisted compensation flag. X3 keeps its balanced HALF waveform.
+HalDisplay::RefreshMode finalSleepRefreshMode(const GfxRenderer& renderer) {
+  return renderer.isX3() ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+}
+
 struct OverlayBmpInfo {
   int width = 0;
   int height = 0;
@@ -412,7 +420,7 @@ bool renderPngSleepScreen(const std::string& filename, GfxRenderer& renderer, co
   // Fire the BW scrub without waiting: the waveform runs on the controller's own RAM,
   // so the LSB decode below (CPU/SD-only work) overlaps it. copyGrayscaleLsbBuffers()
   // drains the pending finish before its SPI plane write.
-  renderer.triggerDisplayAsync(HalDisplay::HALF_REFRESH);
+  renderer.triggerDisplayAsync(finalSleepRefreshMode(renderer));
 
   // Passes 2 and 3 replay the cache when one is available; the render mode selects
   // which bit-plane each cached 2-bit value lands in, so no re-decode is needed.
@@ -519,6 +527,11 @@ size_t pickSleepImageIndex(size_t numFiles) {
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
+  // The sleep frame must never leave the panel's analog power enabled: on X4
+  // that makes an otherwise white background drift visibly gray. Force the
+  // renderer's existing turn-off path for this terminal activity regardless
+  // of whether the persisted fading-compensation setting was restored.
+  renderer.setFadingFix(true);
   RenderLock lock(*this);
 
   // Quick Resume: paint a moon icon over the current page and keep the framebuffer
@@ -648,7 +661,7 @@ void SleepActivity::renderDefaultSleepScreen() const {
     renderer.invertScreen();
   }
 
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  renderer.displayBuffer(finalSleepRefreshMode(renderer));
 }
 
 BookOverlayInfo SleepActivity::getBookOverlayInfo(const std::string& bookPath) const {
@@ -901,12 +914,12 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
   drawOverlay();
 
   if (!hasGreyscale) {
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    renderer.displayBuffer(finalSleepRefreshMode(renderer));
   } else {
     // Fire the BW scrub without waiting: the waveform runs on the controller's own RAM,
     // so the LSB draw below (CPU/SD-only work) overlaps it. copyGrayscaleLsbBuffers()
     // drains the pending finish before its SPI plane write.
-    renderer.triggerDisplayAsync(HalDisplay::HALF_REFRESH);
+    renderer.triggerDisplayAsync(finalSleepRefreshMode(renderer));
     bitmap.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
@@ -1004,7 +1017,7 @@ void SleepActivity::renderCoverSleepScreen() const {
 
 void SleepActivity::renderBlankSleepScreen() const {
   renderer.clearScreen();
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  renderer.displayBuffer(finalSleepRefreshMode(renderer));
 }
 
 void SleepActivity::renderLastScreenSleepScreen() const {
@@ -1013,7 +1026,7 @@ void SleepActivity::renderLastScreenSleepScreen() const {
   // it before the boot screen would otherwise paint.
   const auto pageHeight = renderer.getScreenHeight();
   renderer.drawImage(MoonIcon, 0, pageHeight - MOONICON_HEIGHT, MOONICON_WIDTH, MOONICON_HEIGHT);
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  renderer.displayBuffer(finalSleepRefreshMode(renderer));
 }
 
 void SleepActivity::renderOverlaySleepScreen() const {
@@ -1210,5 +1223,5 @@ void SleepActivity::renderOverlaySleepScreen() const {
   }
 
   renderer.setOrientation(savedOrientation);
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  renderer.displayBuffer(finalSleepRefreshMode(renderer));
 }

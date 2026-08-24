@@ -138,7 +138,9 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
     }
     const auto* best = family->pickClosestSize(targetPt);
     const uint8_t bestPt = best ? best->pointSize : 0;
-    if (bestPt == manager_.currentPointSize()) return;  // already loaded with the right size
+    if (bestPt == manager_.currentPointSize() && !manager_.isPreviewLoad()) {
+      return;  // already loaded with the right size through the normal cache path
+    }
     LOG_DBG("SDFS", "Reloading %s: size %u -> %u (target %u)", wantedFamily, manager_.currentPointSize(), bestPt,
             targetPt);
   }
@@ -184,7 +186,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, const char* wantedFam
       return;
     }
     const auto* best = family->pickClosestSize(targetPt);
-    if (best && best->pointSize == manager_.currentPointSize()) return;
+    if (best && best->pointSize == manager_.currentPointSize() && !manager_.isPreviewLoad()) return;
   }
 
   if (!currentFamily.empty()) manager_.unloadAll(renderer);
@@ -194,6 +196,25 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer, const char* wantedFam
     if (!manager_.loadFamily(*family, renderer, targetPt, onColdLoad)) {
       LOG_ERR("SDFS", "Failed to load SD font family: %s", wantedFamily);
     }
+  }
+}
+
+void SdCardFontSystem::ensureLoadedForPreview(GfxRenderer& renderer, const char* wantedFamily,
+                                              uint8_t fontSizeEnum) {
+  const uint8_t targetPt = targetPtSizeFromEnum(fontSizeEnum);
+  if (!wantedFamily || wantedFamily[0] == '\0') {
+    if (!manager_.currentFamilyName().empty()) manager_.unloadAll(renderer);
+    return;
+  }
+
+  const auto* family = registry_.findFamily(wantedFamily);
+  if (!family) return;
+  const auto* best = family->pickClosestSize(targetPt);
+  if (manager_.currentFamilyName() == wantedFamily && best && best->pointSize == manager_.currentPointSize()) return;
+
+  if (!manager_.currentFamilyName().empty()) manager_.unloadAll(renderer);
+  if (!manager_.loadFamilyPreview(*family, renderer, targetPt)) {
+    LOG_ERR("SDFS", "Failed to load preview font family: %s", wantedFamily);
   }
 }
 

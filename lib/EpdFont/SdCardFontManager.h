@@ -27,6 +27,11 @@ class SdCardFontManager {
   bool loadFamily(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t targetPtSize,
                   const std::function<void()>& onColdLoad = {});
 
+  // Load only the requested size directly from SD for a temporary settings
+  // preview. This deliberately bypasses the flash cache so browsing fonts
+  // cannot erase/rewrite the font partition and stall the controls.
+  bool loadFamilyPreview(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t targetPtSize);
+
   // Unload everything, unregister from renderer.
   void unloadAll(GfxRenderer& renderer);
 
@@ -41,6 +46,8 @@ class SdCardFontManager {
   // 0 if nothing loaded.
   uint8_t currentPointSize() const { return loadedPointSize_; };
 
+  bool isPreviewLoad() const { return previewLoad_; }
+
  private:
   struct LoadedFont {
     SdCardFont* font;  // heap-allocated, owned
@@ -52,5 +59,6 @@ class SdCardFontManager {
   GfxRenderer* renderer_ = nullptr;
   std::string loadedFamilyName_;
   uint8_t loadedPointSize_ = 0;
+  bool previewLoad_ = false;
   std::vector<LoadedFont> loaded_;
 };
