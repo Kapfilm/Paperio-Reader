@@ -4,7 +4,7 @@
 #include <string>
 
 #ifndef CROSSPOINT_GIT_REPOSITORY
-#define CROSSPOINT_GIT_REPOSITORY "Kapfilm/PtiPo-Reader"
+#define CROSSPOINT_GIT_REPOSITORY "Kapfilm/Paperio-Reader"
 #endif
 
 class OtaUpdater {

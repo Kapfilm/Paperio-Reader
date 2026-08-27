@@ -2,7 +2,7 @@ _language_name: "Català"
 _language_code: "CA"
 _order: "9"
 
-STR_CROSSPOINT: "PtiPo Reader"
+STR_CROSSPOINT: "Paperio Reader"
 STR_BOOTING: "ARRENCANT"
 STR_SLEEPING: "ENTRANT EN REPÒS"
 STR_ENTERING_SLEEP: "Entrant en repòs"

@@ -234,7 +234,7 @@ esp_err_t performKoRequest(const char* method, const std::string& url, const cha
   // payloads, so the small-buffer intent of the old 1 KB config is naturally met.
   http->setCACert(CROSSPOINT_ROOTS_PEM);
   http->setTimeout(5000);
-  http->setUserAgent("PtiPoReader-ESP32-" CROSSPOINT_VERSION);
+  http->setUserAgent("PaperioReader-ESP32-" CROSSPOINT_VERSION);
   http->clearHeaders();
   applyAuthHeaders(*http);
   if (contentType && *contentType) {

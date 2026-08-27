@@ -36,7 +36,7 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
-      - name: Build PtiPo Reader
+      - name: Build Paperio Reader
         env:
           CROSSPOINT_RELEASE_VERSION: ${{ github.ref_name }}
         run: pio run -e gh_release
@@ -44,12 +44,15 @@ jobs:
       - name: Patch min_chip_rev_full to 0
         run: python3 scripts/patch_min_chip_rev.py .pio/build/gh_release/firmware.bin
 
+      - name: Create branded firmware asset
+        run: cp .pio/build/gh_release/firmware.bin ".pio/build/gh_release/firmware-Paperio-Reader-${{ github.ref_name }}.bin"
+
       - name: Upload release assets
         if: ${{ env.ACT != 'true' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: PtiPo Reader ${{ github.ref_name }}
+          name: Paperio Reader ${{ github.ref_name }}
           generate_release_notes: true
           make_latest: true
           # A hardware-tested firmware.bin may already be attached manually.
@@ -59,6 +62,7 @@ jobs:
           files: |
             .pio/build/gh_release/bootloader.bin
             .pio/build/gh_release/firmware.bin
+            .pio/build/gh_release/firmware-Paperio-Reader-${{ github.ref_name }}.bin
             .pio/build/gh_release/firmware.elf
             .pio/build/gh_release/firmware.map
             .pio/build/gh_release/partitions.bin

@@ -1,7 +1,7 @@
-# <img src="assets/ptipo-reader-robot.png" width="42" height="42" alt="PtiPo robot"> PtiPo Reader
+# <img src="assets/paperio-reader-robot.png" width="42" height="42" alt="Paperio robot"> Paperio Reader
 
 <p align="center">
-  <img src="assets/screenshots/home.jpg" width="23%" alt="Главный экран PtiPo Reader">
+  <img src="assets/screenshots/home.jpg" width="23%" alt="Главный экран Paperio Reader">
   <img src="assets/screenshots/recent-books.jpg" width="23%" alt="Недавние книги в сетке 2×2">
   <img src="assets/screenshots/highlights.jpg" width="23%" alt="Три варианта выделения текста">
   <img src="assets/screenshots/text-settings.jpg" width="23%" alt="Настройки текста с предпросмотром">
@@ -9,7 +9,7 @@
 
 Прошивка для электронных книг **XTEINK X3 и X4**.
 
-Текущая стабильная версия — **1.0**.
+Текущая стабильная версия — **1.1.0**.
 
 ## Возможности
 
@@ -39,7 +39,7 @@
 
 ## Словари
 
-PtiPo Reader поддерживает словари **StarDict**. Распакуйте каждый словарь в
+Paperio Reader поддерживает словари **StarDict**. Распакуйте каждый словарь в
 отдельную папку на SD-карте:
 
 ```text
@@ -74,15 +74,15 @@ PtiPo Reader поддерживает словари **StarDict**. Распак�
 AliExpress), поставляются с заводской USB-блокировкой. Если ваше устройство
 заблокировано, вам нужно будет воспользоваться инструментом
 [Xteink Unlocker](https://crosspointreader.com/#unlock-tool), прежде чем вы
-сможете прошить PtiPo Reader.
+сможете прошить Paperio Reader.
 
-Первую версию PtiPo Reader установите вручную файлом `firmware.bin`.
+Первую версию Paperio Reader установите вручную файлом `firmware.bin`.
 Последующие версии можно устанавливать на устройстве через:
 
 `Настройки → Система → Обновление прошивки`
 
-- [Последний релиз](https://github.com/Kapfilm/PtiPo-Reader/releases/latest)
-- [Скачать firmware.bin](https://github.com/Kapfilm/PtiPo-Reader/releases/latest/download/firmware.bin)
+- [Последний релиз](https://github.com/Kapfilm/Paperio-Reader/releases/latest)
+- [Скачать firmware.bin](https://github.com/Kapfilm/Paperio-Reader/releases/latest/download/firmware.bin)
 
 ## Сборка
 
@@ -90,12 +90,12 @@ AliExpress), поставляются с заводской USB-блокиров
 pio run -e gh_release
 ```
 
-Релиз создаётся тегом с номером версии, например `1.0`. GitHub Actions собирает
-и прикладывает `firmware.bin`; этот же файл используется для OTA-обновления.
+Релиз создаётся тегом с номером версии, например `1.1.0`. GitHub Actions прикладывает
+`firmware-Paperio-Reader-1.1.0.bin` и совместимую с OTA копию `firmware.bin`.
 
 ## Основа проекта
 
-PtiPo Reader продолжает проверенную кодовую базу
+Paperio Reader продолжает проверенную кодовую базу
 [Witch Reader](https://github.com/jpirnay/witchhunt-reader), основанную на
 [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader), и
 использует [FreeInk SDK](https://github.com/Free-Ink/freeink-sdk).

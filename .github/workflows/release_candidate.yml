@@ -76,13 +76,16 @@ jobs:
           echo "RC_TAG=${VERSION}-rc.${NEXT_RC}" >> $GITHUB_ENV
           echo "RELEASE_NOTES_PATH=${RUNNER_TEMP}/release-notes.md" >> $GITHUB_ENV
 
-      - name: Build PtiPo Reader Release Candidate
+      - name: Build Paperio Reader Release Candidate
         env:
           CROSSPOINT_RC_VERSION: ${{ env.RC_TAG }}
         run: pio run -e gh_release_rc
 
       - name: Patch min_chip_rev_full to 0
         run: python3 scripts/patch_min_chip_rev.py .pio/build/gh_release_rc/firmware.bin
+
+      - name: Create branded firmware asset
+        run: cp .pio/build/gh_release_rc/firmware.bin ".pio/build/gh_release_rc/firmware-Paperio-Reader-${RC_TAG}.bin"
 
       - name: Generate release notes
         env:
@@ -101,12 +104,13 @@ jobs:
         with:
           tag_name: ${{ env.RC_TAG }}
           target_commitish: ${{ github.sha }}
-          name: CrossPoint ${{ env.RC_TAG }}
+          name: Paperio Reader ${{ env.RC_TAG }}
           body_path: ${{ env.RELEASE_NOTES_PATH }}
           prerelease: true
           files: |
             .pio/build/gh_release_rc/bootloader.bin
             .pio/build/gh_release_rc/firmware.bin
+            .pio/build/gh_release_rc/firmware-Paperio-Reader-${{ env.RC_TAG }}.bin
             .pio/build/gh_release_rc/firmware.elf
             .pio/build/gh_release_rc/firmware.map
             .pio/build/gh_release_rc/partitions.bin
