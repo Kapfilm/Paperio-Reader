@@ -1,4 +1,7 @@
-# <img src="assets/paperio-reader-robot.png" width="42" height="42" alt="Paperio robot"> Paperio Reader
+<div align="center">
+  <img src="assets/paperio-reader-robot.png" width="80" height="80" alt="Paperio robot">
+  <h1>Paper|io</h1>
+</div>
 
 <p align="center">
   <img src="assets/screenshots/home.jpg" width="23%" alt="Главный экран Paperio Reader">
