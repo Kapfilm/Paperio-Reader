@@ -1,6 +1,5 @@
 <div align="center">
-  <img src="assets/paperio-reader-robot.png" width="80" height="80" alt="Paperio robot">
-  <h1>Paper|io</h1>
+  <img src="assets/paperio-reader-header.svg" width="240" alt="Paper|io">
 </div>
 
 <p align="center">

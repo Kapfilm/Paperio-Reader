@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 140" role="img" aria-labelledby="title">
+  <title id="title">Paper|io</title>
+  <g transform="translate(90 -8)" shape-rendering="crispEdges">
+    <rect x="24" y="24" width="72" height="48" fill="#000"/>
+    <rect x="12" y="48" width="12" height="16" fill="#000"/>
+    <rect x="96" y="48" width="12" height="16" fill="#000"/>
+    <rect x="35" y="72" width="13" height="16" fill="#000"/>
+    <rect x="53" y="72" width="13" height="16" fill="#000"/>
+    <rect x="71" y="72" width="13" height="16" fill="#000"/>
+    <rect x="37" y="34" width="12" height="13" fill="#fff"/>
+    <rect x="72" y="34" width="12" height="13" fill="#fff"/>
+  </g>
+  <text x="150" y="126" fill="#000" font-family="Arial, sans-serif" font-size="44" font-weight="700" text-anchor="middle">Paper|io</text>
+</svg>
