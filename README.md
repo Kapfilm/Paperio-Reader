@@ -54,7 +54,7 @@ EPUB с параллельными местами, перекрёстными с
 Книга подходит для знакомства с окном примечаний, вложенными переходами и
 возвратом к исходному стиху в Paperio Reader.
 
-**[Скачать книгу в EPUB — 6,5 МБ](https://github.com/Kapfilm/Paperio-Reader/raw/refs/heads/Paperio-Reader/examples/bible-theophylact.epub)**
+**[Скачать книгу в EPUB — 6,7 МБ](https://github.com/Kapfilm/Paperio-Reader/raw/refs/heads/Paperio-Reader/examples/bible-theophylact.epub)**
 
 Скопируйте файл на SD-карту и откройте его в Paperio Reader. Выберите ссылку
 на параллельное место или номер толкования, чтобы открыть примечание;
