@@ -297,6 +297,33 @@ uint8_t epubProgressPercentByte(const Epub& epub, const int spineIndex, const in
   return ReaderUtils::fractionProgressPercentByte(epub.calculateProgress(spineIndex, chapterProgress));
 }
 
+// EPUB pagination is built one spine item (usually one chapter) at a time, so the
+// exact page count of untouched chapters is not available without laying out the
+// whole book up front. Estimate the book-wide count from the current chapter's
+// actual rendered page density. This keeps the home-screen counter consistent with
+// the selected font, margins and line spacing while avoiding a costly full-book pass.
+bool epubBookPageEstimate(const Epub& epub, const int spineIndex, const int currentPage, const int pageCount,
+                          int& bookCurrentPage, int& bookTotalPages) {
+  bookCurrentPage = 0;
+  bookTotalPages = 0;
+  if (pageCount <= 0 || currentPage < 0) return false;
+
+  size_t spineSize = 0;
+  const size_t bookSize = epub.getBookSize();
+  if (bookSize == 0 || !epub.getSpineItemInflatedSize(spineIndex, &spineSize) || spineSize == 0) return false;
+
+  const uint64_t estimated =
+      (static_cast<uint64_t>(bookSize) * static_cast<uint64_t>(pageCount) + spineSize / 2) / spineSize;
+  if (estimated == 0 || estimated > UINT16_MAX) return false;
+
+  const float chapterProgress =
+      std::min(1.0f, static_cast<float>(currentPage + 1) / static_cast<float>(pageCount));
+  const float bookProgress = epub.calculateProgress(spineIndex, chapterProgress);
+  bookTotalPages = static_cast<int>(estimated);
+  bookCurrentPage = std::clamp(static_cast<int>(bookProgress * bookTotalPages + 0.5f), 1, bookTotalPages);
+  return true;
+}
+
 int clampPercent(int percent) {
   if (percent < 0) {
     return 0;
@@ -3733,14 +3760,15 @@ bool EpubReaderActivity::maybeRestartForFragmentedHeap(const uint32_t freeHeap, 
 }
 
 bool EpubReaderActivity::writeReaderProgressCache(const std::string& cachePath, const int spineIndex,
-                                                  const int currentPage, const int pageCount, const uint8_t percent) {
+                                                  const int currentPage, const int pageCount, const uint8_t percent,
+                                                  const int bookCurrentPage, const int bookTotalPages) {
   FsFile f;
   if (!Storage.openFileForWrite("ERS", cachePath + "/progress.bin", f)) {
     LOG_ERR("ERS", "Failed to open progress cache: %s", cachePath.c_str());
     return false;
   }
 
-  uint8_t data[7];
+  uint8_t data[11];
   data[0] = spineIndex & 0xFF;
   data[1] = (spineIndex >> 8) & 0xFF;
   data[2] = currentPage & 0xFF;
@@ -3748,7 +3776,11 @@ bool EpubReaderActivity::writeReaderProgressCache(const std::string& cachePath, 
   data[4] = pageCount & 0xFF;
   data[5] = (pageCount >> 8) & 0xFF;
   data[6] = percent;
-  f.write(data, 7);
+  data[7] = bookCurrentPage & 0xFF;
+  data[8] = (bookCurrentPage >> 8) & 0xFF;
+  data[9] = bookTotalPages & 0xFF;
+  data[10] = (bookTotalPages >> 8) & 0xFF;
+  f.write(data, sizeof(data));
   f.close();
   return true;
 }
@@ -3756,7 +3788,11 @@ bool EpubReaderActivity::writeReaderProgressCache(const std::string& cachePath, 
 void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
   if (!footnoteHistory.empty()) return;
   const uint8_t percent = epubProgressPercentByte(*epub, spineIndex, currentPage, pageCount);
-  if (!writeReaderProgressCache(epub->getCachePath(), spineIndex, currentPage, pageCount, percent)) {
+  int bookCurrentPage = 0;
+  int bookTotalPages = 0;
+  epubBookPageEstimate(*epub, spineIndex, currentPage, pageCount, bookCurrentPage, bookTotalPages);
+  if (!writeReaderProgressCache(epub->getCachePath(), spineIndex, currentPage, pageCount, percent, bookCurrentPage,
+                                bookTotalPages)) {
     LOG_ERR("ERS", "Could not save progress!");
     return;
   }

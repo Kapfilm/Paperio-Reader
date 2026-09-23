@@ -83,7 +83,7 @@ class LineReaderActivity : public Activity {
   // suppress no-op minute-tick re-renders. Call at the end of renderStatusBar().
   void noteStatusBarRendered() const;
 
-  // progress.bin, 7-byte format: page(2 LE) + file offset(4 LE) + percent(1).
+  // progress.bin, 9-byte format: page(2 LE) + file offset(4 LE) + percent(1) + total pages(2 LE).
   // The offset lets drawCurrentPageToBuffer render without requiring index.bin.
   void saveProgress() const;
   void loadProgress();

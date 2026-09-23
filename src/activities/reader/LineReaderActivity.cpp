@@ -210,7 +210,7 @@ void LineReaderActivity::saveProgress() const {
     const size_t offset =
         (currentPage >= 0 && currentPage < static_cast<int>(pageOffsets.size())) ? pageOffsets[currentPage] : 0;
     const uint8_t percent = ReaderUtils::pageProgressPercentByte(currentPage, totalPages);
-    uint8_t data[7];
+    uint8_t data[9];
     data[0] = currentPage & 0xFF;
     data[1] = (currentPage >> 8) & 0xFF;
     data[2] = offset & 0xFF;
@@ -218,7 +218,9 @@ void LineReaderActivity::saveProgress() const {
     data[4] = (offset >> 16) & 0xFF;
     data[5] = (offset >> 24) & 0xFF;
     data[6] = percent;
-    f.write(data, 7);
+    data[7] = totalPages & 0xFF;
+    data[8] = (totalPages >> 8) & 0xFF;
+    f.write(data, sizeof(data));
     f.close();
     globalReadingSessionTracker().updateProgress(percent);
   }

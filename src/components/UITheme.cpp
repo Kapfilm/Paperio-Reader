@@ -11,6 +11,7 @@
 #include <Xtc.h>
 
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -267,6 +268,54 @@ int UITheme::getBookProgressPercent(const RecentBook& book) {
   int percent = static_cast<int>(data[percentByteOffset]);
   if (percent > 100) percent = 100;
   return percent;
+}
+
+bool UITheme::getBookProgressPages(const RecentBook& book, int& currentPage, int& totalPages) {
+  currentPage = 0;
+  totalPages = 0;
+  if (book.path.empty()) return false;
+
+  std::string cachePath;
+  enum class Format { Epub, Xtc, Text } format;
+  if (FsHelpers::hasEpubExtension(book.path)) {
+    cachePath = Epub(book.path, "/.crosspoint").getCachePath();
+    format = Format::Epub;
+  } else if (FsHelpers::hasXtcExtension(book.path)) {
+    cachePath = Xtc(book.path, "/.crosspoint").getCachePath();
+    format = Format::Xtc;
+  } else if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
+    cachePath = Txt(book.path, "/.crosspoint").getCachePath();
+    format = Format::Text;
+  } else {
+    return false;
+  }
+
+  FsFile file;
+  if (!Storage.openFileForRead("UIT", cachePath + "/progress.bin", file)) return false;
+  uint8_t data[11] = {0};
+  const int size = file.read(data, sizeof(data));
+  file.close();
+
+  if (format == Format::Epub) {
+    if (size < 11) return false;
+    currentPage = static_cast<int>(data[7] | (data[8] << 8));
+    totalPages = static_cast<int>(data[9] | (data[10] << 8));
+  } else if (format == Format::Xtc) {
+    if (size < 9) return false;
+    const uint32_t page = static_cast<uint32_t>(data[0]) | (static_cast<uint32_t>(data[1]) << 8) |
+                          (static_cast<uint32_t>(data[2]) << 16) | (static_cast<uint32_t>(data[3]) << 24);
+    const uint32_t total = static_cast<uint32_t>(data[5]) | (static_cast<uint32_t>(data[6]) << 8) |
+                           (static_cast<uint32_t>(data[7]) << 16) | (static_cast<uint32_t>(data[8]) << 24);
+    if (page >= static_cast<uint32_t>(INT_MAX) || total > static_cast<uint32_t>(INT_MAX)) return false;
+    currentPage = static_cast<int>(page + 1);
+    totalPages = static_cast<int>(total);
+  } else {
+    if (size < 9) return false;
+    currentPage = static_cast<int>(data[0] | (data[1] << 8)) + 1;
+    totalPages = static_cast<int>(data[7] | (data[8] << 8));
+  }
+
+  return totalPages > 0 && currentPage > 0 && currentPage <= totalPages;
 }
 
 void UITheme::drawCoverProgressIndicator(const GfxRenderer& renderer, Rect coverRect, int progressPercent) {

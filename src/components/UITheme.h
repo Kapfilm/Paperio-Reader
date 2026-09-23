@@ -66,6 +66,9 @@ class UITheme {
   // progress.bin. Cheap: derives the cache path from the book path, no book parsing.
   // Returns -1 when the book was never opened or the percent byte isn't written yet.
   static int getBookProgressPercent(const RecentBook& book);
+  // Reads the saved current/total page pair where the reader cache provides it.
+  // Values are one-based for display; returns false for old or incomplete caches.
+  static bool getBookProgressPages(const RecentBook& book, int& currentPage, int& totalPages);
   // Draws a reading-progress overlay directly on a cover thumbnail: a thin bar
   // along the bottom edge while in progress (1..99%), a folded top-right corner
   // when finished (100%), and nothing for unread books (0% / <0). Drawn with a

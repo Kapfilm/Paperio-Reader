@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -249,6 +250,82 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
   String json;
   serializeJson(doc, json);
   return Storage.writeFile(path, json);
+}
+
+bool JsonSettingsIO::saveButtonSettings(const CrossPointSettings& s, const char* path) {
+  JsonDocument doc;
+  doc["format"] = 1;
+
+  for (const auto& info : getSettingsList()) {
+    if (!info.key || !info.valuePtr || info.category != StrId::STR_CAT_CONTROLS) continue;
+    doc[info.key] = s.*(info.valuePtr);
+  }
+
+  doc["frontButtonBack"] = s.frontButtonBack;
+  doc["frontButtonConfirm"] = s.frontButtonConfirm;
+  doc["frontButtonLeft"] = s.frontButtonLeft;
+  doc["frontButtonRight"] = s.frontButtonRight;
+
+  String json;
+  serializeJsonPretty(doc, json);
+  return Storage.writeFile(path, json);
+}
+
+bool JsonSettingsIO::loadButtonSettings(CrossPointSettings& s, const char* json) {
+  JsonDocument doc;
+  const auto error = deserializeJson(doc, json);
+  if (error || (doc["format"] | 0) != 1) {
+    LOG_ERR("CPS", "Button settings JSON is invalid: %s", error ? error.c_str() : "unsupported format");
+    return false;
+  }
+
+  struct PendingValue {
+    uint8_t CrossPointSettings::* field;
+    uint8_t value;
+  };
+  std::vector<PendingValue> pending;
+  for (const auto& info : getSettingsList()) {
+    if (!info.key || !info.valuePtr || info.category != StrId::STR_CAT_CONTROLS) continue;
+    if (doc[info.key].isNull()) continue;
+    const uint8_t value = doc[info.key].as<uint8_t>();
+    pending.push_back(
+        {info.valuePtr, value < info.enumValues.size() ? value : static_cast<uint8_t>(CrossPointSettings::BTN_DEFAULT)});
+  }
+
+  using S = CrossPointSettings;
+  const auto front = [&doc](const char* key, uint8_t fallback) {
+    const uint8_t value = doc[key] | fallback;
+    return value < S::FRONT_BUTTON_HARDWARE_COUNT ? value : fallback;
+  };
+  uint8_t frontValues[] = {
+      front("frontButtonBack", S::FRONT_HW_BACK),
+      front("frontButtonConfirm", S::FRONT_HW_CONFIRM),
+      front("frontButtonLeft", S::FRONT_HW_LEFT),
+      front("frontButtonRight", S::FRONT_HW_RIGHT),
+  };
+  bool validFrontMapping = true;
+  for (size_t i = 0; i < 4; ++i) {
+    for (size_t j = i + 1; j < 4; ++j) {
+      if (frontValues[i] == frontValues[j]) validFrontMapping = false;
+    }
+  }
+  if (!validFrontMapping) {
+    frontValues[0] = S::FRONT_HW_BACK;
+    frontValues[1] = S::FRONT_HW_CONFIRM;
+    frontValues[2] = S::FRONT_HW_LEFT;
+    frontValues[3] = S::FRONT_HW_RIGHT;
+  }
+
+  for (const auto& item : pending) s.*(item.field) = item.value;
+  s.frontButtonBack = frontValues[0];
+  s.frontButtonConfirm = frontValues[1];
+  s.frontButtonLeft = frontValues[2];
+  s.frontButtonRight = frontValues[3];
+
+  // These two short presses deliberately retain their fixed built-in actions.
+  s.btnShortBack = S::BTN_DEFAULT;
+  s.btnShortConfirm = S::BTN_DEFAULT;
+  return true;
 }
 
 bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool* needsResave) {

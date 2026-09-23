@@ -28,7 +28,7 @@ constexpr StrId DARKNESS_IDS[] = {StrId::STR_NORMAL, StrId::STR_DARK, StrId::STR
                                   StrId::STR_MAX_DARK};
 
 constexpr int LAYOUT_ROW_COUNT = 4;
-constexpr int STYLE_BASE_ROW_COUNT = 6;
+constexpr int STYLE_BASE_ROW_COUNT = 7;
 }  // namespace
 
 void TextSettingsActivity::onEnter() {
@@ -168,6 +168,9 @@ void TextSettingsActivity::activateRow(const int row) {
           SETTINGS.fontSizeNormalization = !SETTINGS.fontSizeNormalization;
           break;
         case 6:
+          SETTINGS.guideDots = !SETTINGS.guideDots;
+          break;
+        case 7:
           SETTINGS.fastAntiAliasing = !SETTINGS.fastAntiAliasing;
           renderer.setFastGrayscaleLut(SETTINGS.fastAntiAliasing != 0);
           break;
@@ -199,7 +202,7 @@ std::string TextSettingsActivity::rowTitle(const int row) const {
     case Tab::Style: {
       constexpr StrId ids[] = {StrId::STR_BIONIC_READING, StrId::STR_HYPHENATION, StrId::STR_EMBEDDED_STYLE,
                                StrId::STR_TEXT_AA, StrId::STR_TEXT_DARKNESS, StrId::STR_FONT_SIZE_NORMALIZATION,
-                               StrId::STR_FAST_AA};
+                               StrId::STR_GUIDE_DOTS, StrId::STR_FAST_AA};
       return I18N.get(ids[row]);
     }
     default:
@@ -245,6 +248,8 @@ std::string TextSettingsActivity::rowValue(const int row) const {
         case 5:
           return state(SETTINGS.fontSizeNormalization);
         case 6:
+          return state(SETTINGS.guideDots);
+        case 7:
           return state(SETTINGS.fastAntiAliasing);
       }
       break;

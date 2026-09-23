@@ -13,6 +13,8 @@ namespace JsonSettingsIO {
 // CrossPointSettings
 bool saveSettings(const CrossPointSettings& s, const char* path);
 bool loadSettings(CrossPointSettings& s, const char* json, bool* needsResave = nullptr);
+bool saveButtonSettings(const CrossPointSettings& s, const char* path);
+bool loadButtonSettings(CrossPointSettings& s, const char* json);
 
 // CrossPointState
 bool saveState(const CrossPointState& s, const char* path);
