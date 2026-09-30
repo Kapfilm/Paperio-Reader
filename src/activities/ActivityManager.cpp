@@ -1,3 +1,4 @@
+#include "network/BootHealth.h"
 #include "ActivityManager.h"
 
 #include <Arduino.h>
@@ -104,7 +105,10 @@ void ActivityManager::renderTaskLoop() {
         applyUiFontStyle(renderer, uiFontStyle);
         uiFontStyleApplied = uiFontStyle;
       }
+      const bool healthScreen = currentActivity->getName() != "Boot" && currentActivity->getName() != "Sleep" &&
+                                currentActivity->getName() != "SdFirmwareUpdate";
       currentActivity->render(std::move(lock));
+      if (healthScreen) boot_health::rendered();
       // Cleared unconditionally on every exit path of render(): the call cannot throw
       // (-fno-exceptions) and every `return` inside it lands here.
       renderPassActive.store(false, std::memory_order_release);

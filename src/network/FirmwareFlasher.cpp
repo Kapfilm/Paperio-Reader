@@ -13,6 +13,7 @@
 #include <memory>
 
 #include "OtaBootSwitch.h"
+#include "BootHealth.h"
 
 namespace firmware_flash {
 
@@ -303,7 +304,7 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
   }
   file.close();
 
-  if (!ota_boot::switchTo(dest)) {
+  if (!boot_health::stageUpdate(dest) || !ota_boot::switchTo(dest)) {
     LOG_ERR("FLASH", "otadata switch failed");
     return Result::OTADATA_FAIL;
   }

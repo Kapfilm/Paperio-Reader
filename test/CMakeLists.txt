@@ -87,3 +87,5 @@ add_subdirectory(native_fb2_zip)
 add_subdirectory(clipping_store)
 
 add_subdirectory(book_progress_pages)
+
+add_subdirectory(boot_health)

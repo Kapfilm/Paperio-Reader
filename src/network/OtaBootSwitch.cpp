@@ -1,6 +1,8 @@
 #include "OtaBootSwitch.h"
 
 #include <Logging.h>
+#include <esp_ota_ops.h>
+#include <cstddef>
 #include <esp_rom_crc.h>
 #include <spi_flash_mmap.h>
 #include <string.h>
@@ -81,6 +83,47 @@ bool switchTo(const esp_partition_t* dest) {
   LOG_INF("BOOT", "otadata: wrote slot=%d seq=%u crc=0x%08x -> %s", targetSlot, static_cast<unsigned>(newSeq),
           static_cast<unsigned>(next.crc), dest->label);
   return true;
+}
+
+bool rollbackCandidateMatches(const esp_partition_t* running, const esp_partition_t* previous) {
+  if (!running || !previous || running == previous || esp_ota_get_app_partition_count() != 2) return false;
+  const esp_partition_t* data =
+      esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, nullptr);
+  if (!data || data->size < 2 * SPI_FLASH_SEC_SIZE) return false;
+  SelectEntry entries[2] = {};
+  for (int i = 0; i < 2; ++i) {
+    if (esp_partition_read(data, i * SPI_FLASH_SEC_SIZE, &entries[i], sizeof(SelectEntry)) != ESP_OK) return false;
+    const auto& e = entries[i];
+    if (!e.ota_seq || e.ota_seq == UINT32_MAX || e.crc != computeSeqCrc(e.ota_seq) ||
+        e.ota_state == kOtaImgInvalid || e.ota_state == kOtaImgAborted) return false;
+  }
+  if (entries[0].ota_seq == entries[1].ota_seq) return false;
+  const int active = entries[0].ota_seq > entries[1].ota_seq ? 0 : 1;
+  return (entries[active].ota_seq - 1) % 2 + ESP_PARTITION_SUBTYPE_APP_OTA_0 == running->subtype &&
+         (entries[1 - active].ota_seq - 1) % 2 + ESP_PARTITION_SUBTYPE_APP_OTA_0 == previous->subtype;
+}
+
+bool rearmPending(const esp_partition_t* running) {
+  if (!running || esp_ota_get_app_partition_count() != 2 ||
+      running->subtype < ESP_PARTITION_SUBTYPE_APP_OTA_0 || running->subtype > ESP_PARTITION_SUBTYPE_APP_OTA_1) return false;
+  const esp_partition_t* data =
+      esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, nullptr);
+  if (!data || data->encrypted || data->size < 2 * SPI_FLASH_SEC_SIZE) return false;
+  SelectEntry slots[2] = {};
+  int selected = -1;
+  for (int i = 0; i < 2; ++i) {
+    if (esp_partition_read(data, i * SPI_FLASH_SEC_SIZE, &slots[i], sizeof(SelectEntry)) != ESP_OK) return false;
+    const auto& entry = slots[i];
+    if (!entry.ota_seq || entry.ota_seq == UINT32_MAX || entry.crc != computeSeqCrc(entry.ota_seq)) continue;
+    if ((entry.ota_seq - 1) % 2 != static_cast<uint32_t>(running->subtype - ESP_PARTITION_SUBTYPE_APP_OTA_0)) continue;
+    if (selected < 0 || entry.ota_seq > slots[selected].ota_seq) selected = i;
+  }
+  if (selected < 0 || slots[selected].ota_state != ESP_OTA_IMG_PENDING_VERIFY) return false;
+  const uint32_t state = kOtaImgNew;
+  const size_t offset = selected * SPI_FLASH_SEC_SIZE + offsetof(SelectEntry, ota_state);
+  if (esp_partition_write(data, offset, &state, sizeof(state)) != ESP_OK) return false;
+  uint32_t readback = UINT32_MAX;
+  return esp_partition_read(data, offset, &readback, sizeof(readback)) == ESP_OK && readback == state;
 }
 
 }  // namespace ota_boot

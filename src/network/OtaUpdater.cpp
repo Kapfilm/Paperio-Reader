@@ -1,3 +1,4 @@
+#include "BootHealth.h"
 #include "OtaUpdater.h"
 
 #include <Arduino.h>
@@ -310,7 +311,7 @@ int OtaUpdater::forceSetOtaBootPartition() {
   }
 
   otadata[nextSlot].ota_seq = newSeq;
-  otadata[nextSlot].ota_state = ESP_OTA_IMG_VALID;
+  otadata[nextSlot].ota_state = ESP_OTA_IMG_NEW;
   otadata[nextSlot].crc = bootloader_common_ota_select_crc(&otadata[nextSlot]);
 
   err = esp_partition_erase_range(otaDataPartition, otaDataPartition->erase_size * static_cast<uint32_t>(nextSlot),
@@ -405,6 +406,11 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
   // in esp_ota_set_boot_partition (and esp_ota_end returns VALIDATE_FAILED), so
   // fall back to writing otadata directly — same bypass as before.
   const esp_partition_t* updatePartition = esp_ota_get_next_update_partition(nullptr);
+  if (!boot_health::stageUpdate(updatePartition)) {
+    LOG_ERR("OTA", "Cannot persist update recovery record");
+    installResult = INTERNAL_UPDATE_ERROR;
+    return installResult;
+  }
   esp_err_t boot_err = (finish_err == ESP_ERR_OTA_VALIDATE_FAILED) ? ESP_ERR_OTA_VALIDATE_FAILED
                                                                    : esp_ota_set_boot_partition(updatePartition);
   if (boot_err == ESP_ERR_OTA_VALIDATE_FAILED) {

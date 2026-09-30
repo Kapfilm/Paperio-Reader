@@ -36,6 +36,7 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
+#include "network/BootHealth.h"
 #include "UiFonts.h"
 #include "WeatherSettingsStore.h"
 #include "activities/Activity.h"
@@ -585,6 +586,7 @@ static HalGPIO::WakeGestures wakeGestureFromSettings() {
 }
 
 void setup() {
+  boot_health::begin();
   markBootPhase(BootPhase::SetupEntry);
   // Load just the settings we need before any other init, so the wake gesture mirrors
   // whichever press type(s) the user configured to put the device to sleep.
@@ -602,13 +604,7 @@ void setup() {
 #else
   heap_caps_check_integrity_all(/*print_errors=*/true);
 #endif
-  {
-    esp_ota_img_states_t otaState;
-    const esp_partition_t* running = esp_ota_get_running_partition();
-    if (esp_ota_get_state_partition(running, &otaState) == ESP_OK && otaState == ESP_OTA_IMG_PENDING_VERIFY) {
-      esp_ota_mark_app_valid_cancel_rollback();
-    }
-  }
+
 
   // Heap integrity check — must run before any allocation.
   //
@@ -757,7 +753,7 @@ void setup() {
   // Recovery firmware mode: hold left side button (BTN_UP) together with the power button at
   // boot to skip directly to the SD-card firmware update screen. Useful on devices where USB
   // flashing has been locked down (e.g. recent X3 firmware).
-  bool recoveryFirmwareMode = false;
+  bool recoveryFirmwareMode = boot_health::recoveryRequired();
   if (wakeupReason == HalGPIO::WakeupReason::PowerButton) {
     // This window sits between the wake gesture and the splash, so every millisecond here
     // is dead time on a dark screen — it measured 501-508 ms across X3 and X4, roughly
@@ -1377,6 +1373,7 @@ void loop() {
 
   const unsigned long activityStartTime = millis();
   activityManager.loop();
+  boot_health::tick(activityManager.isRenderActive());
   const unsigned long activityDuration = millis() - activityStartTime;
 
   const unsigned long loopDuration = millis() - loopStartTime;

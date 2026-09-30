@@ -40,4 +40,12 @@ uint32_t computeSeqCrc(uint32_t seq);
 // Returns true on success.
 bool switchTo(const esp_partition_t* dest);
 
+// Keep an unconfirmed image on probation across an intentional sleep/restart.
+// PENDING (1) -> NEW (0) clears one flash bit; no sector erase or CRC change.
+bool rearmPending(const esp_partition_t* running);
+
+// Verify the two actual OTA records select running and the expected fallback,
+// so IDF rollback cannot select a duplicate entry for the current image.
+bool rollbackCandidateMatches(const esp_partition_t* running, const esp_partition_t* previous);
+
 }  // namespace ota_boot

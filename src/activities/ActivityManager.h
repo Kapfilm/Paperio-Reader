@@ -120,6 +120,7 @@ class ActivityManager {
 
   void begin();
   void loop();
+  bool isRenderActive() const { return renderPassActive.load(std::memory_order_acquire); }
 
   // Will replace currentActivity and drop all activities on stack
   void replaceActivity(std::unique_ptr<Activity>&& newActivity);
