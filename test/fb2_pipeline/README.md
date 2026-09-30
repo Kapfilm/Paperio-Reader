@@ -28,3 +28,12 @@ For the 2011 Russian Bible regression use `n1`, `n1337`, and `n2672`. The runner
 `anchor_index_test` checks the bounded-memory ID index with 50,000 IDs, exact hash-collision comparisons, duplicate IDs and damaged files. `fb2_crossrefs book.fb2 cache-dir target-ids.txt output-dir` resolves every requested ID and renders every virtual chapter. Verify each mapped chapter contains the hashed target marker and compare generated link labels/counts with the original XML. Use a separate disposable cache for each run. The synthetic split-section fixture should cover early/middle/late paragraphs, title IDs, nested sections, table cells and an ID on a link.
 
 FB2 table cells are emitted as sequential paragraphs to preserve targets and outgoing links through the existing page layout engine. The original column layout is not retained. The additional anchor cache invalidates only derived page/source caches on first upgrade; progress, bookmarks, metadata and covers are preserved.
+
+## Encoding preparation and stack regression
+
+`python3 test/fb2_pipeline/encoding_regression.py build/fb2-pipeline/fb2_pipeline /tmp/new-encoding-regression`
+checks UTF-8, Windows-1251, KOI8-R, incorrectly declared UTF-8 and an absent declaration,
+each in plain and zipped form. It checks cold/warm preparation, Cyrillic TOC and
+transcoded text. The output directory must not exist. For the device stack regression,
+inspect the ESP32-C3 disassembly: encoding preparation must not reserve the 4 KiB
+sample or conversion buffers on the Arduino task's 8 KiB stack, even on the UTF-8 early return.

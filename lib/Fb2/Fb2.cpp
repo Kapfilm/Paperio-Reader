@@ -621,17 +621,24 @@ size_t appendUtf8(char* out, int codePoint) {
 // single-byte-encoded text scatters bytes across the whole 0x80-0xFF range
 // fairly uniformly and would only pass this by chance in a vanishingly
 // small fraction of cases.
-bool bodyLooksLikeUtf8Already(const std::string& path) {
+// -1 means an I/O/allocation failure: do not guess an encoding in that case.
+int bodyLooksLikeUtf8Already(const std::string& path) {
   HalFile file;
-  if (!Storage.openFileForRead("FB2", path, file)) return false;
+  if (!Storage.openFileForRead("FB2", path, file)) return -1;
   // Skip roughly past the XML prolog/declaration so the sample is actual
   // book content, not the (pure-ASCII, hence UTF-8-compatible either way)
   // header line.
   file.seek(64);
-  uint8_t buf[4096];
-  const int got = file.read(buf, sizeof(buf));
+  constexpr size_t sampleSize = 4096;
+  auto buf = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[sampleSize]);
+  if (!buf) {
+    LOG_ERR("FB2", "Not enough heap for encoding sample");
+    return -1;
+  }
+  const int got = file.read(buf.get(), sampleSize);
   file.close();
-  if (got <= 0) return false;
+  if (got < 0) return -1;
+  if (got == 0) return false;
 
   int multiByteSequences = 0;
   for (int i = 0; i < got;) {
@@ -684,7 +691,24 @@ bool transcodeToUtf8IfNeeded(std::string& path, const std::string& tempPathBase,
   // sequences over a large enough sample are vanishingly unlikely for
   // real single-byte-encoded text (which uses the whole 0x80-0xFF range
   // fairly uniformly), so this is a reliable signal, not a guess.
-  if (bodyLooksLikeUtf8Already(path)) return true;
+  const int utf8Probe = bodyLooksLikeUtf8Already(path);
+  if (utf8Probe < 0) return false;
+  if (utf8Probe > 0) return true;
+
+  // This function is also entered for UTF-8 books. Large automatic arrays
+  // reserve stack space even on early-return paths (5.5 KiB in the C3 build).
+  // Allocate conversion workspace only when conversion is actually needed.
+  struct TranscodeBuffers {
+    uint8_t input[1024];
+    char output[1024 * 3];
+  };
+  auto buffers = std::unique_ptr<TranscodeBuffers>(new (std::nothrow) TranscodeBuffers);
+  if (!buffers) {
+    LOG_ERR("FB2", "Not enough heap for encoding conversion");
+    return false;
+  }
+  auto& inBuf = buffers->input;
+  auto& outBuf = buffers->output;
 
   HalFile in;
   if (!Storage.openFileForRead("FB2", path, in)) return false;
@@ -698,8 +722,6 @@ bool transcodeToUtf8IfNeeded(std::string& path, const std::string& tempPathBase,
   const size_t totalSize = in.fileSize();
   size_t processed = 0;
   int chunkCount = 0;
-  uint8_t inBuf[1024];
-  char outBuf[1024 * 3];
   bool ok = true;
   for (;;) {
     const int got = in.read(inBuf, sizeof(inBuf));
