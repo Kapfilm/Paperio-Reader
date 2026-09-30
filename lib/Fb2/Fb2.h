@@ -174,7 +174,6 @@ class Fb2 {
   std::string coverImageId;
   uint64_t sourceSize = 0;
   bool loaded = false;
-  bool sectionIdsOnly = false;  // Set only by a successful full source scan.
 
   int chapterCount = 0;
   std::deque<ImageInfoPublic> images;

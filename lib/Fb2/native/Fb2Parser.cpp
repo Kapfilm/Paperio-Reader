@@ -346,11 +346,6 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
 
         const std::string& name = xml.name();
         if (tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) {
-            if ((name != "binary" || currentBodyIndex >= 0 || inAnnotation) &&
-                (name != "section" || currentBodyIndex < 0)) {
-                const char* id = xml.attr("id");
-                if (id && *id) out.hasNonSectionAnchors = true;
-            }
             if (name == "description") inDescription = true;
             else if (name == "title-info" && inDescription) inTitleInfo = true;
             else if (name == "author" && inTitleInfo) { inAuthorTag = true; curAuthor = Fb2Author{}; }

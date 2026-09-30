@@ -775,7 +775,7 @@ constexpr char SECTIONS_INDEX_FILE[] = "/.fb2_sections.bin";
 constexpr char SOURCE_PATHS_INDEX_FILE[] = "/.fb2_sourcepaths.bin";
 constexpr char NAVIGATION_INDEX_FILE[] = "/.fb2_nav.bin";
 constexpr char ANCHORS_INDEX_FILE[] = "/.fb2_anchors.bin";
-bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourcePath, Fb2AnchorIndex& index, bool sectionIdsOnly = false);
+bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourcePath, Fb2AnchorIndex& index);
 
 bool ensureFb2NavigationIndex(const std::string& cachePath, Fb2NavigationIndex& index) {
   const std::string sections = cachePath + SECTIONS_INDEX_FILE;
@@ -1563,9 +1563,7 @@ class TextRangeFilterSink : public Fb2ContentSink {
 
 // Build anchors through the same render filters used for XHTML. This assigns
 // paragraph/cell IDs to the actual virtual slice, including deferred block cuts.
-// A completed scan can prove that only section IDs exist. Then the directory
-// already contains every target: do not render the entire book before opening it.
-bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourcePath, Fb2AnchorIndex& index, bool sectionIdsOnly) {
+bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourcePath, Fb2AnchorIndex& index) {
   const std::string sectionsPath = cachePath + SECTIONS_INDEX_FILE;
   const std::string indexPath = cachePath + ANCHORS_INDEX_FILE;
   const std::string readyPath = cachePath + "/.fb2_anchors_ready";
@@ -1575,7 +1573,7 @@ bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourc
     if (!writer.begin(sectionsPath, indexPath, PACKAGE_VERSION)) return false;
     HalFile sections, source;
     if (!Storage.openFileForRead("FB2ANC", sectionsPath, sections) || !readAndCheckCacheHeader(sections) ||
-        (!sectionIdsOnly && !Storage.openFileForRead("FB2ANC", sourcePath, source))) return false;
+        !Storage.openFileForRead("FB2ANC", sourcePath, source)) return false;
     FsFileReader records(sections), reader(source);
     Fb2Parser parser;
     class AnchorSink final : public Fb2ContentSink {
@@ -1598,22 +1596,19 @@ bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourc
           !records.seek(records.tell() + titleLen) || records.read(tail, sizeof(tail)) != sizeof(tail)) return false;
       AnchorSink sink(writer, chapter);
       sink.onAnchor(id);
-      if (!sectionIdsOnly) {
-        Fb2SectionIndexEntry section;
-        section.innerStartOffset = offset; section.level = level & 0x7f; section.fallbackTitle = (level & 0x80) != 0;
-        if (chapter == 0 && (!parser.renderAnnotation(reader, sink) || !parser.renderBodyPreambleForFirstSection(reader, sink))) return false;
-        if (titleLen) parser.renderSectionTitle(reader, section, sink, section.level);
-        RangeFilterSink images(sink, tail[1], tail[2]);
-        TextRangeFilterSink text(images, tail[3], tail[4]);
-        if (!parser.renderSection(reader, section, text)) return false;
-      }
-      if (!sink.ok) return false;
+      Fb2SectionIndexEntry section;
+      section.innerStartOffset = offset; section.level = level & 0x7f; section.fallbackTitle = (level & 0x80) != 0;
+      if (chapter == 0 && (!parser.renderAnnotation(reader, sink) || !parser.renderBodyPreambleForFirstSection(reader, sink))) return false;
+      if (titleLen) parser.renderSectionTitle(reader, section, sink, section.level);
+      RangeFilterSink images(sink, tail[1], tail[2]);
+      TextRangeFilterSink text(images, tail[3], tail[4]);
+      if (!parser.renderSection(reader, section, text) || !sink.ok) return false;
       ++chapter;
       if (fb2CancellationRequested(nullptr)) return false;
       if (millis() - lastYield >= 100) { vTaskDelay(1); lastYield = millis(); }
     }
     if (!writer.finish() || !index.open(sectionsPath, indexPath, PACKAGE_VERSION)) return false;
-    LOG_INF("FB2ANC", "Indexed anchors in %u virtual chapters (%s)", chapter, sectionIdsOnly ? "section directory" : "rendered targets");
+    LOG_INF("FB2ANC", "Indexed inline anchors in %u virtual chapters", chapter);
   }
   if (!Storage.exists(readyPath.c_str())) {
     // Only derived page/source caches change. Keep progress, bookmarks, cover,
@@ -2155,7 +2150,7 @@ bool Fb2::load(const ProgressFn& onProgress) {
   LOG_INF("FB2-PROF", "convertToPackage: %lums", millis() - packageStarted);
   if (!converted) return false;
   { Fb2NavigationIndex navigation; ensureFb2NavigationIndex(cachePath, navigation); }
-    { Fb2AnchorIndex anchors; if (!ensureFb2AnchorIndex(cachePath, sourcePath, anchors, sectionIdsOnly)) return false; }
+    { Fb2AnchorIndex anchors; if (!ensureFb2AnchorIndex(cachePath, sourcePath, anchors)) return false; }
   loaded = true;
   LOG_INF("FB2", "Indexed FB2: %d chapters, %zu images (chapters render on demand)", chapterCount, images.size());
   maintainCacheBudget();
@@ -2253,7 +2248,6 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
             static_cast<unsigned>(scan.binaries.size()),
             static_cast<unsigned>(scan.stringPool.size()));
   }
-  sectionIdsOnly = !scan.hasNonSectionAnchors;
   if (onProgress) onProgress(40);
 
   unsigned long phaseStarted = millis();

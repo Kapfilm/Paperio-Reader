@@ -387,22 +387,3 @@ TEST(NativeFb2Parser, DiskIndexActualRegressionBook) {
 }
 
 }  // namespace
-
-TEST(NativeFb2Parser, DetectsTargetsThatNeedRenderedAnchorIndex) {
-  for (const std::string tag : {"p", "title", "td", "image", "empty-line"}) {
-    CoreMemoryReader reader("<FictionBook><body><section id=\"s\"><" + tag +
-                            " id=\"target\"/></section></body></FictionBook>");
-    Fb2ScanResult result;
-    ASSERT_TRUE(Fb2Parser().scan(reader, result));
-    EXPECT_TRUE(result.hasNonSectionAnchors) << tag;
-  }
-  CoreMemoryReader sections(kBook);
-  Fb2ScanResult result;
-  ASSERT_TRUE(Fb2Parser().scan(sections, result));
-  EXPECT_FALSE(result.hasNonSectionAnchors);
-  CoreMemoryReader annotation("<FictionBook><description><title-info><annotation>"
-      "<section id=\"extra\"><p>Text</p></section></annotation></title-info></description>"
-      "<body><section id=\"s\"><p>Text</p></section></body></FictionBook>");
-  ASSERT_TRUE(Fb2Parser().scan(annotation, result));
-  EXPECT_TRUE(result.hasNonSectionAnchors);
-}

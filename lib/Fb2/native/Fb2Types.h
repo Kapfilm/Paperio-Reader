@@ -164,8 +164,6 @@ struct Fb2BinaryIndexEntry {
 
 // Result of a full metadata/index scan (Fb2Parser::scan()).
 struct Fb2ScanResult {
-    // Only section IDs can be indexed directly from the section directory.
-    bool hasNonSectionAnchors = false;
     Fb2Metadata metadata;
     std::vector<Fb2BodyIndexEntry> bodies;
     Fb2SectionList sections;   // flat, in document order
