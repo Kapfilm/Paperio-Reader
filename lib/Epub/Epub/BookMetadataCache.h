@@ -88,6 +88,9 @@ class BookMetadataCache {
   static constexpr int MAX_ADDRESSABLE_SPINES = 32767;
   std::deque<SpineHrefIndexEntry> spineHrefIndex;
   bool useSpineHrefIndex = false;
+  std::optional<serialization::BufferedFileReader> sequentialSpineReader_;
+  SpineEntry sequentialSpineEntry_;
+  int sequentialSpineIndex_ = -1;
 
   // Batch ZIP size lookup and fast spine-href index are always better when N is
   // larger than a handful — lower threshold so even moderate books (e.g. 105
@@ -127,7 +130,7 @@ class BookMetadataCache {
   bool beginContentOpfPass();
   void createSpineEntry(const std::string& href);
   bool endContentOpfPass();
-  bool beginTocPass();
+  bool beginTocPass(bool sequentialSpines = false);
   bool resetTocPassOutput();
   void createTocEntry(const std::string& title, const std::string& href, const std::string& anchor, uint8_t level);
   bool endTocPass();
@@ -135,7 +138,7 @@ class BookMetadataCache {
   bool cleanupTmpFiles() const;
 
   // Post-processing to update mappings and sizes
-  bool buildBookBin(const std::string& epubPath, const BookMetadata& metadata);
+  bool buildBookBin(const std::string& epubPath, const BookMetadata& metadata, bool unpackedPackage = false);
 
   // True when the spine/TOC cache file (book.bin) already exists for this cachePath,
   // i.e. load() can read it instead of rebuilding. Cheap (a single Storage.exists).

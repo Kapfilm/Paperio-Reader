@@ -30,7 +30,7 @@ bool isUnifiedTextSetting(const SettingInfo& setting) {
       "fontFamily",          "fontSize",          "textAntiAliasing",    "fastAntiAliasingV2",
       "textDarkness",        "paragraphAlignment", "embeddedStyle",       "hyphenationEnabled",
       "fontSizeNormalization", "screenMargin",     "lineHeightPercent",    "extraParagraphSpacing",
-      "bionicReading",
+      "bionicReading",         "guideDots",
   };
   for (const char* key : keys) {
     if (std::strcmp(setting.key, key) == 0) return true;
@@ -159,6 +159,9 @@ void SettingsActivity::onEnter() {
   // the per-button submenus, so no new separator is inserted).
   addToMoved(controlsSettings, lastControlsSub,
              std::move(SettingInfo::Action(StrId::STR_BTN_ACTIONS_OVERVIEW, SettingAction::ButtonActionsOverview)
+                           .withSubcategory(StrId::STR_MENU_BTN_ACTIONS)));
+  addToMoved(controlsSettings, lastControlsSub,
+             std::move(SettingInfo::Action(StrId::STR_BUTTON_SETTINGS_BACKUP, SettingAction::ButtonSettingsBackup)
                            .withSubcategory(StrId::STR_MENU_BTN_ACTIONS)));
 
   addToMoved(readerSettings, lastReaderSub,

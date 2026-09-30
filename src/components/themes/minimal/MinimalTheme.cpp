@@ -39,7 +39,7 @@ constexpr int kMainMenuIconSize = 32;
 constexpr int kMaxListValueWidth = 200;
 
 Rect coverRectForScreen(const GfxRenderer& renderer, const Rect& rect) {
-  const int coverHeight = std::min(MinimalMetrics::values.homeCoverHeight, rect.height - 55);
+  const int coverHeight = MinimalMetrics::coverHeightForTile(rect.height);
   const int coverWidth = static_cast<int>((static_cast<int64_t>(coverHeight) * 3 + 2) / 5);
   return Rect{(renderer.getScreenWidth() - coverWidth) / 2, rect.y, coverWidth, coverHeight};
 }
@@ -88,8 +88,14 @@ void drawProgress(const GfxRenderer& renderer, const Rect& coverRect, const Rece
     renderer.fillRectDither(coverRect.x, barY, coverRect.width * std::min(progress, 100) / 100, kProgressBarHeight,
                             Color::DarkGray);
   }
-  char label[8];
-  snprintf(label, sizeof(label), "%d%%", progress);
+  int currentPage = 0;
+  int totalPages = 0;
+  char label[32];
+  if (UITheme::getBookProgressPages(book, currentPage, totalPages)) {
+    snprintf(label, sizeof(label), "%d/%d   %d%%", currentPage, totalPages, progress);
+  } else {
+    snprintf(label, sizeof(label), "%d%%", progress);
+  }
   const int labelWidth = renderer.getTextWidth(UI_10_FONT_ID, label);
   renderer.drawText(UI_10_FONT_ID, coverRect.x + coverRect.width - labelWidth,
                     barY + kProgressBarHeight + kProgressLabelGap, label);

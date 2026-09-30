@@ -8,6 +8,7 @@
 #include <algorithm>
 
 #include "ImageFormatDetector.h"
+#include "../Epub.h"
 #include "converters/GifToFramebufferConverter.h"
 #include "converters/JpegToFramebufferConverter.h"
 #include "converters/PngToFramebufferConverter.h"
@@ -156,6 +157,32 @@ const ImageManifestEntry* EpubImageManifest::ensureResolved(const std::string& e
   }
 
   // Note: the handle is intentionally left open; closeResolveHandle() releases it at persist.
+  return result;
+}
+
+const ImageManifestEntry* EpubImageManifest::ensureResolved(const Epub& epub,
+                                                            const std::string& epubEntryPath) {
+  if (!epub.isFb2Package()) return ensureResolved(epub.getPath(), epubEntryPath);
+  if (const ImageManifestEntry* hit = find(epubEntryPath)) return hit;
+
+  auto headerBuf = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[kHeaderBufSize]);
+  if (!headerBuf) return nullptr;
+  const size_t bytesRead = epub.readItemHeaderBytes(epubEntryPath, headerBuf.get(), kHeaderBufSize);
+  ImageDimensions dims = {0, 0};
+  if (bytesRead == 0 || !parseImageDimensions(headerBuf.get(), bytesRead, dims) || dims.width <= 0 || dims.height <= 0) {
+    return nullptr;
+  }
+
+  ImageManifestEntry e;
+  e.epubEntryPath = epubEntryPath;
+  e.width = dims.width;
+  e.height = dims.height;
+  auto it = std::lower_bound(entries_.begin(), entries_.end(), epubEntryPath,
+                             [](const ImageManifestEntry& a, const std::string& k) {
+                               return a.epubEntryPath < k;
+                             });
+  const ImageManifestEntry* result = &*entries_.insert(it, std::move(e));
+  dirty_ = true;
   return result;
 }
 

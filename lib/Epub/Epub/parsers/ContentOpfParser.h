@@ -95,6 +95,7 @@ class ContentOpfParser final : public Print {
   };
   ItemIndexVec itemIndex;
   bool useItemIndex = false;
+  bool sequentialManifest_ = false;
   bool indexDisabled_ = false;  // latched when an index growth hit OOM → linear-scan fallback
 
   // Memo of the last manifest item's media-type and its classification (MediaClass enum in the
@@ -135,6 +136,7 @@ class ContentOpfParser final : public Print {
     uint32_t spineOpenMs = 0;
     uint32_t guideOpenMs = 0;
     uint32_t itemRefCount = 0;
+    uint32_t scannedManifestEntries = 0;
     uint32_t itemRefLookupMs = 0;
     uint32_t createSpineEntryMs = 0;
   } stats;
@@ -154,8 +156,9 @@ class ContentOpfParser final : public Print {
   std::vector<std::string> cssFiles;  // CSS stylesheet paths
 
   explicit ContentOpfParser(const std::string& cachePath, const std::string& baseContentPath, const size_t xmlSize,
-                            BookMetadataCache* cache)
-      : cachePath(cachePath), baseContentPath(baseContentPath), remainingSize(xmlSize), cache(cache) {}
+                            BookMetadataCache* cache, bool sequentialManifest = false)
+      : cachePath(cachePath), baseContentPath(baseContentPath), remainingSize(xmlSize), cache(cache),
+        sequentialManifest_(sequentialManifest), indexDisabled_(sequentialManifest) {}
   ~ContentOpfParser() override;
 
   bool setup();

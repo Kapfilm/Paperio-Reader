@@ -1,6 +1,7 @@
 #include "Section.h"
 
 #include <FsHelpers.h>
+#include <Fb2.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -372,11 +373,14 @@ bool Section::loadSectionFile(const BuildParams& p) {
     }
   }
 
+  // readPod intentionally has no status; cache headers must check every read.
+  const auto readChecked = [this](auto& value) {
+    return file.read(reinterpret_cast<uint8_t*>(&value), sizeof(value)) == sizeof(value);
+  };
   // Match parameters
   {
-    uint8_t version;
-    serialization::readPod(file, version);
-    if (version != SECTION_FILE_VERSION) {
+    uint8_t version = 0;
+    if (!readChecked(version) || version != SECTION_FILE_VERSION) {
       LOG_ERR("SCT", "Deserialization failed: Unknown version %u", version);
       clearCache();  // closes file before removal
       return false;
@@ -392,17 +396,20 @@ bool Section::loadSectionFile(const BuildParams& p) {
     bool fileBionicReadingEnabled;
     uint8_t fileImageRendering;
     bool fileParseComplete;
-    serialization::readPod(file, fileFontId);
-    serialization::readPod(file, fileLineCompression);
-    serialization::readPod(file, fileExtraParagraphSpacing);
-    serialization::readPod(file, fileParagraphAlignment);
-    serialization::readPod(file, fileViewportWidth);
-    serialization::readPod(file, fileViewportHeight);
-    serialization::readPod(file, fileHyphenationEnabled);
-    serialization::readPod(file, fileEmbeddedStyle);
-    serialization::readPod(file, fileBionicReadingEnabled);
-    serialization::readPod(file, fileImageRendering);
-    serialization::readPod(file, fileParseComplete);
+    if (!readChecked(fileFontId) ||
+        !readChecked(fileLineCompression) ||
+        !readChecked(fileExtraParagraphSpacing) ||
+        !readChecked(fileParagraphAlignment) ||
+        !readChecked(fileViewportWidth) ||
+        !readChecked(fileViewportHeight) ||
+        !readChecked(fileHyphenationEnabled) ||
+        !readChecked(fileEmbeddedStyle) ||
+        !readChecked(fileBionicReadingEnabled) ||
+        !readChecked(fileImageRendering) ||
+        !readChecked(fileParseComplete)) {
+      clearCache();
+      return false;
+    }
 
     const bool embeddedStyleMatches =
         (p.embeddedStyle == fileEmbeddedStyle) || (usingEmbeddedStyleFallback && !fileEmbeddedStyle);
@@ -419,7 +426,10 @@ bool Section::loadSectionFile(const BuildParams& p) {
     truncatedCache = !fileParseComplete;
   }
 
-  serialization::readPod(file, pageCount);
+  if (!readChecked(pageCount)) {
+    clearCache();
+    return false;
+  }
 
   // Sanity check: same upper bound used by TextBlock::deserialize for word count
   if (pageCount > 10000) {
@@ -429,8 +439,12 @@ bool Section::loadSectionFile(const BuildParams& p) {
   }
 
   // Load LUT into memory (file is now positioned at the lutOffset field)
-  uint32_t lutOffset;
-  serialization::readPod(file, lutOffset);
+  uint32_t lutOffset = 0;
+  if (!readChecked(lutOffset) || lutOffset < header::kSize || lutOffset > file.size() ||
+      static_cast<uint64_t>(pageCount) * sizeof(uint32_t) > file.size() - lutOffset) {
+    clearCache();
+    return false;
+  }
   lut.resize(pageCount);
   if (!file.seek(lutOffset)) {
     LOG_ERR("SCT", "Deserialization failed: seek to LUT offset %u failed", lutOffset);
@@ -438,8 +452,7 @@ bool Section::loadSectionFile(const BuildParams& p) {
     return false;
   }
   for (uint32_t& pos : lut) {
-    serialization::readPod(file, pos);
-    if (pos < header::kSize || pos >= lutOffset) {
+    if (!readChecked(pos) || pos < header::kSize || pos >= lutOffset) {
       LOG_ERR("SCT", "Deserialization failed: LUT entry %u out of range [%u, %u)", pos, header::kSize, lutOffset);
       clearCache();
       return false;
@@ -645,7 +658,8 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   LOG_INF("SCT", "createSectionFile spine=%d start: %s (free=%lu)", spineIndex, st.localPath.c_str(),
           esp_get_free_heap_size());
 
-  // Create cache directory if it doesn't exist
+  // Create cache directory if it doesn't exist. FB2 also uses it for the
+  // lazily rendered XHTML source shared by all layout variants.
   {
     const auto sectionsDir = epub->getCachePath() + "/sections";
     Storage.mkdir(sectionsDir.c_str());
@@ -658,12 +672,38 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   // inflated size — no separate getSpineItemInflatedSize scan.
   const uint32_t phaseSetupStart = millis();
   st.inflatedSize = 0;
-  st.statValid = epub->getSpineItemStat(spineIndex, &st.spineStat);
-  if (st.statValid) {
-    st.inflatedSize = st.spineStat.uncompressedSize;
-  } else if (!epub->getSpineItemInflatedSize(spineIndex, &st.inflatedSize)) {
-    LOG_ERR("SCT", "Failed to get inflated size for %s", st.localPath.c_str());
-    return BuildPhaseResult::Failed;
+  if (epub->isFb2Package()) {
+    // Paperio's parser is resumable and expects a seekable source. Materialise
+    // only the requested virtual chapter into the existing book-keyed XHTML
+    // cache, then feed it through the unchanged sliced parser/arena pipeline.
+    const std::string htmlCachePath = getSectionHtmlCachePath();
+    if (!Storage.exists(htmlCachePath.c_str())) {
+      FsFile rendered;
+      if (!Storage.openFileForWrite("SCT", htmlCachePath, rendered) ||
+          !Fb2::renderChapterOnDemand(epub->getCachePath(), spineIndex, rendered, nullptr)) {
+        rendered.close();
+        Storage.remove(htmlCachePath.c_str());
+        LOG_ERR("SCT", "Failed to render FB2 chapter %d", spineIndex);
+        return BuildPhaseResult::Failed;
+      }
+      rendered.flush();
+      rendered.close();
+    }
+    FsFile rendered;
+    if (!Storage.openFileForRead("SCT", htmlCachePath, rendered) || rendered.isDirectory()) {
+      return BuildPhaseResult::Failed;
+    }
+    st.inflatedSize = rendered.size();
+    rendered.close();
+    st.statValid = false;
+  } else {
+    st.statValid = epub->getSpineItemStat(spineIndex, &st.spineStat);
+    if (st.statValid) {
+      st.inflatedSize = st.spineStat.uncompressedSize;
+    } else if (!epub->getSpineItemInflatedSize(spineIndex, &st.inflatedSize)) {
+      LOG_ERR("SCT", "Failed to get inflated size for %s", st.localPath.c_str());
+      return BuildPhaseResult::Failed;
+    }
   }
 
   // Reset build state — createSectionFile may be called on a Section that previously

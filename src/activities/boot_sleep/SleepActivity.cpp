@@ -2,6 +2,7 @@
 
 #include <Epub.h>
 #include <Epub/Section.h>
+#include <Fb2.h>
 #include <Epub/converters/DirectPixelWriter.h>
 #include <Epub/converters/PixelCache.h>
 #include <Epub/converters/PngToFramebufferConverter.h>
@@ -32,6 +33,7 @@
 #include "fontIds.h"
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
+#include "util/BookArchiveUtils.h"
 
 namespace {
 
@@ -731,8 +733,16 @@ BookOverlayInfo SleepActivity::getBookOverlayInfo(const std::string& bookPath) c
         f.close();
       }
     }
-  } else if (FsHelpers::checkFileExtension(bookPath, ".epub")) {
-    Epub epub(bookPath, "/.crosspoint");
+  } else if (FsHelpers::checkFileExtension(bookPath, ".epub") || isFb2BookPath(bookPath) ||
+             (isBookZipPath(bookPath) && detectBookArchiveType(bookPath) == BookArchiveType::Fb2)) {
+    std::unique_ptr<Fb2> fb2;
+    std::string packagePath = bookPath;
+    if (!FsHelpers::checkFileExtension(bookPath, ".epub")) {
+      fb2 = std::make_unique<Fb2>(bookPath, "/.crosspoint");
+      if (!fb2->load()) return info;
+      packagePath = fb2->getPackagePath();
+    }
+    Epub epub(packagePath, "/.crosspoint");
     if (epub.load(true, true)) {
       info.title = epub.getTitle();
       info.author = epub.getAuthor();
@@ -979,10 +989,20 @@ void SleepActivity::renderCoverSleepScreen() const {
     } else {
       LOG_ERR("SLP", "No cover image found for TXT file");
     }
-  } else if (FsHelpers::hasEpubExtension(APP_STATE.openEpubPath)) {
-    Epub lastEpub(APP_STATE.openEpubPath, "/.crosspoint");
+  } else if (FsHelpers::hasEpubExtension(APP_STATE.openEpubPath) || isFb2BookPath(APP_STATE.openEpubPath) ||
+             (isBookZipPath(APP_STATE.openEpubPath) &&
+              detectBookArchiveType(APP_STATE.openEpubPath) == BookArchiveType::Fb2)) {
+    std::unique_ptr<Fb2> fb2;
+    std::string packagePath = APP_STATE.openEpubPath;
+    bool packageReady = true;
+    if (!FsHelpers::hasEpubExtension(APP_STATE.openEpubPath)) {
+      fb2 = std::make_unique<Fb2>(APP_STATE.openEpubPath, "/.crosspoint");
+      packageReady = fb2->load();
+      if (packageReady) packagePath = fb2->getPackagePath();
+    }
+    Epub lastEpub(packagePath, "/.crosspoint");
     // Skip loading css since we only need metadata here.
-    if (lastEpub.load(true, true) && lastEpub.generateCoverBmp(cropped)) {
+    if (packageReady && lastEpub.load(true, true) && lastEpub.generateCoverBmp(cropped)) {
       coverBmpPath = lastEpub.getCoverBmpPath(cropped);
     } else {
       LOG_ERR("SLP", "Failed to load/generate EPUB cover bmp");
@@ -1055,6 +1075,10 @@ void SleepActivity::renderOverlaySleepScreen() const {
       rendered = TxtReaderActivity::drawCurrentPageToBuffer(path, renderer);
     } else if (FsHelpers::checkFileExtension(path, ".epub")) {
       rendered = EpubReaderActivity::drawCurrentPageToBuffer(path, renderer);
+    } else if (isFb2BookPath(path) ||
+               (isBookZipPath(path) && detectBookArchiveType(path) == BookArchiveType::Fb2)) {
+      Fb2 fb2(path, "/.crosspoint");
+      rendered = fb2.load() && EpubReaderActivity::drawCurrentPageToBuffer(fb2.getPackagePath(), renderer);
     }
 
     if (!rendered) {

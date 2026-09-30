@@ -1,6 +1,7 @@
 #include "BookMetadataCache.h"
 
 #include <Logging.h>
+#include <Fb2.h>
 #include <Serialization.h>
 #include <ZipFile.h>
 #include <esp_heap_caps.h>
@@ -47,7 +48,7 @@ bool BookMetadataCache::endContentOpfPass() {
   return true;
 }
 
-bool BookMetadataCache::beginTocPass() {
+bool BookMetadataCache::beginTocPass(bool sequentialSpines) {
   LOG_DBG("BMC", "Beginning toc pass");
 
   if (!Storage.openFileForRead("BMC", cachePath + tmpSpineBinFile, spineFile)) {
@@ -63,7 +64,14 @@ bool BookMetadataCache::beginTocPass() {
   // to wrong (or negative) spines. The linear scan has no such limit, so fall back to it rather
   // than build a silently-corrupt index. No known EPUB comes close; this is a correctness guard,
   // not a memory one.
-  if (spineCount > MAX_ADDRESSABLE_SPINES) {
+  if (sequentialSpines) {
+    // Generated FB2 TOC follows spine order. Keep one buffered cursor instead of a
+    // throwing allocation proportional to chapter count (Bible has 3941 spines).
+    sequentialSpineReader_.emplace(spineFile);
+    sequentialSpineIndex_ = -1;
+    sequentialSpineEntry_ = SpineEntry{};
+    useSpineHrefIndex = false;
+  } else if (spineCount > MAX_ADDRESSABLE_SPINES) {
     LOG_INF("BMC", "Spine count %d exceeds indexable %d; using linear TOC lookup", spineCount, MAX_ADDRESSABLE_SPINES);
     useSpineHrefIndex = false;
   } else if (spineCount >= LARGE_SPINE_THRESHOLD) {
@@ -126,6 +134,7 @@ bool BookMetadataCache::endTocPass() {
     tocWriter_.reset();
   }
   tocFile.close();
+  sequentialSpineReader_.reset();
   spineFile.close();
 
   spineHrefIndex.clear();
@@ -146,7 +155,8 @@ bool BookMetadataCache::endWrite() {
   return true;
 }
 
-bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMetadata& metadata) {
+bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMetadata& metadata,
+                                     const bool unpackedPackage) {
   LOG_DBG("BMC", "buildBookBin start: free=%lu contig=%lu", static_cast<unsigned long>(esp_get_free_heap_size()),
           static_cast<unsigned long>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT)));
   // Open all three files, writing to meta, reading from spine and toc
@@ -261,7 +271,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
 
   ZipFile zip(epubPath);
   // Pre-open zip file to speed up size calculations
-  if (!zip.open()) {
+  if (!unpackedPackage && !zip.open()) {
     LOG_ERR("BMC", "Could not open EPUB zip for size calculations");
     bookFile.close();
     spineFile.close();
@@ -283,6 +293,8 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   // abort() under -fno-exceptions — which is what the heap probe below guards.
   std::deque<uint32_t> spineSizes;
   bool useBatchSizes = false;
+  std::deque<uint32_t> fb2ApproxSizes;
+  const bool fb2SizesAvailable = unpackedPackage && Fb2::loadApproxChapterSizes(cachePath, fb2ApproxSizes);
 
   // Batch tables cost ~20 B/spine (16 B SizeTarget + 4 B size): 35 KB at 1732 spines, against
   // ~122 KB free here (device-measured on King's Avatar). Skip the batch path only when the heap
@@ -298,7 +310,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   const size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   const bool heapAllowsBatchSizes = freeHeap > batchTableBytes + 32 * 1024;
 
-  if (spineCount >= LARGE_SPINE_THRESHOLD && heapAllowsBatchSizes) {
+  if (!unpackedPackage && spineCount >= LARGE_SPINE_THRESHOLD && heapAllowsBatchSizes) {
     LOG_DBG("BMC", "Using batch size lookup for %d spine items", spineCount);
 
     std::deque<ZipFile::SizeTarget> targets;
@@ -332,7 +344,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
     targets.shrink_to_fit();
 
     useBatchSizes = true;
-  } else if (spineCount >= LARGE_SPINE_THRESHOLD) {
+  } else if (!unpackedPackage && spineCount >= LARGE_SPINE_THRESHOLD) {
     // Should be rare — see the sizing note above. If this shows up on an ordinary book, the
     // threshold is too conservative and is costing a central-directory scan per spine.
     LOG_INF("BMC", "Skipping batch size lookup for %d spine items (free %u < %u needed); using per-item lookup",
@@ -358,7 +370,11 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
     lastSpineTocIndex = spineScratch.tocIndex;
 
     size_t itemSize = 0;
-    if (useBatchSizes) {
+    if (unpackedPackage) {
+      itemSize = fb2SizesAvailable && i < static_cast<int>(fb2ApproxSizes.size())
+                     ? fb2ApproxSizes[i]
+                     : Fb2::getApproxChapterSize(cachePath, i);
+    } else if (useBatchSizes) {
       itemSize = spineSizes[i];
       if (itemSize == 0) {
         FsHelpers::normalisePath(spineScratch.href, pathScratch);
@@ -380,7 +396,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
     writeSpineEntry(bookWriter, spineScratch);
   }
   // Close opened zip file
-  zip.close();
+  if (!unpackedPackage) zip.close();
 
   // Loop through toc entries from toc file writing to book.bin
   tocReader.seek(0);
@@ -489,7 +505,25 @@ void BookMetadataCache::createTocEntry(const std::string& title, const std::stri
 
   int16_t spineIndex = -1;
 
-  if (useSpineHrefIndex) {
+  if (sequentialSpineReader_) {
+    // Exact comparison also handles repeated targets. A backwards target wraps
+    // once; missing targets scan at most one full spine, never loop forever.
+    if (sequentialSpineIndex_ >= 0 && sequentialSpineEntry_.href == href) {
+      spineIndex = static_cast<int16_t>(sequentialSpineIndex_);
+    } else {
+      for (uint32_t checked = 0; checked < spineCount; ++checked) {
+        if (++sequentialSpineIndex_ >= spineCount) {
+          sequentialSpineIndex_ = 0;
+          sequentialSpineReader_->seek(0);
+        }
+        readSpineEntry(*sequentialSpineReader_, sequentialSpineEntry_);
+        if (sequentialSpineEntry_.href == href) {
+          spineIndex = static_cast<int16_t>(sequentialSpineIndex_);
+          break;
+        }
+      }
+    }
+  } else if (useSpineHrefIndex) {
     uint64_t targetHash = HashUtils::fnvHash64(href);
     uint16_t targetLen = static_cast<uint16_t>(href.size());
 
@@ -537,29 +571,39 @@ bool BookMetadataCache::load() {
     return false;
   }
 
-  uint8_t version;
-  serialization::readPod(bookFile, version);
-  if (version != BOOK_CACHE_VERSION) {
-    LOG_DBG("BMC", "Cache version mismatch: expected %d, got %d", BOOK_CACHE_VERSION, version);
+  loaded = false;
+  const auto reject = [this]() {
     bookFile.close();
+    LOG_ERR("BMC", "Incomplete or invalid book cache header");
     return false;
-  }
-
-  serialization::readPod(bookFile, lutOffset);
-  serialization::readPod(bookFile, spineCount);
-  serialization::readPod(bookFile, tocCount);
-  uint8_t tocReliableByte;
-  serialization::readPod(bookFile, tocReliableByte);
+  };
+  const auto readExact = [this](auto& value) {
+    return bookFile.read(&value, sizeof(value)) == sizeof(value);
+  };
+  uint8_t version = 0;
+  uint8_t tocReliableByte = 0;
+  if (!readExact(version) || version != BOOK_CACHE_VERSION || !readExact(lutOffset) ||
+      !readExact(spineCount) || !readExact(tocCount) || !readExact(tocReliableByte)) return reject();
+  const size_t fileSize = bookFile.size();
+  const size_t lutSize = (static_cast<size_t>(spineCount) + tocCount) * sizeof(uint32_t);
+  if (lutOffset < bookFile.position() || lutOffset > fileSize || lutSize > fileSize - lutOffset) return reject();
   tocReliable = (tocReliableByte != 0);
 
-  serialization::readString(bookFile, coreMetadata.title);
-  serialization::readString(bookFile, coreMetadata.author);
-  serialization::readString(bookFile, coreMetadata.language);
-  serialization::readString(bookFile, coreMetadata.coverItemHref);
-  serialization::readString(bookFile, coreMetadata.textReferenceHref);
-  serialization::readString(bookFile, coreMetadata.series);
-  serialization::readString(bookFile, coreMetadata.seriesIndex);
-  serialization::readString(bookFile, coreMetadata.description);
+  // Validate lengths against the metadata region BEFORE allocating strings.
+  // Interrupted writes must not be accepted as a warm cache by the home screen.
+  const auto readMetadata = [&](std::string& value) {
+    uint32_t length = 0;
+    if (bookFile.position() > lutOffset || lutOffset - bookFile.position() < sizeof(length) ||
+        !readExact(length) || length > serialization::MAX_STRING_LENGTH ||
+        length > lutOffset - bookFile.position()) return false;
+    value.resize(length);
+    return length == 0 || bookFile.read(value.data(), length) == length;
+  };
+  if (!readMetadata(coreMetadata.title) || !readMetadata(coreMetadata.author) ||
+      !readMetadata(coreMetadata.language) || !readMetadata(coreMetadata.coverItemHref) ||
+      !readMetadata(coreMetadata.textReferenceHref) || !readMetadata(coreMetadata.series) ||
+      !readMetadata(coreMetadata.seriesIndex) || !readMetadata(coreMetadata.description) ||
+      bookFile.position() != lutOffset) return reject();
 
   loaded = true;
   LOG_DBG("BMC", "Loaded cache data: %d spine, %d TOC entries", spineCount, tocCount);

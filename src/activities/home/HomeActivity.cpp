@@ -195,12 +195,10 @@ void HomeActivity::giveUpCover(RecentBook& book, ThumbResult res, const std::vec
     LOG_DBG("HOME", "Transient cover failure %u/%u for %s", n, COVER_MAX_TRANSIENT_ATTEMPTS, book.path.c_str());
   }
 
-  // Permanent give-up = structurally absent, or transient failures past this session's budget
-  // (e.g. an embedded cover the decoder rejects every time — oversize PNG, corrupt image). Mirror
-  // RecentBooksActivity: write a valid placeholder BMP at each thumb slot so isCoverThumbComplete()
-  // treats the book as resolved on disk and it is never re-decoded on the next boot. A still-retryable
-  // transient failure records an empty cover instead, so it gets a fresh attempt next session.
-  const bool permanent = (res == ThumbResult::StructurallyAbsent) || coverAttemptsExhausted(book.path);
+  // A retry budget only limits this visit to Home. It is not evidence that the
+  // book has no cover: a JPEG decode may fail transiently under memory pressure.
+  // Persist a blank BMP only when the source proved structurally absent.
+  const bool permanent = (res == ThumbResult::StructurallyAbsent);
 
   if (permanent) {
     bool allWritten = !slots.empty();
@@ -217,12 +215,17 @@ void HomeActivity::giveUpCover(RecentBook& book, ThumbResult res, const std::vec
       book.coverBmpPath = placeholder;
       return;
     }
-    // Placeholder write failed (e.g. tight heap) — fall through to empty; retry next pass.
-    LOG_DBG("HOME", "Placeholder write failed for %s — recording empty, will retry", book.path.c_str());
+    // Placeholder write failed (e.g. tight heap) — retain the path and retry next visit.
+    LOG_DBG("HOME", "Placeholder write failed for %s — will retry", book.path.c_str());
   }
 
-  RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
-  book.coverBmpPath = "";
+  // Keep the shared path: other sizes (for example the Mini home cover while
+  // generating a grid thumbnail) may already be complete and usable.
+  const std::string placeholder = ReaderActivity::coverThumbPlaceholder(book.path);
+  if (book.coverBmpPath != placeholder) {
+    RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
+    book.coverBmpPath = placeholder;
+  }
 }
 
 void HomeActivity::loadRecentCovers(int coverHeight) {
@@ -423,10 +426,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
           // This book already burned its transient-failure budget this session — stop retrying it
           // (a reboot resets the counter and tries again) so it can't starve the others.
           if (coverAttemptsExhausted(book.path)) {
-            LOG_DBG("HOME", "Cover attempts exhausted for %s this session — writing placeholder", book.path.c_str());
-            // Already counted to the budget; don't re-count. coverAttemptsExhausted() makes this
-            // a permanent give-up inside giveUpCover(), so a durable placeholder BMP is written.
-            giveUpCover(book, ThumbResult::StructurallyAbsent, slotsForBook(placeholder));
+            LOG_DBG("HOME", "Cover attempts exhausted for %s this session — defer until next visit", book.path.c_str());
             allValid = false;
             break;
           }
@@ -539,10 +539,7 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
         // This book already burned its transient-failure budget this session — stop retrying it
         // (a reboot resets the counter) and advance.
         if (coverAttemptsExhausted(book.path)) {
-          LOG_DBG("HOME", "Cover attempts exhausted for %s this session — writing placeholder", book.path.c_str());
-          // Already counted to the budget; don't re-count. coverAttemptsExhausted() makes this a
-          // permanent give-up inside giveUpCover(), so a durable placeholder BMP is written.
-          giveUpCover(book, ThumbResult::StructurallyAbsent, slotsForBook(placeholder));
+          LOG_DBG("HOME", "Cover attempts exhausted for %s this session — defer until next visit", book.path.c_str());
           nextRecentCoverIndex++;
           yieldAfterDecode();
           return;
@@ -662,7 +659,8 @@ void HomeActivity::onEnter() {
   // which is the one reading-stats consumer outside the settings screens. Load the history for
   // as long as Home is on screen and release it on the way out — the reader must not inherit it,
   // since that ~15 KB and its effect on the largest free block is what starves a section build.
-  statsLoad_.emplace();
+  // Mini shows progress from recents and does not use the reading-history ETA.
+  if (!isMinimalTheme()) statsLoad_.emplace();
   hasOpdsServers = OPDS_STORE.hasServers();
 
   selectorIndex = 0;
@@ -771,7 +769,10 @@ void HomeActivity::loop() {
     const bool inputWaiting =
         mappedInput.hasPendingInput() || mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased();
     if (firstRenderDone && !recentsLoaded && !recentsLoading && !inputWaiting) {
-      loadRecentCovers(UITheme::getInstance().getMetrics().homeCoverHeight);
+      const auto& metrics = UITheme::getInstance().getMetrics();
+      const Rect contentRect = UITheme::getContentRect(renderer, true, false);
+      const int tileHeight = std::min(metrics.homeCoverTileHeight, contentRect.height - metrics.homeTopPadding);
+      loadRecentCovers(MinimalMetrics::coverHeightForTile(tileHeight));
       return;
     }
 
@@ -937,14 +938,18 @@ void HomeActivity::render(RenderLock&&) {
       return;
     }
 
-    bool bufferRestored = coverBufferStored && restoreCoverBuffer();
+    // Mini clears the frame on each render; read its small BMP from SD instead
+    // of retaining a second 42 KiB copy of almost the whole screen.
+    freeCoverBuffer();
+    coverRendered = false;
+    bool bufferRestored = false;
     coverRectX = contentRect.x;
     coverRectY = metrics.homeTopPadding;
     coverRectW = contentRect.width;
     coverRectH = std::min(metrics.homeCoverTileHeight, contentRect.height - metrics.homeTopPadding);
     GUI.drawRecentBookCover(renderer, Rect{coverRectX, coverRectY, coverRectW, coverRectH}, recentBooks, 0,
                             coverRendered, coverBufferStored, bufferRestored,
-                            std::bind(&HomeActivity::storeCoverBuffer, this));
+                            []() { return false; });
 
     const auto labels = mappedInput.mapLabels(tr(STR_MENU), tr(STR_BOOKS), tr(STR_BUTTON_SETTINGS),
                                               recentBooks.empty() ? "" : tr(STR_READ));

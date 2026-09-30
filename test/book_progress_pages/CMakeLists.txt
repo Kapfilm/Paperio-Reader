@@ -1,0 +1,3 @@
+add_executable(BookProgressPagesTest BookProgressPagesTest.cpp)
+target_link_libraries(BookProgressPagesTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(BookProgressPagesTest)

@@ -310,11 +310,20 @@ bool ContentOpfParser::resolveItemRefHrefWithIndex(const std::string& idref, std
 }
 
 bool ContentOpfParser::resolveItemRefHrefLinearScan(const std::string& idref, std::string& href) {
-  itemReader_->seek(0);
+  if (!sequentialManifest_) itemReader_->seek(0);
+  const size_t start = itemReader_->position();
+  bool wrapped = false;
   const size_t itemStoreSize = tempItemStore.fileSize();
   std::string itemId;
 
-  while (itemReader_->position() < itemStoreSize) {
+  while (true) {
+    if (itemReader_->position() >= itemStoreSize) {
+      if (!sequentialManifest_ || wrapped || start == 0) return false;
+      itemReader_->seek(0);
+      wrapped = true;
+    }
+    if (wrapped && itemReader_->position() >= start) return false;
+    ++stats.scannedManifestEntries;
     const size_t beforeReadPos = itemReader_->position();
     if (!itemReader_->readString(itemId) || !itemReader_->readString(href)) {
       return false;

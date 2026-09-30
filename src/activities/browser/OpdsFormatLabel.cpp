@@ -81,6 +81,12 @@ const char* opdsBaseFormatLabel(const OpdsAcquisitionLink& acquisition) {
   if (acquisition.formatKey == "epub") {
     return "EPUB";
   }
+  if (acquisition.formatKey == "fb2") {
+    return "FB2";
+  }
+  if (acquisition.formatKey == "fb2zip") {
+    return "FB2.ZIP";
+  }
   if (acquisition.formatKey == "txt") {
     return "TXT";
   }

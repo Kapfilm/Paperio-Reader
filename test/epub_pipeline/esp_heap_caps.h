@@ -9,5 +9,6 @@
 #define MALLOC_CAP_DEFAULT (1 << 1)
 #define MALLOC_CAP_INTERNAL (1 << 2)
 
-inline size_t heap_caps_get_largest_free_block(uint32_t /*caps*/) { return 200 * 1024; }
+inline size_t testLargestHeapBlock = 200 * 1024;
+inline size_t heap_caps_get_largest_free_block(uint32_t /*caps*/) { return testLargestHeapBlock; }
 inline size_t heap_caps_get_free_size(uint32_t /*caps*/) { return 300 * 1024; }

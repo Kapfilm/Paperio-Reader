@@ -64,9 +64,9 @@ class ReaderActivity final : public Activity {
   // to rediscover the absence — without the 0-byte-file "mess" (we now treat empty files as invalid).
   static bool writeCoverPlaceholderBmp(const std::string& path, int width, int height);
 
-  // Sliced extraction of a ZIP entry to a file, one chunk per continueStep() call.
-  // Used to extract an embedded PNG cover (cover.img) without blocking loop() for
-  // the full ~35-second decompress. Owns the ZipFile (which EntryReader references).
+  // Sliced extraction/copy of a cover image to a file, one chunk per
+  // continueStep() call. ZIP EPUBs use EntryReader; FB2's prepared unpacked
+  // package uses a direct file copy after its image has been decoded on demand.
   class CoverExtractSession {
    public:
     enum class Status { Running, Done, Error };
@@ -74,6 +74,9 @@ class ReaderActivity final : public Activity {
     // Begin extracting zipEntryPath from epubPath into destPath.
     // Returns false if the entry cannot be opened.
     bool begin(const std::string& epubPath, const std::string& zipEntryPath, const std::string& destPath);
+
+    // Begin copying an already-materialized file into destPath in slices.
+    bool beginFileCopy(const std::string& sourcePath, const std::string& destPath);
 
     // Decompress up to chunkBytes into destPath. Call repeatedly until not Running.
     Status continueStep(size_t chunkBytes = 4096);
@@ -86,13 +89,17 @@ class ReaderActivity final : public Activity {
    private:
     std::unique_ptr<ZipFile> zip_;
     std::unique_ptr<ZipFile::EntryReader> reader_;
+    FsFile source_;
     FsFile dst_;
     std::string destPath_;
+    std::string workPath_;  // promoted only after a complete extraction/copy
     uint8_t* buf_ = nullptr;
     size_t chunkBytes_ = 0;
+    size_t fileCopyProduced_ = 0;
+    size_t fileCopyTotal_ = 0;
   };
 
-  // Begin a sliced ZIP extraction for the embedded cover of bookPath.
+  // Begin sliced extraction/copy for the embedded cover of bookPath.
   // Returns nullptr if the book has no extractable embedded PNG cover, or if
   // cover.img is already cached. On success the caller drives the session via
   // continueStep() each loop() tick until Done, then calls beginPngThumbSession.

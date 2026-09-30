@@ -100,7 +100,6 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   // --- Navigation ---
   menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_NAVIGATION));
   menuItems.push_back(SettingInfo::Action(StrId::STR_SELECT_CHAPTER, SettingAction::None));
-  menuItems.push_back(SettingInfo::Action(StrId::STR_READING_PROFILES, SettingAction::None));
   menuItems.push_back(SettingInfo::Action(StrId::STR_GO_TO_PERCENT, SettingAction::None));
   if (hasPrintedPages) {
     menuItems.push_back(SettingInfo::Action(StrId::STR_GO_TO_PRINTED_PAGE, SettingAction::None));
@@ -130,6 +129,7 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
 
   // --- Appearance ---
   menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_APPEARANCE));
+  menuItems.push_back(SettingInfo::Action(StrId::STR_READING_PROFILES, SettingAction::None));
 
   auto* self = this;
   // Orientation: straightforward 0-3 cycle

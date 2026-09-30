@@ -5,6 +5,8 @@
 #include <JsonSettingsIO.h>
 #include <Logging.h>
 
+#include <esp_heap_caps.h>
+
 #include <algorithm>
 #include <ctime>
 
@@ -61,17 +63,57 @@ uint16_t currentLocalDayIndex() {
 
 ReadingStatsStore ReadingStatsStore::instance;
 
+// No exceptions in the firmware: preflight growth before touching counters.
+// Include old and new allocations and reserve exact vector sizes, avoiding
+// std::vector's doubling at precisely the point where memory is most limited.
+bool ReadingStatsStore::prepareMutation(const std::string& docId, const std::string& title,
+                                        const std::string& author, uint16_t day) {
+  auto it = std::find_if(books.begin(), books.end(), [&docId](const BookReadingStats& b) { return b.docId == docId; });
+  const bool newBook = it == books.end();
+  auto needsDay = [day](const std::vector<DayBucket>& days) {
+    return day != 0 && std::none_of(days.begin(), days.end(),
+                                   [day](const DayBucket& b) { return b.dayIndex == day; });
+  };
+  const bool bookDay = day != 0 && (newBook || needsDay(it->days));
+  const bool globalDay = needsDay(globalDays);
+  size_t bytes = 0;
+  size_t largest = 0;
+  auto account = [&](size_t n) { bytes += n + 32; largest = std::max(largest, n); };
+  if (newBook && books.capacity() < books.size() + 1) account((books.size() + 1) * sizeof(BookReadingStats));
+  if (globalDay && globalDays.capacity() < globalDays.size() + 1) account((globalDays.size() + 1) * sizeof(DayBucket));
+  if (bookDay && (newBook || it->days.capacity() < it->days.size() + 1)) {
+    account((newBook ? 1 : it->days.size() + 1) * sizeof(DayBucket));
+  }
+  if (newBook) account(docId.size() + 1);
+  // libstdc++ string assignment can grow capacity geometrically.
+  if (newBook || title.size() > it->title.capacity()) account(2 * title.size() + 1);
+  if (newBook || author.size() > it->author.capacity()) account(2 * author.size() + 1);
+  if (bytes + 8192 > heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT) ||
+      largest + 1024 > heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT)) {
+    LOG_ERR("RST", "Insufficient heap for history update; existing history retained");
+    return false;
+  }
+  if (globalDay) globalDays.reserve(globalDays.size() + 1);
+  if (!newBook && bookDay) it->days.reserve(it->days.size() + 1);
+  if (newBook) books.reserve(books.size() + 1);
+  return true;
+}
+
 void ReadingStatsStore::recordSession(const std::string& docId, const std::string& title, const std::string& author,
                                       uint32_t sessionSeconds, uint32_t sessionPagesTurned, uint8_t progress,
                                       time_t walltimeEpoch) {
+  if (!ensureLoaded()) return;
   if (docId.empty()) {
     // Title-update-only flows go through a different path.
     return;
   }
 
+  const uint16_t day = sessionSeconds > 0 ? localDayIndexFromEpoch(walltimeEpoch) : 0;
+  if (!prepareMutation(docId, title, author, day)) return;
   auto it = std::find_if(books.begin(), books.end(), [&docId](const BookReadingStats& b) { return b.docId == docId; });
   if (it == books.end()) {
     BookReadingStats fresh;
+    if (day != 0) fresh.days.reserve(1);
     fresh.docId = docId;
     fresh.title = title;
     fresh.author = author;
@@ -152,7 +194,8 @@ uint16_t ReadingStatsStore::computeLongestStreak() const {
 
 void ReadingStatsStore::markFinished(const std::string& docId, const std::string& title, const std::string& author,
                                      time_t walltimeEpoch) {
-  if (docId.empty()) return;
+  if (!ensureLoaded() || docId.empty()) return;
+  if (!prepareMutation(docId, title, author, 0)) return;
   auto it = std::find_if(books.begin(), books.end(), [&docId](const BookReadingStats& b) { return b.docId == docId; });
   if (it == books.end()) {
     BookReadingStats fresh;
@@ -229,15 +272,19 @@ bool ReadingStatsStore::saveToFile() const {
 }
 
 bool ReadingStatsStore::loadFromFile() {
-  loaded_ = true;  // an absent or empty file is a legitimately empty history, not a failure to load
+  if (!Storage.exists(READING_STATS_FILE) && Storage.exists("/.crosspoint/reading-stats.json.bak")) {
+    // Interrupted atomic replacement: restore the last committed history first.
+    if (!Storage.rename("/.crosspoint/reading-stats.json.bak", READING_STATS_FILE)) {
+      loaded_ = false;
+      return false;
+    }
+  }
   if (!Storage.exists(READING_STATS_FILE)) {
-    return false;
+    loaded_ = true;  // Only absence is a new, legitimately empty history.
+    return true;
   }
-  String json = Storage.readFile(READING_STATS_FILE);
-  if (json.isEmpty()) {
-    return false;
-  }
-  return JsonSettingsIO::loadReadingStats(*this, json.c_str());
+  loaded_ = JsonSettingsIO::loadReadingStatsFile(*this, READING_STATS_FILE);
+  return loaded_;
 }
 
 bool ReadingStatsStore::ensureLoaded() {

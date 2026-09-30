@@ -2,6 +2,7 @@
 
 #include <Bitmap.h>
 #include <CooperativeAbort.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <limits>
@@ -72,6 +74,35 @@ ImageFormatDetector::Format detectCoverImageFormat(FsFile& imageFile) {
 
 }  // namespace
 
+Epub::Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
+  HalFile source;
+  if (Storage.openFileForRead("EBP", this->filepath, source)) {
+    unpackedPackage = source.isDirectory();
+    source.close();
+  }
+
+  constexpr char kPackageSuffix[] = "/package.epub";
+  constexpr size_t kSuffixLen = sizeof(kPackageSuffix) - 1;
+  if (this->filepath.size() > kSuffixLen &&
+      this->filepath.compare(this->filepath.size() - kSuffixLen, kSuffixLen, kPackageSuffix) == 0) {
+    const std::string parent = this->filepath.substr(0, this->filepath.size() - kSuffixLen);
+    const std::string cachePrefix = cacheDir + "/";
+    if (parent.compare(0, cachePrefix.size(), cachePrefix) == 0 &&
+        Storage.exists((parent + Fb2::SOURCE_MARKER_FILE).c_str())) {
+      cachePath = parent;
+      isFb2Origin = true;
+    }
+  }
+  if (cachePath.empty()) {
+    cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
+  }
+}
+
+std::string Epub::itemPath(const std::string& itemHref) const {
+  const std::string normalized = FsHelpers::normalisePath(itemHref);
+  return unpackedPackage ? filepath + "/" + normalized : normalized;
+}
+
 bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   const auto containerPath = "META-INF/container.xml";
   size_t containerSize;
@@ -124,7 +155,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, OpfCac
   LOG_DBG("EBP", "content.opf size=%zu bytes", contentOpfSize);
 
   ContentOpfParser opfParser(getCachePath(), getBasePath(), contentOpfSize,
-                             cacheMode == OpfCacheMode::Enabled ? bookMetadataCache.get() : nullptr);
+                             cacheMode == OpfCacheMode::Enabled ? bookMetadataCache.get() : nullptr, isFb2Package());
   if (!opfParser.setup()) {
     LOG_ERR("EBP", "Could not setup content.opf parser");
     return false;
@@ -206,7 +237,7 @@ bool Epub::parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, OpfCac
     return getItemSize(path, &coverSize);
   };
 
-  if (!hasReadableCover(bookMetadata.coverItemHref)) {
+  if (!unpackedPackage && !hasReadableCover(bookMetadata.coverItemHref)) {
     if (!bookMetadata.coverItemHref.empty()) {
       LOG_DBG("EBP", "Cover href unresolved, trying common cover candidates: %s", bookMetadata.coverItemHref.c_str());
     }
@@ -415,6 +446,7 @@ void Epub::adoptZipDetails(const ZipFile& zip) const {
 }
 
 bool Epub::computeZipFingerprint(uint64_t* out) const {
+  if (unpackedPackage) return false;
   if (!zipFingerprintComputed_) {
     ZipFile zip(filepath);
     primeZip(zip);
@@ -455,11 +487,11 @@ void Epub::writeStoredFingerprint(const uint64_t fp) const {
   f.close();
 }
 
-bool Epub::needsFirstOpenIndexing() const {
+bool Epub::needsFirstOpenIndexing(const bool skipLoadingCss) const {
   // Spine/TOC cache missing -> load() rebuilds it (content.opf + TOC/NCX + book.bin).
   if (!BookMetadataCache::cacheExists(cachePath)) return true;
   // Compiled CSS rules cache missing -> load() runs the (slow) CSS compile.
-  if (!CssParser(cachePath).hasCache()) return true;
+  if (!skipLoadingCss && !CssParser(cachePath).hasCache()) return true;
   // Book content changed at the same path -> load() wipes the cache and rebuilds.
   uint64_t zipFp = 0, storedFp = 0;
   if (computeZipFingerprint(&zipFp) && readStoredFingerprint(&storedFp) && storedFp != zipFp) return true;
@@ -490,6 +522,7 @@ void Epub::discoverCssFilesFromZip() {
   // Use streamCentralDirectoryNames (O(1) heap, fixed 256-byte stack buffer per entry)
   // instead of loadAllFileStatSlims(). The old path built a full unordered_map of every
   // ZIP entry — on EPUBs with 3000+ entries this consumed ~200 KB and crashed.
+  if (unpackedPackage) return;  // generated FB2 OPF lists its stylesheet explicitly
   ZipFile zf(filepath);
   primeZip(zf);
 
@@ -706,11 +739,11 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     LOG_ERR("EBP", "Could not end writing content.opf pass");
     return false;
   }
-  LOG_DBG("EBP", "OPF pass completed in %lu ms", millis() - opfStart);
+  LOG_INF("EBP", "OPF pass completed in %lu ms", millis() - opfStart);
 
   // TOC Pass - try EPUB 3 nav first, fall back to NCX
   const uint32_t tocStart = millis();
-  if (!bookMetadataCache->beginTocPass()) {
+  if (!bookMetadataCache->beginTocPass(isFb2Package())) {
     LOG_ERR("EBP", "Could not begin writing toc pass");
     return false;
   }
@@ -753,7 +786,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
     LOG_ERR("EBP", "Could not end writing toc pass");
     return false;
   }
-  LOG_DBG("EBP", "TOC pass completed in %lu ms", millis() - tocStart);
+  LOG_INF("EBP", "TOC pass completed in %lu ms", millis() - tocStart);
 
   // Close the cache files
   if (!bookMetadataCache->endWrite()) {
@@ -763,12 +796,12 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
 
   // Build final book.bin
   const uint32_t buildStart = millis();
-  if (!bookMetadataCache->buildBookBin(filepath, bookMetadata)) {
+  if (!bookMetadataCache->buildBookBin(filepath, bookMetadata, unpackedPackage)) {
     LOG_ERR("EBP", "Could not update mappings and sizes");
     return false;
   }
-  LOG_DBG("EBP", "buildBookBin completed in %lu ms", millis() - buildStart);
-  LOG_DBG("EBP", "Total indexing completed in %lu ms", millis() - indexingStart);
+  LOG_INF("EBP", "buildBookBin completed in %lu ms", millis() - buildStart);
+  LOG_INF("EBP", "Total indexing completed in %lu ms", millis() - indexingStart);
 
   if (!bookMetadataCache->cleanupTmpFiles()) {
     LOG_DBG("EBP", "Could not cleanup tmp files - ignoring");
@@ -851,6 +884,27 @@ bool Epub::loadForMetadata() {
 bool Epub::clearCache(const bool preserveThumbs) const {
   if (!Storage.exists(cachePath.c_str())) {
     LOG_DBG("EPB", "Cache does not exist, no action needed");
+    return true;
+  }
+
+  // The FB2 package and its source indexes live in the same directory as the
+  // EPUB-derived caches. Never remove that directory from the Epub layer;
+  // Fb2::clearCache() owns full-package invalidation and preserves user state.
+  if (isFb2Origin) {
+    Storage.removeDir((cachePath + "/sections").c_str());
+    Storage.removeDir((cachePath + "/spine_src").c_str());
+    Storage.removeDir((cachePath + "/img").c_str());
+    for (const char* name : {"/book.bin", "/spine.bin.tmp", "/toc.bin.tmp", "/css_rules.cache", "/images.bin",
+                             "/footnotes.bin", "/pagelist.bin"}) {
+      const std::string path = cachePath + name;
+      if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+    }
+    if (!preserveThumbs) {
+      for (const char* name : {"/cover.bmp", "/cover_crop.bmp", "/cover.img"}) {
+        const std::string path = cachePath + name;
+        if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+      }
+    }
     return true;
   }
 
@@ -1324,7 +1378,30 @@ uint8_t* Epub::readItemContentsToBytes(const std::string& itemHref, size_t* size
     return nullptr;
   }
 
-  const std::string path = FsHelpers::normalisePath(itemHref);
+  const std::string path = itemPath(itemHref);
+
+  if (isFb2Origin && !Storage.exists(path.c_str())) {
+    Fb2::decodeImageOnDemand(path, nullptr);
+  }
+  if (unpackedPackage) {
+    FsFile file;
+    if (!Storage.openFileForRead("EBP", path, file) || file.isDirectory()) return nullptr;
+    const size_t bytes = file.size();
+    auto* content = static_cast<uint8_t*>(malloc(bytes + (trailingNullByte ? 1u : 0u)));
+    if (!content) {
+      file.close();
+      return nullptr;
+    }
+    const int got = file.read(content, bytes);
+    file.close();
+    if (got != static_cast<int>(bytes)) {
+      free(content);
+      return nullptr;
+    }
+    if (trailingNullByte) content[bytes] = '\0';
+    if (size) *size = bytes;
+    return content;
+  }
 
   ZipFile zip(filepath);
   primeZip(zip);
@@ -1345,7 +1422,39 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
     return false;
   }
 
-  const std::string path = FsHelpers::normalisePath(itemHref);
+  const std::string path = itemPath(itemHref);
+  if (isFb2Origin) {
+    int chapterIndex = -1;
+    const size_t prefixPos = itemHref.rfind("chapter_");
+    if (prefixPos != std::string::npos) chapterIndex = std::atoi(itemHref.c_str() + prefixPos + 8);
+    if (chapterIndex >= 0) return Fb2::renderChapterOnDemand(cachePath, chapterIndex, out, nullptr);
+    if (!Storage.exists(path.c_str())) Fb2::decodeImageOnDemand(path, nullptr);
+  }
+  if (unpackedPackage) {
+    FsFile file;
+    if (!Storage.openFileForRead("EBP", path, file) || file.isDirectory()) return false;
+    const size_t bufferSize = std::max<size_t>(chunkSize, 1);
+    auto buffer = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[bufferSize]);
+    if (!buffer) {
+      file.close();
+      return false;
+    }
+    bool ok = true;
+    while (file.available() > 0) {
+      if (abortable && CooperativeAbort::shouldAbortLongTask()) {
+        CooperativeAbort::markAborted();
+        ok = false;
+        break;
+      }
+      const int got = file.read(buffer.get(), bufferSize);
+      if (got <= 0 || out.write(buffer.get(), static_cast<size_t>(got)) != static_cast<size_t>(got)) {
+        ok = false;
+        break;
+      }
+    }
+    file.close();
+    return ok;
+  }
   ZipFile zip(filepath);
   primeZip(zip);
   AbortablePrint abortableOut(out);
@@ -1357,7 +1466,15 @@ bool Epub::readItemContentsToStream(const std::string& itemHref, Print& out, con
 
 size_t Epub::readItemHeaderBytes(const std::string& itemHref, uint8_t* outBuf, const size_t maxBytes) const {
   if (itemHref.empty() || !outBuf || maxBytes == 0) return 0;
-  const std::string path = FsHelpers::normalisePath(itemHref);
+  const std::string path = itemPath(itemHref);
+  if (isFb2Origin && !Storage.exists(path.c_str())) Fb2::decodeImageOnDemand(path, nullptr);
+  if (unpackedPackage) {
+    FsFile file;
+    if (!Storage.openFileForRead("EBP", path, file) || file.isDirectory()) return 0;
+    const int got = file.read(outBuf, maxBytes);
+    file.close();
+    return got > 0 ? static_cast<size_t>(got) : 0;
+  }
   ZipFile zip(filepath);
   primeZip(zip);
   const size_t got = zip.readBytesFromEntry(path.c_str(), outBuf, maxBytes);
@@ -1366,6 +1483,7 @@ size_t Epub::readItemHeaderBytes(const std::string& itemHref, uint8_t* outBuf, c
 }
 
 bool Epub::readItemContentsToStreamWithArena(const std::string& itemHref, Print& out, BuildArena* arena) const {
+  if (unpackedPackage) return readItemContentsToStream(itemHref, out, 1024, true);
   const std::string path = FsHelpers::normalisePath(itemHref);
   ZipFile zip(filepath);
   primeZip(zip);
@@ -1428,7 +1546,14 @@ bool Epub::extractItemToFile(const std::string& itemHref, const std::string& des
 }
 
 bool Epub::getItemSize(const std::string& itemHref, size_t* size) const {
-  const std::string path = FsHelpers::normalisePath(itemHref);
+  const std::string path = itemPath(itemHref);
+  if (unpackedPackage) {
+    FsFile file;
+    if (!Storage.openFileForRead("EBP", path, file) || file.isDirectory()) return false;
+    *size = file.size();
+    file.close();
+    return true;
+  }
   ZipFile zip(filepath);
   primeZip(zip);
   const bool ok = zip.getInflatedFileSize(path.c_str(), size);
@@ -1439,6 +1564,7 @@ bool Epub::getItemSize(const std::string& itemHref, size_t* size) const {
 void Epub::ensureSpineStats() const {
   if (spineStatsResolved_) return;
   spineStatsResolved_ = true;  // one attempt per book instance; on failure fall back to scans
+  if (unpackedPackage) return;
 
   const int spineCount = getSpineItemsCount();
   if (spineCount <= 0) return;
@@ -1492,6 +1618,7 @@ void Epub::ensureSpineStats() const {
 
 bool Epub::getSpineItemStat(const int spineIndex, ZipFile::FileStatSlim* out) const {
   if (!out || spineIndex < 0) return false;
+  if (unpackedPackage) return false;
   ensureSpineStats();
 
   if (spineStatsUsable_ && spineIndex < static_cast<int>(spineStats_.size())) {
@@ -1631,7 +1758,12 @@ bool Epub::hasReliableToc() const {
   // Reliability is computed once at indexing time and persisted in book.bin's header.
   // This avoids the O(tocCount) seek-heavy scan that previously fired on first page load
   // for every book — a large web-novel TOC (~3000 entries) added several seconds of latency.
-  const bool reliable = bookMetadataCache->isTocReliable();
+  // FB2's generated TOC deliberately omits notes and continuation slices.
+  // Its chapter names and targets come from the same section index, so the
+  // generic EPUB coverage heuristic must not replace them with Section N.
+  // Apply this when reading too, to repair existing fix1 metadata caches.
+  const bool reliable = isFb2Origin ? bookMetadataCache->getTocCount() > 0
+                                    : bookMetadataCache->isTocReliable();
   tocReliability = reliable ? TocReliability::Reliable : TocReliability::Unreliable;
   return reliable;
 }
@@ -1652,6 +1784,14 @@ int Epub::getTocIndexForSpineIndex(const int spineIndex) const {
   }
 
   return bookMetadataCache->getSpineEntry(spineIndex).tocIndex;
+}
+
+bool Epub::getLogicalChapterBounds(const int spineIndex, int& startIndex, int& endIndex) const {
+  startIndex = spineIndex;
+  endIndex = spineIndex;
+  if (spineIndex < 0 || spineIndex >= getSpineItemsCount()) return false;
+  if (isFb2Origin) return Fb2::getLogicalChapterBounds(cachePath, spineIndex, startIndex, endIndex);
+  return true;
 }
 
 size_t Epub::getBookSize() const {
@@ -1795,6 +1935,40 @@ int Epub::resolveHrefToSpineIndex(const std::string& href, const int sourceSpine
   // External URI schemes must never fall back to a similarly named book file.
   if (path.find(':') != std::string::npos || path.compare(0, 2, "//") == 0) return -1;
   const auto findExact = [this](const std::string& target) {
+    if (isFb2Package()) {
+      // Generated FB2 paths encode their spine position. Validate the entire path
+      // against the indexed entry; a matching basename in a different directory
+      // must not send the reader to an unrelated note. No in-memory index needed.
+      constexpr char prefix[] = "chapter_";
+      constexpr char suffix[] = ".xhtml";
+      constexpr size_t prefixLength = sizeof(prefix) - 1;
+      constexpr size_t suffixLength = sizeof(suffix) - 1;
+      const size_t basename = target.find_last_of('/') + 1;
+      const size_t digitsBegin = basename + prefixLength;
+      if (target.size() <= digitsBegin + suffixLength || target.compare(basename, prefixLength, prefix) != 0 ||
+          target.compare(target.size() - suffixLength, suffixLength, suffix) != 0) return -1;
+      const size_t end = target.size() - suffixLength;
+      if (end > digitsBegin + 1 && target[digitsBegin] == '0') return -1;
+      int index = 0;
+      for (size_t pos = digitsBegin; pos < end; ++pos) {
+        const char c = target[pos];
+        if (c < '0' || c > '9') return -1;
+        const int digit = c - '0';
+        // Bound every step before multiplying, including maliciously long input.
+        const int maxIndex = getSpineItemsCount() - 1;
+        if (maxIndex < digit || index > (maxIndex - digit) / 10) return -1;
+        index = index * 10 + digit;
+      }
+      const std::string indexedHref = getSpineItem(index).href;
+      if (indexedHref == target) return index;
+      // Older FB2 XHTML stored OPF-relative "text/chapter_N.xhtml" links.
+      // Warm metadata loading does not restore contentBasePath. Resolve this
+      // exact generated alias against the indexed entry, without a spine scan
+      // or a basename fallback accepting arbitrary directories.
+      const size_t textDir = indexedHref.rfind("/text/");
+      return target.compare(0, 5, "text/") == 0 && textDir != std::string::npos &&
+                     indexedHref.substr(textDir + 1) == target ? index : -1;
+    }
     for (int i = 0; i < getSpineItemsCount(); ++i) {
       if (getSpineItem(i).href == target) return i;
     }
@@ -1811,6 +1985,9 @@ int Epub::resolveHrefToSpineIndex(const std::string& href, const int sourceSpine
   const std::string target = FsHelpers::normalisePath(path.front() == '/' ? path.substr(1) : path);
   if (const int match = findExact(target); match >= 0) return match;
   if (const int match = findExact(FsHelpers::normalisePath(contentBasePath + path)); match >= 0) return match;
+  // FB2 packages have canonical generated paths; do not conceal a broken path
+  // with the legacy EPUB basename fallback (which also scans the whole spine).
+  if (isFb2Package()) return -1;
   // Legacy converters sometimes flatten paths. Only accept an unambiguous basename;
   // never let an early basename match shadow a later exact path.
   const std::string filename = target.substr(target.find_last_of('/') + 1);

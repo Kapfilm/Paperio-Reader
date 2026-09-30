@@ -27,6 +27,8 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookArchiveUtils.h"
+#include "util/BookCacheUtils.h"
 
 // Legacy global function (for backward compat if needed elsewhere)
 void sortFileList(std::vector<std::string>& strs) {
@@ -71,7 +73,8 @@ void FileBrowserActivity::loadFiles() {
       if (mode == Mode::PickFirmware) {
         shouldAdd = FsHelpers::checkFileExtension(filename, ".bin");
       } else {
-        shouldAdd = FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+        shouldAdd = FsHelpers::hasEpubExtension(filename) || isFb2OrZipBookPath(filename) ||
+                    FsHelpers::hasXtcExtension(filename) ||
                     FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
                     FsHelpers::hasBmpExtension(filename) || FsHelpers::hasJpgExtension(filename) ||
                     FsHelpers::hasPngExtension(filename);
@@ -106,7 +109,8 @@ bool FileBrowserActivity::acceptFileForBrowser(const char* name, bool isDir) {
 
   // File: check extension
   std::string_view filename{name};
-  return FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
+  return FsHelpers::hasEpubExtension(filename) || isFb2OrZipBookPath(filename) ||
+         FsHelpers::hasXtcExtension(filename) ||
          FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
          FsHelpers::hasBmpExtension(filename) || FsHelpers::hasJpgExtension(filename) ||
          FsHelpers::hasPngExtension(filename);
@@ -178,8 +182,8 @@ void FileBrowserActivity::onExit() {
 }
 
 void FileBrowserActivity::clearFileMetadata(const std::string& fullPath) {
-  if (FsHelpers::hasEpubExtension(fullPath)) {
-    Epub(fullPath, "/.crosspoint").clearCache();
+  if (FsHelpers::hasEpubExtension(fullPath) || isFb2OrZipBookPath(fullPath)) {
+    clearBookCacheForPath(fullPath);
     LOG_DBG("FileBrowser", "Cleared metadata cache for: %s", fullPath.c_str());
   } else if (FsHelpers::hasXtcExtension(fullPath)) {
     Xtc(fullPath, "/.crosspoint").clearCache();
@@ -322,7 +326,8 @@ void FileBrowserActivity::loop() {
         fullPath += entry;
         // Long-press on an EPUB arms an AUTO_PULL before the reader renders its first page.
         // Restricted to EPUB so long-pressing a non-EPUB cannot leak the flag to the reader.
-        if (longPress && KOREADER_STORE.hasCredentials() && FsHelpers::hasEpubExtension(fullPath)) {
+        if (longPress && KOREADER_STORE.hasCredentials() &&
+            (FsHelpers::hasEpubExtension(fullPath) || isFb2OrZipBookPath(fullPath))) {
           auto& sync = APP_STATE.koReaderSyncSession;
           sync.autoPullEpubPath = fullPath;
           sync.exitToHomeAfterSync = false;
@@ -642,7 +647,8 @@ void FileBrowserActivity::handleContextMenuAction(int action, const std::string&
       return;
     }
     case Action::FetchAndOpen: {
-      if (KOREADER_STORE.hasCredentials() && FsHelpers::hasEpubExtension(fullPath)) {
+      if (KOREADER_STORE.hasCredentials() &&
+          (FsHelpers::hasEpubExtension(fullPath) || isFb2OrZipBookPath(fullPath))) {
         auto& sync = APP_STATE.koReaderSyncSession;
         sync.autoPullEpubPath = fullPath;
         sync.exitToHomeAfterSync = false;
@@ -685,10 +691,9 @@ void FileBrowserActivity::doMarkAsRead(const std::string& fullPath) {
   uint8_t data[7] = {0};
   size_t dataLen = 0;
 
-  if (FsHelpers::hasEpubExtension(fullPath)) {
-    Epub epub(fullPath, "/.crosspoint");
-    epub.setupCacheDir();
-    cachePath = epub.getCachePath();
+  if (FsHelpers::hasEpubExtension(fullPath) || isFb2OrZipBookPath(fullPath)) {
+    cachePath = getBookCachePath(fullPath);
+    Storage.mkdir(cachePath.c_str());
     // 7-byte EPUB progress: spine(2) + page(2) + pageCount(2) + percent(1)
     data[6] = 100;
     dataLen = 7;

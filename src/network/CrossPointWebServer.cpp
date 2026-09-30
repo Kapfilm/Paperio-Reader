@@ -28,6 +28,8 @@
 #include "SettingsList.h"
 #include "SystemStatus.h"
 #include "WebDAVHandler.h"
+#include "util/BookArchiveUtils.h"
+#include "util/BookCacheUtils.h"
 #include "WifiCredentialStore.h"
 #include "html/FilesPageHtml.generated.h"
 #include "html/FontsPageHtml.generated.h"
@@ -103,9 +105,9 @@ size_t lastDeleteCount = 0;
 unsigned long lastDeleteAt = 0;
 
 void clearBookCacheIfNeeded(const String& filePath) {
-  if (FsHelpers::hasEpubExtension(filePath)) {
-    Epub(filePath.c_str(), "/.crosspoint").clearCache();
-    LOG_DBG("WEB", "Cleared epub cache for: %s", filePath.c_str());
+  if (FsHelpers::hasEpubExtension(filePath) || isFb2OrZipBookPath(filePath.c_str())) {
+    clearBookCacheForPath(filePath.c_str());
+    LOG_DBG("WEB", "Cleared ebook cache for: %s", filePath.c_str());
   } else if (FsHelpers::hasXtcExtension(filePath)) {
     Xtc(filePath.c_str(), "/.crosspoint").clearCache();
     LOG_DBG("WEB", "Cleared xtc cache for: %s", filePath.c_str());
@@ -767,7 +769,9 @@ void CrossPointWebServer::scanFiles(const char* path, const FileVisitor visitor,
   root.close();
 }
 
-bool CrossPointWebServer::isEpubFile(const String& filename) const { return FsHelpers::hasEpubExtension(filename); }
+bool CrossPointWebServer::isEpubFile(const String& filename) const {
+  return FsHelpers::hasEpubExtension(filename) || isFb2BookPath(filename.c_str());
+}
 
 void CrossPointWebServer::handleFileList() const {
   sendHtmlContent(server.get(), FilesPageHtml, sizeof(FilesPageHtml));
@@ -876,8 +880,12 @@ void CrossPointWebServer::handleDownload() const {
   }
 
   String contentType = "application/octet-stream";
-  if (isEpubFile(itemPath)) {
+  if (FsHelpers::hasEpubExtension(itemPath)) {
     contentType = "application/epub+zip";
+  } else if (FsHelpers::checkFileExtension(itemPath, ".fb2.zip")) {
+    contentType = "application/fb2+zip";
+  } else if (FsHelpers::checkFileExtension(itemPath, ".fb2")) {
+    contentType = "application/x-fictionbook+xml";
   }
 
   char nameBuf[128] = {0};

@@ -2,6 +2,7 @@
 
 #include <Bitmap.h>
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
@@ -13,10 +14,12 @@
 
 #include <cstdio>
 #include <ctime>
+#include <memory>
 
 #include "ReadingStats.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookArchiveUtils.h"
 
 namespace {
 
@@ -107,8 +110,20 @@ void BookInfoActivity::loadData() {
   }
 
   // Load epub metadata — builds cache if missing, which also gives us cover
-  if (FsHelpers::hasEpubExtension(filePath)) {
-    Epub epub(filePath, "/.crosspoint");
+  if (FsHelpers::hasEpubExtension(filePath) || isFb2OrZipBookPath(filePath)) {
+    std::unique_ptr<Fb2> fb2;
+    std::string packagePath = filePath;
+    if (isFb2BookPath(filePath) ||
+        (isBookZipPath(filePath) && detectBookArchiveType(filePath) == BookArchiveType::Fb2)) {
+      fb2 = std::make_unique<Fb2>(filePath, "/.crosspoint");
+      if (!fb2->load()) {
+        loadError = tr(STR_LOAD_EPUB_FAILED);
+        LOG_ERR("BookInfo", "Failed to prepare FB2 metadata: %s", filePath.c_str());
+        return;
+      }
+      packagePath = fb2->getPackagePath();
+    }
+    Epub epub(packagePath, "/.crosspoint");
     if (!epub.load(true, true)) {
       loadError = tr(STR_LOAD_EPUB_FAILED);
       LOG_ERR("BookInfo", "Failed to load EPUB metadata: %s", filePath.c_str());

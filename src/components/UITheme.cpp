@@ -1,6 +1,7 @@
 #include "UITheme.h"
 
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
@@ -11,6 +12,7 @@
 #include <Xtc.h>
 
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -25,6 +27,9 @@
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/minimal/MinimalTheme.h"
 #include "fontIds.h"
+#include "util/BookArchiveUtils.h"
+#include "util/BookCacheUtils.h"
+#include "util/BookProgressPages.h"
 
 namespace {
 constexpr int SKIP_PAGE_MS = 700;
@@ -238,8 +243,8 @@ int UITheme::getBookProgressPercent(const RecentBook& book) {
   std::string cachePath;
   int percentByteOffset = 0;  // byte index of the percent field in progress.bin
 
-  if (FsHelpers::hasEpubExtension(book.path)) {
-    cachePath = Epub(book.path, "/.crosspoint").getCachePath();
+  if (FsHelpers::hasEpubExtension(book.path) || isFb2OrZipBookPath(book.path)) {
+    cachePath = getBookCachePath(book.path);
     percentByteOffset = 6;  // epub: [spineIdx(2), page(2), chapterPageCount(2), percent(1)]
   } else if (FsHelpers::hasXtcExtension(book.path)) {
     cachePath = Xtc(book.path, "/.crosspoint").getCachePath();
@@ -267,6 +272,36 @@ int UITheme::getBookProgressPercent(const RecentBook& book) {
   int percent = static_cast<int>(data[percentByteOffset]);
   if (percent > 100) percent = 100;
   return percent;
+}
+
+bool UITheme::getBookProgressPages(const RecentBook& book, int& currentPage, int& totalPages) {
+  currentPage = 0;
+  totalPages = 0;
+  if (book.path.empty()) return false;
+
+  std::string cachePath;
+  using BookProgressPages::Format;
+  Format format;
+  if (FsHelpers::hasEpubExtension(book.path) || isFb2OrZipBookPath(book.path)) {
+    cachePath = getBookCachePath(book.path);
+    format = Format::Epub;
+  } else if (FsHelpers::hasXtcExtension(book.path)) {
+    cachePath = Xtc(book.path, "/.crosspoint").getCachePath();
+    format = Format::Xtc;
+  } else if (FsHelpers::hasTxtExtension(book.path) || FsHelpers::hasMarkdownExtension(book.path)) {
+    cachePath = Txt(book.path, "/.crosspoint").getCachePath();
+    format = Format::Text;
+  } else {
+    return false;
+  }
+
+  FsFile file;
+  if (!Storage.openFileForRead("UIT", cachePath + "/progress.bin", file)) return false;
+  uint8_t data[11] = {0};
+  const int size = file.read(data, sizeof(data));
+  file.close();
+
+  return BookProgressPages::decode(format, data, size, currentPage, totalPages);
 }
 
 void UITheme::drawCoverProgressIndicator(const GfxRenderer& renderer, Rect coverRect, int progressPercent) {
@@ -360,7 +395,8 @@ UIIcon UITheme::getFileIcon(const std::string& filename) {
   if (filename.back() == '/') {
     return Folder;
   }
-  if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename)) {
+  if (FsHelpers::hasEpubExtension(filename) || isFb2OrZipBookPath(filename) ||
+      FsHelpers::hasXtcExtension(filename)) {
     return Book;
   }
   if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {

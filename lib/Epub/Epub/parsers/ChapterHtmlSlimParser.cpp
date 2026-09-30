@@ -670,6 +670,7 @@ void ChapterHtmlSlimParser::startPreviewAtAnchor() {
   currentPage.reset();
   currentTextBlock.reset();
   pendingAnchorId.clear();
+  pendingFb2Anchors.clear();
   pendingAnchorStartsPage = false;
   anchorData.clear();
   compactIdAnchorData.clear();
@@ -755,6 +756,27 @@ bool ChapterHtmlSlimParser::recordAnchorSafely(const std::string& anchor, const 
     anchorData.emplace_back(anchor, page);
   }
   return true;
+}
+
+void ChapterHtmlSlimParser::queueFb2AnchorSafely(std::string&& anchor, const uint32_t wordIndex) {
+  if (anchorRecordingDisabled) return;
+  if (pendingFb2Anchors.size() == pendingFb2Anchors.capacity()) {
+    const size_t nextCapacity = pendingFb2Anchors.capacity() == 0 ? 1 : pendingFb2Anchors.capacity() * 2;
+    const size_t vectorBytes = nextCapacity * sizeof(decltype(pendingFb2Anchors)::value_type);
+    const uint32_t caps = MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT;
+    const size_t largestBlock = heap_caps_get_largest_free_block(caps);
+    const size_t freeHeap = heap_caps_get_free_size(caps);
+    // Match the stored-anchor guard: vector growth allocates before freeing its old
+    // buffer and allocation failure aborts this firmware without C++ exceptions.
+    if (largestBlock < vectorBytes + 512 || freeHeap < vectorBytes + anchor.size() + 2 * 1024) {
+      anchorRecordingDisabled = true;
+      LOG_ERR("EHP", "FB2 anchor queue stopped (need=%u free=%u max=%u)",
+              static_cast<unsigned>(vectorBytes), static_cast<unsigned>(freeHeap),
+              static_cast<unsigned>(largestBlock));
+      return;
+    }
+  }
+  pendingFb2Anchors.emplace_back(std::move(anchor), wordIndex);
 }
 
 void ChapterHtmlSlimParser::recordPageBreakLabel(const std::string& label) {
@@ -1187,6 +1209,25 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     }
   }
 
+  // The lazy FB2 renderer emits explicit empty markers between the cover,
+  // generated front matter and the first real section. They must remain hard
+  // page boundaries regardless of the generated stylesheet.
+  const bool isFb2HardPageBreak =
+      self->epub && self->epub->isFb2Package() &&
+      (hasAttributeToken(classAttr.c_str(), "inkmod-fb2-cover-page-break") ||
+       hasAttributeToken(classAttr.c_str(), "inkmod-fb2-frontmatter-page-break"));
+  if (isFb2HardPageBreak) {
+    if (self->partWordBufferIndex > 0 && !self->flushPartWordBuffer()) return;
+    if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) self->makePages();
+    if (self->currentPage && !self->currentPage->elements.empty()) {
+      self->emitPage(self->lastBodyChildByteOffset);
+    }
+    // Ignore the private marker element itself; endElement() restores normal parsing.
+    self->skipUntilDepth = self->depth;
+    self->depth += 1;
+    return;
+  }
+
   // Defer generic anchor recording until startNewTextBlock, after the previous block
   // is flushed to pages via makePages(). Skip pagebreak anchors since they were already recorded.
   //
@@ -1198,11 +1239,25 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   if (!isPageBreakMarker && !navigationAnchor.empty()) {
     const bool isTocAnchor =
         std::find(self->tocAnchors.begin(), self->tocAnchors.end(), navigationAnchor) != self->tocAnchors.end();
+    const bool isFb2Marker = navigationAnchor.compare(0, 4, "fb2-") == 0;
     const bool keepInlineAnchor =
-        !isNonNavigableInlineElement(name) || isGatheredFootnoteTarget || looksLikeFootnoteAnchor(navigationAnchor);
-    if (isTocAnchor || (keepInlineAnchor && self->recordedAnchorCount() < MAX_ANCHORS_PER_CHAPTER)) {
-      self->pendingAnchorId = std::move(navigationAnchor);
-      self->pendingAnchorStartsPage = isFootnoteDestination;
+        isFb2Marker || !isNonNavigableInlineElement(name) || isGatheredFootnoteTarget ||
+        looksLikeFootnoteAnchor(navigationAnchor);
+    if (isTocAnchor || (keepInlineAnchor &&
+                       self->recordedAnchorCount() + self->pendingFb2Anchors.size() < MAX_ANCHORS_PER_CHAPTER)) {
+      // Generated FB2 markers sit inside paragraphs (including flattened table cells).
+      // Record their word position now, then the page only once that line has actually
+      // passed the page-overflow check. Generic deferred block anchors point too late
+      // for these inline markers, or one page early at a full-page boundary.
+      if (isFb2Marker && !isTocAnchor && (strcmp(name, "span") == 0 || strcmp(name, "a") == 0)) {
+        if (self->partWordBufferIndex > 0 && !self->flushPartWordBuffer()) return;
+        const uint32_t wordIndex = self->wordsExtractedInBlock +
+            (self->currentTextBlock ? static_cast<uint32_t>(self->currentTextBlock->size()) : 0);
+        self->queueFb2AnchorSafely(std::move(navigationAnchor), wordIndex);
+      } else {
+        self->pendingAnchorId = std::move(navigationAnchor);
+        self->pendingAnchorStartsPage = isFootnoteDestination;
+      }
     }
   }
 
@@ -1489,7 +1544,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
             if (!dimsOk && self->imageManifest) {
               // Resolve + cache on a miss: each image's header is read at most once ever.
               const ImageManifestEntry* entry =
-                  self->imageManifest->ensureResolved(self->epub->getPath(), resolvedPath);
+                  self->imageManifest->ensureResolved(*self->epub, resolvedPath);
               if (entry) {
                 dims.width = entry->width;
                 dims.height = entry->height;
@@ -2861,6 +2916,11 @@ bool ChapterHtmlSlimParser::finalize() {
         pendingAnchorId.clear();
         pendingAnchorStartsPage = false;
       }
+      // Empty trailing targets still resolve to the last real page.
+      const uint16_t finalAnchorPage = static_cast<uint16_t>(
+          !hasFinalPageContent && completedPageCount > 0 ? completedPageCount - 1 : completedPageCount);
+      for (const auto& anchor : pendingFb2Anchors) recordAnchorSafely(anchor.first, finalAnchorPage);
+      pendingFb2Anchors.clear();
       if (hasFinalPageContent) {
         emitPage(0u);  // post-parse: no byte offset available
       }
@@ -2944,6 +3004,12 @@ ParsedText::LineProcessResult ChapterHtmlSlimParser::addLineToPage(std::shared_p
 
   // Track cumulative words to assign footnotes to the page containing their anchor
   wordsExtractedInBlock += line->wordCount();
+  auto anchorIt = pendingFb2Anchors.begin();
+  while (anchorIt != pendingFb2Anchors.end() && anchorIt->second < static_cast<uint32_t>(wordsExtractedInBlock)) {
+    recordAnchorSafely(anchorIt->first, static_cast<uint16_t>(completedPageCount));
+    ++anchorIt;
+  }
+  pendingFb2Anchors.erase(pendingFb2Anchors.begin(), anchorIt);
   auto footnoteIt = pendingFootnotes.begin();
   while (footnoteIt != pendingFootnotes.end() && footnoteIt->first <= wordsExtractedInBlock) {
     currentPage->addFootnote(footnoteIt->second.number, footnoteIt->second.href);
@@ -3086,6 +3152,15 @@ void ChapterHtmlSlimParser::makePages() {
       },
       /*includeLastLine=*/true, static_cast<int16_t>(currentPageNextY), lineHeightForFloat);
 
+  // Markers after the final word belong to the block's final page; consuming them
+  // here also prevents their word offsets from leaking into the following block.
+  if (currentPage) {
+    for (const auto& anchor : pendingFb2Anchors) {
+      recordAnchorSafely(anchor.first, static_cast<uint16_t>(completedPageCount));
+    }
+    pendingFb2Anchors.clear();
+  }
+
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches
   // edge cases where a footnote's word index equals the exact block size.
@@ -3146,7 +3221,7 @@ std::shared_ptr<ImageBlock> ChapterHtmlSlimParser::buildCellImage(const std::str
   ImageDimensions dims = {0, 0};
   bool dimsOk = false;
   if (imageManifest) {
-    const ImageManifestEntry* entry = imageManifest->ensureResolved(epub->getPath(), resolvedPath);
+    const ImageManifestEntry* entry = imageManifest->ensureResolved(*epub, resolvedPath);
     if (entry) {
       dims.width = entry->width;
       dims.height = entry->height;

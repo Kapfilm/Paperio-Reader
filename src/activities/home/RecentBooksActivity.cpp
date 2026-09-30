@@ -25,6 +25,7 @@
 #include "activities/reader/ReaderActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookArchiveUtils.h"
 #include "util/ButtonNavigator.h"
 
 namespace {
@@ -181,12 +182,12 @@ bool RecentBooksActivity::loadNextCover() {
       RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
       book.coverBmpPath = placeholder;
     } else {
-      // Remove the partial BMP; the normal failure path below will store empty.
+      // Remove only this incomplete size; preserve the reference to other cached sizes.
       const std::string thumbPath = gridThumbPath(placeholder, tw, th);
       Storage.remove(thumbPath.c_str());
       LOG_ERR("RBA", "PNG session failed for %s", book.path.c_str());
-      RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, "");
-      book.coverBmpPath = "";
+      RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
+      book.coverBmpPath = placeholder;
     }
     nextCoverIndex++;
     return false;  // advance to next book on next render tick
@@ -211,7 +212,8 @@ bool RecentBooksActivity::loadNextCover() {
     // resolved cover — no re-opening the EPUB three times per scan to rediscover it has no cover.
     bool valid = ReaderActivity::isCoverThumbComplete(thumbPath, tw, th);
     if (!valid) {
-      const bool ok = (ReaderActivity::ensureCoverThumb(book.path, tw, th, cropCover) == ThumbResult::Ok);
+      const ThumbResult result = ReaderActivity::ensureCoverThumb(book.path, tw, th, cropCover);
+      const bool ok = (result == ThumbResult::Ok);
       const bool wasPostFailure = pngSessionFailed;
       pngSessionFailed = false;  // consumed
       if (!ok && !wasPostFailure) {
@@ -226,12 +228,10 @@ bool RecentBooksActivity::loadNextCover() {
                   extractSession->totalBytes());
           return false;
         }
-        // No thumb produced AND no decode/extract session could start → genuinely no extractable
-        // cover. But NOT if a sidecar image exists: that is a real cover source that simply failed
-        // to convert this pass (e.g. tight heap) and should be retried, not permanently placeholdered.
-        // Otherwise write a valid placeholder BMP so future scans treat the book as resolved and stop
-        // re-opening the EPUB. (A transient post-failure retry — wasPostFailure — is skipped here too.)
-        if (ReaderActivity::sidecarCoverPath(book.path).empty() &&
+        // Failure to start a session may mean a transient JPEG decode failure,
+        // memory pressure or an unavailable FB2 package. Only a proven absence
+        // may become a durable blank thumbnail.
+        if (result == ThumbResult::StructurallyAbsent &&
             ReaderActivity::writeCoverPlaceholderBmp(thumbPath, tw, th)) {
           LOG_DBG("RBA", "No extractable cover for %s — wrote placeholder", book.path.c_str());
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
@@ -240,8 +240,10 @@ bool RecentBooksActivity::loadNextCover() {
           return false;
         }
       }
-      RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, ok ? placeholder : "");
-      book.coverBmpPath = ok ? placeholder : "";
+      // This path names all thumbnail sizes. A failed grid decode must not hide
+      // an already cached Mini home cover on the next screen transition.
+      RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
+      book.coverBmpPath = placeholder;
       nextCoverIndex++;
       return false;
     }
@@ -335,7 +337,7 @@ void RecentBooksActivity::removeSelectedBook() {
 void RecentBooksActivity::showSelectedBookInfo() {
   if (recentBooks.empty() || selectorIndex >= static_cast<int>(recentBooks.size())) return;
   const std::string& path = recentBooks[selectorIndex].path;
-  if (FsHelpers::hasEpubExtension(path) || FsHelpers::hasXtcExtension(path)) {
+  if (FsHelpers::hasEpubExtension(path) || isFb2OrZipBookPath(path) || FsHelpers::hasXtcExtension(path)) {
     startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, path),
                            [this](const ActivityResult&) { requestUpdate(); });
   }
@@ -353,7 +355,7 @@ void RecentBooksActivity::loop() {
       if (recentBooks.empty() || selectorIndex >= static_cast<int>(recentBooks.size())) return;
       const bool longPress = (ev.type == ButtonEventManager::PressType::Long) && KOREADER_STORE.hasCredentials();
       const std::string& selectedPath = recentBooks[selectorIndex].path;
-      const bool isEpubBook = FsHelpers::hasEpubExtension(selectedPath);
+      const bool isEpubBook = FsHelpers::hasEpubExtension(selectedPath) || isFb2OrZipBookPath(selectedPath);
       LOG_DBG("RBA", "Selected recent book: %s (sync=%d epub=%d)", selectedPath.c_str(), longPress ? 1 : 0,
               isEpubBook ? 1 : 0);
       if (longPress && isEpubBook) {

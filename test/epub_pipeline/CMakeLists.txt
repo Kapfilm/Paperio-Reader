@@ -88,6 +88,7 @@ add_executable(EpubPipelineTest
   FootnoteNavigationTest.cpp
   BookmarkStoreTest.cpp
   FingerprintTest.cpp
+  BookMetadataCacheTest.cpp
   ImageExtractionTest.cpp
   ${PIPELINE_SOURCES}
 )

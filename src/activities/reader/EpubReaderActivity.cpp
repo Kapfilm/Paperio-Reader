@@ -19,6 +19,7 @@
 #include <Epub/blocks/TextBlock.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
@@ -75,6 +76,8 @@ static FontSizeLadder buildReaderFontSizeLadder(int bodyFontId);
 
 namespace {
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
+
+std::string sourceBookPath(const Epub& epub) { return Fb2::resolveOriginalPath(epub.getPath()); }
 
 // Human-readable effective refresh mode for the page-summary diagnostic log.
 const char* refreshModeName(HalDisplay::RefreshMode mode) {
@@ -297,6 +300,33 @@ uint8_t epubProgressPercentByte(const Epub& epub, const int spineIndex, const in
   return ReaderUtils::fractionProgressPercentByte(epub.calculateProgress(spineIndex, chapterProgress));
 }
 
+// EPUB pagination is built one spine item (usually one chapter) at a time, so the
+// exact page count of untouched chapters is not available without laying out the
+// whole book up front. Estimate the book-wide count from the current chapter's
+// actual rendered page density. This keeps the home-screen counter consistent with
+// the selected font, margins and line spacing while avoiding a costly full-book pass.
+bool epubBookPageEstimate(const Epub& epub, const int spineIndex, const int currentPage, const int pageCount,
+                          int& bookCurrentPage, int& bookTotalPages) {
+  bookCurrentPage = 0;
+  bookTotalPages = 0;
+  if (pageCount <= 0 || currentPage < 0) return false;
+
+  size_t spineSize = 0;
+  const size_t bookSize = epub.getBookSize();
+  if (bookSize == 0 || !epub.getSpineItemInflatedSize(spineIndex, &spineSize) || spineSize == 0) return false;
+
+  const uint64_t estimated =
+      (static_cast<uint64_t>(bookSize) * static_cast<uint64_t>(pageCount) + spineSize / 2) / spineSize;
+  if (estimated == 0 || estimated > UINT16_MAX) return false;
+
+  const float chapterProgress =
+      std::min(1.0f, static_cast<float>(currentPage + 1) / static_cast<float>(pageCount));
+  const float bookProgress = epub.calculateProgress(spineIndex, chapterProgress);
+  bookTotalPages = static_cast<int>(estimated);
+  bookCurrentPage = std::clamp(static_cast<int>(bookProgress * bookTotalPages + 0.5f), 1, bookTotalPages);
+  return true;
+}
+
 int clampPercent(int percent) {
   if (percent < 0) {
     return 0;
@@ -428,20 +458,26 @@ void EpubReaderActivity::onEnter() {
   // Load bookmarks for this book
   bookmarkStore.load(epub->getCachePath());
   logReaderMemSnapshot("onEnter_after_bookmarks_loaded");
-  if (!clippingStore.loadForBook(epub->getPath(), epub->getTitle(), epub->getAuthor())) {
-    LOG_ERR("CLIP", "Could not load highlights for %s", epub->getPath().c_str());
+  const std::string sourcePath = sourceBookPath(*epub);
+  if (!clippingStore.loadForBook(sourcePath, epub->getTitle(), epub->getAuthor())) {
+    LOG_ERR("CLIP", "Could not load highlights for %s", sourcePath.c_str());
   }
 
-  // Save current epub as last opened epub and add to recent books
+  // Keep the prepared package path as the active-reader resume target.  FB2 books are
+  // represented by an unpacked package.epub while they are open; saving the original
+  // .fb2 here made deep-sleep wake route through the converter again while the device
+  // was still restoring the reader, which is both unnecessarily expensive and prone
+  // to watchdog resets on large books.  Recent-books, stats and user-facing actions
+  // still use sourcePath below, so the original FB2 remains the public identity.
   APP_STATE.openEpubPath = epub->getPath();
   APP_STATE.saveToFile();
   std::string series = epub->getSeries();
   if (!series.empty() && !epub->getSeriesIndex().empty()) {
     series += " #" + epub->getSeriesIndex();
   }
-  RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), series,
-                       ReaderActivity::coverThumbPlaceholder(epub->getPath()));
-  const RecentBook currentBook = RECENT_BOOKS.getBookByPath(epub->getPath());
+  RECENT_BOOKS.addBook(sourcePath, epub->getTitle(), epub->getAuthor(), series,
+                       ReaderActivity::coverThumbPlaceholder(sourcePath));
+  const RecentBook currentBook = RECENT_BOOKS.getBookByPath(sourcePath);
   bookEmbeddedStyleOverride = currentBook.embeddedStyleOverride;
   bookImageRenderingOverride = currentBook.imageRenderingOverride;
   bookFontFamilyOverride = currentBook.fontFamilyOverride;
@@ -465,7 +501,7 @@ void EpubReaderActivity::onEnter() {
   // computing the content hash would re-read the file on every reader open,
   // and a renamed book getting a new stats entry is acceptable — it'll still
   // accumulate going forward.
-  globalReadingSessionTracker().begin(KOReaderDocumentId::calculateFromFilename(epub->getPath()), epub->getTitle(),
+  globalReadingSessionTracker().begin(KOReaderDocumentId::calculateFromFilename(sourcePath), epub->getTitle(),
                                       epub->getAuthor());
 
   // Trigger first update
@@ -479,10 +515,6 @@ void EpubReaderActivity::onExit() {
   Activity::onExit();
   logReaderMemSnapshot("onExit_before_release");
 
-  // Flush the reading-stats session before tearing down the epub: end() needs
-  // no live epub reference and persists the JSON. Sleep paths that bypass
-  // onExit() still end up here on resume because the activity is recreated.
-  globalReadingSessionTracker().end();
   // If a pre-render left the next page in the frame buffer, redraw the current page so the
   // next activity (notably SleepActivity's OVERLAY mode) sees what the user was looking at.
   // Must run before section.reset() and the orientation reset below.
@@ -492,7 +524,7 @@ void EpubReaderActivity::onExit() {
   bookmarkStore.save();
   clippingStore.unload();
   if (epub) {
-    GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, epub->getPath(), epub->getCachePath(), epub->getTitle(), false);
+    GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, sourceBookPath(*epub), epub->getCachePath(), epub->getTitle(), false);
   }
 
   // Reset orientation back to portrait for the rest of the UI
@@ -534,10 +566,13 @@ void EpubReaderActivity::onExit() {
   // so a stale true would make the next activity's first FAST refresh diff against the
   // controller's retained RED RAM instead of its host baseline (ghosting). No-op on X3.
   renderer.setSingleBufferFastDiff(false);
-  UITheme::getInstance().getMutableTheme().onBookWillClose(epub ? epub->getPath() : "", epub.get(), nullptr, nullptr);
+  UITheme::getInstance().getMutableTheme().onBookWillClose(epub ? sourceBookPath(*epub) : "", epub.get(), nullptr,
+                                                            nullptr);
   epub.reset();
   currentPageFootnotes.clear();
   currentPageFootnotes.shrink_to_fit();
+  // The tracker owns its metadata; load history only after reader allocations are gone.
+  globalReadingSessionTracker().end();
 }
 
 void EpubReaderActivity::loop() {
@@ -703,7 +738,7 @@ void EpubReaderActivity::loop() {
       }
       writeReaderProgressCache(epub->getCachePath(), lastSpineIndex, lastPageIndex, lastPageCount, 100);
 
-      BookFinished::launchFinishedBookFlow(*this, renderer, mappedInput, epub->getPath(), epub->getSeries(),
+      BookFinished::launchFinishedBookFlow(*this, renderer, mappedInput, sourceBookPath(*epub), epub->getSeries(),
                                            epub->getSeriesIndex(), epub->getAuthor());
     } else {
       currentSpineIndex = epub->getSpineItemsCount() - 1;
@@ -984,7 +1019,9 @@ void EpubReaderActivity::endBackgroundBorrow() {
 }
 
 void EpubReaderActivity::stepBackgroundSectionBuild() {
-  if (!epub || !section || readerPhase_ != ReaderPhase::READING || !footnoteHistory.empty() ||
+  // FB2 chapter preparation currently shares too little headroom with a live reader.
+  // Build chapters on demand until speculative preparation is validated on hardware.
+  if (!epub || epub->isFb2Package() || !section || readerPhase_ != ReaderPhase::READING || !footnoteHistory.empty() ||
       !pendingFootnotePreviewAnchor.empty()) {
     return;
   }
@@ -1493,7 +1530,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       const int spineIdx = currentSpineIndex;
       const int tocIdx = section ? section->getTocIndexForPage(section->currentPage)
                                  : epub->getTocIndexForSpineIndex(currentSpineIndex);
-      const std::string path = epub->getPath();
+      const std::string path = sourceBookPath(*epub);
       startActivityForResult(
           std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, path, spineIdx, tocIdx),
           [this](const ActivityResult& result) {
@@ -1688,13 +1725,14 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // the screen will show "no data"; that's accurate.
       if (!epub) break;
       startActivityForResult(std::make_unique<ReadingStatsBookDetailActivity>(
-                                 renderer, mappedInput, KOReaderDocumentId::calculateFromFilename(epub->getPath())),
+                                 renderer, mappedInput,
+                                 KOReaderDocumentId::calculateFromFilename(sourceBookPath(*epub))),
                              [this](const ActivityResult&) { requestUpdate(); });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::BOOK_INFO: {
       if (!epub) break;
-      startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, epub->getPath()),
+      startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, sourceBookPath(*epub)),
                              [this](const ActivityResult&) { requestUpdate(); });
       break;
     }
@@ -1717,7 +1755,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           writeReaderProgressCache(epub->getCachePath(), lastSpineIndex, 0, 0, 100);
         }
       }
-      BookFinished::launchFinishedBookFlow(*this, renderer, mappedInput, epub->getPath(), epub->getSeries(),
+      BookFinished::launchFinishedBookFlow(*this, renderer, mappedInput, sourceBookPath(*epub), epub->getSeries(),
                                            epub->getSeriesIndex(), epub->getAuthor());
       return;
     }
@@ -1735,7 +1773,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
           if (!bookmarkStore.isEmpty()) {
             bookmarkStore.markDirty();
             bookmarkStore.save();
-            GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, epub->getPath(), epub->getCachePath(), epub->getTitle(),
+            GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, sourceBookPath(*epub), epub->getCachePath(), epub->getTitle(),
                                            false);
           }
         }
@@ -1778,7 +1816,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
 
 void EpubReaderActivity::applyPendingBookmarkJump() {
   auto& jump = APP_STATE.pendingBookmarkJump;
-  if (!jump.active || !epub || jump.bookPath != epub->getPath()) {
+  if (!jump.active || !epub || jump.bookPath != sourceBookPath(*epub)) {
     return;
   }
   LOG_DBG("ERS", "Applying pending bookmark jump: spine=%u page=%u", jump.spineIndex, jump.pageNumber);
@@ -1951,7 +1989,7 @@ void EpubReaderActivity::applyBookReaderOverrides(
   bookInlineFootnotePreviewsOverride = inlineFootnotePreviewsOverride;
   bookLineHeightPercentOverride = lineHeightPercentOverride;
   RECENT_BOOKS.setReaderOverrides(
-      epub->getPath(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
+      sourceBookPath(*epub), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
       bookSdFontFamilyOverride, bookFontSizeOverride, bookBionicReadingOverride, bookParagraphAlignmentOverride,
       bookTextAntiAliasingOverride, bookHyphenationOverride, bookFontSizeNormalizationOverride, bookGuideDotsOverride,
       bookInlineFootnotePreviewsOverride, bookLineHeightPercentOverride);
@@ -2723,7 +2761,7 @@ void EpubReaderActivity::serviceFinishedBookLaunch() {
   }
   finishedBookLaunchPending_ = false;
   BookFinished::launchFinishedBookFlow(
-      *this, renderer, mappedInput, epub->getPath(), epub->getSeries(), epub->getSeriesIndex(), epub->getAuthor(),
+      *this, renderer, mappedInput, sourceBookPath(*epub), epub->getSeries(), epub->getSeriesIndex(), epub->getAuthor(),
       [](void* ctx) { static_cast<EpubReaderActivity*>(ctx)->finishedBookActivityStarted_ = false; }, this);
 }
 
@@ -3733,14 +3771,15 @@ bool EpubReaderActivity::maybeRestartForFragmentedHeap(const uint32_t freeHeap, 
 }
 
 bool EpubReaderActivity::writeReaderProgressCache(const std::string& cachePath, const int spineIndex,
-                                                  const int currentPage, const int pageCount, const uint8_t percent) {
+                                                  const int currentPage, const int pageCount, const uint8_t percent,
+                                                  const int bookCurrentPage, const int bookTotalPages) {
   FsFile f;
   if (!Storage.openFileForWrite("ERS", cachePath + "/progress.bin", f)) {
     LOG_ERR("ERS", "Failed to open progress cache: %s", cachePath.c_str());
     return false;
   }
 
-  uint8_t data[7];
+  uint8_t data[11];
   data[0] = spineIndex & 0xFF;
   data[1] = (spineIndex >> 8) & 0xFF;
   data[2] = currentPage & 0xFF;
@@ -3748,7 +3787,11 @@ bool EpubReaderActivity::writeReaderProgressCache(const std::string& cachePath, 
   data[4] = pageCount & 0xFF;
   data[5] = (pageCount >> 8) & 0xFF;
   data[6] = percent;
-  f.write(data, 7);
+  data[7] = bookCurrentPage & 0xFF;
+  data[8] = (bookCurrentPage >> 8) & 0xFF;
+  data[9] = bookTotalPages & 0xFF;
+  data[10] = (bookTotalPages >> 8) & 0xFF;
+  f.write(data, sizeof(data));
   f.close();
   return true;
 }
@@ -3756,7 +3799,11 @@ bool EpubReaderActivity::writeReaderProgressCache(const std::string& cachePath, 
 void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
   if (!footnoteHistory.empty()) return;
   const uint8_t percent = epubProgressPercentByte(*epub, spineIndex, currentPage, pageCount);
-  if (!writeReaderProgressCache(epub->getCachePath(), spineIndex, currentPage, pageCount, percent)) {
+  int bookCurrentPage = 0;
+  int bookTotalPages = 0;
+  epubBookPageEstimate(*epub, spineIndex, currentPage, pageCount, bookCurrentPage, bookTotalPages);
+  if (!writeReaderProgressCache(epub->getCachePath(), spineIndex, currentPage, pageCount, percent, bookCurrentPage,
+                                bookTotalPages)) {
     LOG_ERR("ERS", "Could not save progress!");
     return;
   }
@@ -4531,7 +4578,7 @@ void EpubReaderActivity::toggleCurrentBookmark() {
   bookmarkStore.toggle(static_cast<uint16_t>(currentSpineIndex), static_cast<uint16_t>(section->currentPage),
                        annotationAnchor(), isFullNoteView());
   if (bookmarkStore.save()) {
-    GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, epub->getPath(), epub->getCachePath(), epub->getTitle(), false);
+    GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, sourceBookPath(*epub), epub->getCachePath(), epub->getTitle(), false);
   } else {
     GUI.drawPopup(renderer, tr(STR_ERROR_GENERAL_FAILURE));
     delay(900);
@@ -5265,8 +5312,8 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
         const int tocIdx = section ? section->getTocIndexForPage(section->currentPage)
                                    : epub->getTocIndexForSpineIndex(currentSpineIndex);
         ReaderUtils::enforceExitFullRefresh(renderer);
-        startActivityForResult(std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub,
-                                                                                    epub->getPath(), spineIdx, tocIdx),
+        startActivityForResult(std::make_unique<EpubReaderChapterSelectionActivity>(
+                                   renderer, mappedInput, epub, sourceBookPath(*epub), spineIdx, tocIdx),
                                [this](const ActivityResult& result) {
                                  if (result.isCancelled) return;
                                  // See the matching comment in onReaderMenuConfirm's SELECT_CHAPTER

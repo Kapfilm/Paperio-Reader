@@ -13,6 +13,8 @@ namespace JsonSettingsIO {
 // CrossPointSettings
 bool saveSettings(const CrossPointSettings& s, const char* path);
 bool loadSettings(CrossPointSettings& s, const char* json, bool* needsResave = nullptr);
+bool saveButtonSettings(const CrossPointSettings& s, const char* path);
+bool loadButtonSettings(CrossPointSettings& s, const char* json);
 
 // CrossPointState
 bool saveState(const CrossPointState& s, const char* path);
@@ -37,5 +39,7 @@ bool loadOpds(OpdsServerStore& store, const char* json, bool* needsResave = null
 // ReadingStatsStore
 bool saveReadingStats(const ReadingStatsStore& store, const char* path);
 bool loadReadingStats(ReadingStatsStore& store, const char* json);
+bool loadReadingStatsFile(ReadingStatsStore& store, const char* path);
+template <typename Input> bool loadReadingStatsInput(ReadingStatsStore& store, Input& input);
 
 }  // namespace JsonSettingsIO

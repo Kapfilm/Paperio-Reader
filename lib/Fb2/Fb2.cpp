@@ -1,0 +1,3561 @@
+#include "Fb2.h"
+#include "Fb2NavigationIndex.h"
+#include "Fb2AnchorIndex.h"
+
+#include <CooperativeAbort.h>
+#include <Logging.h>
+#include <freertos/task.h>
+
+#include <algorithm>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/stream_buffer.h>
+#include <freertos/task.h>
+#include <array>
+#include <cctype>
+#include <cstring>
+#include <limits>
+#include <memory>
+#include "Fb2Encoding.h"
+#include "native/Fb2ZipOpener.h"
+#include "native/BufferedFb2ScanStorage.h"
+#include "native/FsFileReader.h"
+
+namespace {
+
+// Preserve the upstream cancellation-token-shaped API so the lazy FB2 source
+// remains easy to sync, but route cancellation through Paperio's existing
+// library-level cooperative abort hook. ReaderCancellationToken stays opaque.
+bool fb2CancellationRequested(const reader::ReaderCancellationToken*) {
+  if (!CooperativeAbort::shouldAbortLongTask()) return false;
+  CooperativeAbort::markAborted();
+  return true;
+}
+
+// Temporary seekable index: RAM usage does not grow with the number of chapters.
+class SdFb2ScanStorage final : public Fb2ScanStorage {
+ public:
+  explicit SdFb2ScanStorage(const std::string& directory)
+      : recordsPath(directory + "/.fb2_scan_records.tmp"), stringsPath(directory + "/.fb2_scan_strings.tmp") {
+    records = Storage.open(recordsPath.c_str(), O_RDWR | O_CREAT | O_TRUNC);
+    strings = Storage.open(stringsPath.c_str(), O_RDWR | O_CREAT | O_TRUNC);
+  }
+  ~SdFb2ScanStorage() override {
+    records.close(); strings.close();
+    Storage.remove(recordsPath.c_str()); Storage.remove(stringsPath.c_str());
+  }
+  bool valid() const { return records && strings; }
+  bool read(bool text, uint32_t offset, void* data, size_t size) override {
+    HalFile& file = text ? strings : records;
+    return file.seek(offset) && file.read(data, size) == static_cast<int>(size);
+  }
+  bool write(bool text, uint32_t offset, const void* data, size_t size) override {
+    HalFile& file = text ? strings : records;
+    return file.seek(offset) && file.write(data, size) == size;
+  }
+ private:
+  std::string recordsPath, stringsPath;
+  HalFile records, strings;
+};
+
+struct Fb2PreservedStateFile {
+  const char* name;
+  const char* tempSuffix;
+};
+
+constexpr Fb2PreservedStateFile FB2_PRESERVED_STATE_FILES[] = {
+    {"progress.bin", ".preserve_progress.bin"},
+    {"progress.bin.bak", ".preserve_progress.bin.bak"},
+    {"stats.bin", ".preserve_stats.bin"},
+    {"bookmarks.bin", ".preserve_bookmarks.bin"},
+    {"reader_settings.bin", ".preserve_reader_settings.bin"},
+};
+
+// FB2 package rebuilding normally wipes cachePath.  Keep user-owned state
+// outside that directory while the generated package/cache is removed, then
+// put it back before rebuilding.  This is especially important after a full
+// cache clear followed by statistics/progress restore: the restored directory
+// contains progress.bin/stats.bin but no package metadata yet.
+bool clearFb2GeneratedCachePreservingUserState(const std::string& cachePath) {
+  std::array<bool, std::size(FB2_PRESERVED_STATE_FILES)> moved{};
+
+  // Recover any state left outside the cache by an interrupted previous
+  // rebuild before starting another one.
+  Storage.mkdir(cachePath.c_str(), true);
+  for (size_t i = 0; i < std::size(FB2_PRESERVED_STATE_FILES); ++i) {
+    const auto& item = FB2_PRESERVED_STATE_FILES[i];
+    const std::string finalPath = cachePath + "/" + item.name;
+    const std::string tempPath = cachePath + item.tempSuffix;
+    if (!Storage.exists(finalPath.c_str()) && Storage.exists(tempPath.c_str())) {
+      Storage.rename(tempPath.c_str(), finalPath.c_str());
+    }
+  }
+
+  for (size_t i = 0; i < std::size(FB2_PRESERVED_STATE_FILES); ++i) {
+    const auto& item = FB2_PRESERVED_STATE_FILES[i];
+    const std::string sourcePath = cachePath + "/" + item.name;
+    const std::string tempPath = cachePath + item.tempSuffix;
+    if (!Storage.exists(sourcePath.c_str())) continue;
+
+    if (Storage.exists(tempPath.c_str()) && !Storage.remove(tempPath.c_str())) {
+      LOG_ERR("FB2", "Could not remove stale preserved state: %s", tempPath.c_str());
+      goto rollback;
+    }
+    if (!Storage.rename(sourcePath.c_str(), tempPath.c_str())) {
+      LOG_ERR("FB2", "Could not preserve user state before cache rebuild: %s", sourcePath.c_str());
+      goto rollback;
+    }
+    moved[i] = true;
+  }
+
+  if (Storage.exists(cachePath.c_str()) && !Storage.removeDir(cachePath.c_str())) {
+    LOG_ERR("FB2", "Could not clear generated FB2 cache while preserving user state");
+    goto rollback;
+  }
+  if (!Storage.mkdir(cachePath.c_str(), true) && !Storage.exists(cachePath.c_str())) {
+    LOG_ERR("FB2", "Could not recreate FB2 cache directory");
+    goto rollback;
+  }
+
+  for (size_t i = 0; i < std::size(FB2_PRESERVED_STATE_FILES); ++i) {
+    if (!moved[i]) continue;
+    const auto& item = FB2_PRESERVED_STATE_FILES[i];
+    const std::string finalPath = cachePath + "/" + item.name;
+    const std::string tempPath = cachePath + item.tempSuffix;
+    if (!Storage.rename(tempPath.c_str(), finalPath.c_str())) {
+      LOG_ERR("FB2", "Could not restore user state after cache rebuild: %s", finalPath.c_str());
+      return false;
+    }
+  }
+  return true;
+
+rollback:
+  Storage.mkdir(cachePath.c_str(), true);
+  for (size_t i = 0; i < std::size(FB2_PRESERVED_STATE_FILES); ++i) {
+    if (!moved[i]) continue;
+    const auto& item = FB2_PRESERVED_STATE_FILES[i];
+    const std::string finalPath = cachePath + "/" + item.name;
+    const std::string tempPath = cachePath + item.tempSuffix;
+    if (!Storage.exists(finalPath.c_str()) && Storage.exists(tempPath.c_str())) {
+      Storage.rename(tempPath.c_str(), finalPath.c_str());
+    }
+  }
+  return false;
+}
+
+// Measures how much of scan() is actual storage I/O versus XML/token work.
+// It delegates directly to the existing reader and does not allocate or copy
+// any additional book data.
+class ProfiledByteReader final : public IByteReader {
+ public:
+  explicit ProfiledByteReader(IByteReader& source) : source_(source) {}
+
+  size_t read(void* buf, size_t len) override {
+    const uint32_t started = millis();
+    const size_t got = source_.read(buf, len);
+    readTimeMs_ += millis() - started;
+    readCalls_++;
+    bytesRead_ += got;
+    return got;
+  }
+  bool seek(uint64_t pos) override {
+    const uint32_t started = millis();
+    const bool ok = source_.seek(pos);
+    seekTimeMs_ += millis() - started;
+    seekCalls_++;
+    return ok;
+  }
+  uint64_t tell() const override { return source_.tell(); }
+  uint64_t size() const override { return source_.size(); }
+
+  uint32_t readCalls() const { return readCalls_; }
+  uint32_t seekCalls() const { return seekCalls_; }
+  uint32_t ioTimeMs() const { return readTimeMs_ + seekTimeMs_; }
+  uint64_t bytesRead() const { return bytesRead_; }
+
+ private:
+  IByteReader& source_;
+  uint32_t readCalls_ = 0;
+  uint32_t seekCalls_ = 0;
+  uint32_t readTimeMs_ = 0;
+  uint32_t seekTimeMs_ = 0;
+  uint64_t bytesRead_ = 0;
+};
+
+// Coalesce the many tiny generated-index/XML writes into 4 KiB SD writes.
+// If allocation fails, transparently fall back to direct writes.
+class BufferedFileWriter final : public Print {
+ public:
+  explicit BufferedFileWriter(HalFile& file, size_t capacity = 4096)
+      : file_(file), capacity_(capacity), buffer_(new (std::nothrow) uint8_t[capacity]) {}
+  ~BufferedFileWriter() override { flushBuffer(); }
+  size_t write(uint8_t value) override { return write(&value, 1); }
+  size_t write(const uint8_t* data, size_t length) override {
+    if (failed_) return 0;
+    if (!buffer_) {
+      const size_t written = file_.write(data, length);
+      cooperate();
+      failed_ = written != length;
+      return written;
+    }
+    size_t accepted = 0;
+    while (accepted < length) {
+      if (used_ == capacity_ && !flushBuffer()) return accepted;
+      const size_t chunk = std::min(length - accepted, capacity_ - used_);
+      memcpy(buffer_.get() + used_, data + accepted, chunk);
+      used_ += chunk;
+      accepted += chunk;
+    }
+    return accepted;
+  }
+  bool finish() { return flushBuffer() && !failed_; }
+
+ private:
+  bool flushBuffer() {
+    if (failed_) return false;
+    if (used_ == 0) return true;
+    const size_t written = file_.write(buffer_.get(), used_);
+    cooperate();
+    if (written != used_) {
+      failed_ = true;
+      return false;
+    }
+    used_ = 0;
+    return true;
+  }
+  void cooperate() {
+    const uint32_t now = millis();
+    if (now - lastYield_ >= 20) {
+      vTaskDelay(1);
+      lastYield_ = millis();
+    }
+  }
+  uint32_t lastYield_ = millis();
+  HalFile& file_;
+  size_t capacity_;
+  std::unique_ptr<uint8_t[]> buffer_;
+  size_t used_ = 0;
+  bool failed_ = false;
+};
+
+// v6 ZIP fused-scan pipe -------------------------------------------------
+// ESP32-C3 is single-core, so this does not magically make inflate + XML
+// parsing parallel CPU work. The win is that scan() consumes decompressed
+// bytes directly from RAM as they are produced instead of reopening and
+// rereading the complete staged .source.fb2 from the SD card afterward.
+//
+// Keep the pipe deliberately small: extraction already owns a 32 KiB DEFLATE
+// window. A 4 KiB stream buffer plus an 8 KiB parser task is a much safer
+// trade-off than another large book-sized/lookup allocation.
+class Fb2PipeReader final : public IByteReader {
+ public:
+  Fb2PipeReader(StreamBufferHandle_t stream, uint64_t totalBytes, volatile bool* producerDone)
+      : stream_(stream), totalBytes_(totalBytes), producerDone_(producerDone) {}
+
+  size_t read(void* buf, size_t len) override {
+    auto* dst = static_cast<uint8_t*>(buf);
+    size_t total = 0;
+    while (total < len) {
+      const size_t got = xStreamBufferReceive(stream_, dst + total, len - total, pdMS_TO_TICKS(20));
+      total += got;
+      pos_ += got;
+      if (got == 0 && *producerDone_ && xStreamBufferBytesAvailable(stream_) == 0) break;
+      // A short chunk is perfectly valid for Fb2XmlReader; returning here
+      // also keeps producer/consumer task switches coarse rather than busy.
+      if (total > 0) break;
+    }
+    return total;
+  }
+
+  bool seek(uint64_t) override { return false; }
+  uint64_t tell() const override { return pos_; }
+  uint64_t size() const override { return totalBytes_; }
+
+ private:
+  StreamBufferHandle_t stream_;
+  uint64_t totalBytes_;
+  volatile bool* producerDone_;
+  uint64_t pos_ = 0;
+};
+
+struct Fb2ZipScanTaskCtx {
+  Fb2PipeReader* reader = nullptr;
+  Fb2ScanResult* result = nullptr;
+  SemaphoreHandle_t done = nullptr;
+  bool ok = false;
+};
+
+void fb2ZipScanTask(void* arg) {
+  auto* ctx = static_cast<Fb2ZipScanTaskCtx*>(arg);
+  Fb2Parser parser;
+  // Fused ZIP mode is RAM-sensitive: a 2 KiB tokenizer is enough because
+  // the pipe itself already supplies small sequential chunks. Normal plain-FB2
+  // scan keeps the default 4 KiB buffer.
+  ctx->ok = parser.scan(*ctx->reader, *ctx->result, 2048);
+#if defined(ENABLE_SERIAL_LOG)
+  LOG_INF("FB2-PROF", "fused task stack free: %u bytes",
+          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+#endif
+  xSemaphoreGive(ctx->done);
+  vTaskDelete(nullptr);
+}
+
+
+constexpr uint8_t PACKAGE_VERSION = 29;  // rebuild with buffered indexes and complete FB2 TOC mapping
+// A single FB2 <section> with more inline images than this gets split into
+// several virtual chapters while its SD-card index is written, so a chapter
+// that's actually opened never needs to extract more than this many images
+// at once. Real-world crash trace: 23 images in one un-split section
+// reliably tripped the reader's own low-heap image-suppression check
+// (MemoryBudget::hasHeapForEpubInlineImage) on every single one of them.
+// Keep chapters bounded without splitting too aggressively through nested
+// markup.  Images are now converted to their SD pixel cache while parsing, so
+// two per virtual chapter no longer requires two live PNG decoders later.
+constexpr uint32_t MAX_IMAGES_PER_CHAPTER = 2;
+
+// Large image-free FB2 <section>s are exposed to the common EPUB reader as
+// several small virtual spine items. This is deliberately based on decoded
+// text bytes rather than "pages": the real page count depends on font,
+// margins and viewport and is only known later in ChapterHtmlSlimParser.
+// ~20 KiB normally lands in the 5-10 page range on X3/X4, so first-open work
+// is bounded without creating hundreds of tiny spine items.
+// 20 KiB produced 2220 virtual spine items for a real 48 MiB FB2. Each item
+// adds index/OPF/cache work and made package creation take over two minutes.
+// 24 KiB is the compromise after real-device traces showed maxAlloc falling
+// to roughly 32-36 KiB while a 40 KiB virtual chapter was being paginated.
+// This leaves headroom for parser/layout allocations without returning all the
+// way to the 20 KiB setting that created ~2220 spine items on a 48 MiB book.
+constexpr uint32_t TARGET_TEXT_BYTES_PER_CHAPTER = 24 * 1024;
+
+uint32_t virtualChapterCount(const Fb2SectionIndexEntry& section) {
+  const uint32_t imageSlices =
+      std::max<uint32_t>(1, (section.imageRefCount + MAX_IMAGES_PER_CHAPTER - 1) / MAX_IMAGES_PER_CHAPTER);
+  const uint32_t textSlices =
+      std::max<uint32_t>(1, (section.approxTextBytes / TARGET_TEXT_BYTES_PER_CHAPTER +
+                                (section.approxTextBytes % TARGET_TEXT_BYTES_PER_CHAPTER != 0)));
+  // An illustrated section still needs the text-size bound. The old either/or
+  // choice produced 50-140 KiB virtual chapters in large illustrated omnibus
+  // books, which exhausted the X4 layout heap and could trigger a reboot.
+  return std::max(imageSlices, textSlices);
+}
+
+constexpr char CACHE_MAGIC[] = "FB2IDX";  // 6 bytes, no trailing NUL written
+constexpr size_t CACHE_MAGIC_LEN = 6;
+
+void normalizeText(std::string& value) {
+  std::string normalized;
+  normalized.reserve(value.size());
+  bool pendingSpace = false;
+  for (const unsigned char c : value) {
+    if (std::isspace(c)) {
+      pendingSpace = !normalized.empty();
+      continue;
+    }
+    if (pendingSpace) normalized.push_back(' ');
+    normalized.push_back(static_cast<char>(c));
+    pendingSpace = false;
+  }
+  value.swap(normalized);
+}
+
+uint64_t fnvHash64Update(uint64_t hash, const char* data, size_t length) {
+  for (size_t i = 0; i < length; ++i) {
+    hash ^= static_cast<uint8_t>(data[i]);
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+uint64_t fnvHash64(const char* data, size_t length) {
+  return fnvHash64Update(14695981039346656037ull, data, length);
+}
+
+uint64_t hashString(const std::string& value) { return fnvHash64(value.data(), value.size()); }
+
+size_t formatUnsignedDecimal(uint32_t value, char (&buffer)[11]) {
+  char reverse[10];
+  size_t count = 0;
+  do {
+    reverse[count++] = static_cast<char>('0' + value % 10);
+    value /= 10;
+  } while (value != 0);
+  for (size_t i = 0; i < count; ++i) buffer[i] = reverse[count - 1 - i];
+  buffer[count] = '\0';
+  return count;
+}
+
+std::string anchorName(uint64_t hash) {
+  constexpr char HEX_DIGITS[] = "0123456789abcdef";
+  std::string result = "fb2-";
+  result.resize(20);
+  for (int i = 0; i < 16; ++i) {
+    result[4 + i] = HEX_DIGITS[(hash >> ((15 - i) * 4)) & 0x0f];
+  }
+  return result;
+}
+
+uint64_t automaticAnchor(const char* type, int serial) {
+  uint64_t hash = 14695981039346656037ull;
+  hash = fnvHash64Update(hash, type, strlen(type));
+  const char colon = ':';
+  hash = fnvHash64Update(hash, &colon, 1);
+  char digits[11];
+  const size_t digitCount = formatUnsignedDecimal(static_cast<uint32_t>(serial), digits);
+  return fnvHash64Update(hash, digits, digitCount);
+}
+
+std::string chapterHref(int index) {
+  char digits[11];
+  const size_t digitCount = formatUnsignedDecimal(static_cast<uint32_t>(index), digits);
+  std::string result;
+  result.reserve(sizeof("text/chapter_") - 1 + digitCount + sizeof(".xhtml") - 1);
+  result.append("text/chapter_");
+  result.append(digits, digitCount);
+  result.append(".xhtml");
+  return result;
+}
+
+inline unsigned char asciiLowerFb2(unsigned char c) {
+  return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
+}
+
+template <size_t N>
+bool equalsAsciiIgnoreCase(const std::string& value, const char (&literal)[N]) {
+  constexpr size_t literalLen = N - 1;
+  if (value.size() != literalLen) return false;
+  for (size_t i = 0; i < literalLen; ++i) {
+    if (asciiLowerFb2(static_cast<unsigned char>(value[i])) !=
+        asciiLowerFb2(static_cast<unsigned char>(literal[i]))) return false;
+  }
+  return true;
+}
+
+bool isNotesBody(const std::string& name) {
+  return equalsAsciiIgnoreCase(name, "notes") || equalsAsciiIgnoreCase(name, "comments") ||
+         equalsAsciiIgnoreCase(name, "footnotes") || equalsAsciiIgnoreCase(name, "endnotes") ||
+         equalsAsciiIgnoreCase(name, "annotations");
+}
+
+std::string normalizeImageMediaType(const std::string& value) {
+  if (equalsAsciiIgnoreCase(value, "image/jpeg") || equalsAsciiIgnoreCase(value, "image/jpg") ||
+      equalsAsciiIgnoreCase(value, "image/pjpeg")) return "image/jpeg";
+  if (equalsAsciiIgnoreCase(value, "image/png") || equalsAsciiIgnoreCase(value, "image/x-png")) return "image/png";
+  return {};
+}
+
+void writeBytes(Print& out, const char* data, size_t length) {
+  if (length > 0) out.write(reinterpret_cast<const uint8_t*>(data), length);
+}
+
+void writeBytes(Print& out, const std::string& value) { writeBytes(out, value.data(), value.size()); }
+
+void writeBytes(Print& out, const char* value) { writeBytes(out, value, strlen(value)); }
+
+void writeDecimal(Print& out, uint32_t value) {
+  char digits[11];
+  const size_t count = formatUnsignedDecimal(value, digits);
+  writeBytes(out, digits, count);
+}
+
+void writeChapterHrefDirect(Print& out, int index) {
+  writeBytes(out, "text/chapter_");
+  writeDecimal(out, static_cast<uint32_t>(index));
+  writeBytes(out, ".xhtml");
+}
+
+void writeAnchorNameDirect(Print& out, uint64_t hash) {
+  static constexpr char HEX_DIGITS[] = "0123456789abcdef";
+  char value[20] = {'f', 'b', '2', '-'};
+  for (int i = 0; i < 16; ++i) value[4 + i] = HEX_DIGITS[(hash >> ((15 - i) * 4)) & 0x0f];
+  writeBytes(out, value, sizeof(value));
+}
+
+void writeHeadingTag(Print& out, int heading, bool closing) {
+  const char digit = static_cast<char>('0' + heading);
+  if (closing) {
+    const char tag[] = {'<', '/', 'h', digit, '>'};
+    writeBytes(out, tag, sizeof(tag));
+  } else {
+    const char tag[] = {'<', 'h', digit, '>'};
+    writeBytes(out, tag, sizeof(tag));
+  }
+}
+
+void writeXmlEscaped(Print& out, const char* text, size_t length, bool attribute = false) {
+  size_t start = 0;
+  for (size_t i = 0; i < length; ++i) {
+    const char* replacement = nullptr;
+    switch (text[i]) {
+      case '&':
+        replacement = "&amp;";
+        break;
+      case '<':
+        replacement = "&lt;";
+        break;
+      case '>':
+        replacement = "&gt;";
+        break;
+      case '"':
+        if (attribute) replacement = "&quot;";
+        break;
+      case '\'':
+        if (attribute) replacement = "&apos;";
+        break;
+      default:
+        break;
+    }
+    if (!replacement) continue;
+    writeBytes(out, text + start, i - start);
+    writeBytes(out, replacement, strlen(replacement));
+    start = i + 1;
+  }
+  writeBytes(out, text + start, length - start);
+}
+
+void writeXmlEscaped(Print& out, const std::string& value, bool attribute = false) {
+  writeXmlEscaped(out, value.data(), value.size(), attribute);
+}
+
+bool writeStaticFile(const std::string& path, const char* contents) {
+  HalFile file;
+  if (!Storage.openFileForWrite("FB2", path, file)) return false;
+  const size_t length = strlen(contents);
+  const bool success = file.write(contents, length) == length;
+  file.close();
+  return success;
+}
+
+// Every binary cache artifact (section index, image index, package state)
+// starts with the same "FB2IDX" + version header, so a corrupted, truncated,
+// or format-mismatched file is caught with one cheap check up front instead
+// of misreading whatever bytes happen to follow as if they were valid
+// records - which, worst case, could walk off the end of the file or hand
+// back garbage a caller trusts.
+void writeCacheHeader(Print& out) {
+  out.write(CACHE_MAGIC, CACHE_MAGIC_LEN);
+  const uint8_t version = PACKAGE_VERSION;
+  out.write(&version, sizeof(version));
+}
+
+bool readAndCheckCacheHeader(HalFile& in) {
+  char magic[CACHE_MAGIC_LEN];
+  uint8_t version = 0;
+  if (in.read(magic, CACHE_MAGIC_LEN) != CACHE_MAGIC_LEN || memcmp(magic, CACHE_MAGIC, CACHE_MAGIC_LEN) != 0) {
+    return false;
+  }
+  return in.read(&version, sizeof(version)) == sizeof(version) && version == PACKAGE_VERSION;
+}
+
+// Skip an on-SD variable-length field without allocating a std::string for
+// it. The 64-byte scratch buffer stays well below the reader task's stack
+// budget and prevents a large chapter title/id from fragmenting the heap.
+bool skipCacheBytes(HalFile& in, uint32_t bytes) {
+  std::array<uint8_t, 64> scratch = {};
+  while (bytes > 0) {
+    const size_t chunk = std::min<size_t>(bytes, scratch.size());
+    if (in.read(scratch.data(), chunk) != chunk) return false;
+    bytes -= static_cast<uint32_t>(chunk);
+  }
+  return true;
+}
+
+// The native parser (native/Fb2XmlReader.h) intentionally never decodes
+// bytes - it assumes UTF-8 input and forwards everything else verbatim, by
+// design (see its own header comment). Real-world FB2 files frequently
+// declare a legacy single-byte Russian encoding instead (windows-1251 is
+// extremely common; koi8-r less so), so that assumption doesn't hold as-is.
+// This mirrors what the old expat-based converter did via its
+// XML_SetUnknownEncodingHandler: read the declared encoding out of the XML
+// prolog and, if it's not already UTF-8, transcode the whole file to a UTF-8
+// temp copy before handing it to the parser.
+std::string extractDeclaredEncoding(const char* prolog, size_t length) {
+  const char* needle = "encoding=";
+  const char* found = nullptr;
+  for (size_t i = 0; i + 9 <= length; ++i) {
+    if (strncmp(prolog + i, needle, 9) == 0) {
+      found = prolog + i + 9;
+      break;
+    }
+  }
+  if (!found) return {};
+  const char quote = *found;
+  if (quote != '"' && quote != '\'') return {};
+  const char* end = static_cast<const char*>(memchr(found + 1, quote, length - (found + 1 - prolog)));
+  if (!end) return {};
+  return std::string(found + 1, end - (found + 1));
+}
+
+// Appends the UTF-8 encoding of a BMP code point (single-byte legacy
+// encodings never produce anything outside the BMP) into a fixed buffer.
+// Returns the number of bytes written (1-3).
+size_t appendUtf8(char* out, int codePoint) {
+  const uint32_t cp = static_cast<uint32_t>(codePoint);
+  if (cp <= 0x7F) {
+    out[0] = static_cast<char>(cp);
+    return 1;
+  }
+  if (cp <= 0x7FF) {
+    out[0] = static_cast<char>(0xC0 | (cp >> 6));
+    out[1] = static_cast<char>(0x80 | (cp & 0x3F));
+    return 2;
+  }
+  out[0] = static_cast<char>(0xE0 | (cp >> 12));
+  out[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+  out[2] = static_cast<char>(0x80 | (cp & 0x3F));
+  return 3;
+}
+
+// If `path` declares a supported non-UTF-8 encoding, transcodes it to a new
+// UTF-8 temp file next to `cacheBaseFile` and rewrites `path` to point at
+// it (so the caller can track/clean it up the same way as any other temp
+// source). Leaves `path` untouched (and returns true) when the file is
+// already UTF-8/ASCII or declares an encoding this module has no table
+// for - in the latter case the native parser will pass the original bytes
+// through as-is, same as it would for any other unrecognized encoding.
+// Checks whether a chunk of `path`'s content is already well-formed UTF-8:
+// every byte >= 0x80 must be part of a structurally valid multi-byte
+// sequence (right number of 0x80-0xBF continuation bytes, no sequence
+// truncated by EOF). Doesn't attempt to detect overlong encodings or
+// validate the decoded code points are "sensible" - structural well-
+// formedness over several KB is already strong enough evidence, since real
+// single-byte-encoded text scatters bytes across the whole 0x80-0xFF range
+// fairly uniformly and would only pass this by chance in a vanishingly
+// small fraction of cases.
+bool bodyLooksLikeUtf8Already(const std::string& path) {
+  HalFile file;
+  if (!Storage.openFileForRead("FB2", path, file)) return false;
+  // Skip roughly past the XML prolog/declaration so the sample is actual
+  // book content, not the (pure-ASCII, hence UTF-8-compatible either way)
+  // header line.
+  file.seek(64);
+  uint8_t buf[4096];
+  const int got = file.read(buf, sizeof(buf));
+  file.close();
+  if (got <= 0) return false;
+
+  int multiByteSequences = 0;
+  for (int i = 0; i < got;) {
+    const uint8_t b = buf[i];
+    if (b < 0x80) {
+      ++i;
+      continue;
+    }
+    int extra;
+    if ((b & 0xE0) == 0xC0) extra = 1;
+    else if ((b & 0xF0) == 0xE0) extra = 2;
+    else if ((b & 0xF8) == 0xF0) extra = 3;
+    else return false;  // 0x80-0xBF or 0xF8-0xFF as a lead byte: not valid UTF-8
+    if (i + extra >= got) break;  // sequence runs past the sample; stop, don't guess
+    for (int k = 1; k <= extra; ++k) {
+      if ((buf[i + k] & 0xC0) != 0x80) return false;
+    }
+    ++multiByteSequences;
+    i += 1 + extra;
+  }
+  // Require a reasonable amount of evidence, not just "no bytes contradicted
+  // it" (a sample with zero high-bit bytes at all would trivially "pass"
+  // otherwise, telling us nothing about which encoding is actually in use).
+  return multiByteSequences >= 20;
+}
+
+bool transcodeToUtf8IfNeeded(std::string& path, const std::string& tempPathBase, const Fb2::ProgressFn& onProgress) {
+  char prolog[256];
+  const size_t prologLen = Storage.readFileToBuffer(path.c_str(), prolog, sizeof(prolog));
+  const std::string declared = extractDeclaredEncoding(prolog, prologLen);
+  if (declared.empty()) return true;
+  const std::string lower = [&] {
+    std::string s = declared;
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+  }();
+  if (lower == "utf-8" || lower == "utf8" || lower == "us-ascii" || lower == "ascii") return true;
+  // Probe with a representative high byte to see if this is an encoding we
+  // actually have a conversion table for.
+  if (Fb2Encoding::decodeByte(declared.c_str(), 0xC0) < 0) return true;
+
+  // Some real-world FB2s declare a legacy encoding but were actually
+  // re-saved as UTF-8 at some point without the <?xml?> line being
+  // updated to match - the declaration lies. Re-encoding already-correct
+  // UTF-8 through a single-byte table produces exactly the kind of
+  // well-formed-but-wrong-text "double encoding" garbage that's otherwise
+  // very hard to tell apart from a genuine decode bug after the fact, so
+  // it's worth checking for directly: sample a chunk of the body and see
+  // if it's already well-formed UTF-8. Coincidentally-valid multi-byte
+  // sequences over a large enough sample are vanishingly unlikely for
+  // real single-byte-encoded text (which uses the whole 0x80-0xFF range
+  // fairly uniformly), so this is a reliable signal, not a guess.
+  if (bodyLooksLikeUtf8Already(path)) return true;
+
+  HalFile in;
+  if (!Storage.openFileForRead("FB2", path, in)) return false;
+  const std::string outPath = tempPathBase + ".utf8.fb2";
+  HalFile out;
+  if (!Storage.openFileForWrite("FB2", outPath, out)) {
+    in.close();
+    return false;
+  }
+
+  const size_t totalSize = in.fileSize();
+  size_t processed = 0;
+  int chunkCount = 0;
+  uint8_t inBuf[1024];
+  char outBuf[1024 * 3];
+  bool ok = true;
+  for (;;) {
+    const int got = in.read(inBuf, sizeof(inBuf));
+    if (got <= 0) break;
+    processed += static_cast<size_t>(got);
+    ++chunkCount;
+    if (onProgress && totalSize > 0 && chunkCount % 16 == 0) {
+      onProgress(30 + static_cast<int>(processed * 10 / totalSize));
+    }
+    // vTaskDelay only exists here so a very large book can't starve the
+    // watchdog - it does NOT need to run anywhere near every chunk, and on
+    // this firmware it apparently isn't cheap: something else runs a ~500ms
+    // display refresh on its own timer, and yielding at all seems to be
+    // enough to let a pending one go ahead before returning control here,
+    // so yielding too often turns into a slow drip of ~500ms stalls (this
+    // is very likely what regressed the "Девчата" load from ~38s to ~138s
+    // between builds - too many yield points, not too few this time).
+    // Once every ~1MB is still far more than needed to avoid the watchdog.
+    if (chunkCount % 256 == 0) vTaskDelay(1);
+    size_t outLen = 0;
+    for (int i = 0; i < got; ++i) {
+      int cp = Fb2Encoding::decodeByte(declared.c_str(), inBuf[i]);
+      if (cp < 0) cp = 0xFFFD;  // undefined byte in this encoding: Unicode replacement char
+      outLen += appendUtf8(outBuf + outLen, cp);
+      if (outLen > sizeof(outBuf) - 8) {
+        if (out.write(outBuf, outLen) != outLen) { ok = false; }
+        outLen = 0;
+      }
+    }
+    if (outLen && out.write(outBuf, outLen) != outLen) ok = false;
+    if (!ok) break;
+  }
+  in.close();
+  out.close();
+  if (!ok) {
+    Storage.remove(outPath.c_str());
+    return false;
+  }
+  path = outPath;
+  return true;
+}
+
+// Keep a short recency list, but never evict book directories by book count.
+// They also contain thumbnails, progress, bookmarks, and reading statistics.
+constexpr int MAX_RECENT_FB2_PACKAGES = 5;
+constexpr char LRU_INDEX_FILE[] = "/.fb2_lru_index";
+constexpr char METADATA_FILE[] = "/fb2_metadata.txt";
+constexpr char ANNOTATION_FILE[] = "/fb2_annotation.txt";
+constexpr char PACKAGE_STATE_FILE[] = "/fb2_package.bin";
+constexpr char SECTIONS_INDEX_FILE[] = "/.fb2_sections.bin";
+constexpr char SOURCE_PATHS_INDEX_FILE[] = "/.fb2_sourcepaths.bin";
+constexpr char NAVIGATION_INDEX_FILE[] = "/.fb2_nav.bin";
+constexpr char ANCHORS_INDEX_FILE[] = "/.fb2_anchors.bin";
+bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourcePath, Fb2AnchorIndex& index);
+
+bool ensureFb2NavigationIndex(const std::string& cachePath, Fb2NavigationIndex& index) {
+  const std::string sections = cachePath + SECTIONS_INDEX_FILE;
+  const std::string navigation = cachePath + NAVIGATION_INDEX_FILE;
+  if (index.open(sections, navigation, PACKAGE_VERSION)) return true;
+  const unsigned long started = millis();
+  if (!Fb2NavigationIndex::build(sections, navigation, PACKAGE_VERSION) ||
+      !index.open(sections, navigation, PACKAGE_VERSION)) {
+    LOG_ERR("FB2NAV", "Navigation cache unavailable; using buffered section lookup");
+    return false;
+  }
+  LOG_INF("FB2NAV", "Built direct navigation for %u chapters in %lums", index.chapterCount(), millis() - started);
+  return true;
+}
+
+constexpr char IMAGES_INDEX_FILE[] = "/.fb2_images.bin";
+
+std::vector<std::string> readLruIndex(const std::string& path) {
+  std::vector<std::string> keys;
+  char buffer[1024];
+  const size_t length = Storage.readFileToBuffer(path.c_str(), buffer, sizeof(buffer) - 1);
+  if (length == 0) return keys;
+  buffer[length] = '\0';
+  size_t start = 0;
+  for (size_t i = 0; i <= length; ++i) {
+    if (i == length || buffer[i] == '\n') {
+      if (i > start) keys.emplace_back(buffer + start, i - start);
+      start = i + 1;
+    }
+  }
+  return keys;
+}
+
+void writeLruIndex(const std::string& path, const std::vector<std::string>& keys) {
+  HalFile file;
+  if (!Storage.openFileForWrite("FB2", path, file)) return;
+  for (const auto& key : keys) {
+    writeBytes(file, key);
+    file.write(static_cast<uint8_t>('\n'));
+  }
+  file.close();
+}
+
+// ---------------------------------------------------------------------
+// StreamSink: turns Fb2Parser's content events for a single <section> into
+// XHTML written straight to a Print& (no intermediate chapter file, no
+// chapter-splitting - one call renders exactly one section, the same way a
+// real EPUB's single chapter file can be arbitrarily long).
+// ---------------------------------------------------------------------
+bool findIndexedImageFilename(const std::string& imageIndexPath, const std::string& wantedId, std::string& filename) {
+  HalFile imagesIn;
+  if (!Storage.openFileForRead("FB2", imageIndexPath, imagesIn) || !readAndCheckCacheHeader(imagesIn)) {
+    imagesIn.close();
+    return false;
+  }
+
+  // The FB2 image index is on SD precisely so large illustrated books don't
+  // retain every binary id in RAM. Compare ids in a fixed buffer and allocate
+  // a filename only for the one image that is actually emitted on this page.
+  std::array<char, 64> scratch{};
+  for (;;) {
+    uint16_t idLen = 0;
+    if (imagesIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) break;
+
+    bool idMatches = idLen == wantedId.size();
+    size_t consumed = 0;
+    while (consumed < idLen) {
+      const size_t chunk = std::min<size_t>(scratch.size(), idLen - consumed);
+      if (imagesIn.read(scratch.data(), chunk) != static_cast<int>(chunk)) {
+        imagesIn.close();
+        return false;
+      }
+      if (idMatches && memcmp(scratch.data(), wantedId.data() + consumed, chunk) != 0) idMatches = false;
+      consumed += chunk;
+    }
+
+    uint16_t nameLen = 0;
+    if (imagesIn.read(&nameLen, sizeof(nameLen)) != sizeof(nameLen)) break;
+    if (idMatches) {
+      // Names are generated as image_<n>.png/jpg. Treat a corrupted cache
+      // entry as missing rather than allocating an unbounded string.
+      if (nameLen == 0 || nameLen > 96) {
+        imagesIn.close();
+        return false;
+      }
+      filename.assign(nameLen, '\0');
+      const bool readOk = imagesIn.read(filename.data(), nameLen) == static_cast<int>(nameLen);
+      imagesIn.close();
+      return readOk;
+    }
+    if (nameLen && !skipCacheBytes(imagesIn, nameLen)) break;
+    uint32_t skipStart = 0;
+    uint32_t skipEnd = 0;
+    if (imagesIn.read(&skipStart, sizeof(skipStart)) != sizeof(skipStart) ||
+        imagesIn.read(&skipEnd, sizeof(skipEnd)) != sizeof(skipEnd)) {
+      break;
+    }
+  }
+  imagesIn.close();
+  return false;
+}
+
+
+
+// Some FB2 files (especially OCR/converted sources) contain accidental NBSP or
+// narrow-NBSP between every Cyrillic letter of a word.  Keeping these as real
+// spaces produces visible runs such as "д в у х" or "т е п е р ь".  Do not
+// collapse a single NBSP ("в\u00A0доме" is legitimate typography); only collapse
+// runs with at least two no-break separators between lowercase Cyrillic letters.
+// This also avoids touching initials such as "А. Б. В.".
+static bool decodeLowerCyrillicAt(const std::string& s, size_t pos, size_t& cpLen) {
+  cpLen = 0;
+  if (pos + 1 >= s.size()) return false;
+  const uint8_t b0 = static_cast<uint8_t>(s[pos]);
+  const uint8_t b1 = static_cast<uint8_t>(s[pos + 1]);
+  if ((b0 != 0xD0 && b0 != 0xD1) || (b1 & 0xC0) != 0x80) return false;
+  const uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+  cpLen = 2;
+  return cp >= 0x0430 && cp <= 0x045F;  // а..я + ё and nearby lowercase Cyrillic
+}
+
+static size_t noBreakSpaceLenAt(const std::string& s, size_t pos) {
+  if (pos + 1 < s.size() && static_cast<uint8_t>(s[pos]) == 0xC2 &&
+      static_cast<uint8_t>(s[pos + 1]) == 0xA0) {
+    return 2;  // U+00A0 NBSP
+  }
+  if (pos + 2 < s.size() && static_cast<uint8_t>(s[pos]) == 0xE2 &&
+      static_cast<uint8_t>(s[pos + 1]) == 0x80 && static_cast<uint8_t>(s[pos + 2]) == 0xAF) {
+    return 3;  // U+202F narrow NBSP
+  }
+  return 0;
+}
+
+// The shared HTML layout keeps NBSP as a continuation token. That is useful
+// for EPUB typography, but some FB2 sources use U+00A0/U+202F as their normal
+// inter-word separator. On small custom fonts those continuation spaces can
+// end up with no visible advance, visually gluing otherwise separate words
+// (e.g. "Ну а что?" -> "Нуачто?"). Normalize only FB2-generated XHTML to an
+// ordinary ASCII space. This deliberately does not touch the common EPUB
+// parser or renderer, keeping existing EPUB and baseline layout behaviour
+// unchanged.
+static bool normalizeFb2NoBreakSpaces(const std::string& input, std::string& out) {
+  bool changed = false;
+  out.clear();
+  out.reserve(input.size());
+
+  for (size_t i = 0; i < input.size();) {
+    const size_t sepLen = noBreakSpaceLenAt(input, i);
+    if (sepLen) {
+      out.push_back(' ');
+      i += sepLen;
+      changed = true;
+      continue;
+    }
+    out.push_back(input[i++]);
+  }
+  return changed;
+}
+
+static bool isCyrillicLetterEndingAt(const std::string& s, size_t pos) {
+  // Return true when the UTF-8 codepoint immediately before pos is a Cyrillic
+  // letter. FB2's letter-spacing repair must never start in the middle of a
+  // normal word (e.g. "бы\u00A0я\u00A0не" used to be misdetected starting at
+  // the final 'ы' and was rewritten to "быяне").
+  if (pos < 2) return false;
+  const uint8_t b0 = static_cast<uint8_t>(s[pos - 2]);
+  const uint8_t b1 = static_cast<uint8_t>(s[pos - 1]);
+  if ((b0 != 0xD0 && b0 != 0xD1) || (b1 & 0xC0) != 0x80) return false;
+  const uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+  return cp >= 0x0400 && cp <= 0x04FF;
+}
+
+static bool isCyrillicLetterStartingAt(const std::string& s, size_t pos) {
+  if (pos + 1 >= s.size()) return false;
+  const uint8_t b0 = static_cast<uint8_t>(s[pos]);
+  const uint8_t b1 = static_cast<uint8_t>(s[pos + 1]);
+  if ((b0 != 0xD0 && b0 != 0xD1) || (b1 & 0xC0) != 0x80) return false;
+  const uint32_t cp = ((b0 & 0x1F) << 6) | (b1 & 0x3F);
+  return cp >= 0x0400 && cp <= 0x04FF;
+}
+
+static bool normalizeFb2LetterSpacing(const std::string& input, std::string& out) {
+  // Repair only genuine letter-spaced runs such as "д\u00A0в\u00A0у\u00A0х".
+  // The old heuristic could begin at the LAST letter of an ordinary word and
+  // consume the first letter of the next word(s), so perfectly valid Russian
+  // prose such as "бы\u00A0я\u00A0не" became "быяне", and "ж\u00A0я\u00A0от"
+  // became "жяот". A candidate must now be bounded by real word boundaries on
+  // BOTH sides. This keeps the legacy repair without touching normal FB2 NBSPs.
+  bool found = false;
+  for (size_t i = 0; i < input.size() && !found;) {
+    size_t cpLen = 0;
+    if (!decodeLowerCyrillicAt(input, i, cpLen) || isCyrillicLetterEndingAt(input, i)) {
+      ++i;
+      continue;
+    }
+
+    size_t scan = i;
+    size_t letters = 0;
+    size_t runEnd = i;
+    while (scan < input.size()) {
+      size_t letterLen = 0;
+      if (!decodeLowerCyrillicAt(input, scan, letterLen)) break;
+      ++letters;
+      scan += letterLen;
+      runEnd = scan;
+      const size_t sepLen = noBreakSpaceLenAt(input, scan);
+      if (!sepLen) break;
+      size_t nextLen = 0;
+      if (!decodeLowerCyrillicAt(input, scan + sepLen, nextLen)) break;
+      scan += sepLen;
+    }
+
+    // A true spaced-letter run must contain at least three separated letters
+    // and must not terminate in the middle of a normal Cyrillic word.
+    if (letters >= 3 && !isCyrillicLetterStartingAt(input, runEnd)) {
+      found = true;
+      break;
+    }
+    i += cpLen;
+  }
+  if (!found) return false;
+
+  out.clear();
+  out.reserve(input.size());
+  for (size_t i = 0; i < input.size();) {
+    size_t cpLen = 0;
+    if (!decodeLowerCyrillicAt(input, i, cpLen) || isCyrillicLetterEndingAt(input, i)) {
+      out.push_back(input[i++]);
+      continue;
+    }
+
+    size_t scan = i;
+    size_t letters = 0;
+    size_t runEnd = i;
+    while (scan < input.size()) {
+      size_t letterLen = 0;
+      if (!decodeLowerCyrillicAt(input, scan, letterLen)) break;
+      ++letters;
+      scan += letterLen;
+      runEnd = scan;
+      const size_t sepLen = noBreakSpaceLenAt(input, scan);
+      if (!sepLen) break;
+      size_t nextLen = 0;
+      if (!decodeLowerCyrillicAt(input, scan + sepLen, nextLen)) break;
+      scan += sepLen;
+    }
+
+    const bool genuineLetterSpacing =
+        letters >= 3 && !isCyrillicLetterStartingAt(input, runEnd);
+    if (genuineLetterSpacing) {
+      size_t q = i;
+      size_t copied = 0;
+      while (q < runEnd && copied < letters) {
+        size_t letterLen = 0;
+        if (!decodeLowerCyrillicAt(input, q, letterLen)) break;
+        out.append(input, q, letterLen);
+        q += letterLen;
+        ++copied;
+        const size_t sepLen = noBreakSpaceLenAt(input, q);
+        if (sepLen && copied < letters) q += sepLen;
+      }
+      i = runEnd;
+    } else {
+      out.append(input, i, cpLen);
+      i += cpLen;
+    }
+  }
+  return true;
+}
+
+class StreamSink : public Fb2ContentSink {
+ public:
+  // resolveLink(targetId) -> XHTML href to point at (e.g. "chapter_5.xhtml#fb2-...")
+  // for a resolvable target, or an empty string if targetId doesn't match
+  // any known section (in which case the link renders as plain text - no
+  // point emitting an <a href=""> that goes nowhere).
+  using LinkResolver = std::function<std::string(const std::string&)>;
+
+  StreamSink(Print& out, std::string imageIndexPath, LinkResolver resolveLink = nullptr)
+      : out_(out), imageIndexPath_(std::move(imageIndexPath)), resolveLink_(std::move(resolveLink)) {}
+
+  void onAnchor(const std::string& id) override {
+    if (id.empty()) return;
+    writeBytes(out_, "<span id=\"");
+    writeAnchorNameDirect(out_, fnvHash64(id.data(), id.size()));
+    writeBytes(out_, "\"></span>");
+  }
+  bool streamsTableCells() const override { return true; }
+  void onParagraphBegin() override { writeBytes(out_, "<p>"); }
+  void onParagraphEnd() override { writeBytes(out_, "</p>"); }
+
+  void onSubtitle(const std::string& text) override {
+    onSubtitleBegin(); writeXmlEscaped(out_, text); onSubtitleEnd();
+  }
+  void onSubtitleBegin() override { writeBytes(out_, "<h3 class=\"subtitle\">"); }
+  void onSubtitleEnd() override { writeBytes(out_, "</h3>"); }
+  void onTitleBegin(uint8_t level) override {
+    const int h = std::min(std::max(static_cast<int>(level) + 1, 1), 6);
+    writeHeadingTag(out_, h, false);
+  }
+  void onTitleEnd(uint8_t level) override {
+    const int h = std::min(std::max(static_cast<int>(level) + 1, 1), 6);
+    writeHeadingTag(out_, h, true);
+  }
+  void onTitleLineBreak() override { writeBytes(out_, "<br/>"); }
+  void onEmptyLine() override { writeBytes(out_, "<p class=\"empty-line\"><br/></p>"); }
+  void onHorizontalRule() override { writeBytes(out_, "<hr/>"); }
+
+  void onPoemBegin() override {
+    stanzaIndexStack_.push_back(0);
+    writeBytes(out_, "<div class=\"poem\">");
+  }
+  void onPoemEnd() override {
+    writeBytes(out_, "</div>");
+    if (!stanzaIndexStack_.empty()) stanzaIndexStack_.pop_back();
+  }
+  void onStanzaBegin() override {
+    const bool isContinuationStanza = !stanzaIndexStack_.empty() && stanzaIndexStack_.back() > 0;
+    writeBytes(out_, isContinuationStanza ? "<div class=\"stanza stanza-break\">" : "<div class=\"stanza\">");
+    if (!stanzaIndexStack_.empty()) ++stanzaIndexStack_.back();
+  }
+  void onStanzaEnd() override { writeBytes(out_, "</div>"); }
+  void onVerseLine(const std::string& text) override {
+    writeBytes(out_, "<p class=\"v\">");
+    writeXmlEscaped(out_, text);
+    writeBytes(out_, "</p>");
+  }
+  void onVerseBegin() override { writeBytes(out_, "<p class=\"v\">"); }
+  void onVerseEnd() override { writeBytes(out_, "</p>"); }
+
+  void onCiteBegin() override { writeBytes(out_, "<blockquote class=\"cite\">"); }
+  void onCiteEnd() override { writeBytes(out_, "</blockquote>"); }
+  void onEpigraphBegin() override { writeBytes(out_, "<div class=\"epigraph\">"); }
+  void onEpigraphEnd() override { writeBytes(out_, "</div>"); }
+  void onTextAuthor(const std::string& text) override {
+    onTextAuthorBegin(); writeXmlEscaped(out_, text); onTextAuthorEnd();
+  }
+  void onTextAuthorBegin() override { writeBytes(out_, "<p class=\"text-author\">"); }
+  void onTextAuthorEnd() override { writeBytes(out_, "</p>"); }
+
+  void onText(const std::string& text, Fb2InlineStyle style) override {
+    const uint8_t bits = static_cast<uint8_t>(style);
+    const auto has = [bits](Fb2InlineStyle bit) {
+      return (bits & static_cast<uint8_t>(bit)) != 0;
+    };
+
+    // This callback is on the per-text-run render hot path. Writing the
+    // wrappers directly avoids constructing/concatenating two temporary
+    // std::strings for every styled run, which fragmented the small C3 heap
+    // in formatting-heavy FB2 chapters. Close in exact reverse order.
+    if (has(Fb2InlineStyle::Bold)) writeBytes(out_, "<strong>");
+    if (has(Fb2InlineStyle::Italic)) writeBytes(out_, "<em>");
+    if (has(Fb2InlineStyle::Underline)) writeBytes(out_, "<span class=\"underline\">");
+    if (has(Fb2InlineStyle::Strikethrough)) writeBytes(out_, "<span class=\"strike\">");
+    if (has(Fb2InlineStyle::SmallCaps)) writeBytes(out_, "<span class=\"smallcaps\">");
+    if (has(Fb2InlineStyle::Superscript)) writeBytes(out_, "<sup>");
+    if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "<sub>");
+
+    std::string normalizedText;
+    const std::string* textForLayout = &text;
+    if (normalizeFb2LetterSpacing(text, normalizedText)) {
+      textForLayout = &normalizedText;
+    }
+
+    std::string normalizedSpaces;
+    if (normalizeFb2NoBreakSpaces(*textForLayout, normalizedSpaces)) {
+      writeXmlEscaped(out_, normalizedSpaces);
+    } else {
+      writeXmlEscaped(out_, *textForLayout);
+    }
+
+    if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "</sub>");
+    if (has(Fb2InlineStyle::Superscript)) writeBytes(out_, "</sup>");
+    if (has(Fb2InlineStyle::SmallCaps)) writeBytes(out_, "</span>");
+    if (has(Fb2InlineStyle::Strikethrough)) writeBytes(out_, "</span>");
+    if (has(Fb2InlineStyle::Underline)) writeBytes(out_, "</span>");
+    if (has(Fb2InlineStyle::Italic)) writeBytes(out_, "</em>");
+    if (has(Fb2InlineStyle::Bold)) writeBytes(out_, "</strong>");
+  }
+
+  void onImage(const std::string& binaryId) override {
+    std::string filename;
+    if (!findIndexedImageFilename(imageIndexPath_, binaryId, filename)) return;
+    writeBytes(out_, "<img src=\"../images/");
+    writeXmlEscaped(out_, filename, true);
+    writeBytes(out_, "\" alt=\"\"/>");
+  }
+
+  void onLinkBegin(const std::string& targetId) override {
+    linkWasEmitted_ = false;
+    if (!resolveLink_) return;
+    const std::string href = resolveLink_(targetId);
+    if (href.empty()) return;  // unresolvable target: render as plain text, no <a> wrapper
+    writeBytes(out_, "<a href=\"");
+    writeXmlEscaped(out_, href, true);
+    writeBytes(out_, "\">");
+    linkWasEmitted_ = true;
+  }
+  void onLinkEnd() override {
+    if (linkWasEmitted_) writeBytes(out_, "</a>");
+    linkWasEmitted_ = false;
+  }
+
+  // The EPUB table paginator does not retain per-cell links/anchors. Linear
+  // FB2 cells use its ordinary paragraph path, preserving navigation and text.
+  void onTableBegin() override { writeBytes(out_, "<div class=\"fb2-table\">"); }
+  void onTableEnd() override { writeBytes(out_, "</div>"); }
+  void onTableRowBegin() override { writeBytes(out_, "<div class=\"fb2-table-row\">"); }
+  void onTableRowEnd() override { writeBytes(out_, "</div>"); }
+  void onTableCellBegin(const Fb2TableCellAttrs& attrs) override {
+    cellIsHeader_ = attrs.isHeader;
+    writeBytes(out_, "<p class=\"fb2-table-cell\">");
+    if (cellIsHeader_) writeBytes(out_, "<strong>");
+  }
+  void onTableCellEnd() override {
+    if (cellIsHeader_) writeBytes(out_, "</strong>");
+    writeBytes(out_, "</p>");
+  }
+  void onTableCell(const std::string& text, const Fb2TableCellAttrs& attrs) override {
+    onTableCellBegin(attrs); writeXmlEscaped(out_, text); onTableCellEnd();
+  }
+
+ private:
+  bool cellIsHeader_ = false;
+  Print& out_;
+  // Own this path. renderChapterOnDemand() passes a concatenated temporary;
+  // retaining a reference to it made image lookups read arbitrary bytes as a
+  // path after the constructor returned.
+  std::string imageIndexPath_;
+  LinkResolver resolveLink_;
+  std::vector<uint16_t> stanzaIndexStack_;
+  bool linkWasEmitted_ = false;  // whether onLinkBegin actually wrote an <a> for the currently-open link
+};
+
+// Splits an illustration-heavy section after the complete block containing
+// the last image in a slice.  Both neighbouring slices make the decision at
+// the same image ordinal and block boundary, so no prose is lost and a
+// virtual chapter never cuts a paragraph in half merely because its image
+// quota was reached.
+class RangeFilterSink : public Fb2ContentSink {
+ public:
+  RangeFilterSink(Fb2ContentSink& inner, uint32_t rangeStart, uint32_t rangeEnd)
+      : inner_(inner), rangeStart_(rangeStart), rangeEnd_(rangeEnd), emitting_(rangeStart == 0) {}
+
+  bool streamsTableCells() const override { return inner_.streamsTableCells(); }
+  void onAnchor(const std::string& id) override { if (ensureEmitting()) inner_.onAnchor(id); }
+  void onTableCellBegin(const Fb2TableCellAttrs& attrs) override {
+    cellAttrs_ = attrs; beginScope(Scope::TableCell);
+  }
+  void onTableCellEnd() override { endScope(Scope::TableCell); }
+  void onParagraphBegin() override { beginScope(Scope::Paragraph); }
+  void onParagraphEnd() override { endScope(Scope::Paragraph); }
+  void onSubtitleBegin() override { if (ensureEmitting()) inner_.onSubtitleBegin(); }
+  void onSubtitleEnd() override { if (emitting_) inner_.onSubtitleEnd(); safeBoundary(); }
+  void onTextAuthorBegin() override { if (ensureEmitting()) inner_.onTextAuthorBegin(); }
+  void onTextAuthorEnd() override { if (emitting_) inner_.onTextAuthorEnd(); safeBoundary(); }
+  void onSubtitle(const std::string& text) override {
+    if (ensureEmitting()) inner_.onSubtitle(text);
+    safeBoundary();
+  }
+  void onEmptyLine() override {
+    if (ensureEmitting()) inner_.onEmptyLine();
+    safeBoundary();
+  }
+  void onHorizontalRule() override {
+    if (ensureEmitting()) inner_.onHorizontalRule();
+    safeBoundary();
+  }
+  void onPoemBegin() override { beginScope(Scope::Poem); }
+  void onPoemEnd() override { endScope(Scope::Poem); }
+  void onStanzaBegin() override { beginScope(Scope::Stanza); }
+  void onStanzaEnd() override { endScope(Scope::Stanza); }
+  void onVerseLine(const std::string& text) override {
+    if (ensureEmitting()) inner_.onVerseLine(text);
+    safeBoundary();
+  }
+  void onVerseBegin() override { beginScope(Scope::Verse); }
+  void onVerseEnd() override { endScope(Scope::Verse); }
+  void onCiteBegin() override { beginScope(Scope::Cite); }
+  void onCiteEnd() override { endScope(Scope::Cite); }
+  void onEpigraphBegin() override { beginScope(Scope::Epigraph); }
+  void onEpigraphEnd() override { endScope(Scope::Epigraph); }
+  void onTextAuthor(const std::string& text) override {
+    if (ensureEmitting()) inner_.onTextAuthor(text);
+    safeBoundary();
+  }
+  void onText(const std::string& text, Fb2InlineStyle style) override {
+    if (ensureEmitting()) inner_.onText(text, style);
+  }
+  void onImage(const std::string& binaryId) override {
+    if (ensureEmitting()) inner_.onImage(binaryId);
+    ++imageOrdinal_;
+    // A top-level image is already an indivisible block. Images inside a
+    // paragraph/table wait for that container's end callback instead.
+    if (scopeCount_ == 0) safeBoundary();
+  }
+  void onLinkBegin(const std::string& targetId) override {
+    linkEmitted_ = ensureEmitting();
+    if (linkEmitted_) inner_.onLinkBegin(targetId);
+  }
+  void onLinkEnd() override {
+    if (linkEmitted_) inner_.onLinkEnd();
+    linkEmitted_ = false;
+  }
+  void onTableBegin() override { beginScope(Scope::Table); }
+  void onTableEnd() override { endScope(Scope::Table); }
+  void onTableRowBegin() override { beginScope(Scope::TableRow); }
+  void onTableRowEnd() override { endScope(Scope::TableRow); }
+  void onTableCell(const std::string& text, const Fb2TableCellAttrs& attrs) override {
+    if (ensureEmitting()) inner_.onTableCell(text, attrs);
+    safeBoundary();
+  }
+
+ private:
+  enum class Scope : uint8_t { Paragraph, Poem, Stanza, Verse, Cite, Epigraph, Table, TableRow, TableCell };
+  static constexpr size_t MAX_SCOPES = 16;
+
+  void beginScope(Scope scope) {
+    const bool emitScope = ensureEmitting();
+    if (scopeCount_ < MAX_SCOPES) scopes_[scopeCount_++] = scope;
+    if (emitScope) openScope(scope);
+  }
+
+  void endScope(Scope scope) {
+    if (emitting_) closeScope(scope);
+    // FB2 input is well-formed, but tolerate an unexpected end tag without
+    // underflowing the fixed stack used on this RAM-constrained target.
+    if (scopeCount_ > 0) --scopeCount_;
+    safeBoundary();
+  }
+
+  bool ensureEmitting() {
+    if (emitting_) return true;
+    if (!startReady_ || finished_) return false;
+    for (size_t i = 0; i < scopeCount_; ++i) openScope(scopes_[i]);
+    emitting_ = true;
+    startReady_ = false;
+    return true;
+  }
+
+  void safeBoundary() {
+    if (emitting_ && rangeEnd_ != UINT32_MAX && imageOrdinal_ >= rangeEnd_) {
+      if (linkEmitted_) {
+        inner_.onLinkEnd();
+        linkEmitted_ = false;
+      }
+      for (size_t i = scopeCount_; i > 0; --i) closeScope(scopes_[i - 1]);
+      emitting_ = false;
+      finished_ = true;
+      return;
+    }
+    if (!emitting_ && !finished_ && imageOrdinal_ >= rangeStart_) {
+      if (rangeEnd_ != UINT32_MAX && imageOrdinal_ >= rangeEnd_) {
+        finished_ = true;
+      } else {
+        startReady_ = true;
+      }
+    }
+  }
+
+  void openScope(Scope scope) {
+    switch (scope) {
+      case Scope::Paragraph: inner_.onParagraphBegin(); break;
+      case Scope::Poem: inner_.onPoemBegin(); break;
+      case Scope::Stanza: inner_.onStanzaBegin(); break;
+      case Scope::Verse: inner_.onVerseBegin(); break;
+      case Scope::Cite: inner_.onCiteBegin(); break;
+      case Scope::Epigraph: inner_.onEpigraphBegin(); break;
+      case Scope::Table: inner_.onTableBegin(); break;
+      case Scope::TableRow: inner_.onTableRowBegin(); break;
+      case Scope::TableCell: inner_.onTableCellBegin(cellAttrs_); break;
+    }
+  }
+
+  void closeScope(Scope scope) {
+    switch (scope) {
+      case Scope::Paragraph: inner_.onParagraphEnd(); break;
+      case Scope::Poem: inner_.onPoemEnd(); break;
+      case Scope::Stanza: inner_.onStanzaEnd(); break;
+      case Scope::Verse: inner_.onVerseEnd(); break;
+      case Scope::Cite: inner_.onCiteEnd(); break;
+      case Scope::Epigraph: inner_.onEpigraphEnd(); break;
+      case Scope::Table: inner_.onTableEnd(); break;
+      case Scope::TableRow: inner_.onTableRowEnd(); break;
+      case Scope::TableCell: inner_.onTableCellEnd(); break;
+    }
+  }
+
+  Fb2TableCellAttrs cellAttrs_;
+  Fb2ContentSink& inner_;
+  uint32_t rangeStart_;
+  uint32_t rangeEnd_;
+  uint32_t imageOrdinal_ = 0;
+  Scope scopes_[MAX_SCOPES]{};
+  size_t scopeCount_ = 0;
+  bool emitting_ = false;
+  bool startReady_ = false;
+  bool finished_ = false;
+  bool linkEmitted_ = false;
+};
+
+// Text-side counterpart to RangeFilterSink. It lets a very large,
+// image-free FB2 section become several virtual chapters without changing
+// the EPUB/layout engine. Every render still streams the native FB2 section,
+// but only ~TARGET_TEXT_BYTES_PER_CHAPTER of text is emitted as XHTML, so
+// the expensive ChapterHtmlSlimParser/layout pass only paginates a small
+// chunk before the reader can show pages.
+//
+// Byte thresholds decide only when a cut becomes eligible. The actual cut is
+// deferred to the end of the current paragraph (or another atomic text
+// block), so neighbouring virtual chapters never force a partial paragraph
+// onto an otherwise half-empty page.
+class TextRangeFilterSink : public Fb2ContentSink {
+ public:
+  TextRangeFilterSink(Fb2ContentSink& inner, uint32_t rangeStart, uint32_t rangeEnd)
+      : inner_(inner), rangeStart_(rangeStart), rangeEnd_(rangeEnd), emitting_(rangeStart == 0) {}
+
+  bool streamsTableCells() const override { return inner_.streamsTableCells(); }
+  void onAnchor(const std::string& id) override { if (ensureEmitting()) inner_.onAnchor(id); }
+  void onTableCellBegin(const Fb2TableCellAttrs& attrs) override {
+    cellAttrs_ = attrs; beginScope(Scope::TableCell);
+  }
+  void onTableCellEnd() override { endScope(Scope::TableCell); }
+  void onParagraphBegin() override { beginScope(Scope::Paragraph); }
+  void onParagraphEnd() override { endScope(Scope::Paragraph); }
+  void onSubtitleBegin() override { if (ensureEmitting()) inner_.onSubtitleBegin(); }
+  void onSubtitleEnd() override { if (emitting_) inner_.onSubtitleEnd(); safeBoundary(); }
+  void onTextAuthorBegin() override { if (ensureEmitting()) inner_.onTextAuthorBegin(); }
+  void onTextAuthorEnd() override { if (emitting_) inner_.onTextAuthorEnd(); safeBoundary(); }
+  void onPoemBegin() override { beginScope(Scope::Poem); }
+  void onPoemEnd() override { endScope(Scope::Poem); }
+  void onStanzaBegin() override { beginScope(Scope::Stanza); }
+  void onStanzaEnd() override { endScope(Scope::Stanza); }
+  void onCiteBegin() override { beginScope(Scope::Cite); }
+  void onCiteEnd() override { endScope(Scope::Cite); }
+  void onEpigraphBegin() override { beginScope(Scope::Epigraph); }
+  void onEpigraphEnd() override { endScope(Scope::Epigraph); }
+  void onTableBegin() override { beginScope(Scope::Table); }
+  void onTableEnd() override { endScope(Scope::Table); }
+  void onTableRowBegin() override { beginScope(Scope::TableRow); }
+  void onTableRowEnd() override { endScope(Scope::TableRow); }
+
+  void onSubtitle(const std::string& text) override {
+    emitAtomicText(text, [&](const std::string& part) { inner_.onSubtitle(part); });
+  }
+  void onVerseLine(const std::string& text) override {
+    emitAtomicText(text, [&](const std::string& part) { inner_.onVerseLine(part); });
+  }
+  void onVerseBegin() override { beginScope(Scope::Verse); }
+  void onVerseEnd() override { endScope(Scope::Verse); }
+  void onTextAuthor(const std::string& text) override {
+    emitAtomicText(text, [&](const std::string& part) { inner_.onTextAuthor(part); });
+  }
+  void onText(const std::string& text, Fb2InlineStyle style) override {
+    countAndEmitText(text, [&](const std::string& part) { inner_.onText(part, style); });
+  }
+  void onTableCell(const std::string& text, const Fb2TableCellAttrs& attrs) override {
+    emitAtomicText(text, [&](const std::string& part) { inner_.onTableCell(part, attrs); });
+  }
+
+  void onEmptyLine() override { emitAtomic([&]() { inner_.onEmptyLine(); }); }
+  void onHorizontalRule() override { emitAtomic([&]() { inner_.onHorizontalRule(); }); }
+
+  void onImage(const std::string& binaryId) override {
+    if (emitting_) inner_.onImage(binaryId);
+  }
+
+  void onLinkBegin(const std::string& targetId) override {
+    linkEmitted_ = ensureEmitting();
+    if (linkEmitted_) inner_.onLinkBegin(targetId);
+  }
+  void onLinkEnd() override {
+    if (linkEmitted_) inner_.onLinkEnd();
+    linkEmitted_ = false;
+  }
+
+ private:
+  enum class Scope : uint8_t { Paragraph, Poem, Stanza, Verse, Cite, Epigraph, Table, TableRow, TableCell };
+  static constexpr size_t MAX_SCOPES = 16;
+
+  template <typename EmitFn>
+  void countAndEmitText(const std::string& text, EmitFn&& emit) {
+    const uint32_t textLen = static_cast<uint32_t>(std::min<size_t>(text.size(), UINT32_MAX - textOrdinal_));
+    textOrdinal_ += textLen;
+    if (!text.empty() && ensureEmitting()) emit(text);
+  }
+
+  template <typename EmitFn>
+  void emitAtomicText(const std::string& text, EmitFn&& emit) {
+    countAndEmitText(text, emit);
+    safeBoundary();
+  }
+
+  template <typename EmitFn>
+  void emitAtomic(EmitFn&& emit) {
+    if (textOrdinal_ < UINT32_MAX) ++textOrdinal_;
+    if (ensureEmitting()) emit();
+    safeBoundary();
+  }
+
+  void beginScope(Scope scope) {
+    const bool emitScope = ensureEmitting();
+    if (scopeCount_ < MAX_SCOPES) scopes_[scopeCount_++] = scope;
+    if (emitScope) openScope(scope);
+  }
+
+  void endScope(Scope scope) {
+    if (emitting_) closeScope(scope);
+    if (scopeCount_ > 0) --scopeCount_;
+    safeBoundary();
+  }
+
+  bool ensureEmitting() {
+    if (emitting_) return true;
+    if (!startReady_ || finished_) return false;
+    for (size_t i = 0; i < scopeCount_; ++i) openScope(scopes_[i]);
+    emitting_ = true;
+    startReady_ = false;
+    return true;
+  }
+
+  void safeBoundary() {
+    if (emitting_ && rangeEnd_ != UINT32_MAX && textOrdinal_ >= rangeEnd_) {
+      if (linkEmitted_) {
+        inner_.onLinkEnd();
+        linkEmitted_ = false;
+      }
+      for (size_t i = scopeCount_; i > 0; --i) closeScope(scopes_[i - 1]);
+      emitting_ = false;
+      finished_ = true;
+      return;
+    }
+    if (!emitting_ && !finished_ && textOrdinal_ >= rangeStart_) {
+      // An unusually large single paragraph can span more than one nominal
+      // nominal text slice. In that case the intervening slice is intentionally
+      // empty rather than duplicating the paragraph in multiple chapters.
+      if (rangeEnd_ != UINT32_MAX && textOrdinal_ >= rangeEnd_) {
+        finished_ = true;
+      } else {
+        startReady_ = true;
+      }
+    }
+  }
+
+  void openScope(Scope scope) {
+    switch (scope) {
+      case Scope::Paragraph: inner_.onParagraphBegin(); break;
+      case Scope::Poem: inner_.onPoemBegin(); break;
+      case Scope::Stanza: inner_.onStanzaBegin(); break;
+      case Scope::Verse: inner_.onVerseBegin(); break;
+      case Scope::Cite: inner_.onCiteBegin(); break;
+      case Scope::Epigraph: inner_.onEpigraphBegin(); break;
+      case Scope::Table: inner_.onTableBegin(); break;
+      case Scope::TableRow: inner_.onTableRowBegin(); break;
+      case Scope::TableCell: inner_.onTableCellBegin(cellAttrs_); break;
+    }
+  }
+
+  void closeScope(Scope scope) {
+    switch (scope) {
+      case Scope::Paragraph: inner_.onParagraphEnd(); break;
+      case Scope::Poem: inner_.onPoemEnd(); break;
+      case Scope::Stanza: inner_.onStanzaEnd(); break;
+      case Scope::Verse: inner_.onVerseEnd(); break;
+      case Scope::Cite: inner_.onCiteEnd(); break;
+      case Scope::Epigraph: inner_.onEpigraphEnd(); break;
+      case Scope::Table: inner_.onTableEnd(); break;
+      case Scope::TableRow: inner_.onTableRowEnd(); break;
+      case Scope::TableCell: inner_.onTableCellEnd(); break;
+    }
+  }
+
+  Fb2TableCellAttrs cellAttrs_;
+  Fb2ContentSink& inner_;
+  uint32_t rangeStart_;
+  uint32_t rangeEnd_;
+  uint32_t textOrdinal_ = 0;
+  Scope scopes_[MAX_SCOPES]{};
+  size_t scopeCount_ = 0;
+  bool emitting_ = false;
+  bool startReady_ = false;
+  bool finished_ = false;
+  bool linkEmitted_ = false;
+};
+
+// Build anchors through the same render filters used for XHTML. This assigns
+// paragraph/cell IDs to the actual virtual slice, including deferred block cuts.
+bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourcePath, Fb2AnchorIndex& index) {
+  const std::string sectionsPath = cachePath + SECTIONS_INDEX_FILE;
+  const std::string indexPath = cachePath + ANCHORS_INDEX_FILE;
+  const std::string readyPath = cachePath + "/.fb2_anchors_ready";
+  if (!index.open(sectionsPath, indexPath, PACKAGE_VERSION)) {
+    if (Storage.exists(readyPath.c_str()) && !Storage.remove(readyPath.c_str())) return false;
+    Fb2AnchorIndexWriter writer;
+    if (!writer.begin(sectionsPath, indexPath, PACKAGE_VERSION)) return false;
+    HalFile sections, source;
+    if (!Storage.openFileForRead("FB2ANC", sectionsPath, sections) || !readAndCheckCacheHeader(sections) ||
+        !Storage.openFileForRead("FB2ANC", sourcePath, source)) return false;
+    FsFileReader records(sections), reader(source);
+    Fb2Parser parser;
+    class AnchorSink final : public Fb2ContentSink {
+     public:
+      AnchorSink(Fb2AnchorIndexWriter& writer, uint32_t chapter) : writer_(writer), chapter_(chapter) {}
+      bool streamsTableCells() const override { return true; }
+      void onAnchor(const std::string& id) override { if (ok) ok = writer_.add(id, chapter_); }
+      bool ok = true;
+     private:
+      Fb2AnchorIndexWriter& writer_;
+      uint32_t chapter_;
+    };
+    uint32_t chapter = 0;
+    unsigned long lastYield = millis();
+    while (records.tell() < records.size()) {
+      uint8_t level; uint16_t idLen, titleLen; uint32_t offset, tail[5];
+      if (records.read(&level, 1) != 1 || records.read(&offset, 4) != 4 || records.read(&idLen, 2) != 2) return false;
+      std::string id(idLen, '\0');
+      if ((idLen && records.read(id.data(), idLen) != idLen) || records.read(&titleLen, 2) != 2 ||
+          !records.seek(records.tell() + titleLen) || records.read(tail, sizeof(tail)) != sizeof(tail)) return false;
+      AnchorSink sink(writer, chapter);
+      sink.onAnchor(id);
+      Fb2SectionIndexEntry section;
+      section.innerStartOffset = offset; section.level = level & 0x7f; section.fallbackTitle = (level & 0x80) != 0;
+      if (chapter == 0 && (!parser.renderAnnotation(reader, sink) || !parser.renderBodyPreambleForFirstSection(reader, sink))) return false;
+      if (titleLen) parser.renderSectionTitle(reader, section, sink, section.level);
+      RangeFilterSink images(sink, tail[1], tail[2]);
+      TextRangeFilterSink text(images, tail[3], tail[4]);
+      if (!parser.renderSection(reader, section, text) || !sink.ok) return false;
+      ++chapter;
+      if (fb2CancellationRequested(nullptr)) return false;
+      if (millis() - lastYield >= 100) { vTaskDelay(1); lastYield = millis(); }
+    }
+    if (!writer.finish() || !index.open(sectionsPath, indexPath, PACKAGE_VERSION)) return false;
+    LOG_INF("FB2ANC", "Indexed inline anchors in %u virtual chapters", chapter);
+  }
+  if (!Storage.exists(readyPath.c_str())) {
+    // Only derived page/source caches change. Keep progress, bookmarks, cover,
+    // metadata and the expensive original FB2 package intact.
+    for (const char* dir : {"/sections", "/spine_src"}) {
+      const std::string path = cachePath + dir;
+      if (Storage.exists(path.c_str()) && !Storage.removeDir(path.c_str())) return false;
+    }
+    const std::string previews = cachePath + "/footnotes.bin";
+    if (Storage.exists(previews.c_str()) && !Storage.remove(previews.c_str())) return false;
+    if (!writeStaticFile(readyPath, "1")) return false;
+  }
+  return true;
+}
+
+
+}  // namespace
+
+Fb2::Fb2(std::string path, std::string cacheBasePath) : filepath(std::move(path)) {
+  const std::string key = std::to_string(std::hash<std::string>{}(filepath));
+  cacheKey = "fb2_" + key;
+  cacheBaseDir = cacheBasePath;
+  cachePath = cacheBaseDir + "/" + cacheKey;
+  // Cache dirs from before the epub_ -> fb2_ rename; still cleaned up here so
+  // upgrading firmware doesn't leave orphaned caches behind.
+  legacyCachePath = std::move(cacheBasePath) + "/epub_" + key;
+  packagePath = cachePath + "/package.epub";
+  sourcePath = filepath;
+
+  const size_t slash = filepath.find_last_of('/');
+  const size_t start = slash == std::string::npos ? 0 : slash + 1;
+  const size_t dot = filepath.find_last_of('.');
+  title = filepath.substr(start, dot == std::string::npos || dot <= start ? std::string::npos : dot - start);
+}
+
+bool Fb2::isCompressedFb2() const {
+  // Only ".zip" itself matters here, not a specific "*.fb2.zip" naming
+  // convention: this class is only ever constructed once something else
+  // has already decided the file is an FB2 book (see FileBrowserActivity's
+  // own extension checks), so any ".zip" that reaches here needs
+  // extracting - requiring an exact double-extension additionally missed
+  // real books renamed with e.g. "_fb2.zip" instead of ".fb2.zip", which
+  // used to mean prepareSource() skipped extraction entirely and scan()
+  // ended up reading raw zip container bytes as if they were the FB2 XML.
+  if (filepath.size() < 4) return false;
+  const size_t offset = filepath.size() - 4;
+  static constexpr char kZip[] = ".zip";
+  for (size_t i = 0; i < 4; ++i) {
+    if (asciiLowerFb2(static_cast<unsigned char>(filepath[offset + i])) !=
+        static_cast<unsigned char>(kZip[i])) return false;
+  }
+  return true;
+}
+
+bool Fb2::prepareSource(const ProgressFn& onProgress) {
+  sourcePath = filepath;
+  temporarySourcePath.clear();
+
+  if (isCompressedFb2()) {
+    const unsigned long zipStarted = millis();
+    HalFile zipFile;
+    if (!Storage.openFileForRead("FB2", filepath, zipFile)) return false;
+    FsFileReader zipReader(zipFile);
+#if defined(ENABLE_SERIAL_LOG)
+    ProfiledByteReader profiledZipReader(zipReader);
+    IByteReader& zipInput = profiledZipReader;
+#else
+    IByteReader& zipInput = zipReader;
+#endif
+
+    // Locate the FB2 entry ourselves so its uncompressed size can be exposed
+    // to IByteReader::size() in the concurrent parser.
+    ZipEntryInfo zipEntry;
+    if (!findFb2EntryInZip(zipInput, zipEntry)) {
+      zipFile.close();
+      LOG_ERR("FB2", "No FB2 file found in archive: %s", filepath.c_str());
+      return false;
+    }
+
+    setupCacheDir();
+    temporarySourcePath = cachePath + "/.source.fb2";
+    Storage.remove(temporarySourcePath.c_str());
+    HalFile extracted;
+    if (!Storage.openFileForWrite("FB2", temporarySourcePath, extracted)) {
+      zipFile.close();
+      return false;
+    }
+
+    // Fused scan is optional and must be failure-safe. If any of these small
+    // allocations fail we simply extract exactly as v5 did and convertToPackage
+    // performs the normal SD-backed scan afterward.
+    // v7 lean: 1 KiB is enough for producer/consumer decoupling on a
+    // single-core C3. v6 used 4 KiB but profiling showed no throughput benefit
+    // worth the extra RAM.
+    constexpr size_t kPipeBytes = 1024;
+    // Always stage ZIP first: section count is unrelated to compressed file size.
+    StreamBufferHandle_t scanStream = nullptr;
+    SemaphoreHandle_t scanDone = scanStream ? xSemaphoreCreateBinary() : nullptr;
+    volatile bool producerDone = false;
+    std::unique_ptr<Fb2ScanResult> candidateScan;
+    std::unique_ptr<Fb2PipeReader> pipeReader;
+    Fb2ZipScanTaskCtx scanCtx;
+    TaskHandle_t scanTaskHandle = nullptr;
+    bool fusedScanStarted = false;
+
+    // Fused ZIP scan is useful only for small archives. Above 1 MiB
+    // uncompressed, keeping DEFLATE + pipe + XML task alive together costs
+    // more RAM than it saves on ESP32-C3. Large ZIPs stage to SD first and are
+    // scanned sequentially.
+    // Use the same disk-backed scan for every archive: even a small XML
+    // file can contain thousands of short sections. The fused scanner retains
+    // an in-memory index alongside DEFLATE and can exhaust the C3 heap.
+    constexpr bool enableFusedScan = false;
+    if (enableFusedScan && scanStream && scanDone && zipEntry.uncompressedSize <= 1024 * 1024 &&
+        ESP.getFreeHeap() >= 100 * 1024 && ESP.getMaxAllocHeap() >= 64 * 1024) {
+      candidateScan.reset(new (std::nothrow) Fb2ScanResult());
+      if (candidateScan) {
+        pipeReader.reset(new (std::nothrow) Fb2PipeReader(scanStream, zipEntry.uncompressedSize, &producerDone));
+      }
+      if (pipeReader) {
+        scanCtx.reader = pipeReader.get();
+        scanCtx.result = candidateScan.get();
+        scanCtx.done = scanDone;
+        // v8 final polish: real-device high-water in v7 showed ~4.9 KiB
+        // unused from a 6 KiB allocation on two different FB2.ZIP books.
+        // 4 KiB still leaves a wide safety margin while returning ~2 KiB RAM
+        // to the system. Do not reduce further without new real-device traces.
+        fusedScanStarted =
+            xTaskCreate(fb2ZipScanTask, "fb2ZipScan", 4096, &scanCtx, 1, &scanTaskHandle) == pdPASS;
+      }
+    }
+
+    // Staging must leave room for DEFLATE's mandatory 32 KiB window plus
+    // read-ahead/Huffman state. A successful 32 KiB staging allocation can
+    // otherwise fragment the C3 heap enough for the inflater window to fail.
+    // Use the large staging buffer only with generous contiguous headroom.
+    size_t flushBufSize = 8 * 1024;
+    if (!fusedScanStarted) {
+      const uint32_t freeHeap = ESP.getFreeHeap();
+      const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+      if (freeHeap >= 120 * 1024 && maxAlloc >= 80 * 1024) {
+        flushBufSize = 32 * 1024;
+      } else if (freeHeap >= 88 * 1024 && maxAlloc >= 56 * 1024) {
+        flushBufSize = 16 * 1024;
+      }
+    }
+    auto flushBuf = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[flushBufSize]);
+    if (!flushBuf && flushBufSize > 16 * 1024) {
+      flushBufSize = 16 * 1024;
+      flushBuf.reset(new (std::nothrow) uint8_t[flushBufSize]);
+    }
+    if (!flushBuf && flushBufSize > 8 * 1024) {
+      flushBufSize = 8 * 1024;
+      flushBuf.reset(new (std::nothrow) uint8_t[flushBufSize]);
+    }
+    if (!flushBuf) {
+      producerDone = true;
+      if (fusedScanStarted) xSemaphoreTake(scanDone, portMAX_DELAY);
+      if (scanDone) vSemaphoreDelete(scanDone);
+      if (scanStream) vStreamBufferDelete(scanStream);
+      extracted.close();
+      zipFile.close();
+      Storage.remove(temporarySourcePath.c_str());
+      LOG_ERR("FB2", "Not enough heap for FB2.ZIP extraction staging buffer");
+      return false;
+    }
+
+    size_t flushUsed = 0;
+    int flushCount = 0;
+    const uint32_t zipSize = zipInput.size();
+    const unsigned long fusedStarted = millis();
+#if defined(ENABLE_SERIAL_LOG)
+    uint32_t outputWriteMs = 0;
+    uint32_t outputWriteCalls = 0;
+    uint64_t outputWriteBytes = 0;
+#endif
+    bool outputWriteOk = true;
+    LOG_INF("FB2-PROF", "fused start mem: free=%u max=%u",
+            static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+
+    const bool extractedOk = extractZipEntry(
+        zipInput, zipEntry,
+        [&](const uint8_t* d, size_t n) {
+          // Feed the scanner BEFORE staging the same bytes to SD. Backpressure
+          // from the 4 KiB pipe bounds memory: producer waits instead of
+          // accumulating decompressed book data in RAM.
+          if (fusedScanStarted) {
+            size_t sent = 0;
+            while (sent < n) {
+              sent += xStreamBufferSend(scanStream, d + sent, n - sent, portMAX_DELAY);
+            }
+          }
+
+          size_t offset = 0;
+          while (offset < n) {
+            const size_t copy = std::min(n - offset, flushBufSize - flushUsed);
+            memcpy(flushBuf.get() + flushUsed, d + offset, copy);
+            flushUsed += copy;
+            offset += copy;
+            if (flushUsed < flushBufSize) continue;
+#if defined(ENABLE_SERIAL_LOG)
+            const uint32_t writeStarted = millis();
+#endif
+            const size_t written = extracted.write(flushBuf.get(), flushUsed);
+#if defined(ENABLE_SERIAL_LOG)
+            outputWriteMs += millis() - writeStarted;
+            ++outputWriteCalls;
+            outputWriteBytes += written;
+#endif
+            if (written != flushUsed) outputWriteOk = false;
+            flushUsed = 0;
+            ++flushCount;
+            if (onProgress && zipSize > 0 && flushCount % 8 == 0) {
+              onProgress(static_cast<int>(zipInput.tell() * 30 / zipSize));
+            }
+            if (flushCount % 128 == 0) vTaskDelay(1);
+          }
+        });
+
+    if (flushUsed > 0) {
+#if defined(ENABLE_SERIAL_LOG)
+      const uint32_t writeStarted = millis();
+#endif
+      const size_t written = extracted.write(flushBuf.get(), flushUsed);
+#if defined(ENABLE_SERIAL_LOG)
+      outputWriteMs += millis() - writeStarted;
+      ++outputWriteCalls;
+      outputWriteBytes += written;
+#endif
+      if (written != flushUsed) outputWriteOk = false;
+    }
+    extracted.close();
+    zipFile.close();
+
+    producerDone = true;
+    bool fusedScanOk = false;
+    if (fusedScanStarted) {
+      xSemaphoreTake(scanDone, portMAX_DELAY);
+      fusedScanOk = scanCtx.ok;
+      LOG_INF("FB2-PROF", "zip fused scan: %lums (%s)", millis() - fusedStarted, fusedScanOk ? "ok" : "fallback");
+      LOG_INF("FB2-PROF", "fused end mem: free=%u max=%u",
+              static_cast<unsigned>(ESP.getFreeHeap()), static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    }
+    if (scanDone) vSemaphoreDelete(scanDone);
+    if (scanStream) vStreamBufferDelete(scanStream);
+    pipeReader.reset();
+
+#if defined(ENABLE_SERIAL_LOG)
+    const uint32_t zipElapsedMs = millis() - zipStarted;
+    const uint32_t accountedIoMs = profiledZipReader.ioTimeMs() + outputWriteMs;
+    LOG_INF("FB2-PROF",
+            "zip stage io: total=%lums read=%lums calls=%u seeks=%u bytes=%llu write=%lums calls=%u bytes=%llu other=%lums",
+            static_cast<unsigned long>(zipElapsedMs),
+            static_cast<unsigned long>(profiledZipReader.ioTimeMs()),
+            static_cast<unsigned>(profiledZipReader.readCalls()),
+            static_cast<unsigned>(profiledZipReader.seekCalls()),
+            static_cast<unsigned long long>(profiledZipReader.bytesRead()),
+            static_cast<unsigned long>(outputWriteMs),
+            static_cast<unsigned>(outputWriteCalls),
+            static_cast<unsigned long long>(outputWriteBytes),
+            static_cast<unsigned long>(zipElapsedMs > accountedIoMs ? zipElapsedMs - accountedIoMs : 0));
+#endif
+
+    if (!extractedOk || !outputWriteOk) {
+      candidateScan.reset();
+      Storage.remove(temporarySourcePath.c_str());
+      LOG_ERR("FB2", "FB2.ZIP extraction failed: %s", filepath.c_str());
+      return false;
+    }
+
+    sourcePath = temporarySourcePath;
+    if (fusedScanOk) {
+      preparedZipScan = std::move(candidateScan);
+    } else {
+      preparedZipScan.reset();
+    }
+    LOG_INF("FB2-PROF", "zip extract+streamscan: %lums (staging=%u fused=%d)",
+            millis() - zipStarted, static_cast<unsigned>(flushBufSize), fusedScanOk ? 1 : 0);
+  }
+  if (onProgress) onProgress(30);
+
+  // Normalize a declared non-UTF-8 encoding (windows-1251 is common for
+  // older Russian FB2s) to UTF-8: the native parser assumes UTF-8 input and
+  // otherwise just forwards raw bytes, which would corrupt such files.
+  setupCacheDir();
+  const std::string beforeTranscode = sourcePath;
+  const std::string previousTemp = temporarySourcePath;
+  const unsigned long transcodeStarted = millis();
+  if (!transcodeToUtf8IfNeeded(sourcePath, cachePath + "/.source", onProgress)) return false;
+  LOG_INF("FB2-PROF", "encoding check/transcode: %lums", millis() - transcodeStarted);
+  if (sourcePath != beforeTranscode) {
+    if (!previousTemp.empty()) Storage.remove(previousTemp.c_str());
+    temporarySourcePath = sourcePath;
+    // The fused ZIP scan observed pre-transcode byte offsets/text encoding.
+    // A converted UTF-8 source has different offsets, so force the normal
+    // scan against the final prepared file for correctness.
+    preparedZipScan.reset();
+  }
+  return true;
+}
+
+void Fb2::setupCacheDir() const { Storage.mkdir(cachePath.c_str(), true); }
+
+bool Fb2::cacheIsCurrent() {
+  if (!Storage.exists((packagePath + "/META-INF/container.xml").c_str()) ||
+      !Storage.exists((packagePath + "/OEBPS/content.opf").c_str())) {
+    return false;
+  }
+
+  // Validate the section index's own header too, not just its existence -
+  // a truncated/corrupted write (power loss, SD error) would otherwise
+  // pass this check and only surface much later, as every single chapter
+  // silently failing to render instead of a clean rebuild here.
+  {
+    HalFile sections;
+    if (!Storage.openFileForRead("FB2", cachePath + SECTIONS_INDEX_FILE, sections)) return false;
+    const bool sectionsOk = readAndCheckCacheHeader(sections);
+    sections.close();
+    if (!sectionsOk) return false;
+  }
+
+  HalFile state;
+  if (!Storage.openFileForRead("FB2", cachePath + PACKAGE_STATE_FILE, state)) return false;
+
+  uint64_t cachedSize = 0;
+  uint16_t cachedChapters = 0;
+  const bool valid = readAndCheckCacheHeader(state) && state.read(&cachedSize, sizeof(cachedSize)) == sizeof(cachedSize) &&
+                     state.read(&cachedChapters, sizeof(cachedChapters)) == sizeof(cachedChapters) &&
+                     cachedSize == sourceSize && cachedChapters > 0;
+  state.close();
+  if (valid) chapterCount = cachedChapters;
+  return valid;
+}
+
+bool Fb2::loadMetadataCache() {
+  char buffer[1536];
+  const size_t length = Storage.readFileToBuffer((cachePath + METADATA_FILE).c_str(), buffer, sizeof(buffer));
+  if (length == 0) return false;
+
+  const char* first = strchr(buffer, '\n');
+  if (!first) return false;
+  const char* second = strchr(first + 1, '\n');
+  if (!second) return false;
+  title.assign(buffer, first - buffer);
+  author.assign(first + 1, second - first - 1);
+  const char* third = strchr(second + 1, '\n');
+  if (third) {
+    language.assign(second + 1, third - second - 1);
+    date.assign(third + 1);
+    while (!date.empty() && (date.back() == '\n' || date.back() == '\r')) date.pop_back();
+  } else {
+    language.assign(second + 1);
+    date.clear();
+  }
+  while (!language.empty() && (language.back() == '\n' || language.back() == '\r')) language.pop_back();
+  if (language.empty()) language = "und";
+  return !title.empty();
+}
+
+void Fb2::saveMetadataCache() const {
+  HalFile metadata;
+  if (!Storage.openFileForWrite("FB2", cachePath + METADATA_FILE, metadata)) return;
+  writeBytes(metadata, title);
+  metadata.write(static_cast<uint8_t>('\n'));
+  writeBytes(metadata, author);
+  metadata.write(static_cast<uint8_t>('\n'));
+  writeBytes(metadata, language);
+  metadata.write(static_cast<uint8_t>('\n'));
+  writeBytes(metadata, date);
+  metadata.write(static_cast<uint8_t>('\n'));
+  metadata.close();
+}
+
+void Fb2::saveCacheSignature() const {
+  HalFile state;
+  if (!Storage.openFileForWrite("FB2", cachePath + PACKAGE_STATE_FILE, state)) return;
+  const uint16_t chapters = static_cast<uint16_t>(std::min(chapterCount, static_cast<int>(UINT16_MAX)));
+  writeCacheHeader(state);
+  state.write(&sourceSize, sizeof(sourceSize));
+  state.write(&chapters, sizeof(chapters));
+  state.close();
+}
+
+void Fb2::maintainCacheBudget() const {
+  const std::string indexPath = cacheBaseDir + LRU_INDEX_FILE;
+  std::vector<std::string> keys = readLruIndex(indexPath);
+
+  keys.erase(std::remove(keys.begin(), keys.end(), cacheKey), keys.end());
+  keys.insert(keys.begin(), cacheKey);
+
+  // Cache removal is an explicit user action. A count limit caused repeated
+  // indexing/cover generation and silently deleted user state on the sixth book.
+  if (keys.size() > MAX_RECENT_FB2_PACKAGES) keys.resize(MAX_RECENT_FB2_PACKAGES);
+
+  writeLruIndex(indexPath, keys);
+}
+
+bool Fb2::ensurePreparedSource(const std::string& packageCachePath, std::string& outSourcePath) {
+  outSourcePath.clear();
+
+  char sourcePathBuf[600] = {};
+  const size_t sourcePathLen =
+      Storage.readFileToBuffer((packageCachePath + SOURCE_MARKER_FILE).c_str(), sourcePathBuf, sizeof(sourcePathBuf));
+  if (sourcePathLen > 0 && sourcePathLen < sizeof(sourcePathBuf)) {
+    outSourcePath.assign(sourcePathBuf, sourcePathLen);
+    if (Storage.exists(outSourcePath.c_str())) return true;
+    LOG_INF("FB2", "Prepared source disappeared while book was open: %s", outSourcePath.c_str());
+  } else {
+    LOG_INF("FB2", "Prepared source marker is missing/invalid");
+  }
+
+  char originalPathBuf[600] = {};
+  const size_t originalPathLen = Storage.readFileToBuffer((packageCachePath + ORIGINAL_PATH_MARKER_FILE).c_str(),
+                                                          originalPathBuf, sizeof(originalPathBuf));
+  if (originalPathLen == 0 || originalPathLen >= sizeof(originalPathBuf)) {
+    LOG_ERR("FB2", "Cannot repair prepared source: original FB2 path marker is missing");
+    return false;
+  }
+
+  const std::string originalPath(originalPathBuf, originalPathLen);
+  if (!Storage.exists(originalPath.c_str())) {
+    LOG_ERR("FB2", "Cannot repair prepared source: original book is missing: %s", originalPath.c_str());
+    return false;
+  }
+
+  const size_t slash = packageCachePath.find_last_of('/');
+  if (slash == std::string::npos || slash == 0) {
+    LOG_ERR("FB2", "Cannot repair prepared source: invalid cache path: %s", packageCachePath.c_str());
+    return false;
+  }
+  const std::string cacheBase = packageCachePath.substr(0, slash);
+
+  Fb2 repair(originalPath, cacheBase);
+  if (repair.cachePath != packageCachePath) {
+    LOG_ERR("FB2", "Cannot repair prepared source: cache key mismatch");
+    return false;
+  }
+
+  if (!repair.prepareSource(nullptr)) {
+    LOG_ERR("FB2", "Failed to reconstruct prepared source from: %s", originalPath.c_str());
+    return false;
+  }
+
+  outSourcePath = repair.sourcePath;
+  if (!Storage.exists(outSourcePath.c_str())) {
+    LOG_ERR("FB2", "Prepared source repair returned a missing file: %s", outSourcePath.c_str());
+    return false;
+  }
+  if (!writeStaticFile(packageCachePath + SOURCE_MARKER_FILE, outSourcePath.c_str())) {
+    LOG_ERR("FB2", "Failed to rewrite prepared source marker after repair");
+    return false;
+  }
+
+  LOG_INF("FB2", "Prepared source repaired in-place: %s", outSourcePath.c_str());
+  return true;
+}
+
+bool Fb2::needsPreparation() {
+  HalFile original;
+  if (!Storage.openFileForRead("FB2", filepath, original)) return true;
+  sourceSize = original.fileSize64();
+  original.close();
+  if (!cacheIsCurrent() || !loadMetadataCache()) return true;
+
+  char prepared[600] = {};
+  const size_t length = Storage.readFileToBuffer((cachePath + SOURCE_MARKER_FILE).c_str(), prepared, sizeof(prepared));
+  if (!length || length >= sizeof(prepared) || !Storage.exists(std::string(prepared, length).c_str())) return true;
+  if (!Storage.exists((cachePath + "/.fb2_anchors_ready").c_str())) return true;
+  Fb2NavigationIndex navigation;
+  Fb2AnchorIndex anchors;
+  return !navigation.open(cachePath + SECTIONS_INDEX_FILE, cachePath + NAVIGATION_INDEX_FILE, PACKAGE_VERSION) ||
+         !anchors.open(cachePath + SECTIONS_INDEX_FILE, cachePath + ANCHORS_INDEX_FILE, PACKAGE_VERSION);
+}
+
+bool Fb2::load(const ProgressFn& onProgress) {
+  if (loaded) return true;
+
+  // E-ink progress updates are expensive on X4 (~500 ms refresh + optional
+  // sunlight power-down). Conversion/transcode code can report the same
+  // integer percentage many times, which used to turn a fast streaming loop
+  // into dozens of display stalls. Five coarse steps keep long scans visibly
+  // alive without making small FB2 books slower mostly due to screen refreshes.
+  int lastProgressBucket = -1;
+  const ProgressFn reportProgress = onProgress ? ProgressFn([&](int percent) {
+    percent = std::clamp(percent, 0, 100);
+    const int bucket = percent / 20;
+    if (percent == 100 || bucket > lastProgressBucket) {
+      lastProgressBucket = bucket;
+      onProgress(percent);
+    }
+  }) : ProgressFn{};
+  if (!Storage.exists(filepath.c_str())) {
+    LOG_ERR("FB2", "File does not exist: %s", filepath.c_str());
+    return false;
+  }
+
+  HalFile source;
+  if (!Storage.openFileForRead("FB2", filepath, source)) return false;
+  sourceSize = source.fileSize64();
+  source.close();
+
+  if (cacheIsCurrent() && loadMetadataCache()) {
+    writeStaticFile(cachePath + ORIGINAL_PATH_MARKER_FILE, filepath.c_str());
+
+    std::string preparedSource;
+    if (!ensurePreparedSource(cachePath, preparedSource)) {
+      LOG_ERR("FB2", "Cached package cannot restore its prepared source");
+      return false;
+    }
+
+    { Fb2NavigationIndex navigation; ensureFb2NavigationIndex(cachePath, navigation); }
+    { Fb2AnchorIndex anchors; if (!ensureFb2AnchorIndex(cachePath, preparedSource, anchors)) return false; }
+    loaded = true;
+    LOG_INF("FB2", "Loaded cached FB2 package: %d chapters", chapterCount);
+    maintainCacheBudget();
+    if (reportProgress) reportProgress(100);
+    return true;
+  }
+
+  LOG_INF("FB2", "Indexing FB2: %llu bytes", static_cast<unsigned long long>(sourceSize));
+  // Rebuild the cache directory fresh before prepareSource() writes a
+  // zip-extracted/transcoded source copy into it - that copy has to survive
+  // this wipe, not get created before it and then deleted a moment later.
+  if (!clearFb2GeneratedCachePreservingUserState(cachePath)) {
+    LOG_ERR("FB2", "Aborting package rebuild because user reading state could not be preserved");
+    return false;
+  }
+  setupCacheDir();
+  const unsigned long prepareStarted = millis();
+  if (!prepareSource(reportProgress)) return false;
+  LOG_INF("FB2-PROF", "prepareSource: %lums", millis() - prepareStarted);
+  // temporarySourcePath (that zip-extracted/transcoded copy) is NOT deleted
+  // after this: renderChapterOnDemand() reopens whatever `sourcePath`
+  // ended up as, on every future chapter render, however much later that
+  // is. It lives inside cachePath, so normal cache clearing/eviction
+  // cleans it up along with everything else.
+  const unsigned long packageStarted = millis();
+  const bool converted = convertToPackage(reportProgress);
+  LOG_INF("FB2-PROF", "convertToPackage: %lums", millis() - packageStarted);
+  if (!converted) return false;
+  { Fb2NavigationIndex navigation; ensureFb2NavigationIndex(cachePath, navigation); }
+    { Fb2AnchorIndex anchors; if (!ensureFb2AnchorIndex(cachePath, sourcePath, anchors)) return false; }
+  loaded = true;
+  LOG_INF("FB2", "Indexed FB2: %d chapters, %zu images (chapters render on demand)", chapterCount, images.size());
+  maintainCacheBudget();
+  // The popup remains visible until this function returns. Mark it complete
+  // only after metadata writes and cache-budget maintenance are done, rather
+  // than leaving a finished FB2 preparation visually stuck at 95%.
+  if (reportProgress) reportProgress(100);
+  return true;
+}
+
+const Fb2::ImageInfoPublic* Fb2::findImage(const std::string& id) const {
+  const auto it = std::find_if(images.begin(), images.end(), [&](const ImageInfoPublic& image) { return image.id == id; });
+  return it == images.end() ? nullptr : &*it;
+}
+
+bool Fb2::convertToPackage(const ProgressFn& onProgress) {
+  const unsigned long packageProfileStarted = millis();
+  // Cache directory was already wiped fresh and recreated in load(), before
+  // prepareSource() wrote a possibly-transcoded source copy into it.
+  setupCacheDir();
+  Storage.mkdir((packagePath + "/META-INF").c_str(), true);
+  Storage.mkdir((packagePath + "/OEBPS/text").c_str(), true);
+  Storage.mkdir((packagePath + "/OEBPS/images").c_str(), true);
+
+  Fb2ScanResult scan;
+  std::shared_ptr<BufferedFb2ScanStorage> scanStorage;
+  const auto fail = [this, &scan, &scanStorage]() {
+    // Close scratch handles before removing their directory.
+    scan.sections.storage.reset();
+    scanStorage.reset();
+    // Do not throw away progress/statistics if package generation fails after
+    // they have already been restored into cachePath.
+    if (!clearFb2GeneratedCachePreservingUserState(cachePath)) {
+      LOG_ERR("FB2", "Failed to preserve user state while cleaning a failed package build");
+    }
+    return false;
+  };
+
+  {
+    auto backing = std::make_shared<SdFb2ScanStorage>(cachePath);
+    if (backing->valid()) {
+      scanStorage.reset(new (std::nothrow) BufferedFb2ScanStorage(std::move(backing)));
+    }
+  }
+  if (!scanStorage) return fail();
+  scan.sections.storage = scanStorage;
+  if (preparedZipScan) {
+    scan = std::move(*preparedZipScan);
+    preparedZipScan.reset();
+    LOG_INF("FB2-PROF", "scan: 0ms (reused fused ZIP scan)");
+  } else {
+    HalFile source;
+    if (!Storage.openFileForRead("FB2", sourcePath, source)) return fail();
+    FsFileReader rawReader(source);
+#if defined(ENABLE_SERIAL_LOG)
+    ProfiledByteReader profiledReader(rawReader);
+    IByteReader& reader = profiledReader;
+#else
+    IByteReader& reader = rawReader;
+#endif
+    Fb2Parser parser;
+    const unsigned long scanStarted = millis();
+    LOG_INF("FB2-PROF", "scan start mem: free=%u max=%u",
+            static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()));
+    constexpr size_t scanXmlBufferSize = 8 * 1024;
+    LOG_INF("FB2-PROF", "scan XML buffer: %u bytes", static_cast<unsigned>(scanXmlBufferSize));
+    if (!parser.scan(reader, scan, scanXmlBufferSize)) {
+      source.close();
+      LOG_ERR("FB2", "FB2 scan failed (not well-formed?): %s", filepath.c_str());
+      return fail();
+    }
+    source.close();
+#if defined(ENABLE_SERIAL_LOG)
+    const uint32_t scanElapsed = millis() - scanStarted;
+    const uint32_t scanCpuMs = scanElapsed >= profiledReader.ioTimeMs() ? scanElapsed - profiledReader.ioTimeMs() : 0;
+    LOG_INF("FB2-PROF", "scan: %lums", static_cast<unsigned long>(scanElapsed));
+    LOG_INF("FB2-PROF", "scan io: %lums calls=%u seeks=%u",
+            static_cast<unsigned long>(profiledReader.ioTimeMs()),
+            static_cast<unsigned>(profiledReader.readCalls()),
+            static_cast<unsigned>(profiledReader.seekCalls()));
+    LOG_INF("FB2-PROF", "scan bytes=%llu xml/cpu=%lums",
+            static_cast<unsigned long long>(profiledReader.bytesRead()),
+            static_cast<unsigned long>(scanCpuMs));
+#endif
+    LOG_INF("FB2-PROF", "scan tokens=%u textTokens=%u textBytes=%llu binaryTextBytes=%llu",
+            static_cast<unsigned>(scan.tokenCount),
+            static_cast<unsigned>(scan.textTokenCount),
+            static_cast<unsigned long long>(scan.textPayloadBytes),
+            static_cast<unsigned long long>(scan.binaryTextBytes));
+    LOG_INF("FB2-PROF", "scan end mem: free=%u max=%u sections=%u binaries=%u pool=%u",
+            static_cast<unsigned>(ESP.getFreeHeap()),
+            static_cast<unsigned>(ESP.getMaxAllocHeap()),
+            static_cast<unsigned>(scan.sections.size()),
+            static_cast<unsigned>(scan.binaries.size()),
+            static_cast<unsigned>(scan.stringPool.size()));
+  }
+  if (onProgress) onProgress(40);
+
+  unsigned long phaseStarted = millis();
+
+  title = scan.metadata.title;
+  author = scan.metadata.author;
+  language = scan.metadata.language;
+  date = scan.metadata.date;
+  normalizeText(title);
+  normalizeText(author);
+  normalizeText(language);
+  normalizeText(date);
+  if (title.empty()) {
+    const size_t slash = filepath.find_last_of('/');
+    const size_t start = slash == std::string::npos ? 0 : slash + 1;
+    const size_t dot = filepath.find_last_of('.');
+    title = filepath.substr(start, dot == std::string::npos || dot <= start ? std::string::npos : dot - start);
+  }
+  if (language.empty()) language = "und";
+  coverImageId = scan.metadata.coverBinaryId;
+
+  if (!scan.metadata.annotationText.empty()) {
+    HalFile annotation;
+    if (!Storage.openFileForWrite("FB2", cachePath + ANNOTATION_FILE, annotation)) return fail();
+    const bool annotationOk =
+        annotation.write(scan.metadata.annotationText.data(), scan.metadata.annotationText.size()) == scan.metadata.annotationText.size();
+    annotation.close();
+    if (!annotationOk) return fail();
+  }
+  LOG_INF("FB2-PROF", "package metadata+annotation: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
+  {
+    const bool imagesOk = persistImageIndex(scan);
+    if (!imagesOk) return fail();
+  }
+  LOG_INF("FB2-PROF", "package image index: %lums", millis() - phaseStarted);
+
+  // The scan result already owns every binary id. Persist its offsets first,
+  // then transfer those strings into the long-lived image list instead of
+  // copying them. On illustration-heavy FB2s, keeping both copies alive is
+  // enough to exhaust the C3 heap before the first chapter can be opened.
+  phaseStarted = millis();
+  images.clear();
+  for (auto& binary : scan.binaries) {
+    const std::string mediaType = normalizeImageMediaType(binary.contentType);
+    if (mediaType.empty()) continue;
+    ImageInfoPublic image;
+    image.id = std::move(binary.id);
+    image.mediaType = mediaType;
+    image.filename = "image_" + std::to_string(images.size()) + (mediaType == "image/png" ? ".png" : ".jpg");
+    images.push_back(std::move(image));
+  }
+  std::deque<Fb2BinaryIndexEntry>().swap(scan.binaries);
+  LOG_INF("FB2-PROF", "package image catalog: %lums", millis() - phaseStarted);
+  if (onProgress) onProgress(70);
+
+  // Persist the section index (level, innerStartOffset, id, title, image
+  // range) - kept permanently, not deleted after this call, since
+  // renderChapterOnDemand() reads it on every later chapter open to find
+  // where to seek in the FB2 source. Id/title are needed to build the
+  // anchor and heading; approxTextBytes is used by getApproxChapterSize()
+  // to seed BookMetadataCache's progress-bar math, since a chapter isn't a
+  // real file with a real size until it's actually been rendered once.
+  // Offsets, parent/body indices are scan()-only bookkeeping and aren't
+  // persisted. One record is written per *virtual* chapter, not per FB2
+  // <section> - see splitSectionsForImageLoad().
+  phaseStarted = millis();
+  chapterCount = 0;
+  {
+    HalFile sectionsOut;
+    if (!Storage.openFileForWrite("FB2", cachePath + SECTIONS_INDEX_FILE, sectionsOut)) return fail();
+    BufferedFileWriter bufferedSections(sectionsOut);
+    writeCacheHeader(bufferedSections);
+    for (const auto& section : scan.sections) {
+      const uint32_t sliceCount = virtualChapterCount(section);
+      const uint32_t imageSliceCount =
+          std::max<uint32_t>(1, (section.imageRefCount + MAX_IMAGES_PER_CHAPTER - 1) / MAX_IMAGES_PER_CHAPTER);
+      const uint32_t textSliceCount =
+          std::max<uint32_t>(1, (section.approxTextBytes / TARGET_TEXT_BYTES_PER_CHAPTER +
+                                (section.approxTextBytes % TARGET_TEXT_BYTES_PER_CHAPTER != 0)));
+      // Use one sequential boundary strategy per section. Text-dominant
+      // illustrated sections follow text ranges (images naturally remain at
+      // their source positions); image-dominant sections keep image-boundary
+      // splitting so a picture gallery cannot overload one chapter.
+      const bool splitByText = section.approxTextBytes > 0 && textSliceCount >= imageSliceCount;
+      // Bit 7 records a non-standard first-styled-paragraph title. Depths over
+      // 127 are not useful to the reader and are clamped before packing.
+      const uint8_t level = static_cast<uint8_t>(std::min<uint16_t>(section.level, 127)) |
+                            (section.fallbackTitle ? 0x80u : 0u);
+      const uint32_t innerStartOffset = section.innerStartOffset;
+      const std::string_view sectionId = scan.sectionId(section);
+      const std::string_view sectionTitle = scan.sectionTitle(section);
+      const uint16_t idLen = static_cast<uint16_t>(std::min(sectionId.size(), static_cast<size_t>(4096)));
+
+      for (uint32_t slice = 0; slice < sliceCount; ++slice) {
+        const std::string_view title = slice == 0 ? sectionTitle : std::string_view();
+        const uint16_t titleLen = static_cast<uint16_t>(std::min(title.size(), static_cast<size_t>(4096)));
+
+        uint32_t imageRangeStart = 0;
+        uint32_t imageRangeEnd = UINT32_MAX;
+        uint32_t textRangeStart = 0;
+        uint32_t textRangeEnd = UINT32_MAX;
+        uint32_t approxBytes = section.approxTextBytes;
+
+        if (!splitByText && section.imageRefCount > 0) {
+          imageRangeStart = slice * MAX_IMAGES_PER_CHAPTER;
+          imageRangeEnd =
+              imageRangeStart + MAX_IMAGES_PER_CHAPTER >= section.imageRefCount
+                  ? UINT32_MAX
+                  : imageRangeStart + MAX_IMAGES_PER_CHAPTER;
+        } else if (sliceCount > 1) {
+          const uint32_t bytesPerSlice =
+              std::max<uint32_t>(1, (section.approxTextBytes / sliceCount + (section.approxTextBytes % sliceCount != 0)));
+          textRangeStart = slice * bytesPerSlice;
+          textRangeEnd =
+              slice + 1 >= sliceCount ? UINT32_MAX : textRangeStart + bytesPerSlice;
+          const uint32_t remaining =
+              section.approxTextBytes > textRangeStart ? section.approxTextBytes - textRangeStart : 0;
+          approxBytes = std::min<uint32_t>(remaining, bytesPerSlice);
+        }
+
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&level), sizeof(level));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&innerStartOffset), sizeof(innerStartOffset));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&idLen), sizeof(idLen));
+        if (idLen) bufferedSections.write(reinterpret_cast<const uint8_t*>(sectionId.data()), idLen);
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&titleLen), sizeof(titleLen));
+        if (titleLen) bufferedSections.write(reinterpret_cast<const uint8_t*>(title.data()), titleLen);
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&approxBytes), sizeof(approxBytes));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&imageRangeStart), sizeof(imageRangeStart));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&imageRangeEnd), sizeof(imageRangeEnd));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&textRangeStart), sizeof(textRangeStart));
+        bufferedSections.write(reinterpret_cast<const uint8_t*>(&textRangeEnd), sizeof(textRangeEnd));
+        if (++chapterCount > UINT16_MAX) {
+          sectionsOut.close();
+          return fail();
+        }
+      }
+    }
+    if (!bufferedSections.finish()) {
+      sectionsOut.close();
+      return fail();
+    }
+    sectionsOut.close();
+  }
+  LOG_INF("FB2-PROF", "package section index: %lums (chapters=%d)", millis() - phaseStarted, chapterCount);
+
+  // Persist the exact structural path of every ORIGINAL FB2 <section>.
+  // KOReader/CREngine exposes canonical FB2 positions such as
+  // /FictionBook/body/section[2]/section[7]/p[328]/text().76.  These section
+  // sibling indices are source-document coordinates and are independent of
+  // screen size, font, pagination, and inkMOD's virtual chapter splitting.
+  // One compact record is written per source section (not per virtual slice):
+  // bodyIndex(1-based), depth, then depth 1-based section sibling indices.
+  {
+    HalFile pathsOut;
+    if (!Storage.openFileForWrite("FB2", cachePath + SOURCE_PATHS_INDEX_FILE, pathsOut)) return fail();
+    BufferedFileWriter bufferedPaths(pathsOut);
+    writeCacheHeader(bufferedPaths);
+    std::array<uint16_t, 32> siblingCounters = {};
+    int currentBody = -1;
+    for (const auto& section : scan.sections) {
+      const int body = std::max(0, static_cast<int>(section.bodyIndex));
+      if (body != currentBody) {
+        siblingCounters.fill(0);
+        currentBody = body;
+      }
+      const size_t depth = std::min<size_t>(static_cast<size_t>(section.level) + 1, siblingCounters.size());
+      if (depth == 0) continue;
+      ++siblingCounters[depth - 1];
+      for (size_t d = depth; d < siblingCounters.size(); ++d) siblingCounters[d] = 0;
+
+      const uint16_t bodyOneBased = static_cast<uint16_t>(std::min(body + 1, 65535));
+      const uint8_t depth8 = static_cast<uint8_t>(std::min<size_t>(depth, 255));
+      bufferedPaths.write(reinterpret_cast<const uint8_t*>(&bodyOneBased), sizeof(bodyOneBased));
+      bufferedPaths.write(reinterpret_cast<const uint8_t*>(&depth8), sizeof(depth8));
+      for (size_t d = 0; d < depth; ++d) {
+        const uint16_t idx = std::max<uint16_t>(1, siblingCounters[d]);
+        bufferedPaths.write(reinterpret_cast<const uint8_t*>(&idx), sizeof(idx));
+      }
+    }
+    if (!bufferedPaths.finish()) {
+      pathsOut.close();
+      return fail();
+    }
+    pathsOut.close();
+  }
+
+  if (chapterCount <= 0 || chapterCount > UINT16_MAX) {
+    LOG_ERR("FB2", "FB2 has no readable chapters: %s", filepath.c_str());
+    return fail();
+  }
+
+  // The marker file renderChapterOnDemand()/Epub::readItemContentsToStream()
+  // key off of: its presence is what says "this package's chapters aren't
+  // real files, render them from this FB2 source instead."
+  phaseStarted = millis();
+  if (!writeStaticFile(cachePath + SOURCE_MARKER_FILE, sourcePath.c_str())) return fail();
+  if (!writeStaticFile(cachePath + ORIGINAL_PATH_MARKER_FILE, filepath.c_str())) return fail();
+  LOG_INF("FB2-PROF", "package marker files: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
+  if (!writeContainerFile()) return fail();
+  LOG_INF("FB2-PROF", "package container: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
+  if (!writeStyleFile()) return fail();
+  LOG_INF("FB2-PROF", "package stylesheet: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
+  if (!writeOpfFile()) return fail();
+  LOG_INF("FB2-PROF", "package OPF: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
+  if (!writeNcxFile(scan) || !scan.good() || !scanStorage->flush()) return fail();
+  LOG_INF("FB2-PROF", "package NCX: %lums", millis() - phaseStarted);
+  if (onProgress) onProgress(95);
+
+  phaseStarted = millis();
+  saveMetadataCache();
+  LOG_INF("FB2-PROF", "package metadata cache: %lums", millis() - phaseStarted);
+
+  phaseStarted = millis();
+  saveCacheSignature();
+  LOG_INF("FB2-PROF", "package signature: %lums", millis() - phaseStarted);
+  LOG_INF("FB2-PROF", "package detailed total: %lums", millis() - packageProfileStarted);
+  return true;
+}
+
+bool Fb2::persistImageIndex(const Fb2ScanResult& scan) {
+  // Images are NOT decoded here - only their (id, filename, byte-offset
+  // range) is recorded, so a later decodeImageOnDemand() call can seek
+  // straight to the right <binary> and decode just that one image, the
+  // first time it's actually about to be rendered.
+  HalFile imagesOut;
+  if (!Storage.openFileForWrite("FB2", cachePath + IMAGES_INDEX_FILE, imagesOut)) return false;
+  BufferedFileWriter bufferedImages(imagesOut);
+  writeCacheHeader(bufferedImages);
+  size_t imageIndex = 0;
+  for (const auto& binary : scan.binaries) {
+    const std::string mediaType = normalizeImageMediaType(binary.contentType);
+    if (mediaType.empty()) continue;
+    const bool isPng = mediaType == "image/png";
+    char imageDigits[11];
+    const size_t digitCount = formatUnsignedDecimal(static_cast<uint32_t>(imageIndex++), imageDigits);
+    const uint16_t idLen = static_cast<uint16_t>(std::min(binary.id.size(), static_cast<size_t>(4096)));
+    const uint16_t nameLen = static_cast<uint16_t>((sizeof("image_") - 1) + digitCount + 4);
+    bufferedImages.write(reinterpret_cast<const uint8_t*>(&idLen), sizeof(idLen));
+    if (idLen) bufferedImages.write(reinterpret_cast<const uint8_t*>(binary.id.data()), idLen);
+    bufferedImages.write(reinterpret_cast<const uint8_t*>(&nameLen), sizeof(nameLen));
+    writeBytes(bufferedImages, "image_");
+    writeBytes(bufferedImages, imageDigits, digitCount);
+    writeBytes(bufferedImages, isPng ? ".png" : ".jpg");
+    bufferedImages.write(reinterpret_cast<const uint8_t*>(&binary.payloadStartOffset), sizeof(binary.payloadStartOffset));
+    bufferedImages.write(reinterpret_cast<const uint8_t*>(&binary.payloadEndOffset), sizeof(binary.payloadEndOffset));
+  }
+  if (!bufferedImages.finish()) {
+    imagesOut.close();
+    return false;
+  }
+  imagesOut.close();
+  return true;
+}
+
+namespace {
+// Bounds how many raw decoded images (the original, often much larger than
+// screen-sized, .png/.jpg straight out of the FB2) stay on disk at once.
+// Once a view has happened, Epub's own .pxc pixel-cache - a small,
+// already-downsampled-to-screen bitmap - satisfies every later render of
+// that same image, so keeping more than a couple of raw sources around
+// mostly just wastes SD space on a book with many illustrations.
+constexpr int MAX_CACHED_RAW_IMAGES = 3;
+constexpr char IMAGE_LRU_FILE[] = "/.fb2_image_lru";
+}  // namespace
+
+bool sanitizeFb2JpegMetadata(const std::string& path) {
+  HalFile in;
+  if (!Storage.openFileForRead("FB2", path, in)) return false;
+  uint8_t soi[2] = {};
+  if (in.read(soi, 2) != 2 || soi[0] != 0xFF || soi[1] != 0xD8) { in.close(); return false; }
+  const std::string tmp = path + ".clean";
+  HalFile out;
+  if (!Storage.openFileForWrite("FB2", tmp, out)) { in.close(); return false; }
+  bool ok = out.write(soi, 2) == 2;
+  std::array<uint8_t, 512> buf{};
+  auto copyN = [&](uint32_t n) {
+    while (ok && n) {
+      const size_t chunk = std::min<size_t>(buf.size(), n);
+      const int got = in.read(buf.data(), chunk);
+      if (got != static_cast<int>(chunk) || out.write(buf.data(), chunk) != chunk) { ok = false; return; }
+      n -= static_cast<uint32_t>(chunk);
+    }
+  };
+  auto skipN = [&](uint32_t n) {
+    while (ok && n) {
+      const size_t chunk = std::min<size_t>(buf.size(), n);
+      if (in.read(buf.data(), chunk) != static_cast<int>(chunk)) { ok = false; return; }
+      n -= static_cast<uint32_t>(chunk);
+    }
+  };
+  while (ok) {
+    int b = in.read();
+    if (b < 0) { ok = false; break; }
+    if (b != 0xFF) { ok = false; break; }
+    int marker = in.read();
+    while (marker == 0xFF) marker = in.read();
+    if (marker < 0) { ok = false; break; }
+    if (marker == 0xD9) { uint8_t m[2]={0xFF,0xD9}; ok = out.write(m,2)==2; break; }
+    if (marker == 0xDA) {
+      uint8_t lenb[2]; if (in.read(lenb,2)!=2) { ok=false; break; }
+      const uint16_t len=(uint16_t(lenb[0])<<8)|lenb[1];
+      uint8_t head[4]={0xFF,static_cast<uint8_t>(marker),lenb[0],lenb[1]};
+      if (len < 2 || out.write(head,4)!=4) { ok=false; break; }
+      copyN(len-2);
+      while (ok) { const int got=in.read(buf.data(),buf.size()); if (got<=0) break; if (out.write(buf.data(),got)!=static_cast<size_t>(got)) ok=false; }
+      break;
+    }
+    // Standalone markers have no length.
+    if ((marker >= 0xD0 && marker <= 0xD7) || marker == 0x01) {
+      uint8_t m[2]={0xFF,static_cast<uint8_t>(marker)}; ok = out.write(m,2)==2; continue;
+    }
+    uint8_t lenb[2]; if (in.read(lenb,2)!=2) { ok=false; break; }
+    const uint16_t len=(uint16_t(lenb[0])<<8)|lenb[1]; if (len<2) { ok=false; break; }
+    const bool drop = marker == 0xE1 || marker == 0xE2 || marker == 0xFE;
+    if (drop) { skipN(len-2); continue; }
+    uint8_t head[4]={0xFF,static_cast<uint8_t>(marker),lenb[0],lenb[1]};
+    if (out.write(head,4)!=4) { ok=false; break; }
+    copyN(len-2);
+  }
+  in.close(); out.close();
+  if (!ok) { Storage.remove(tmp.c_str()); return false; }
+  Storage.remove(path.c_str());
+  if (!Storage.rename(tmp.c_str(), path.c_str())) { Storage.remove(tmp.c_str()); return false; }
+  return true;
+}
+
+// static
+bool Fb2::decodeImageOnDemand(const std::string& imagePath,
+                              const reader::ReaderCancellationToken* cancellationToken) {
+  if (fb2CancellationRequested(cancellationToken)) return false;
+  // imagePath looks like ".../<cachePrefix>_<hash>/package.epub/OEBPS/images/image_7.png".
+  // Recover that package's own cache dir from it rather than needing an
+  // Fb2 instance (ImageBlock only has the path baked into its serialized
+  // cache entry, from whenever the chapter was first rendered).
+  constexpr char kPackageMarker[] = "/package.epub/";
+  const size_t markerPos = imagePath.find(kPackageMarker);
+  if (markerPos == std::string::npos) return false;
+  const std::string packageCachePath = imagePath.substr(0, markerPos);
+  const size_t nameStart = imagePath.find_last_of('/');
+  if (nameStart == std::string::npos) return false;
+  const std::string filename = imagePath.substr(nameStart + 1);
+
+  std::string sourcePath;
+  if (!ensurePreparedSource(packageCachePath, sourcePath)) return false;
+
+  HalFile imagesIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + IMAGES_INDEX_FILE, imagesIn)) return false;
+  if (!readAndCheckCacheHeader(imagesIn)) {
+    imagesIn.close();
+    return false;
+  }
+  Fb2BinaryIndexEntry binary;
+  bool found = false;
+  // Parser-side binary ids are capped at 192 bytes and generated image names
+  // are far shorter than 96. Keep scan scratch fixed so looking up image_500
+  // does not allocate two std::strings for each of the first 500 records.
+  std::array<char, 192> idScratch{};
+  std::array<char, 96> nameScratch{};
+  for (;;) {
+    if (fb2CancellationRequested(cancellationToken)) {
+      imagesIn.close();
+      return false;
+    }
+    uint16_t idLen = 0, nameLen = 0;
+    if (imagesIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) break;
+    if (idLen > idScratch.size()) {
+      if (!skipCacheBytes(imagesIn, idLen)) break;
+    } else if (idLen && imagesIn.read(idScratch.data(), idLen) != idLen) {
+      break;
+    }
+    if (imagesIn.read(&nameLen, sizeof(nameLen)) != sizeof(nameLen)) break;
+    bool nameMatches = nameLen == filename.size() && nameLen <= nameScratch.size();
+    if (nameLen > nameScratch.size()) {
+      if (!skipCacheBytes(imagesIn, nameLen)) break;
+      nameMatches = false;
+    } else if (nameLen && imagesIn.read(nameScratch.data(), nameLen) != nameLen) {
+      break;
+    }
+    if (nameMatches && memcmp(nameScratch.data(), filename.data(), nameLen) != 0) nameMatches = false;
+
+    uint32_t startOffset = 0, endOffset = 0;
+    if (imagesIn.read(&startOffset, sizeof(startOffset)) != sizeof(startOffset) ||
+        imagesIn.read(&endOffset, sizeof(endOffset)) != sizeof(endOffset)) {
+      break;
+    }
+    if (nameMatches && idLen <= idScratch.size()) {
+      binary.id.assign(idScratch.data(), idLen);
+      binary.payloadStartOffset = startOffset;
+      binary.payloadEndOffset = endOffset;
+      found = true;
+      break;
+    }
+  }
+  imagesIn.close();
+  if (!found) return false;
+
+  HalFile source;
+  if (!Storage.openFileForRead("FB2", sourcePath, source)) return false;
+  FsFileReader reader(source);
+
+  const std::string partialImagePath = imagePath + ".partial";
+  HalFile out;
+  if (!Storage.openFileForWrite("FB2", partialImagePath, out)) {
+    source.close();
+    return false;
+  }
+
+  // See the equivalent buffering note that used to live on the old eager
+  // decodeImages(): Base64Decoder's callback fires 1-3 bytes at a time, so
+  // writing straight through would be tens of thousands of individual SD
+  // writes for one sizeable illustration.
+  constexpr size_t kFlushBufSize = 4096;
+  std::unique_ptr<uint8_t[]> flushBuf(new (std::nothrow) uint8_t[kFlushBufSize]);
+  if (!flushBuf) { out.close(); source.close(); Storage.remove(partialImagePath.c_str()); return false; }
+  size_t flushUsed = 0;
+  bool writeOk = true;
+  unsigned long lastYield = millis();
+  Fb2Parser parser;
+  const bool decoded = parser.decodeBinary(reader, binary, [&](const uint8_t* d, size_t n) {
+    if (!writeOk) return;
+    size_t offset = 0;
+    while (offset < n) {
+      const size_t copy = std::min(n - offset, kFlushBufSize - flushUsed);
+      memcpy(flushBuf.get() + flushUsed, d + offset, copy);
+      flushUsed += copy;
+      offset += copy;
+      if (flushUsed != kFlushBufSize) continue;
+      writeOk = out.write(flushBuf.get(), flushUsed) == flushUsed;
+      flushUsed = 0;
+      if (!writeOk) return;
+      // Let the idle task service the watchdog while decoding large covers.
+      if (millis() - lastYield >= 20) { vTaskDelay(1); lastYield = millis(); }
+    }
+  }, cancellationToken);
+  if (decoded && writeOk && flushUsed > 0) {
+    writeOk = out.write(flushBuf.get(), flushUsed) == flushUsed;
+  }
+  out.close();
+  source.close();
+  // Some large FB2 covers carry EXIF thumbnails/ICC chunks that confuse the
+  // tiny embedded JPEG decoder even though desktop decoders accept them.
+  // Strip only non-rendering metadata; pixel data remains byte-for-byte intact.
+  if (decoded && writeOk && binary.id == "cover.jpg") sanitizeFb2JpegMetadata(partialImagePath);
+  if (!decoded || !writeOk || fb2CancellationRequested(cancellationToken)) {
+    Storage.remove(partialImagePath.c_str());
+    LOG_INF("FB2", "Lazy image decode incomplete/cancelled: %s", filename.c_str());
+    return false;
+  }
+
+  if (!Storage.rename(partialImagePath.c_str(), imagePath.c_str())) {
+    Storage.remove(partialImagePath.c_str());
+    return false;
+  }
+
+  // LRU bookkeeping: note this filename as most-recently-decoded, and evict
+  // the raw file for anything that's fallen out of the last
+  // MAX_CACHED_RAW_IMAGES. A plain newline-separated list, same format as
+  // the existing package-cache LRU index.
+  const std::string lruPath = packageCachePath + IMAGE_LRU_FILE;
+  std::vector<std::string> recent = readLruIndex(lruPath);
+  recent.erase(std::remove(recent.begin(), recent.end(), filename), recent.end());
+  recent.insert(recent.begin(), filename);
+  while (static_cast<int>(recent.size()) > MAX_CACHED_RAW_IMAGES) {
+    const std::string evictName = recent.back();
+    recent.pop_back();
+    if (evictName != filename) {
+      Storage.remove((packageCachePath + "/package.epub/OEBPS/images/" + evictName).c_str());
+    }
+  }
+  writeLruIndex(lruPath, recent);
+  return true;
+}
+
+// static
+uint32_t Fb2::getApproxChapterSize(const std::string& packageCachePath, int chapterIndex) {
+  if (chapterIndex < 0) return 0;
+
+  HalFile sectionsIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn)) return 0;
+  if (!readAndCheckCacheHeader(sectionsIn)) {
+    sectionsIn.close();
+    return 0;
+  }
+
+  uint32_t result = 0;
+  for (int i = 0; i <= chapterIndex; ++i) {
+    uint8_t level = 0;
+    uint32_t innerStartOffset = 0;
+    uint16_t idLen = 0, titleLen = 0;
+    uint32_t approxTextBytes = 0;
+    if (sectionsIn.read(&level, sizeof(level)) != sizeof(level) ||
+        sectionsIn.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+        sectionsIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) {
+      break;
+    }
+    if (idLen && !skipCacheBytes(sectionsIn, idLen)) break;
+    if (sectionsIn.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) break;
+    if (titleLen && !skipCacheBytes(sectionsIn, titleLen)) break;
+    if (sectionsIn.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes)) break;
+    uint32_t skipRangeStart = 0, skipRangeEnd = 0, skipTextStart = 0, skipTextEnd = 0;
+    if (sectionsIn.read(&skipRangeStart, sizeof(skipRangeStart)) != sizeof(skipRangeStart) ||
+        sectionsIn.read(&skipRangeEnd, sizeof(skipRangeEnd)) != sizeof(skipRangeEnd) ||
+        sectionsIn.read(&skipTextStart, sizeof(skipTextStart)) != sizeof(skipTextStart) ||
+        sectionsIn.read(&skipTextEnd, sizeof(skipTextEnd)) != sizeof(skipTextEnd)) {
+      break;
+    }
+    if (i == chapterIndex) {
+      result = approxTextBytes;
+      break;
+    }
+  }
+  sectionsIn.close();
+  return result;
+}
+
+// static
+bool Fb2::loadApproxChapterSizes(const std::string& packageCachePath, std::deque<uint32_t>& outSizes) {
+  outSizes.clear();
+  HalFile sectionsIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn)) return false;
+  if (!readAndCheckCacheHeader(sectionsIn)) {
+    sectionsIn.close();
+    return false;
+  }
+
+  // Sequential 4 KiB read-ahead avoids one SD transaction per tiny field.
+  FsFileReader input(sectionsIn);
+  bool complete = true;
+  while (input.tell() < input.size()) {
+    uint8_t level = 0;
+    uint32_t innerStartOffset = 0;
+    uint16_t idLen = 0, titleLen = 0;
+    uint32_t approxTextBytes = 0;
+    if (input.read(&level, sizeof(level)) != sizeof(level) ||
+        input.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+        input.read(&idLen, sizeof(idLen)) != sizeof(idLen)) { complete = false; break; }
+    if (idLen && !input.seek(input.tell() + idLen)) { complete = false; break; }
+    if (input.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) { complete = false; break; }
+    if (titleLen && !input.seek(input.tell() + titleLen)) { complete = false; break; }
+    if (input.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes)) { complete = false; break; }
+    uint32_t imageRangeStart = 0, imageRangeEnd = 0, textRangeStart = 0, textRangeEnd = 0;
+    if (input.read(&imageRangeStart, sizeof(imageRangeStart)) != sizeof(imageRangeStart) ||
+        input.read(&imageRangeEnd, sizeof(imageRangeEnd)) != sizeof(imageRangeEnd) ||
+        input.read(&textRangeStart, sizeof(textRangeStart)) != sizeof(textRangeStart) ||
+        input.read(&textRangeEnd, sizeof(textRangeEnd)) != sizeof(textRangeEnd)) { complete = false; break; }
+    outSizes.push_back(approxTextBytes);
+  }
+  sectionsIn.close();
+  if (!complete) outSizes.clear();
+  return complete && !outSizes.empty();
+}
+
+
+// static
+bool Fb2::getOriginalSectionOrdinal(const std::string& packageCachePath, int chapterIndex, int& ordinal) {
+  ordinal = 0;
+  if (chapterIndex < 0) return false;
+
+  HalFile sectionsIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn)) return false;
+  if (!readAndCheckCacheHeader(sectionsIn)) {
+    sectionsIn.close();
+    return false;
+  }
+
+  uint32_t previousOffset = UINT32_MAX;
+  int distinctSections = 0;
+  for (int i = 0; i <= chapterIndex; ++i) {
+    uint8_t level = 0;
+    uint32_t innerStartOffset = 0;
+    uint16_t idLen = 0, titleLen = 0;
+    uint32_t approxTextBytes = 0;
+    uint32_t imageRangeStart = 0, imageRangeEnd = 0, textRangeStart = 0, textRangeEnd = 0;
+
+    if (sectionsIn.read(&level, sizeof(level)) != sizeof(level) ||
+        sectionsIn.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+        sectionsIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) break;
+    if (idLen && !skipCacheBytes(sectionsIn, idLen)) break;
+    if (sectionsIn.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) break;
+    if (titleLen && !skipCacheBytes(sectionsIn, titleLen)) break;
+    if (sectionsIn.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes) ||
+        sectionsIn.read(&imageRangeStart, sizeof(imageRangeStart)) != sizeof(imageRangeStart) ||
+        sectionsIn.read(&imageRangeEnd, sizeof(imageRangeEnd)) != sizeof(imageRangeEnd) ||
+        sectionsIn.read(&textRangeStart, sizeof(textRangeStart)) != sizeof(textRangeStart) ||
+        sectionsIn.read(&textRangeEnd, sizeof(textRangeEnd)) != sizeof(textRangeEnd)) break;
+
+    if (i == 0 || innerStartOffset != previousOffset) {
+      ++distinctSections;
+      previousOffset = innerStartOffset;
+    }
+    if (i == chapterIndex) {
+      ordinal = distinctSections;
+      sectionsIn.close();
+      return ordinal > 0;
+    }
+  }
+
+  sectionsIn.close();
+  return false;
+}
+
+// static
+bool Fb2::getChapterRangeForOriginalSectionOrdinal(const std::string& packageCachePath, int ordinal,
+                                                    int& startIndex, int& endIndex) {
+  startIndex = -1;
+  endIndex = -1;
+  if (ordinal <= 0) return false;
+
+  HalFile sectionsIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn)) return false;
+  if (!readAndCheckCacheHeader(sectionsIn)) {
+    sectionsIn.close();
+    return false;
+  }
+
+  uint32_t previousOffset = UINT32_MAX;
+  int distinctSections = 0;
+  int chapterIndex = 0;
+  while (sectionsIn.available()) {
+    uint8_t level = 0;
+    uint32_t innerStartOffset = 0;
+    uint16_t idLen = 0, titleLen = 0;
+    uint32_t approxTextBytes = 0;
+    uint32_t imageRangeStart = 0, imageRangeEnd = 0, textRangeStart = 0, textRangeEnd = 0;
+
+    if (sectionsIn.read(&level, sizeof(level)) != sizeof(level) ||
+        sectionsIn.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+        sectionsIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) break;
+    if (idLen && !skipCacheBytes(sectionsIn, idLen)) break;
+    if (sectionsIn.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) break;
+    if (titleLen && !skipCacheBytes(sectionsIn, titleLen)) break;
+    if (sectionsIn.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes) ||
+        sectionsIn.read(&imageRangeStart, sizeof(imageRangeStart)) != sizeof(imageRangeStart) ||
+        sectionsIn.read(&imageRangeEnd, sizeof(imageRangeEnd)) != sizeof(imageRangeEnd) ||
+        sectionsIn.read(&textRangeStart, sizeof(textRangeStart)) != sizeof(textRangeStart) ||
+        sectionsIn.read(&textRangeEnd, sizeof(textRangeEnd)) != sizeof(textRangeEnd)) break;
+
+    if (chapterIndex == 0 || innerStartOffset != previousOffset) {
+      ++distinctSections;
+      previousOffset = innerStartOffset;
+      if (distinctSections > ordinal) break;
+    }
+
+    if (distinctSections == ordinal) {
+      if (startIndex < 0) startIndex = chapterIndex;
+      endIndex = chapterIndex;
+    }
+    ++chapterIndex;
+  }
+  sectionsIn.close();
+  return startIndex >= 0 && endIndex >= startIndex;
+}
+
+// static
+bool Fb2::getSourceSectionPath(const std::string& packageCachePath, int originalSectionOrdinal,
+                               uint16_t& bodyIndex, std::vector<uint16_t>& sectionPath) {
+  bodyIndex = 0;
+  sectionPath.clear();
+  if (originalSectionOrdinal <= 0) return false;
+
+  HalFile in;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SOURCE_PATHS_INDEX_FILE, in)) return false;
+  if (!readAndCheckCacheHeader(in)) {
+    in.close();
+    return false;
+  }
+
+  for (int ordinal = 1; in.available(); ++ordinal) {
+    uint16_t body = 0;
+    uint8_t depth = 0;
+    if (in.read(&body, sizeof(body)) != sizeof(body) || in.read(&depth, sizeof(depth)) != sizeof(depth) || depth == 0) {
+      break;
+    }
+    if (ordinal == originalSectionOrdinal) {
+      sectionPath.resize(depth);
+      for (uint8_t i = 0; i < depth; ++i) {
+        if (in.read(&sectionPath[i], sizeof(sectionPath[i])) != sizeof(sectionPath[i])) {
+          sectionPath.clear();
+          in.close();
+          return false;
+        }
+      }
+      bodyIndex = body;
+      in.close();
+      return bodyIndex > 0 && !sectionPath.empty();
+    }
+    if (!skipCacheBytes(in, static_cast<uint32_t>(depth) * sizeof(uint16_t))) break;
+  }
+  in.close();
+  return false;
+}
+
+// static
+bool Fb2::findOriginalSectionBySourcePath(const std::string& packageCachePath, uint16_t bodyIndex,
+                                          const std::vector<uint16_t>& sectionPath, int& originalSectionOrdinal) {
+  originalSectionOrdinal = 0;
+  if (bodyIndex == 0 || sectionPath.empty()) return false;
+
+  HalFile in;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SOURCE_PATHS_INDEX_FILE, in)) return false;
+  if (!readAndCheckCacheHeader(in)) {
+    in.close();
+    return false;
+  }
+
+  int ordinal = 0;
+  while (in.available()) {
+    ++ordinal;
+    uint16_t body = 0;
+    uint8_t depth = 0;
+    if (in.read(&body, sizeof(body)) != sizeof(body) || in.read(&depth, sizeof(depth)) != sizeof(depth) || depth == 0) {
+      break;
+    }
+    bool match = body == bodyIndex && depth == sectionPath.size();
+    for (uint8_t i = 0; i < depth; ++i) {
+      uint16_t idx = 0;
+      if (in.read(&idx, sizeof(idx)) != sizeof(idx)) {
+        in.close();
+        return false;
+      }
+      if (match && idx != sectionPath[i]) match = false;
+    }
+    if (match) {
+      originalSectionOrdinal = ordinal;
+      in.close();
+      return true;
+    }
+  }
+  in.close();
+  return false;
+}
+
+// static
+std::string Fb2::buildCanonicalSourceSectionXPath(const std::string& packageCachePath, int originalSectionOrdinal) {
+  uint16_t body = 0;
+  std::vector<uint16_t> path;
+  if (!getSourceSectionPath(packageCachePath, originalSectionOrdinal, body, path)) return {};
+
+  std::string out = "/FictionBook/body";
+  if (body > 1) out += "[" + std::to_string(body) + "]";
+  for (const uint16_t idx : path) {
+    out += "/section[" + std::to_string(std::max<uint16_t>(1, idx)) + "]";
+  }
+  return out;
+}
+
+// static
+std::string Fb2::resolveOriginalPath(const std::string& packagePath) {
+  const size_t lastSlash = packagePath.find_last_of('/');
+  if (lastSlash == std::string::npos) return packagePath;
+  const std::string packageDir = packagePath.substr(0, lastSlash);
+  char buf[600] = {};
+  const size_t len = Storage.readFileToBuffer((packageDir + ORIGINAL_PATH_MARKER_FILE).c_str(), buf, sizeof(buf));
+  if (len == 0 || len >= sizeof(buf)) return packagePath;
+  return std::string(buf, len);
+}
+
+bool Fb2::getLogicalChapterBounds(const std::string& packageCachePath, int chapterIndex, int& startIndex,
+                                  int& endIndex) {
+  startIndex = chapterIndex;
+  endIndex = chapterIndex;
+  if (chapterIndex < 0) return false;
+
+  HalFile sectionsIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn)) return false;
+  if (!readAndCheckCacheHeader(sectionsIn)) {
+    sectionsIn.close();
+    return false;
+  }
+
+  auto readRecordKey = [&](uint32_t& innerStartOffset) -> bool {
+    uint8_t level = 0;
+    uint16_t idLen = 0;
+    uint16_t titleLen = 0;
+    uint32_t approxTextBytes = 0;
+    uint32_t imageRangeStart = 0, imageRangeEnd = 0, textRangeStart = 0, textRangeEnd = 0;
+
+    if (sectionsIn.read(&level, sizeof(level)) != sizeof(level) ||
+        sectionsIn.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+        sectionsIn.read(&idLen, sizeof(idLen)) != sizeof(idLen)) {
+      return false;
+    }
+    if (idLen && !skipCacheBytes(sectionsIn, idLen)) return false;
+    if (sectionsIn.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) return false;
+    if (titleLen && !skipCacheBytes(sectionsIn, titleLen)) return false;
+    if (sectionsIn.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes) ||
+        sectionsIn.read(&imageRangeStart, sizeof(imageRangeStart)) != sizeof(imageRangeStart) ||
+        sectionsIn.read(&imageRangeEnd, sizeof(imageRangeEnd)) != sizeof(imageRangeEnd) ||
+        sectionsIn.read(&textRangeStart, sizeof(textRangeStart)) != sizeof(textRangeStart) ||
+        sectionsIn.read(&textRangeEnd, sizeof(textRangeEnd)) != sizeof(textRangeEnd)) {
+      return false;
+    }
+    return true;
+  };
+
+  uint32_t targetOffset = 0;
+  uint32_t previousOffset = 0;
+  bool havePrevious = false;
+  bool targetFound = false;
+  int index = 0;
+  int runStart = 0;
+  int firstMatch = -1;
+  int lastMatch = -1;
+
+  // Track the start of each contiguous innerStartOffset run while walking to
+  // the target. Once the target is reached we already know its first slice,
+  // so there is no need to close/reopen the file and scan from zero again.
+  while (true) {
+    uint32_t offset = 0;
+    if (!readRecordKey(offset)) break;
+
+    if (!havePrevious || offset != previousOffset) runStart = index;
+    if (index == chapterIndex) {
+      targetOffset = offset;
+      targetFound = true;
+      firstMatch = runStart;
+      lastMatch = index;
+    } else if (targetFound) {
+      if (offset == targetOffset) {
+        lastMatch = index;
+      } else {
+        break;
+      }
+    }
+
+    previousOffset = offset;
+    havePrevious = true;
+    ++index;
+  }
+
+  sectionsIn.close();
+  if (!targetFound) return false;
+  startIndex = firstMatch;
+  endIndex = lastMatch;
+  return true;
+}
+
+
+// Resolves an FB2 section id only when a link is actually emitted.  Keeping a
+// complete id-to-chapter vector per rendered chapter used many short-lived
+// strings and fragmented the C3 heap in illustrated, multi-section books.
+// A bounded hash-chain index on SD resolves links without a whole-book scan.
+// Buffered scanning remains a recovery path if the disposable index is unavailable.
+StreamSink::LinkResolver buildLinkResolver(const std::string& packageCachePath,
+                                         const std::shared_ptr<Fb2NavigationIndex>& navigation,
+                                         const std::shared_ptr<Fb2AnchorIndex>& anchors) {
+  const std::string sectionsPath = packageCachePath + SECTIONS_INDEX_FILE;
+  return [sectionsPath, navigation, anchors](const std::string& targetId) -> std::string {
+    if (targetId.empty()) return {};
+    if (anchors && anchors->good()) {
+      const int chapter = anchors->chapterForId(targetId);
+      if (chapter >= 0) return chapterHref(chapter).substr(5) + "#" + anchorName(fnvHash64(targetId.data(), targetId.size()));
+    }
+    if (navigation && navigation->good()) {
+      const int chapter = navigation->chapterForId(targetId);
+      if (chapter >= 0) return chapterHref(chapter).substr(5) + "#" + anchorName(fnvHash64(targetId.data(), targetId.size()));
+      if (navigation->good()) return {};  // A genuinely absent ID needs no full scan.
+    }
+
+    HalFile sectionsIn;
+    if (!Storage.openFileForRead("FB2", sectionsPath, sectionsIn) || !readAndCheckCacheHeader(sectionsIn)) {
+      sectionsIn.close();
+      return {};
+    }
+
+    FsFileReader records(sectionsIn);
+    std::array<char, 64> scratch{};
+    for (int chapterIndex = 0;; ++chapterIndex) {
+      uint8_t level = 0;
+      uint32_t innerStartOffset = 0;
+      uint16_t idLen = 0, titleLen = 0;
+      if (records.read(&level, sizeof(level)) != sizeof(level) ||
+          records.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+          records.read(&idLen, sizeof(idLen)) != sizeof(idLen)) {
+        break;
+      }
+
+      bool isTarget = idLen == targetId.size();
+      uint16_t remaining = idLen;
+      size_t targetOffset = 0;
+      while (remaining > 0) {
+        const size_t chunkSize = std::min<size_t>(remaining, scratch.size());
+        if (records.read(scratch.data(), chunkSize) != chunkSize) {
+          remaining = UINT16_MAX;
+          break;
+        }
+        if (isTarget && memcmp(scratch.data(), targetId.data() + targetOffset, chunkSize) != 0) {
+          isTarget = false;
+        }
+        targetOffset += chunkSize;
+        remaining -= static_cast<uint16_t>(chunkSize);
+      }
+      if (remaining != 0) break;
+
+      if (records.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) break;
+      remaining = titleLen;
+      while (remaining > 0) {
+        const size_t chunkSize = std::min<size_t>(remaining, scratch.size());
+        if (records.read(scratch.data(), chunkSize) != chunkSize) {
+          remaining = UINT16_MAX;
+          break;
+        }
+        remaining -= static_cast<uint16_t>(chunkSize);
+      }
+      if (remaining != 0) break;
+
+      uint32_t skipApprox = 0, skipRangeStart = 0, skipRangeEnd = 0, skipTextStart = 0, skipTextEnd = 0;
+      if (records.read(&skipApprox, sizeof(skipApprox)) != sizeof(skipApprox) ||
+          records.read(&skipRangeStart, sizeof(skipRangeStart)) != sizeof(skipRangeStart) ||
+          records.read(&skipRangeEnd, sizeof(skipRangeEnd)) != sizeof(skipRangeEnd) ||
+          records.read(&skipTextStart, sizeof(skipTextStart)) != sizeof(skipTextStart) ||
+          records.read(&skipTextEnd, sizeof(skipTextEnd)) != sizeof(skipTextEnd)) {
+        break;
+      }
+      if (isTarget) {
+        sectionsIn.close();
+        const uint64_t anchor = fnvHash64(targetId.data(), targetId.size());
+        return chapterHref(chapterIndex).substr(5) + "#" + anchorName(anchor);
+      }
+    }
+    sectionsIn.close();
+    return {};
+  };
+}
+
+// static
+bool Fb2::renderChapterOnDemand(const std::string& packageCachePath, int chapterIndex, Print& out,
+                                const reader::ReaderCancellationToken* cancellationToken) {
+  if (chapterIndex < 0) return false;
+  if (fb2CancellationRequested(cancellationToken)) return false;
+
+  std::string sourcePath;
+  if (!ensurePreparedSource(packageCachePath, sourcePath)) {
+    LOG_ERR("FB2", "Chapter %d: prepared source is unavailable", chapterIndex);
+    return false;
+  }
+
+  HalFile sectionsIn;
+  if (!Storage.openFileForRead("FB2", packageCachePath + SECTIONS_INDEX_FILE, sectionsIn)) {
+    LOG_ERR("FB2", "Chapter %d: sections index is unavailable", chapterIndex);
+    return false;
+  }
+  if (!readAndCheckCacheHeader(sectionsIn)) {
+    sectionsIn.close();
+    LOG_ERR("FB2", "Chapter %d: sections index header is invalid", chapterIndex);
+    return false;
+  }
+
+  auto navigation = std::shared_ptr<Fb2NavigationIndex>(new (std::nothrow) Fb2NavigationIndex());
+  if (navigation && !ensureFb2NavigationIndex(packageCachePath, *navigation)) navigation.reset();
+  uint32_t recordOffset = 0;
+  const bool direct = navigation && navigation->offsetForChapter(static_cast<uint32_t>(chapterIndex), recordOffset) &&
+                      sectionsIn.seek(recordOffset);
+  if (!direct && !sectionsIn.seek(CACHE_MAGIC_LEN + 1)) return false;
+  FsFileReader records(sectionsIn);
+
+  uint8_t level = 0;
+  uint32_t innerStartOffset = 0;
+  uint16_t idLen = 0, titleLen = 0;
+  uint32_t approxTextBytes = 0;
+  uint32_t imageRangeStart = 0, imageRangeEnd = 0;
+  uint32_t textRangeStart = 0, textRangeEnd = UINT32_MAX;
+  std::string id;
+  std::string title;
+  bool found = false;
+  for (int i = direct ? chapterIndex : 0; i <= chapterIndex; ++i) {
+    if (records.read(&level, sizeof(level)) != sizeof(level) ||
+        records.read(&innerStartOffset, sizeof(innerStartOffset)) != sizeof(innerStartOffset) ||
+        records.read(&idLen, sizeof(idLen)) != sizeof(idLen)) {
+      break;
+    }
+    const bool targetRecord = i == chapterIndex;
+    if (targetRecord) {
+      id.assign(idLen, '\0');
+      if (idLen && records.read(id.data(), idLen) != idLen) break;
+    } else if (idLen && !records.seek(records.tell() + idLen)) {
+      break;
+    }
+    if (records.read(&titleLen, sizeof(titleLen)) != sizeof(titleLen)) break;
+    if (targetRecord) {
+      title.assign(titleLen, '\0');
+      if (titleLen && records.read(title.data(), titleLen) != titleLen) break;
+    } else if (titleLen && !records.seek(records.tell() + titleLen)) {
+      break;
+    }
+    // Every record ends with approxTextBytes then the image/text ranges.
+    if (records.read(&approxTextBytes, sizeof(approxTextBytes)) != sizeof(approxTextBytes) ||
+        records.read(&imageRangeStart, sizeof(imageRangeStart)) != sizeof(imageRangeStart) ||
+        records.read(&imageRangeEnd, sizeof(imageRangeEnd)) != sizeof(imageRangeEnd) ||
+        records.read(&textRangeStart, sizeof(textRangeStart)) != sizeof(textRangeStart) ||
+        records.read(&textRangeEnd, sizeof(textRangeEnd)) != sizeof(textRangeEnd)) {
+      break;
+    }
+    if (targetRecord) {
+      found = true;
+      break;
+    }
+  }
+  sectionsIn.close();
+  if (!found) {
+    LOG_ERR("FB2", "Chapter %d: not found in persisted section index", chapterIndex);
+    return false;
+  }
+  normalizeText(title);
+
+  HalFile source;
+  if (!Storage.openFileForRead("FB2", sourcePath, source)) {
+    LOG_ERR("FB2", "Chapter %d: failed to open prepared source: %s", chapterIndex, sourcePath.c_str());
+    return false;
+  }
+  FsFileReader reader(source);
+
+  writeBytes(out, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+  writeBytes(out, "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><meta charset=\"UTF-8\"/>");
+  writeBytes(out, "<link rel=\"stylesheet\" type=\"text/css\" href=\"../style.css\"/><title>");
+  writeXmlEscaped(out, title);
+  writeBytes(out, "</title></head><body>\n");
+
+  const uint64_t anchor = id.empty() ? automaticAnchor("section", chapterIndex) : fnvHash64(id.data(), id.size());
+  writeBytes(out, "<section id=\"");
+  writeAnchorNameDirect(out, anchor);
+  writeBytes(out, "\">");
+
+  Fb2SectionIndexEntry section;  // only innerStartOffset is read by renderSection()
+  section.innerStartOffset = innerStartOffset;
+  section.level = level & 0x7Fu;
+  section.fallbackTitle = (level & 0x80u) != 0;
+  Fb2Parser parser;
+  auto anchors = std::shared_ptr<Fb2AnchorIndex>(new (std::nothrow) Fb2AnchorIndex());
+  if (anchors && !anchors->open(packageCachePath + SECTIONS_INDEX_FILE,
+                                packageCachePath + ANCHORS_INDEX_FILE, PACKAGE_VERSION)) anchors.reset();
+  StreamSink sink(out, packageCachePath + IMAGES_INDEX_FILE, buildLinkResolver(packageCachePath, navigation, anchors));
+
+  // FB2 stores coverpage in <description>, outside the body. Emit it as the
+  // very first visual content, matching normal EPUB opening behaviour. If a
+  // real cover was emitted, the private marker below gives it a dedicated
+  // first page before generated title/annotation/body content.
+  if (chapterIndex == 0 && parser.renderCoverForFirstSection(reader, section, sink)) {
+    writeBytes(out, "<div class=\"inkmod-fb2-cover-page-break\"></div>");
+  }
+
+  // Render the synthetic FB2 front matter from the ORIGINAL source so inline
+  // markup in <annotation> (especially <emphasis>) is not flattened away.
+  // Author/title/date come from the tiny metadata cache and are followed by
+  // the styled annotation. All of it is marked front-matter so the first real
+  // section starts a fresh page counter/footer after the hard break below.
+  if (chapterIndex == 0) {
+    std::string metaTitle;
+    std::string metaAuthor;
+    std::string metaDate;
+    {
+      char meta[2048] = {};
+      const size_t n = Storage.readFileToBuffer((packageCachePath + METADATA_FILE).c_str(), meta, sizeof(meta));
+      if (n > 0) {
+        const char* a = strchr(meta, '\n');
+        const char* b = a ? strchr(a + 1, '\n') : nullptr;
+        const char* c = b ? strchr(b + 1, '\n') : nullptr;
+        if (a) metaTitle.assign(meta, a - meta);
+        if (a && b) metaAuthor.assign(a + 1, b - a - 1);
+        if (c) {
+          metaDate.assign(c + 1);
+          while (!metaDate.empty() && (metaDate.back() == '\n' || metaDate.back() == '\r')) metaDate.pop_back();
+        }
+      }
+    }
+
+    const bool hasMetadataFrontMatter = !metaAuthor.empty() || !metaTitle.empty() || !metaDate.empty();
+    writeBytes(out, "<div class=\"annotation inkmod-fb2-frontmatter\">");
+    if (!metaAuthor.empty()) {
+      writeBytes(out, "<h2 class=\"fb2-book-author\">");
+      writeXmlEscaped(out, metaAuthor);
+      writeBytes(out, "</h2>");
+    }
+    if (!metaTitle.empty()) {
+      writeBytes(out, "<h2 class=\"fb2-book-title\">");
+      writeXmlEscaped(out, metaTitle);
+      writeBytes(out, "</h2>");
+    }
+    const bool annotationOk = parser.renderAnnotation(reader, sink, cancellationToken);
+    if (!annotationOk) {
+      source.close();
+      return false;
+    }
+    if (!metaDate.empty()) {
+      writeBytes(out, "<p class=\"fb2-book-date\">");
+      writeXmlEscaped(out, metaDate);
+      writeBytes(out, "</p>");
+    }
+    writeBytes(out, "</div>");
+    if (hasMetadataFrontMatter || Storage.exists((packageCachePath + ANNOTATION_FILE).c_str())) {
+      writeBytes(out, "<div class=\"inkmod-fb2-frontmatter-page-break\"></div>");
+    }
+
+    // FB2 also allows an epigraph directly under <body>, before the first
+    // <section>. Such content is outside the section index, so recover it in a
+    // bounded preamble pass that stops as soon as the first section starts.
+    writeBytes(out, "<div class=\"inkmod-fb2-frontmatter\">");
+    if (!parser.renderBodyPreambleForFirstSection(reader, sink, cancellationToken)) {
+      source.close();
+      return false;
+    }
+    writeBytes(out, "</div>");
+    // A real FB2 section after the body-level epigraph starts on a fresh page.
+    // Reuse the parser-level hard page-break marker so CSS cannot collapse it.
+    writeBytes(out, "<div class=\"inkmod-fb2-frontmatter-page-break\"></div>");
+  }
+
+  if (!title.empty()) {
+    // Re-read only the section title so inline FB2 emphasis/strong markup is
+    // preserved in the visible heading. The scan index intentionally keeps a
+    // plain-text title for TOC/search.
+    if (!parser.renderSectionTitle(reader, section, sink, level, cancellationToken)) {
+      const int heading = std::min(std::max(static_cast<int>(level) + 1, 1), 6);
+      writeHeadingTag(out, heading, false);
+      writeXmlEscaped(out, title);
+      writeHeadingTag(out, heading, true);
+    }
+  }
+
+  RangeFilterSink imageRangeSink(sink, imageRangeStart, imageRangeEnd);
+  TextRangeFilterSink textRangeSink(imageRangeSink, textRangeStart, textRangeEnd);
+  const bool renderOk = parser.renderSection(reader, section, textRangeSink, cancellationToken);
+
+  writeBytes(out, "</section>\n</body></html>\n");
+  source.close();
+  if (!renderOk) {
+    LOG_ERR("FB2", "Chapter %d: native parser failed at source offset %u", chapterIndex, innerStartOffset);
+  }
+  return renderOk;
+}
+
+bool Fb2::writeContainerFile() const {
+  return writeStaticFile(packagePath + "/META-INF/container.xml",
+                         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                         "<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">"
+                         "<rootfiles><rootfile full-path=\"OEBPS/content.opf\" "
+                         "media-type=\"application/oebps-package+xml\"/></rootfiles></container>\n");
+}
+
+bool Fb2::writeStyleFile() const {
+  return writeStaticFile(
+      packagePath + "/OEBPS/style.css",
+      "body { text-align: justify; }\n"
+      "h1, h2, h3, h4, h5, h6 { text-align: center; font-weight: bold; margin: 1em 0 0.7em 0; }\n"
+      ".subtitle { text-align: center; }\n"
+      "p { margin: 0.25em 0; }\n"
+      ".epigraph, .cite { margin: 0.7em 1.5em; text-indent: 0; }\n"
+      ".poem { margin: 0.7em 1em; }\n"
+      ".epigraph > .poem { margin-bottom: 0; }\n"
+      ".stanza { margin: 0; padding: 0; }\n"
+      ".stanza-break { margin-top: 0.5em; }\n"
+      ".v { text-indent: 0; text-align: left; margin: 0; }\n"
+      ".text-author { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }\n"
+      ".epigraph > .text-author { margin-top: 0.5em; }\n"
+      ".fb2-book-author { text-align: center; margin: 0.6em 0 0 0; }\n"
+      ".fb2-book-title { text-align: center; margin: 0.6em 0 0.6em 0; }\n"
+      ".fb2-book-date { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }\n"
+      ".empty-line { margin: 0; text-indent: 0; }\n"
+      ".annotation { }\n"
+      ".strike { text-decoration: line-through; }\n"
+      ".underline { text-decoration: underline; }\n"
+      ".smallcaps { font-variant: small-caps; }\n"
+      ".code { font-family: monospace; }\n"
+      "table { border-collapse: collapse; }\n"
+      "td, th { border: 1px solid; padding: 0.2em 0.5em; }\n"
+      "img { display: block; margin: 0.5em auto; max-width: 100%; }\n");
+}
+
+bool Fb2::writeOpfFile() const {
+  HalFile file;
+  if (!Storage.openFileForWrite("FB2", packagePath + "/OEBPS/content.opf", file)) return false;
+  BufferedFileWriter output(file);
+  writeBytes(output, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                   "<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"2.0\" unique-identifier=\"bookid\">"
+                   "<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>");
+  writeXmlEscaped(output, title);
+  writeBytes(output, "</dc:title><dc:creator>");
+  writeXmlEscaped(output, author);
+  writeBytes(output, "</dc:creator><dc:language>");
+  writeXmlEscaped(output, language);
+  writeBytes(output, "</dc:language><dc:identifier id=\"bookid\">fb2-");
+  writeAnchorNameDirect(output, hashString(filepath));
+  writeBytes(output, "</dc:identifier>");
+
+  const ImageInfoPublic* cover = findImage(coverImageId);
+  if (cover) {
+    writeBytes(output, "<meta name=\"cover\" content=\"cover-image\"/>");
+  }
+  writeBytes(output, "</metadata><manifest>");
+  writeBytes(output, "<item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>");
+  writeBytes(output, "<item id=\"style\" href=\"style.css\" media-type=\"text/css\"/>");
+  for (int i = 0; i < chapterCount; ++i) {
+    writeBytes(output, "<item id=\"chapter-");
+    writeDecimal(output, static_cast<uint32_t>(i));
+    writeBytes(output, "\" href=\"");
+    writeChapterHrefDirect(output, i);
+    writeBytes(output, "\" media-type=\"application/xhtml+xml\"/>");
+  }
+  for (size_t i = 0; i < images.size(); ++i) {
+    writeBytes(output, "<item id=\"");
+    if (cover && images[i].id == cover->id) {
+      writeBytes(output, "cover-image");
+    } else {
+      writeBytes(output, "image-");
+      writeDecimal(output, static_cast<uint32_t>(i));
+    }
+    writeBytes(output, "\" href=\"images/");
+    writeXmlEscaped(output, images[i].filename, true);
+    writeBytes(output, "\" media-type=\"");
+    writeXmlEscaped(output, images[i].mediaType, true);
+    writeBytes(output, "\"/>");
+  }
+  writeBytes(output, "</manifest><spine toc=\"ncx\">");
+  for (int i = 0; i < chapterCount; ++i) {
+    writeBytes(output, "<itemref idref=\"chapter-");
+    writeDecimal(output, static_cast<uint32_t>(i));
+    writeBytes(output, "\"/>");
+  }
+  writeBytes(output, "</spine><guide><reference type=\"text\" title=\"Start\" href=\"");
+  writeChapterHrefDirect(output, 0);
+  writeBytes(output, "\"/></guide></package>\n");
+  const bool complete = output.finish();
+  file.close();
+  return complete;
+}
+
+bool Fb2::writeNcxFile(const Fb2ScanResult& scan) const {
+  HalFile file;
+  if (!Storage.openFileForWrite("FB2", packagePath + "/OEBPS/toc.ncx", file)) return false;
+
+  BufferedFileWriter output(file);
+  writeBytes(output, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                   "<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">"
+                   "<head><meta name=\"dtb:uid\" content=\"fb2\"/></head><docTitle><text>");
+  writeXmlEscaped(output, title);
+  writeBytes(output, "</text></docTitle><navMap>\n");
+
+  int openDepth = 0;
+  int playOrder = 1;
+  int sectionFirstChapterIndex = 0;
+  bool any = false;
+  for (size_t i = 0; i < scan.sections.size(); ++i) {
+    const auto& section = scan.sections[i];
+    const int currentFirstChapterIndex = sectionFirstChapterIndex;
+    sectionFirstChapterIndex += static_cast<int>(virtualChapterCount(section));
+    // Footnotes/comments are only reached via in-text links. A non-empty body
+    // name is not itself a footnote marker: multi-book FB2 collections often
+    // name every main body after its volume, and those chapters belong in TOC.
+    if (section.bodyIndex >= 0 && static_cast<size_t>(section.bodyIndex) < scan.bodies.size() &&
+        isNotesBody(scan.bodies[section.bodyIndex].name)) {
+      continue;
+    }
+    // scan() already stores section titles whitespace-normalized in the
+    // shared string pool. Stream that view directly instead of allocating a
+    // second std::string for every TOC entry.
+    const std::string_view sectionTitle = scan.sectionTitle(section);
+    if (sectionTitle.empty()) continue;
+
+    const int targetDepth = std::min(std::max(1, static_cast<int>(section.level) + 1), openDepth + 1);
+    while (openDepth >= targetDepth) {
+      writeBytes(output, "</navPoint>\n");
+      --openDepth;
+    }
+
+    const std::string_view pooledId = scan.sectionId(section);
+    const uint64_t anchor =
+        pooledId.empty() ? automaticAnchor("section", static_cast<int>(i))
+                         : fnvHash64(pooledId.data(), pooledId.size());
+    writeBytes(output, "<navPoint id=\"nav-");
+    writeDecimal(output, static_cast<uint32_t>(playOrder));
+    writeBytes(output, "\" playOrder=\"");
+    writeDecimal(output, static_cast<uint32_t>(playOrder));
+    writeBytes(output, "\"><navLabel><text>");
+    writeXmlEscaped(output, sectionTitle.data(), sectionTitle.size());
+    writeBytes(output, "</text></navLabel><content src=\"");
+    // A split section's TOC entry always points at its first virtual chapter.
+    writeChapterHrefDirect(output, currentFirstChapterIndex);
+    writeBytes(output, "#");
+    writeAnchorNameDirect(output, anchor);
+    writeBytes(output, "\"/>\n");
+    openDepth = targetDepth;
+    ++playOrder;
+    any = true;
+  }
+
+  if (!any) {
+    for (int chapterIndex = 0; chapterIndex < chapterCount; ++chapterIndex) {
+      writeBytes(output, "<navPoint id=\"nav-");
+      writeDecimal(output, static_cast<uint32_t>(playOrder));
+      writeBytes(output, "\" playOrder=\"");
+      writeDecimal(output, static_cast<uint32_t>(playOrder));
+      writeBytes(output, "\"><navLabel><text>");
+      if (chapterIndex == 0) {
+        writeXmlEscaped(output, title);
+      } else {
+        writeBytes(output, "Section ");
+        writeDecimal(output, static_cast<uint32_t>(chapterIndex + 1));
+      }
+      writeBytes(output, "</text></navLabel><content src=\"");
+      writeChapterHrefDirect(output, chapterIndex);
+      writeBytes(output, "\"/></navPoint>\n");
+      ++playOrder;
+    }
+  } else {
+    while (openDepth-- > 0) writeBytes(output, "</navPoint>\n");
+  }
+  writeBytes(output, "</navMap></ncx>\n");
+  const bool complete = output.finish();
+  file.close();
+  return complete;
+}
+
+bool Fb2::clearCache() const {
+  bool success = true;
+  if (Storage.exists(cachePath.c_str())) success = Storage.removeDir(cachePath.c_str()) && success;
+  if (Storage.exists(legacyCachePath.c_str())) success = Storage.removeDir(legacyCachePath.c_str()) && success;
+
+  const std::string indexPath = cacheBaseDir + LRU_INDEX_FILE;
+  std::vector<std::string> keys = readLruIndex(indexPath);
+  keys.erase(std::remove(keys.begin(), keys.end(), cacheKey), keys.end());
+  writeLruIndex(indexPath, keys);
+  return success;
+}

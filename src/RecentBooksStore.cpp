@@ -1,6 +1,7 @@
 #include "RecentBooksStore.h"
 
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <JsonSettingsIO.h>
@@ -8,6 +9,9 @@
 #include <Xtc.h>
 
 #include <algorithm>
+#include <memory>
+
+#include "util/BookArchiveUtils.h"
 
 namespace {
 constexpr char RECENT_BOOKS_FILE_JSON[] = "/.crosspoint/recent.json";
@@ -243,8 +247,19 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
   // If epub, try to load the metadata for title/author and cover.
   // Use buildIfMissing=false to avoid heavy epub loading on boot; getTitle()/getAuthor() may be
   // blank until the book is opened, and entries with missing title are omitted from recent list.
-  if (FsHelpers::hasEpubExtension(lastBookFileName)) {
-    Epub epub(path, "/.crosspoint");
+  if (FsHelpers::hasEpubExtension(lastBookFileName) || isFb2BookPath(lastBookFileName)) {
+    std::unique_ptr<Fb2> fb2;
+    std::string packagePath = path;
+    if (isFb2BookPath(lastBookFileName)) {
+      fb2 = std::make_unique<Fb2>(path, "/.crosspoint");
+      // Recent-book metadata must never trigger a full FB2 conversion during
+      // boot. Only an explicit reader open rebuilds a missing/stale package.
+      packagePath = fb2->getPackagePath();
+      if (!Storage.exists((packagePath + "/OEBPS/content.opf").c_str())) {
+        return RecentBook{path, lastBookFileName, "", "", ""};
+      }
+    }
+    Epub epub(packagePath, "/.crosspoint");
     epub.load(false, true);
     std::string series = epub.getSeries();
     if (!series.empty() && !epub.getSeriesIndex().empty()) series += " #" + epub.getSeriesIndex();

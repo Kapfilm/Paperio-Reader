@@ -223,6 +223,7 @@ class ChapterHtmlSlimParser final : public Print {
   // reference-heavy chapters otherwise spend ~28 bytes per short string anchor.
   std::vector<std::pair<uint32_t, uint16_t>> compactIdAnchorData;
   bool anchorRecordingDisabled = false;  // low-memory state degrades navigation instead of aborting the device
+  std::vector<std::pair<std::string, uint32_t>> pendingFb2Anchors;  // private markers awaiting their rendered word
   std::string pendingAnchorId;           // deferred until after previous text block is flushed
   bool pendingAnchorStartsPage = false;  // footnote destinations begin at viewport top
   std::vector<std::string> tocAnchors;
@@ -350,6 +351,7 @@ class ChapterHtmlSlimParser final : public Print {
   // Anchor indexing is optional metadata. On a fragmented device heap, stop before
   // growing the vector would call the throwing global operator new.
   bool recordAnchorSafely(const std::string& anchor, uint16_t page);
+  void queueFb2AnchorSafely(std::string&& anchor, uint32_t wordIndex);
   size_t recordedAnchorCount() const { return anchorData.size() + compactIdAnchorData.size(); }
   bool isPreviewBuild() const { return !previewAnchor.empty() && previewMaxPages > 0; }
   bool isScanningForPreviewAnchor() const { return isPreviewBuild() && !previewAnchorFound; }

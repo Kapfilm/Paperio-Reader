@@ -2,6 +2,7 @@
 
 #include <Bitmap.h>
 #include <CooperativeAbort.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <I18n.h>
@@ -26,6 +27,7 @@
 #include "activities/util/FullScreenMessageActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookArchiveUtils.h"
 
 #ifndef DEBUG_MEMORY_CONSUMPTION
 #define DEBUG_MEMORY_CONSUMPTION 0
@@ -41,6 +43,35 @@ void logReaderLaunchMemSnapshot(const char* stage) {
 #else
 inline void logReaderLaunchMemSnapshot(const char*) {}
 #endif
+
+// Resolve the EPUB-shaped package used for cover metadata without calling
+// Fb2::load(). The home screen must never re-index a book merely to draw a
+// thumbnail. For a prepared FB2 cache the package already exists; if it does
+// not, cover generation stays transient and the normal reader open owns the
+// rebuild.
+bool resolveCoverPackagePath(const std::string& bookPath, std::string& packagePath, bool& fb2Origin) {
+  fb2Origin = false;
+  if (FsHelpers::hasEpubExtension(bookPath)) {
+    packagePath = bookPath;
+    return Storage.exists(packagePath.c_str());
+  }
+
+  if (isFb2BookPath(bookPath) ||
+      (isBookZipPath(bookPath) && detectBookArchiveType(bookPath) == BookArchiveType::Fb2)) {
+    Fb2 fb2(bookPath, "/.crosspoint");
+    packagePath = fb2.getPackagePath();
+    fb2Origin = true;
+    return Storage.exists((packagePath + "/META-INF/container.xml").c_str()) &&
+           Storage.exists((packagePath + "/OEBPS/content.opf").c_str());
+  }
+
+  // A generic .zip may itself be a valid EPUB archive.
+  if (isBookZipPath(bookPath) && detectBookArchiveType(bookPath) == BookArchiveType::Epub) {
+    packagePath = bookPath;
+    return true;
+  }
+  return false;
+}
 }  // namespace
 
 // ── CoverExtractSession ──────────────────────────────────────────────────────
@@ -51,19 +82,41 @@ ReaderActivity::CoverExtractSession::~CoverExtractSession() {
     buf_ = nullptr;
   }
   if (dst_.isOpen()) dst_.close();
+  if (source_.isOpen()) source_.close();
+  if (!workPath_.empty()) Storage.remove(workPath_.c_str());
   // reader_ destructor closes entry; zip_ destructor is harmless
+}
+
+bool ReaderActivity::CoverExtractSession::beginFileCopy(const std::string& sourcePath,
+                                                        const std::string& destPath) {
+  destPath_ = destPath;
+  workPath_ = destPath + ".part";
+  if (!Storage.openFileForRead("CEX", sourcePath, source_) || source_.isDirectory()) {
+    LOG_ERR("CEX", "Failed to open cover source %s", sourcePath.c_str());
+    return false;
+  }
+  if (!Storage.openFileForWrite("CEX", workPath_, dst_)) {
+    source_.close();
+    LOG_ERR("CEX", "Failed to open dest %s for write", destPath_.c_str());
+    return false;
+  }
+  fileCopyProduced_ = 0;
+  fileCopyTotal_ = source_.size();
+  LOG_DBG("CEX", "Copying %s -> %s (%zu bytes)", sourcePath.c_str(), destPath_.c_str(), fileCopyTotal_);
+  return true;
 }
 
 bool ReaderActivity::CoverExtractSession::begin(const std::string& epubPath, const std::string& zipEntryPath,
                                                 const std::string& destPath) {
   destPath_ = destPath;
+  workPath_ = destPath + ".part";
   zip_ = std::unique_ptr<ZipFile>(new ZipFile(epubPath));
   reader_ = std::unique_ptr<ZipFile::EntryReader>(new ZipFile::EntryReader(*zip_));
   if (!reader_->open(zipEntryPath.c_str())) {
     LOG_ERR("CEX", "Failed to open ZIP entry %s in %s", zipEntryPath.c_str(), epubPath.c_str());
     return false;
   }
-  if (!Storage.openFileForWrite("CEX", destPath_, dst_)) {
+  if (!Storage.openFileForWrite("CEX", workPath_, dst_)) {
     LOG_ERR("CEX", "Failed to open dest %s for write", destPath_.c_str());
     return false;
   }
@@ -72,7 +125,7 @@ bool ReaderActivity::CoverExtractSession::begin(const std::string& epubPath, con
 }
 
 ReaderActivity::CoverExtractSession::Status ReaderActivity::CoverExtractSession::continueStep(size_t chunkBytes) {
-  if (!reader_ || !reader_->isOpen()) return Status::Error;
+  if ((!reader_ || !reader_->isOpen()) && !source_.isOpen()) return Status::Error;
 
   if (!buf_ || chunkBytes_ != chunkBytes) {
     free(buf_);
@@ -86,32 +139,62 @@ ReaderActivity::CoverExtractSession::Status ReaderActivity::CoverExtractSession:
 
   size_t produced = 0;
   bool done = false;
-  if (!reader_->step(buf_, chunkBytes, &produced, &done)) {
+  if (source_.isOpen()) {
+    const int got = source_.read(buf_, chunkBytes);
+    if (got < 0) {
+      source_.close();
+      dst_.close();
+      Storage.remove(workPath_.c_str());
+      return Status::Error;
+    }
+    produced = static_cast<size_t>(got);
+    fileCopyProduced_ += produced;
+    if (got == 0 && fileCopyProduced_ != fileCopyTotal_) return Status::Error;
+    done = fileCopyProduced_ == fileCopyTotal_;
+  } else if (!reader_->step(buf_, chunkBytes, &produced, &done)) {
     LOG_ERR("CEX", "ZIP inflate error at %zu/%zu bytes", reader_->bytesProduced(), reader_->inflatedSize());
     dst_.close();
-    Storage.remove(destPath_.c_str());
+    Storage.remove(workPath_.c_str());
     return Status::Error;
   }
-  if (produced > 0) dst_.write(buf_, produced);
+  if (produced > 0 && dst_.write(buf_, produced) != produced) {
+    if (source_.isOpen()) source_.close();
+    dst_.close();
+    Storage.remove(workPath_.c_str());
+    LOG_ERR("CEX", "Short write while producing %s", destPath_.c_str());
+    return Status::Error;
+  }
 
   if (done) {
+    if (source_.isOpen()) source_.close();
     dst_.close();
-    LOG_DBG("CEX", "Extraction complete: %zu bytes -> %s", reader_->bytesProduced(), destPath_.c_str());
+    if (bytesProduced() != totalBytes()) return Status::Error;
+    if (Storage.exists(destPath_.c_str())) Storage.remove(destPath_.c_str());
+    if (!Storage.rename(workPath_.c_str(), destPath_.c_str())) return Status::Error;
+    workPath_.clear();
+    LOG_DBG("CEX", "Cover extraction/copy complete: %zu bytes -> %s", bytesProduced(), destPath_.c_str());
     return Status::Done;
   }
   return Status::Running;
 }
 
-size_t ReaderActivity::CoverExtractSession::bytesProduced() const { return reader_ ? reader_->bytesProduced() : 0; }
+size_t ReaderActivity::CoverExtractSession::bytesProduced() const {
+  return reader_ ? reader_->bytesProduced() : fileCopyProduced_;
+}
 
-size_t ReaderActivity::CoverExtractSession::totalBytes() const { return reader_ ? reader_->inflatedSize() : 0; }
+size_t ReaderActivity::CoverExtractSession::totalBytes() const {
+  return reader_ ? reader_->inflatedSize() : fileCopyTotal_;
+}
 
 std::unique_ptr<ReaderActivity::CoverExtractSession> ReaderActivity::beginCoverExtractSession(
     const std::string& bookPath) {
-  if (!FsHelpers::hasEpubExtension(bookPath)) return nullptr;
   if (!sidecarCoverPath(bookPath).empty()) return nullptr;  // sidecar takes priority; no extract needed
 
-  Epub epub(bookPath, "/.crosspoint");
+  std::string packagePath;
+  bool fb2Origin = false;
+  if (!resolveCoverPackagePath(bookPath, packagePath, fb2Origin)) return nullptr;
+
+  Epub epub(packagePath, "/.crosspoint");
   if (!epub.loadForCover()) return nullptr;  // cover ref only, no full book.bin build
 
   // If cover.img already exists and is a recognized image format, no extraction
@@ -137,7 +220,13 @@ std::unique_ptr<ReaderActivity::CoverExtractSession> ReaderActivity::beginCoverE
   if (!Storage.exists(dir.c_str())) Storage.mkdir(dir.c_str());
 
   auto session = std::unique_ptr<CoverExtractSession>(new CoverExtractSession());
-  if (!session->begin(bookPath, normHref, coverImgPath)) return nullptr;
+  if (fb2Origin) {
+    const std::string sourcePath = packagePath + "/" + normHref;
+    if (!Storage.exists(sourcePath.c_str()) && !Fb2::decodeImageOnDemand(sourcePath)) return nullptr;
+    if (!session->beginFileCopy(sourcePath, coverImgPath)) return nullptr;
+  } else if (!session->begin(packagePath, normHref, coverImgPath)) {
+    return nullptr;
+  }
 
   return session;
 }
@@ -164,8 +253,9 @@ bool ReaderActivity::isImageFile(const std::string& path) {
 
 std::string ReaderActivity::sidecarCoverPath(const std::string& bookPath) {
   const auto sep = bookPath.find_last_of("/\\");
-  const auto dot = bookPath.rfind('.');
+  auto dot = bookPath.rfind('.');
   if (dot == std::string::npos || (sep != std::string::npos && dot < sep)) return "";
+  if (FsHelpers::checkFileExtension(bookPath, ".fb2.zip")) dot -= 4;
   const std::string base = bookPath.substr(0, dot);
   for (const char* ext : {".jpg", ".jpeg", ".png", ".bmp", ".JPG", ".JPEG", ".PNG", ".BMP"}) {
     const std::string candidate = base + ext;
@@ -178,6 +268,12 @@ std::string ReaderActivity::sidecarCoverPath(const std::string& bookPath) {
 }
 
 std::string ReaderActivity::bookCacheDir(const std::string& bookPath) {
+  if (isFb2BookPath(bookPath)) return Fb2(bookPath, "/.crosspoint").getCachePath();
+  if (isBookZipPath(bookPath)) {
+    const BookArchiveType type = detectBookArchiveType(bookPath);
+    if (type == BookArchiveType::Fb2) return Fb2(bookPath, "/.crosspoint").getCachePath();
+    if (type == BookArchiveType::Epub) return Epub(bookPath, "/.crosspoint").getCachePath();
+  }
   if (FsHelpers::hasEpubExtension(bookPath)) return Epub(bookPath, "/.crosspoint").getCachePath();
   if (FsHelpers::hasXtcExtension(bookPath)) return Xtc(bookPath, "/.crosspoint").getCachePath();
   return Txt(bookPath, "/.crosspoint").getCachePath();
@@ -404,6 +500,13 @@ ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int wi
   // without a sentinel, and the caller's sliced beginCoverExtractSession extracts it
   // across ticks before a later pass decodes it.  This keeps the 35 s ZIP inflate off
   // the per-tick path while still covering both embedded JPEG and PNG covers.
+  std::string coverPackagePath;
+  bool fb2CoverOrigin = false;
+  if (resolveCoverPackagePath(bookPath, coverPackagePath, fb2CoverOrigin) && fb2CoverOrigin) {
+    Epub package(coverPackagePath, "/.crosspoint");
+    if (!package.loadForCover()) return ThumbResult::TransientFail;
+    return package.generateThumbBmp(width, height, /*allowExtract=*/false, crop);
+  }
   if (FsHelpers::hasEpubExtension(bookPath)) {
     // Clear any sentinel left permanent by an older build for what was only a transient failure,
     // so a book whose cover.img is actually present & valid gets decoded instead of skipped.
@@ -451,6 +554,13 @@ ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int he
   // Embedded EPUB cover: generateThumbBmp() decodes an already-extracted cover.img only
   // (see the width/height overload) — the sliced beginCoverExtractSession handles the
   // ZIP inflate so the 35 s stall stays off the per-tick path.
+  std::string coverPackagePath;
+  bool fb2CoverOrigin = false;
+  if (resolveCoverPackagePath(bookPath, coverPackagePath, fb2CoverOrigin) && fb2CoverOrigin) {
+    Epub package(coverPackagePath, "/.crosspoint");
+    if (!package.loadForCover()) return ThumbResult::TransientFail;
+    return package.generateThumbBmp(height, /*allowExtract=*/false);
+  }
   if (FsHelpers::hasEpubExtension(bookPath)) {
     // Clear any sentinel left permanent by an older build for what was only a transient failure.
     healStaleEpubSentinel(bookPath, file);
@@ -494,13 +604,16 @@ std::unique_ptr<PngDecodeSession> beginPngThumbSessionImpl(const std::string& bo
     isSidecar = true;
     // Clear any stale sentinel so the write can proceed.
     if (Storage.exists(bmpPath.c_str())) Storage.remove(bmpPath.c_str());
-  } else if (sidecar.empty() && FsHelpers::hasEpubExtension(bookPath)) {
+  } else if (sidecar.empty()) {
     // Embedded EPUB cover. Do NOT extract here — ensureCoverImageCached() would run a
     // synchronous, possibly multi-MB ZIP inflate in one tick (observed 35 s stalls).
     // Only proceed if cover.img is ALREADY extracted (the sliced beginCoverExtractSession
     // runs first in the caller's ladder and produces it). Otherwise return null so the
     // caller falls through to that sliced extraction.
-    Epub epub(bookPath, "/.crosspoint");
+    std::string packagePath;
+    bool fb2Origin = false;
+    if (!resolveCoverPackagePath(bookPath, packagePath, fb2Origin)) return nullptr;
+    Epub epub(packagePath, "/.crosspoint");
     if (!epub.loadForCover()) return nullptr;  // cover ref only, no full book.bin build
     srcPath = epub.getCoverImageCachePath();
     FsFile peek;
@@ -616,15 +729,16 @@ void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
 
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
-  currentBookPath = epubPath;
+  const std::string sourcePath = Fb2::resolveOriginalPath(epubPath);
+  currentBookPath = sourcePath;
 
   // Long-press Confirm on RecentBooks/FileBrowser sets autoPullEpubPath so the user can
   // ask for KOReader sync at open time. Route into the sync activity instead of creating the
   // reader; sync's resumeReader() will create the reader once the remote position is applied.
   // Pull-only mode does not need accurate local reader state, so we hand off zeros for spine/page.
   auto& sync = APP_STATE.koReaderSyncSession;
-  if (!sync.autoPullEpubPath.empty() && sync.autoPullEpubPath == epubPath && KOREADER_STORE.hasCredentials()) {
-    LOG_DBG("READER", "AUTO_PULL on open: %s", epubPath.c_str());
+  if (!sync.autoPullEpubPath.empty() && sync.autoPullEpubPath == sourcePath && KOREADER_STORE.hasCredentials()) {
+    LOG_DBG("READER", "AUTO_PULL on open: %s", sourcePath.c_str());
     sync.autoPullEpubPath.clear();  // consume the flag
     sync.active = true;
     sync.epubPath = epubPath;
@@ -722,6 +836,51 @@ void ReaderActivity::onEnter() {
       return;
     }
     onGoToTxtReader(std::move(txt));
+  } else if (isFb2BookPath(initialBookPath) ||
+             (isBookZipPath(initialBookPath) && detectBookArchiveType(initialBookPath) == BookArchiveType::Fb2)) {
+    const bool needsIndexing = [&]() {
+      Fb2 probe(initialBookPath, "/.crosspoint");
+      return probe.needsPreparation() || Epub(probe.getPackagePath(), "/.crosspoint").needsFirstOpenIndexing(SETTINGS.embeddedStyle == 0);
+    }();
+    if (needsIndexing) {
+      RenderLock lock;
+      GUI.drawPopup(renderer, tr(STR_INDEXING));
+    }
+    // FB2 preparation and the subsequent EPUB metadata pass need the same
+    // framebuffer headroom as first-open EPUB indexing. No rendering occurs
+    // while the secondary buffer is released.
+    bool releasedForFb2 = false;
+    {
+      RenderLock lock;
+      if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
+        releasedForFb2 = true;
+        renderer.setSingleBufferFastDiff(true);
+      }
+    }
+    std::string packagePath;
+    bool prepared = false;
+    {
+      Fb2 fb2(initialBookPath, "/.crosspoint");
+      prepared = fb2.load();
+      if (prepared) packagePath = fb2.getPackagePath();
+    }  // Drop converter metadata before allocating Epub metadata.
+    auto epub = prepared ? loadEpub(packagePath) : nullptr;
+    if (releasedForFb2) {
+      RenderLock lock;
+      bool restored = renderer.reallocSecondaryBuffer();
+      if (!restored && epub) {
+        epub.reset();
+        restored = renderer.reallocSecondaryBuffer();
+        epub = loadEpub(packagePath);
+      }
+      if (restored) renderer.setSingleBufferFastDiff(false);
+    }
+    if (!epub) {
+      LOG_ERR("READER", "Failed to prepare/open FB2: %s", initialBookPath.c_str());
+      onGoBack();
+      return;
+    }
+    onGoToEpubReader(std::move(epub));
   } else {
     // The first open of a book runs a multi-second index build inside load()
     // (spine/TOC, content.opf, and the CSS compile). Show a popup so the wait

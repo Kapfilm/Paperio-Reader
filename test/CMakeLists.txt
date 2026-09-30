@@ -82,5 +82,8 @@ add_subdirectory(epub_pipeline)
 add_subdirectory(memory_arena)
 add_subdirectory(content_bin)
 add_subdirectory(preview_block_locator)
+add_subdirectory(native_fb2_zip)
 
 add_subdirectory(clipping_store)
+
+add_subdirectory(book_progress_pages)

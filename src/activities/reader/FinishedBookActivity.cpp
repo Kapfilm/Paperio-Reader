@@ -2,6 +2,7 @@
 
 #include <Bitmap.h>
 #include <Epub.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
@@ -30,6 +31,7 @@
 #include "activities/home/RecentBooksActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/BookArchiveUtils.h"
 
 namespace {
 std::string extractFolderPath(const std::string& filePath) {
@@ -175,8 +177,15 @@ NextBookMetadata loadNextBookMetadata(const std::string& nextBookPath) {
     return metadata;
   }
 
-  if (FsHelpers::hasEpubExtension(nextBookPath)) {
-    Epub epub(nextBookPath, "/.crosspoint");
+  if (FsHelpers::hasEpubExtension(nextBookPath) || isFb2BookPath(nextBookPath)) {
+    std::unique_ptr<Fb2> fb2;
+    std::string packagePath = nextBookPath;
+    if (isFb2BookPath(nextBookPath)) {
+      fb2 = std::make_unique<Fb2>(nextBookPath, "/.crosspoint");
+      if (!fb2->load()) return metadata;
+      packagePath = fb2->getPackagePath();
+    }
+    Epub epub(packagePath, "/.crosspoint");
     epub.setSyntheticTocFallbackEnabled(SETTINGS.syntheticTocFallback != 0);
     // loadForCover(), not load(): this preview needs metadata + the cover thumb, never the spine/TOC.
     // A full load() here rebuilt book.bin and reparsed the CSS for a book the user may not even open,
@@ -228,7 +237,8 @@ NextBookMetadata loadNextBookMetadata(const std::string& nextBookPath) {
 }
 
 bool isSupportedBookFile(const std::string& fileName) {
-  return FsHelpers::hasEpubExtension(fileName) || FsHelpers::hasXtcExtension(fileName) ||
+  return FsHelpers::hasEpubExtension(fileName) || isFb2BookPath(fileName) ||
+         FsHelpers::hasXtcExtension(fileName) ||
          FsHelpers::hasTxtExtension(fileName) || FsHelpers::hasMarkdownExtension(fileName);
 }
 

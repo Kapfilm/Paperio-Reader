@@ -397,3 +397,37 @@ TEST(ContentOpfParser, DisablesHashTrustedIndexOnDuplicateIdsAndStillResolves) {
   EXPECT_EQ(capturedSpineHrefs[0], "book/OEBPS/text/ch5.xhtml");  // first occurrence wins
   EXPECT_EQ(capturedSpineHrefs[1], "book/OEBPS/text/ch419.xhtml");
 }
+
+TEST(ContentOpfParser, Fb2BibleManifestUsesLinearTotalWorkWithoutRamIndex) {
+  const std::string cacheDir = makeTempDir();
+  TempDirGuard dirGuard(cacheDir);
+  std::vector<std::string> captured;
+  ScopedSpineHrefSink sinkGuard(&captured);
+  constexpr int count = 3941;
+  std::string xml = "<package><manifest>" + buildManifestItems(count) + "</manifest><spine>";
+  for (int i = 0; i < count; ++i) xml += "<itemref idref='ch" + std::to_string(i) + "'/>";
+  xml += "</spine></package>";
+  const std::string base = "";
+  BookMetadataCache cache(cacheDir);
+  ContentOpfParser parser(cacheDir, base, xml.size(), &cache, true);
+  ASSERT_TRUE(parseOpfXml(parser, xml));
+  ASSERT_EQ(captured.size(), count);
+  EXPECT_EQ(parser.stats.scannedManifestEntries, count);
+  EXPECT_EQ(captured.back(), "text/ch3940.xhtml");
+}
+
+TEST(ContentOpfParser, SequentialLookupWrapsAndTerminatesForMissingTargets) {
+  const std::string cacheDir = makeTempDir();
+  TempDirGuard dirGuard(cacheDir);
+  std::vector<std::string> captured;
+  ScopedSpineHrefSink sinkGuard(&captured);
+  const std::string xml = "<package><manifest>" + buildManifestItems(5) +
+      "</manifest><spine><itemref idref='ch4'/><itemref idref='ch4'/>"
+      "<itemref idref='ch1'/><itemref idref='missing'/><itemref idref='ch0'/></spine></package>";
+  const std::string base = "";
+  BookMetadataCache cache(cacheDir);
+  ContentOpfParser parser(cacheDir, base, xml.size(), &cache, true);
+  ASSERT_TRUE(parseOpfXml(parser, xml));
+  EXPECT_EQ(captured, (std::vector<std::string>{"text/ch4.xhtml", "text/ch4.xhtml", "text/ch1.xhtml", "text/ch0.xhtml"}));
+  EXPECT_LE(parser.stats.scannedManifestEntries, 25u);
+}

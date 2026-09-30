@@ -6,6 +6,7 @@
 //     synthetic corpus book. Regenerate intentionally changed goldens with:
 //     UPDATE_GOLDENS=1 ctest -R EpubPipeline
 #include <gtest/gtest.h>
+#include <esp_heap_caps.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -79,6 +80,95 @@ std::string pageText(const Page& page) {
     }
   }
   return text;
+}
+
+TEST(EpubFb2AnchorTest, QueueSkipsUnsafeGrowthAndStillRendersText) {
+  GfxRenderer renderer;
+  std::vector<std::unique_ptr<Page>> pages;
+  const std::string start = "<html><body><p><span id=\"fb2-lowheap\"></span>";
+  const std::string end = "READABLE TEXT</p></body></html>";
+  ChapterHtmlSlimParser parser(
+      nullptr, renderer, 1, 1.0f, false, 0, 240, 72, false, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr);
+  ASSERT_TRUE(parser.setup(start.size() + end.size()));
+  testLargestHeapBlock = 512;
+  const size_t consumed = parser.write(reinterpret_cast<const uint8_t*>(start.data()), start.size());
+  testLargestHeapBlock = 200 * 1024;
+  ASSERT_EQ(consumed, start.size());
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(end.data()), end.size()), end.size());
+  ASSERT_TRUE(parser.finalize());
+  EXPECT_TRUE(parser.getAnchors().empty());
+  ASSERT_FALSE(pages.empty());
+  EXPECT_NE(pageText(*pages.front()).find("READABLE"), std::string::npos);
+}
+
+TEST(EpubFb2AnchorTest, InlineTargetsFollowTheirRenderedWordsAcrossPages) {
+  GfxRenderer renderer;
+  std::vector<std::unique_ptr<Page>> pages;
+  const std::string xhtml =
+      "<html><body><p>BEFORE</p><p><span id=\"fb2-first\"></span>TARGET</p>"
+      "<p><a id=\"fb2-second\"></a>SECOND</p></body></html>";
+  ChapterHtmlSlimParser parser(
+      nullptr, renderer, 1, 1.0f, false, 0, 240, 24, false, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr);
+  ASSERT_TRUE(parser.setup(xhtml.size()));
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
+  ASSERT_TRUE(parser.finalize());
+  ASSERT_EQ(parser.getAnchors().size(), 2u);
+  for (const auto& anchor : parser.getAnchors()) {
+    ASSERT_LT(anchor.second, pages.size());
+    const std::string expected = anchor.first == "fb2-first" ? "TARGET" : "SECOND";
+    EXPECT_NE(pageText(*pages[anchor.second]).find(expected), std::string::npos);
+    EXPECT_EQ(pageText(*pages[anchor.second]).find("BEFORE"), std::string::npos);
+  }
+}
+
+TEST(EpubFb2AnchorTest, MarkerInsideLongParagraphTracksItsLine) {
+  GfxRenderer renderer;
+  std::vector<std::unique_ptr<Page>> pages;
+  std::string xhtml = "<html><body><p>";
+  for (int i = 0; i < 140; ++i) xhtml += "before ";
+  xhtml += "<span id=\"fb2-middle\"></span>DESTINATION after</p></body></html>";
+  ChapterHtmlSlimParser parser(
+      nullptr, renderer, 1, 1.0f, false, 0, 120, 48, false, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr);
+  ASSERT_TRUE(parser.setup(xhtml.size()));
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
+  ASSERT_TRUE(parser.finalize());
+  ASSERT_EQ(parser.getAnchors().size(), 1u);
+  ASSERT_LT(parser.getAnchors()[0].second, pages.size());
+  EXPECT_NE(pageText(*pages[parser.getAnchors()[0].second]).find("DESTINATION"), std::string::npos);
+}
+
+TEST(EpubFb2AnchorTest, FlattenedCellsKeepLinksAndDestinationMarkers) {
+  GfxRenderer renderer;
+  std::vector<std::unique_ptr<Page>> pages;
+  const std::string xhtml =
+      "<html><body><div class=\"fb2-table\"><div class=\"fb2-row\">"
+      "<p class=\"fb2-cell\"><span id=\"fb2-verse\"></span>VERSE</p>"
+      "<p class=\"fb2-cell\"><a href=\"chapter_2.xhtml#fb2-verse\">"
+      "<span id=\"fb2-link\"></span>REFERENCE</a></p></div></div></body></html>";
+  ChapterHtmlSlimParser parser(
+      nullptr, renderer, 1, 1.0f, false, 0, 240, 24, false, false, false,
+      [&](std::unique_ptr<Page> page) { pages.emplace_back(std::move(page)); }, false, "", "", 0, {}, nullptr);
+  ASSERT_TRUE(parser.setup(xhtml.size()));
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
+  ASSERT_TRUE(parser.finalize());
+  ASSERT_EQ(parser.getAnchors().size(), 2u);
+  bool foundLink = false;
+  for (const auto& anchor : parser.getAnchors()) {
+    ASSERT_LT(anchor.second, pages.size());
+    EXPECT_NE(pageText(*pages[anchor.second]).find(anchor.first == "fb2-verse" ? "VERSE" : "REFERENCE"),
+              std::string::npos);
+  }
+  for (const auto& page : pages) {
+    for (const auto& note : page->footnotes) {
+      EXPECT_STREQ(note.href, "chapter_2.xhtml#fb2-verse");
+      EXPECT_NE(pageText(*page).find("REFERENCE"), std::string::npos);
+      foundLink = true;
+    }
+  }
+  EXPECT_TRUE(foundLink);
 }
 
 TEST(EpubTargetedFootnotePreviewTest, StartsAtRequestedAnchorAndStopsAtPageLimit) {

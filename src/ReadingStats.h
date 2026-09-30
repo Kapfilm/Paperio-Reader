@@ -42,6 +42,8 @@ struct BookReadingStats {
 class ReadingStatsStore;
 namespace JsonSettingsIO {
 bool loadReadingStats(ReadingStatsStore& store, const char* json);
+bool loadReadingStatsFile(ReadingStatsStore& store, const char* path);
+template <typename Input> bool loadReadingStatsInput(ReadingStatsStore& store, Input& input);
 }  // namespace JsonSettingsIO
 
 // Singleton store for per-book + global reading stats.
@@ -65,7 +67,10 @@ class ReadingStatsStore {
   // Used to compute streaks and the sparkline on the stats screen.
   std::vector<DayBucket> globalDays;
 
-  friend bool JsonSettingsIO::loadReadingStats(ReadingStatsStore&, const char*);
+  bool prepareMutation(const std::string& docId, const std::string& title, const std::string& author, uint16_t day);
+
+  template <typename Input>
+  friend bool JsonSettingsIO::loadReadingStatsInput(ReadingStatsStore&, Input&);
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }

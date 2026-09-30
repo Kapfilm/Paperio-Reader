@@ -30,6 +30,10 @@ class Epub {
   std::string pageMapItem;
   // where is the EPUBfile?
   std::string filepath;
+  // FB2 is exposed as an unpacked, EPUB-shaped package. Ordinary EPUBs remain
+  // ZIP archives; all item access is routed through the helpers below.
+  bool unpackedPackage = false;
+  bool isFb2Origin = false;
   // the base path for items in the EPUB file
   std::string contentBasePath;
   // Uniq cache key based on filepath
@@ -81,6 +85,7 @@ class Epub {
   mutable bool spineStatsResolved_ = false;
   mutable bool spineStatsUsable_ = false;
   void ensureSpineStats() const;
+  std::string itemPath(const std::string& itemHref) const;
 
  public:
   // Resolve a spine entry's ZIP central-directory stat via the per-book cache (one
@@ -106,10 +111,7 @@ class Epub {
   void writeStoredFingerprint(uint64_t fp) const;
 
  public:
-  explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
-    // create a cache key based on the filepath
-    cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
-  }
+  explicit Epub(std::string filepath, const std::string& cacheDir);
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }
   bool load(bool buildIfMissing = true, bool skipLoadingCss = false);
@@ -139,7 +141,7 @@ class Epub {
   // build inside load(): the spine/TOC cache (book.bin) or the compiled CSS rules
   // cache is missing. Cheap (only file-existence checks) so callers can decide
   // whether to show a progress popup before calling load().
-  bool needsFirstOpenIndexing() const;
+  bool needsFirstOpenIndexing(bool skipLoadingCss = false) const;
 
   bool clearCache(bool preserveThumbs = false) const;
   void setupCacheDir() const;
@@ -209,6 +211,9 @@ class Epub {
   int getTocItemsCount() const;
   int getSpineIndexForTocIndex(int tocIndex) const;
   int getTocIndexForSpineIndex(int spineIndex) const;
+  // Resolve memory-safe virtual FB2 slices back to their source section.
+  // Ordinary EPUB spines resolve to themselves.
+  bool getLogicalChapterBounds(int spineIndex, int& startIndex, int& endIndex) const;
   bool hasReliableToc() const;
   void setSyntheticTocFallbackEnabled(bool enabled) { syntheticTocFallbackEnabled = enabled; }
   size_t getCumulativeSpineItemSize(int spineIndex) const;
@@ -217,6 +222,8 @@ class Epub {
   size_t getBookSize() const;
   float calculateProgress(int currentSpineIndex, float currentSpineRead) const;
   CssParser* getCssParser() const { return cssParser.get(); }
+  bool isFb2Package() const { return isFb2Origin; }
+  bool isUnpackedPackage() const { return unpackedPackage; }
   // Load (or build) the image manifest. Call after load() when images will be rendered.
   // Skipping this is valid for text-only or placeholder rendering modes.
   void loadImageManifest();

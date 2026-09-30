@@ -5,9 +5,11 @@
 #include <Logging.h>
 #include <ObfuscationUtils.h>
 
+#include <esp_heap_caps.h>
 #include <cctype>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
@@ -249,6 +251,83 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
   String json;
   serializeJson(doc, json);
   return Storage.writeFile(path, json);
+}
+
+bool JsonSettingsIO::saveButtonSettings(const CrossPointSettings& s, const char* path) {
+  JsonDocument doc;
+  doc["format"] = 1;
+
+  for (const auto& info : getSettingsList()) {
+    if (!info.key || !info.valuePtr || info.category != StrId::STR_CAT_CONTROLS) continue;
+    doc[info.key] = s.*(info.valuePtr);
+  }
+
+  doc["frontButtonBack"] = s.frontButtonBack;
+  doc["frontButtonConfirm"] = s.frontButtonConfirm;
+  doc["frontButtonLeft"] = s.frontButtonLeft;
+  doc["frontButtonRight"] = s.frontButtonRight;
+
+  String json;
+  serializeJsonPretty(doc, json);
+  return Storage.writeFile(path, json);
+}
+
+bool JsonSettingsIO::loadButtonSettings(CrossPointSettings& s, const char* json) {
+  JsonDocument doc;
+  const auto error = deserializeJson(doc, json);
+  if (error || (doc["format"] | 0) != 1) {
+    LOG_ERR("CPS", "Button settings JSON is invalid: %s", error ? error.c_str() : "unsupported format");
+    return false;
+  }
+
+  struct PendingValue {
+    uint8_t CrossPointSettings::* field;
+    uint8_t value;
+  };
+  std::vector<PendingValue> pending;
+  for (const auto& info : getSettingsList()) {
+    if (!info.key || !info.valuePtr || info.category != StrId::STR_CAT_CONTROLS) continue;
+    if (doc[info.key].isNull()) continue;
+    const uint8_t value = doc[info.key].as<uint8_t>();
+    const size_t optionCount = info.type == SettingType::TOGGLE ? 2 : info.getEnumOptionCount();
+    pending.push_back(
+        {info.valuePtr, value < optionCount ? value : static_cast<uint8_t>(CrossPointSettings::BTN_DEFAULT)});
+  }
+
+  using S = CrossPointSettings;
+  const auto front = [&doc](const char* key, uint8_t fallback) {
+    const uint8_t value = doc[key] | fallback;
+    return value < S::FRONT_BUTTON_HARDWARE_COUNT ? value : fallback;
+  };
+  uint8_t frontValues[] = {
+      front("frontButtonBack", S::FRONT_HW_BACK),
+      front("frontButtonConfirm", S::FRONT_HW_CONFIRM),
+      front("frontButtonLeft", S::FRONT_HW_LEFT),
+      front("frontButtonRight", S::FRONT_HW_RIGHT),
+  };
+  bool validFrontMapping = true;
+  for (size_t i = 0; i < 4; ++i) {
+    for (size_t j = i + 1; j < 4; ++j) {
+      if (frontValues[i] == frontValues[j]) validFrontMapping = false;
+    }
+  }
+  if (!validFrontMapping) {
+    frontValues[0] = S::FRONT_HW_BACK;
+    frontValues[1] = S::FRONT_HW_CONFIRM;
+    frontValues[2] = S::FRONT_HW_LEFT;
+    frontValues[3] = S::FRONT_HW_RIGHT;
+  }
+
+  for (const auto& item : pending) s.*(item.field) = item.value;
+  s.frontButtonBack = frontValues[0];
+  s.frontButtonConfirm = frontValues[1];
+  s.frontButtonLeft = frontValues[2];
+  s.frontButtonRight = frontValues[3];
+
+  // These two short presses deliberately retain their fixed built-in actions.
+  s.btnShortBack = S::BTN_DEFAULT;
+  s.btnShortConfirm = S::BTN_DEFAULT;
+  return true;
 }
 
 bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool* needsResave) {
@@ -825,21 +904,90 @@ bool JsonSettingsIO::saveReadingStats(const ReadingStatsStore& store, const char
     writeDays(obj["days"].to<JsonArray>(), book.days);
   }
 
-  String json;
-  serializeJson(doc, json);
-  return Storage.writeFile(path, json);
+  if (doc.overflowed()) {
+    LOG_ERR("RST", "Reading history JSON allocation failed; old file retained");
+    return false;
+  }
+  const std::string temp = std::string(path) + ".tmp";
+  const std::string backup = std::string(path) + ".bak";
+  FsFile file;
+  if (!Storage.openFileForWrite("RST", temp.c_str(), file)) return false;
+  const size_t expected = measureJson(doc);
+  const size_t written = serializeJson(doc, file);
+  file.flush();
+  const bool synced = file.close();
+  if (written != expected || !synced) {
+    Storage.remove(temp.c_str());
+    return false;
+  }
+  const bool exists = Storage.exists(path);
+  if (exists) {
+    Storage.remove(backup.c_str());
+    if (!Storage.rename(path, backup.c_str())) return false;
+  }
+  if (!Storage.rename(temp.c_str(), path)) {
+    if (exists) Storage.rename(backup.c_str(), path);
+    return false;
+  }
+  if (exists) Storage.remove(backup.c_str());
+  return true;
 }
 
-bool JsonSettingsIO::loadReadingStats(ReadingStatsStore& store, const char* json) {
+template <typename Input>
+bool JsonSettingsIO::loadReadingStatsInput(ReadingStatsStore& destination, Input& input) {
   JsonDocument doc;
-  auto error = deserializeJson(doc, json);
+  auto error = deserializeJson(doc, input);
   if (error) {
     LOG_ERR("RST", "JSON parse error: %s", error.c_str());
     return false;
   }
 
-  store.books.clear();
-  store.globalDays.clear();
+  if (!doc.is<JsonObject>() || !doc["books"].is<JsonArray>()) return false;
+  // Deserialize directly from the file: no second full JSON string in the heap.
+  // Check the complete destination footprint before allocating vectors/strings.
+  JsonArray inputBooks = doc["books"].as<JsonArray>();
+  // Reject malformed history instead of silently dropping records and then
+  // overwriting the only copy when the next session ends.
+  auto validDays = [](JsonVariant value) {
+    if (value.isNull()) return true;  // legacy history may omit day buckets
+    if (!value.is<JsonArray>()) return false;
+    for (JsonVariant entry : value.as<JsonArray>()) {
+      if (!entry.is<JsonArray>() || entry.size() != 2 ||
+          !entry[0].is<uint16_t>() || !entry[1].is<uint32_t>()) return false;
+    }
+    return true;
+  };
+  if (!validDays(doc["globalDays"])) return false;
+  for (JsonVariant entry : inputBooks) {
+    if (!entry.is<JsonObject>() || !entry["docId"].is<const char*>() ||
+        strlen(entry["docId"].as<const char*>()) == 0 || !validDays(entry["days"])) return false;
+    for (const char* key : {"title", "author"}) {
+      if (!entry[key].isNull() && !entry[key].is<const char*>()) return false;
+    }
+  }
+  size_t bytes = inputBooks.size() * sizeof(BookReadingStats);
+  size_t largest = bytes;
+  auto countDays = [&](JsonArray days) {
+    const size_t n = days.size() * sizeof(DayBucket);
+    bytes += n;
+    if (n > largest) largest = n;
+  };
+  countDays(doc["globalDays"].as<JsonArray>());
+  for (JsonObject obj : inputBooks) {
+    for (const char* key : {"docId", "title", "author"}) {
+      const size_t n = strlen(obj[key] | "") + 1;
+      bytes += n + 16;
+      if (n > largest) largest = n;
+    }
+    countDays(obj["days"].as<JsonArray>());
+  }
+  if (bytes + 8192 > heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT) ||
+      largest + 1024 > heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT)) {
+    LOG_ERR("RST", "Not enough memory to load reading history safely");
+    return false;
+  }
+  ReadingStatsStore store;  // Commit only a complete parse; preserve history on failure.
+  store.books.reserve(inputBooks.size());
   store.globalTotalSeconds = doc["totalSeconds"] | (uint32_t)0;
   store.globalTotalSessions = doc["totalSessions"] | (uint32_t)0;
   store.globalTotalPagesTurned = doc["totalPagesTurned"] | (uint32_t)0;
@@ -849,6 +997,7 @@ bool JsonSettingsIO::loadReadingStats(ReadingStatsStore& store, const char* json
   // result of accidentally hand-edited unsorted input is just degraded
   // streak/sparkline accuracy, not a crash.
   auto readDays = [](JsonArray in, std::vector<DayBucket>& out) {
+    out.reserve(in.size());
     for (JsonArray pair : in) {
       if (pair.size() < 2) continue;
       DayBucket b;
@@ -888,5 +1037,29 @@ bool JsonSettingsIO::loadReadingStats(ReadingStatsStore& store, const char* json
   }
 
   LOG_DBG("RST", "Reading stats loaded (%zu books, %u s total)", store.books.size(), store.globalTotalSeconds);
+  destination.books.swap(store.books);
+  destination.globalDays.swap(store.globalDays);
+  destination.globalTotalSeconds = store.globalTotalSeconds;
+  destination.globalTotalSessions = store.globalTotalSessions;
+  destination.globalTotalPagesTurned = store.globalTotalPagesTurned;
   return true;
+}
+
+bool JsonSettingsIO::loadReadingStats(ReadingStatsStore& store, const char* json) {
+  return loadReadingStatsInput(store, json);
+}
+
+bool JsonSettingsIO::loadReadingStatsFile(ReadingStatsStore& store, const char* path) {
+  FsFile file;
+  if (!Storage.openFileForRead("RST", path, file)) return false;
+  // HalFile is a Print, not a Stream; ArduinoJson needs this reader adapter.
+  struct Reader {
+    FsFile& file;
+    int read() { return file.read(); }
+    size_t readBytes(char* buffer, size_t length) {
+      const int count = file.read(buffer, length);
+      return count > 0 ? static_cast<size_t>(count) : 0;
+    }
+  } reader{file};
+  return loadReadingStatsInput(store, reader);
 }

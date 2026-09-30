@@ -17,5 +17,7 @@ class Print {
     return written;
   }
 
+  size_t write(const char* data, size_t n) { return write(reinterpret_cast<const uint8_t*>(data), n); }
+
   virtual void flush() {}
 };

@@ -1,6 +1,7 @@
 #include "ImageBlock.h"
 
 #include <BuildArena.h>
+#include <Fb2.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <I18n.h>
@@ -36,6 +37,12 @@ ImageBlock::ImageBlock(const std::string& imagePath, int16_t width, int16_t heig
 
 bool ImageBlock::ensureExtracted() const {
   if (Storage.exists(imagePath.c_str())) return true;
+
+  // FB2 images live as base64 payloads in the source document rather than as
+  // ordinary ZIP entries. Decode the indexed payload directly before falling
+  // back to EPUB extraction. The helper rejects non-FB2 cache paths cheaply.
+  if (Fb2::decodeImageOnDemand(imagePath)) return true;
+
   if (epubFilePath_.empty() || epubEntryPath_.empty()) {
     LOG_ERR("IMG", "Image missing and no EPUB source: %s", imagePath.c_str());
     return false;

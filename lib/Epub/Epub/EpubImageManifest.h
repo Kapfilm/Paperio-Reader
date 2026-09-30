@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+class Epub;
+
 // Per-image entry: just the normalised key and its pixel dimensions. Dimensions are the only
 // thing any consumer reads (pagination needs them; the parser reads width/height and nothing
 // else). Render-time extraction re-resolves the ZIP entry by path via ImageBlock::ensureExtracted,
@@ -42,6 +44,10 @@ class EpubImageManifest {
   // order, and marks the manifest dirty for the next persistIfDirty(). epubEntryPath must be
   // the normalised path (matches find()'s key). Returns nullptr if the header can't be read.
   const ImageManifestEntry* ensureResolved(const std::string& epubPath, const std::string& epubEntryPath);
+  // Source-aware overload used by the paginator. For FB2 it asks Epub to
+  // lazily decode/read the image header; ordinary EPUBs retain the reused-ZIP
+  // fast path above.
+  const ImageManifestEntry* ensureResolved(const Epub& epub, const std::string& epubEntryPath);
 
   // Returns nullptr when the entry is not (yet) in the manifest.
   const ImageManifestEntry* find(const std::string& epubEntryPath) const;

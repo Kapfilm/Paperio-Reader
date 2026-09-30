@@ -44,6 +44,19 @@ OpdsAcquisitionLink supportedAcquisitionLink(const char* type, const char* href)
     return {href, type, "epub", ".epub"};
   }
 
+  const bool fb2Mime = strcmp(type, "application/fb2") == 0 ||
+                       strcmp(type, "application/x-fictionbook+xml") == 0 ||
+                       strcmp(type, "text/fb2+xml") == 0;
+  if (fb2Mime || FsHelpers::checkFileExtension(trimmedHref, ".fb2")) {
+    return {href, type, "fb2", ".fb2"};
+  }
+
+  const bool fb2ZipMime = strcmp(type, "application/fb2+zip") == 0 ||
+                          strcmp(type, "application/x-fictionbook+zip") == 0;
+  if (fb2ZipMime || FsHelpers::checkFileExtension(trimmedHref, ".fb2.zip")) {
+    return {href, type, "fb2zip", ".fb2.zip"};
+  }
+
   if (strcmp(type, "text/plain") == 0) {
     return {href, type, "txt", ".txt"};
   }

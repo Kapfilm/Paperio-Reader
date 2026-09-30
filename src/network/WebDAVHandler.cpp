@@ -10,6 +10,8 @@
 
 #include "ChunkedResponse.h"
 #include "HttpFileStreamer.h"
+#include "util/BookArchiveUtils.h"
+#include "util/BookCacheUtils.h"
 
 namespace {
 const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
@@ -810,9 +812,9 @@ bool WebDAVHandler::getOverwrite(WebServer& s) const {
 }
 
 void WebDAVHandler::clearEpubCacheIfNeeded(const String& path) const {
-  if (FsHelpers::hasEpubExtension(path)) {
-    Epub(path.c_str(), "/.crosspoint").clearCache();
-    LOG_DBG("DAV", "Cleared epub cache for: %s", path.c_str());
+  if (FsHelpers::hasEpubExtension(path) || isFb2OrZipBookPath(path.c_str())) {
+    clearBookCacheForPath(path.c_str());
+    LOG_DBG("DAV", "Cleared ebook cache for: %s", path.c_str());
   } else if (FsHelpers::hasXtcExtension(path)) {
     Xtc(path.c_str(), "/.crosspoint").clearCache();
     LOG_DBG("DAV", "Cleared xtc cache for: %s", path.c_str());
@@ -828,6 +830,8 @@ void WebDAVHandler::clearEpubCacheIfNeeded(const String& path) const {
 
 String WebDAVHandler::getMimeType(const String& path) const {
   if (FsHelpers::hasEpubExtension(path)) return "application/epub+zip";
+  if (FsHelpers::checkFileExtension(path, ".fb2")) return "application/x-fictionbook+xml";
+  if (FsHelpers::checkFileExtension(path, ".fb2.zip")) return "application/fb2+zip";
   if (FsHelpers::checkFileExtension(path, ".pdf")) return "application/pdf";
   if (FsHelpers::hasTxtExtension(path)) return "text/plain";
   if (FsHelpers::checkFileExtension(path, ".html") || FsHelpers::checkFileExtension(path, ".htm")) return "text/html";

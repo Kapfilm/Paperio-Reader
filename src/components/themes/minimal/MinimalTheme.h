@@ -15,6 +15,12 @@ constexpr ThemeMetrics makeValues() {
 }
 
 constexpr ThemeMetrics values = makeValues();
+
+// Shared by thumbnail generation and painting, including shorter displays.
+constexpr int coverHeightForTile(int tileHeight) {
+  const int available = tileHeight > 55 ? tileHeight - 55 : 1;
+  return available < values.homeCoverHeight ? available : values.homeCoverHeight;
+}
 }  // namespace MinimalMetrics
 
 class MinimalTheme final : public LyraTheme {

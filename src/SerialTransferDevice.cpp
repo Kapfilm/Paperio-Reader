@@ -9,6 +9,7 @@
 #include <ctime>
 
 #include "RecentBooksStore.h"
+#include "util/BookArchiveUtils.h"
 
 namespace {
 
@@ -71,7 +72,7 @@ void collectEpubs(const std::string& dir, std::vector<std::string>& out) {
     entry.close();
     if (isDir) {
       collectEpubs(child, out);
-    } else if (FsHelpers::hasEpubExtension(std::string_view{name})) {
+    } else if (FsHelpers::hasEpubExtension(std::string_view{name}) || isFb2BookPath(std::string_view{name})) {
       out.push_back(child);
       if (out.size() >= kMaxListed) break;
     }

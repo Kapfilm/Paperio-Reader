@@ -8,6 +8,7 @@
 #include "CrossPointSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "components/UITheme.h"
+#include "util/BookArchiveUtils.h"
 
 FileContextMenuActivity::FileContextMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                  const std::string& filePath,
@@ -64,7 +65,7 @@ void FileContextMenuActivity::buildMenuItems() {
   // --- File-specific actions (only when a supported file is selected) ---
   const std::string_view name{filePath};
   const bool isBin = FsHelpers::checkFileExtension(name, ".bin");
-  const bool isEpub = FsHelpers::hasEpubExtension(name);
+  const bool isEpub = FsHelpers::hasEpubExtension(name) || isFb2OrZipBookPath(name);
   const bool isXtc = FsHelpers::hasXtcExtension(name);
   const bool isTxt = FsHelpers::hasTxtExtension(name) || FsHelpers::hasMarkdownExtension(name);
   const bool isImage =

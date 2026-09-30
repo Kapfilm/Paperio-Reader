@@ -6,6 +6,7 @@
 #include "HalStorage.h"
 #include "Logging.h"
 #include "esp_debug_helpers.h"
+#include "esp_memory_utils.h"
 #include "esp_private/esp_cpu_internal.h"
 #include "esp_private/esp_system_attr.h"
 #include "esp_private/panic_internal.h"
@@ -14,6 +15,10 @@
 
 RTC_NOINIT_ATTR char panicMessage[256];
 RTC_NOINIT_ATTR HalSystem::StackFrame panicStack[MAX_PANIC_STACK_DEPTH];
+RTC_NOINIT_ATTR uint32_t panicRegisters[5];  // MEPC, RA, SP, MCAUSE, MTVAL
+RTC_NOINIT_ATTR uint32_t panicRegistersMagic;
+constexpr uint32_t PANIC_REGISTERS_MAGIC = 0x50465231;
+
 
 extern "C" {
 
@@ -42,11 +47,23 @@ void IRAM_ATTR __wrap_panic_print_backtrace(const void* frame, int core) {
     panicStack[i].sp = 0;
   }
 
-  // Copied from components/esp_system/port/arch/riscv/panic_arch.c
-  uint32_t sp = (uint32_t)((RvExcFrame*)frame)->sp;
+  const auto* registers = static_cast<const RvExcFrame*>(frame);
+  panicRegistersMagic = 0;
+  panicRegisters[0] = static_cast<uint32_t>(registers->mepc);
+  panicRegisters[1] = static_cast<uint32_t>(registers->ra);
+  panicRegisters[2] = static_cast<uint32_t>(registers->sp);
+  panicRegisters[3] = static_cast<uint32_t>(registers->mcause);
+  panicRegisters[4] = static_cast<uint32_t>(registers->mtval);
+  panicRegistersMagic = PANIC_REGISTERS_MAGIC;
+
+  // Snapshot only sane RAM addresses; a corrupted SP must not cause a
+  // second fault in the panic handler and lose the original register state.
+  const uint32_t sp = panicRegisters[2];
   const int per_line = 8;
   int depth = 0;
   for (int x = 0; x < 1024; x += per_line * sizeof(uint32_t)) {
+    if ((sp & 3u) != 0 || !esp_stack_ptr_is_sane(sp + x) ||
+        !esp_stack_ptr_is_sane(sp + x + per_line * sizeof(uint32_t) - 4)) break;
     uint32_t* spp = (uint32_t*)(sp + x);
     // panic_print_hex(sp + x);
     // panic_print_str(": ");
@@ -103,6 +120,7 @@ void checkPanic() {
 
 void clearPanic() {
   panicMessage[0] = '\0';
+  panicRegistersMagic = 0;
   for (size_t i = 0; i < MAX_PANIC_STACK_DEPTH; i++) {
     panicStack[i].sp = 0;
   }
@@ -116,9 +134,20 @@ std::string getPanicInfo(bool full) {
     std::string info;
 
     info += "CrossPoint version: " CROSSPOINT_VERSION;
-    info += "\n\nPanic reason: " + std::string(panicMessage);
+    info += "\nReset reason (esp_reset_reason): " + std::to_string(static_cast<int>(esp_reset_reason()));
+    panicMessage[sizeof(panicMessage) - 1] = '\0';
+    info += "\n\nPanic reason: " + std::string(panicMessage[0] ? panicMessage : "not captured; see reset reason/registers");
+    if (panicRegistersMagic == PANIC_REGISTERS_MAGIC) {
+      char registers[160];
+      snprintf(registers, sizeof(registers),
+               "\nMEPC=0x%08lX RA=0x%08lX SP=0x%08lX MCAUSE=0x%08lX MTVAL=0x%08lX\n",
+               static_cast<unsigned long>(panicRegisters[0]), static_cast<unsigned long>(panicRegisters[1]),
+               static_cast<unsigned long>(panicRegisters[2]), static_cast<unsigned long>(panicRegisters[3]),
+               static_cast<unsigned long>(panicRegisters[4]));
+      info += registers;
+    }
     info += "\n\nLast logs:\n" + getLastLogs();
-    info += "\n\nStack memory:\n";
+    info += "\n\nRaw stack memory (not a validated backtrace):\n";
 
     auto toHex = [](uint32_t value) {
       char buffer[9];

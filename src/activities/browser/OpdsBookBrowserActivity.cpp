@@ -28,6 +28,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
+#include "util/BookCacheUtils.h"
 #include "util/OpdsFilename.h"
 #include "util/StringUtils.h"
 #include "util/UrlUtils.h"
@@ -827,7 +828,8 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book, const OpdsAcqu
 
     // Clear any existing cache for this book just in case it's a redownload of
     // a previously opened book.
-    if (acquisition.mimeType == "application/epub+zip") {
+    if (acquisition.mimeType == "application/epub+zip" || acquisition.formatKey == "fb2" ||
+        acquisition.formatKey == "fb2zip") {
       if (!book.imageHref.empty()) {
         const std::string coverUrl =
             (book.imageHref.rfind("http", 0) == 0) ? book.imageHref : UrlUtils::buildUrl(server.url, book.imageHref);
@@ -875,8 +877,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book, const OpdsAcqu
         }
       }
 
-      Epub epub(filename, "/.crosspoint");
-      epub.clearCache();
+      clearBookCacheForPath(filename);
     } else if (acquisition.formatKey == "xtc" || acquisition.formatKey == "xtch") {
       Xtc(filename, "/.crosspoint").clearCache();
     }

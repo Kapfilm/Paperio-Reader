@@ -691,7 +691,7 @@ class EpubReaderActivity final : public Activity {
   // the on-disk format stays consistent regardless of caller. Static (and shared across the split
   // EpubReaderActivity/EpubReaderSync translation units) since it needs no instance state.
   static bool writeReaderProgressCache(const std::string& cachePath, int spineIndex, int currentPage, int pageCount,
-                                       uint8_t percent);
+                                       uint8_t percent, int bookCurrentPage = 0, int bookTotalPages = 0);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);

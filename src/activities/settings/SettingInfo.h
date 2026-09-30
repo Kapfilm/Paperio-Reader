@@ -17,6 +17,7 @@ enum class SettingAction {
   None,
   RemapFrontButtons,
   ButtonActionsOverview,
+  ButtonSettingsBackup,
   CustomiseStatusBar,
   DownloadFonts,
   ClockSettings,
