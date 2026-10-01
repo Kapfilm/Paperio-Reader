@@ -59,7 +59,7 @@ STR_JOIN_DESC: "Подключение к существующей сети Wi-F
 STR_HOTSPOT_DESC: "Создать сеть Wi-Fi для подключения других"
 STR_USB_TRANSFER: "Передача по USB"
 STR_USB_TRANSFER_DESC: "Передача книг через USB-кабель"
-STR_USB_TRANSFER_HINT: "Подключите USB, затем используйте Calibre, DoubleCommander или TotalCommander для передачи книг"
+STR_USB_TRANSFER_HINT: "Это передача через USB Serial, не съёмный диск. Используйте совместимый плагин MicroReader для Calibre или tools/serial_transfer.py."
 STR_STARTING_HOTSPOT: "Запуск точки доступа..."
 STR_HOTSPOT_MODE: "Режим точки доступа"
 STR_CONNECT_WIFI_HINT: "Подключите устройство к этой сети Wi-Fi"

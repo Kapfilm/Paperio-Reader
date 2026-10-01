@@ -36,7 +36,7 @@ enum class SettingAction {
   SleepTimeoutPicker,
   RefreshFrequencyPicker,
   DictionarySelection,
-  SwitchToUsbDrive,
+  UsbTransfer,
   TextSettings,
   Submenu,
 };

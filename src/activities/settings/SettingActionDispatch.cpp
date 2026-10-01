@@ -18,7 +18,7 @@
 #include "SdCardFontGlobals.h"
 #include "SdFirmwareUpdateActivity.h"
 #include "StatusBarSettingsActivity.h"
-#include "SwitchToUsbDriveActivity.h"
+#include "activities/network/SerialTransferActivity.h"
 #include "SyncTimeActivity.h"
 #include "SystemInformationActivity.h"
 #include "TextSettingsActivity.h"
@@ -52,8 +52,8 @@ std::unique_ptr<Activity> createActivityForAction(SettingAction action, GfxRende
       return std::make_unique<OtaUpdateActivity>(renderer, mappedInput);
     case SettingAction::SdFirmwareUpdate:
       return std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput);
-    case SettingAction::SwitchToUsbDrive:
-      return std::make_unique<SwitchToUsbDriveActivity>(renderer, mappedInput);
+    case SettingAction::UsbTransfer:
+      return std::make_unique<SerialTransferActivity>(renderer, mappedInput);
     case SettingAction::TextSettings:
       return std::make_unique<TextSettingsActivity>(renderer, mappedInput);
     case SettingAction::Language:
