@@ -14,7 +14,6 @@
 class BufferedByteReader final : public IByteReader {
  public:
   static constexpr size_t kReadAheadSize = 4096;
-  static constexpr size_t kDirectReadThreshold = 2048;
 
   explicit BufferedByteReader(IByteReader& source)
       : source_(source), size_(source.size()), position_(source.tell()), sourcePosition_(position_) {}
@@ -24,27 +23,24 @@ class BufferedByteReader final : public IByteReader {
     const uint64_t remaining = size_ - position_;
     if (len > remaining) len = static_cast<size_t>(remaining);
 
-    if (len >= kDirectReadThreshold) {
-      bufferLength_ = 0;
-      if (!positionSource(position_)) return 0;
-      const size_t got = source_.read(dst, len);
-      sourcePosition_ += got;
-      position_ += got;
-      return got;
-    }
-
-    if (!buffer_ && !allocateBuffer()) {
-      if (!positionSource(position_)) return 0;
-      const size_t got = source_.read(dst, len);
-      sourcePosition_ += got;
-      position_ += got;
-      return got;
-    }
-
     auto* out = static_cast<uint8_t*>(dst);
     size_t done = 0;
     while (done < len) {
-      if (!bufferContains(position_) && !refill()) break;
+      if (!bufferContains(position_)) {
+        const size_t pending = len - done;
+        // XML title/body reads (2/4 KiB) share read-ahead after a rewind.
+        // Large scanner reads still bypass it, after consuming any cached
+        // prefix, so an 8 KiB request does not become several SD reads.
+        if (pending > kReadAheadSize || (!buffer_ && !allocateBuffer())) {
+          bufferLength_ = 0;
+          if (!positionSource(position_)) break;
+          const size_t got = source_.read(out + done, pending);
+          sourcePosition_ += got;
+          position_ += got;
+          return done + got;
+        }
+        if (!refill()) break;
+      }
       const size_t offset = static_cast<size_t>(position_ - bufferStart_);
       const size_t available = bufferLength_ - offset;
       const size_t take = std::min(available, len - done);

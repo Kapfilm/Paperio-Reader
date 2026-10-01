@@ -3,6 +3,7 @@ add_executable(NativeFb2ZipTest
   InflateOptimizationTest.cpp
   Fb2CoreTest.cpp
   BufferedScanStorageTest.cpp
+  BufferedByteReaderTest.cpp
   ${REPO_ROOT}/lib/Fb2/Fb2Encoding.cpp
   ${REPO_ROOT}/lib/Fb2/native/Fb2Parser.cpp
   ${REPO_ROOT}/lib/Fb2/native/ZipReader.cpp

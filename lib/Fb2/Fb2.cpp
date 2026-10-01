@@ -1586,29 +1586,112 @@ bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourc
       Fb2AnchorIndexWriter& writer_;
       uint32_t chapter_;
     };
-    uint32_t chapter = 0;
+    // Virtual slices share the same native section. Parse its XML once per
+    // bounded batch and replay callbacks through each unchanged range filter.
+    // This preserves paragraph-boundary and inline-anchor ownership without
+    // keeping the source text or an unbounded list of anchors in memory.
+    constexpr size_t batchSize = 8;
+    struct AnchorSlice {
+      AnchorSlice(Fb2AnchorIndexWriter& writer, uint32_t chapter, uint8_t level,
+                  uint32_t offset, uint16_t titleLength, const uint32_t* tail)
+          : titleLen(titleLength), sink(writer, chapter), images(sink, tail[1], tail[2]),
+            text(images, tail[3], tail[4]) {
+        section.innerStartOffset = offset;
+        section.level = level & 0x7f;
+        section.fallbackTitle = (level & 0x80) != 0;
+      }
+      Fb2SectionIndexEntry section;
+      uint16_t titleLen;
+      AnchorSink sink;
+      RangeFilterSink images;
+      TextRangeFilterSink text;
+    };
+    class BatchSink final : public Fb2ContentSink {
+     public:
+      bool streamsTableCells() const override { return true; }
+      Fb2ContentSink* sinks[batchSize]{};
+      size_t count = 0;
+      void onParagraphBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onParagraphBegin(); }
+      void onParagraphEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onParagraphEnd(); }
+      void onSubtitleBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onSubtitleBegin(); }
+      void onSubtitleEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onSubtitleEnd(); }
+      void onTitleLineBreak() override { for (size_t i = 0; i < count; ++i) sinks[i]->onTitleLineBreak(); }
+      void onEmptyLine() override { for (size_t i = 0; i < count; ++i) sinks[i]->onEmptyLine(); }
+      void onHorizontalRule() override { for (size_t i = 0; i < count; ++i) sinks[i]->onHorizontalRule(); }
+      void onPoemBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onPoemBegin(); }
+      void onPoemEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onPoemEnd(); }
+      void onStanzaBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onStanzaBegin(); }
+      void onStanzaEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onStanzaEnd(); }
+      void onVerseBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onVerseBegin(); }
+      void onVerseEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onVerseEnd(); }
+      void onCiteBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onCiteBegin(); }
+      void onCiteEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onCiteEnd(); }
+      void onEpigraphBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onEpigraphBegin(); }
+      void onEpigraphEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onEpigraphEnd(); }
+      void onTextAuthorBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onTextAuthorBegin(); }
+      void onTextAuthorEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onTextAuthorEnd(); }
+      void onLinkEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onLinkEnd(); }
+      void onTableBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onTableBegin(); }
+      void onTableEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onTableEnd(); }
+      void onTableRowBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onTableRowBegin(); }
+      void onTableRowEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onTableRowEnd(); }
+      void onTableCellEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onTableCellEnd(); }
+      void onSubtitle(const std::string& value) override { for (size_t i = 0; i < count; ++i) sinks[i]->onSubtitle(value); }
+      void onVerseLine(const std::string& value) override { for (size_t i = 0; i < count; ++i) sinks[i]->onVerseLine(value); }
+      void onTextAuthor(const std::string& value) override { for (size_t i = 0; i < count; ++i) sinks[i]->onTextAuthor(value); }
+      void onImage(const std::string& value) override { for (size_t i = 0; i < count; ++i) sinks[i]->onImage(value); }
+      void onAnchor(const std::string& value) override { for (size_t i = 0; i < count; ++i) sinks[i]->onAnchor(value); }
+      void onLinkBegin(const std::string& value) override { for (size_t i = 0; i < count; ++i) sinks[i]->onLinkBegin(value); }
+      void onTitleBegin(uint8_t level) override { for (size_t i = 0; i < count; ++i) sinks[i]->onTitleBegin(level); }
+      void onTitleEnd(uint8_t level) override { for (size_t i = 0; i < count; ++i) sinks[i]->onTitleEnd(level); }
+      void onText(const std::string& text, Fb2InlineStyle style) override { for (size_t i = 0; i < count; ++i) sinks[i]->onText(text, style); }
+      void onTableCellBegin(const Fb2TableCellAttrs& attrs) override { for (size_t i = 0; i < count; ++i) sinks[i]->onTableCellBegin(attrs); }
+      void onTableCell(const std::string& text, const Fb2TableCellAttrs& attrs) override { for (size_t i = 0; i < count; ++i) sinks[i]->onTableCell(text, attrs); }
+    };
+    uint32_t chapter = 0, sectionPasses = 0;
     unsigned long lastYield = millis();
     while (records.tell() < records.size()) {
-      uint8_t level; uint16_t idLen, titleLen; uint32_t offset, tail[5];
-      if (records.read(&level, 1) != 1 || records.read(&offset, 4) != 4 || records.read(&idLen, 2) != 2) return false;
-      std::string id(idLen, '\0');
-      if ((idLen && records.read(id.data(), idLen) != idLen) || records.read(&titleLen, 2) != 2 ||
-          !records.seek(records.tell() + titleLen) || records.read(tail, sizeof(tail)) != sizeof(tail)) return false;
-      AnchorSink sink(writer, chapter);
-      sink.onAnchor(id);
-      Fb2SectionIndexEntry section;
-      section.innerStartOffset = offset; section.level = level & 0x7f; section.fallbackTitle = (level & 0x80) != 0;
-      if (chapter == 0 && (!parser.renderAnnotation(reader, sink) || !parser.renderBodyPreambleForFirstSection(reader, sink))) return false;
-      if (titleLen) parser.renderSectionTitle(reader, section, sink, section.level);
-      RangeFilterSink images(sink, tail[1], tail[2]);
-      TextRangeFilterSink text(images, tail[3], tail[4]);
-      if (!parser.renderSection(reader, section, text) || !sink.ok) return false;
-      ++chapter;
+      // Filters include scope state and table attributes; keep them on the
+      // heap rather than the reader task's small stack. At most eight exist.
+      std::unique_ptr<AnchorSlice> slices[batchSize];
+      BatchSink batch;
+      while (batch.count < batchSize && records.tell() < records.size()) {
+        const auto recordStart = records.tell();
+        uint8_t level; uint16_t idLen, titleLen; uint32_t offset, tail[5];
+        if (records.read(&level, 1) != 1 || records.read(&offset, 4) != 4 || records.read(&idLen, 2) != 2) return false;
+        if (batch.count && (offset != slices[0]->section.innerStartOffset ||
+                           (level & 0x7f) != slices[0]->section.level ||
+                           ((level & 0x80) != 0) != slices[0]->section.fallbackTitle)) {
+          if (!records.seek(recordStart)) return false;
+          break;
+        }
+        std::string id(idLen, '\0');
+        if ((idLen && records.read(id.data(), idLen) != idLen) || records.read(&titleLen, 2) != 2 ||
+            !records.seek(records.tell() + titleLen) || records.read(tail, sizeof(tail)) != sizeof(tail)) return false;
+        auto& slice = slices[batch.count];
+        slice.reset(new (std::nothrow) AnchorSlice(writer, chapter, level, offset, titleLen, tail));
+        if (!slice) {
+          // Batching is optional: under heap pressure finish the smaller batch
+          // already allocated and retry this record after releasing it.
+          if (!batch.count || !records.seek(recordStart)) return false;
+          break;
+        }
+        slice->sink.onAnchor(id);
+        if (chapter == 0 && (!parser.renderAnnotation(reader, slice->sink) ||
+                            !parser.renderBodyPreambleForFirstSection(reader, slice->sink))) return false;
+        if (titleLen) parser.renderSectionTitle(reader, slice->section, slice->sink, slice->section.level);
+        if (!slice->sink.ok) return false;
+        batch.sinks[batch.count++] = &slice->text;
+        ++chapter;
+      }
+      if (!parser.renderSection(reader, slices[0]->section, batch)) return false;
+      ++sectionPasses;
+      for (size_t i = 0; i < batch.count; ++i) if (!slices[i]->sink.ok) return false;
       if (fb2CancellationRequested(nullptr)) return false;
       if (millis() - lastYield >= 100) { vTaskDelay(1); lastYield = millis(); }
     }
     if (!writer.finish() || !index.open(sectionsPath, indexPath, PACKAGE_VERSION)) return false;
-    LOG_INF("FB2ANC", "Indexed inline anchors in %u virtual chapters", chapter);
+    LOG_INF("FB2ANC", "Indexed inline anchors in %u virtual chapters using %u section passes", chapter, sectionPasses);
   }
   if (!Storage.exists(readyPath.c_str())) {
     // Only derived page/source caches change. Keep progress, bookmarks, cover,

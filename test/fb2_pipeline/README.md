@@ -37,3 +37,13 @@ each in plain and zipped form. It checks cold/warm preparation, Cyrillic TOC and
 transcoded text. The output directory must not exist. For the device stack regression,
 inspect the ESP32-C3 disassembly: encoding preparation must not reserve the 4 KiB
 sample or conversion buffers on the Arduino task's 8 KiB stack, even on the UTF-8 early return.
+
+## Cold indexing comparison
+
+Build a baseline pipeline from the previous revision, then compare with the current pipeline:
+
+```sh
+python3 test/fb2_pipeline/indexing_regression.py /path/to/baseline/fb2_pipeline build/fb2-pipeline/fb2_pipeline /tmp/new-index-comparison
+```
+
+The output directory must not exist. The script generates ordinary, long inline-anchor and short-chapter books, tests each as FB2 and FB2.ZIP, runs the full cache recovery/reopen regression, compares every anchor's target chapter, and reports storage operations. Use these counters to assess redundant I/O; host milliseconds do not predict physical SD/display timing.
