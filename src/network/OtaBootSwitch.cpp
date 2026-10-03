@@ -13,8 +13,9 @@ uint32_t computeSeqCrc(uint32_t seq) {
   return esp_rom_crc32_le(UINT32_MAX, reinterpret_cast<const uint8_t*>(&seq), kOtaSeqCrcLen);
 }
 
-bool switchTo(const esp_partition_t* dest) {
-  if (!dest) return false;
+static bool selectPartition(const esp_partition_t* dest, uint32_t imageState) {
+  if (!dest || dest->type != ESP_PARTITION_TYPE_APP || esp_ota_get_app_partition_count() != 2 ||
+      dest->subtype < ESP_PARTITION_SUBTYPE_APP_OTA_0 || dest->subtype > ESP_PARTITION_SUBTYPE_APP_OTA_1) return false;
 
   const esp_partition_t* otadata =
       esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, nullptr);
@@ -38,7 +39,7 @@ bool switchTo(const esp_partition_t* dest) {
   int activeIdx = -1;
   uint32_t activeSeq = 0;
   for (int i = 0; i < 2; ++i) {
-    if (slots[i].ota_seq == 0xFFFFFFFFu) continue;
+    if (slots[i].ota_seq == 0 || slots[i].ota_seq == 0xFFFFFFFFu) continue;
     if (slots[i].crc != computeSeqCrc(slots[i].ota_seq)) continue;
     if (slots[i].ota_state == kOtaImgInvalid || slots[i].ota_state == kOtaImgAborted) continue;
     if (activeIdx < 0 || slots[i].ota_seq > activeSeq) {
@@ -58,13 +59,14 @@ bool switchTo(const esp_partition_t* dest) {
 
   // Find smallest seq > activeSeq such that (seq-1) % 2 == destOtaIdx,
   // assuming 2 OTA partitions (matches our partitions.csv with ota_0 + ota_1).
+  if (activeSeq > UINT32_MAX - 3) return false;  // Never wrap into an invalid or older sequence.
   uint32_t newSeq = activeSeq + 1;
   while (((newSeq - 1u) % 2u) != (destOtaIdx % 2u)) ++newSeq;
 
   SelectEntry next = {};
   next.ota_seq = newSeq;
   memset(next.seq_label, 0xFF, sizeof(next.seq_label));
-  next.ota_state = kOtaImgNew;
+  next.ota_state = imageState;
   next.crc = computeSeqCrc(next.ota_seq);
 
   // Write to the OTHER slot (so the bootloader sees a higher seq there).
@@ -83,6 +85,18 @@ bool switchTo(const esp_partition_t* dest) {
   LOG_INF("BOOT", "otadata: wrote slot=%d seq=%u crc=0x%08x -> %s", targetSlot, static_cast<unsigned>(newSeq),
           static_cast<unsigned>(next.crc), dest->label);
   return true;
+}
+
+bool switchTo(const esp_partition_t* dest) {
+  return selectPartition(dest, kOtaImgNew);
+}
+
+bool switchToInstalled(const esp_partition_t* dest) {
+  const auto* running = esp_ota_get_running_partition();
+  if (!running || !dest || dest->address == running->address) return false;
+  // Explicitly selecting an installed, validated image is not an OTA trial.
+  // Other firmware may not implement IDF's PENDING_VERIFY confirmation.
+  return selectPartition(dest, ESP_OTA_IMG_VALID);
 }
 
 bool rollbackCandidateMatches(const esp_partition_t* running, const esp_partition_t* previous) {

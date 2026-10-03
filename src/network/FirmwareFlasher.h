@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <esp_partition.h>
 
 // Flash a firmware image from an SD-card path into the next OTA app
 // partition, then switch otadata so the X3/X4 stock bootloader picks it up
@@ -20,6 +21,7 @@ enum class Result {
   TOO_SMALL,
   TOO_LARGE,
   BAD_MAGIC,
+  BAD_CHIP,     // image targets a different ESP chip
   BAD_SEGMENTS,  // segment table malformed or runs past EOF
   BAD_CHECKSUM,  // ESP image XOR checksum mismatch
   BAD_SHA,       // SHA256 trailer mismatch (hash_appended images)
@@ -54,6 +56,11 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
 // `partitionSize` is the size of the destination OTA partition; pass 0 to
 // skip the size-fits-partition check. Streams the file in CHUNK-sized reads.
 Result validateImageFile(const char* sdPath, size_t partitionSize);
+
+// Read-only verification of an installed ESP32-C3 app, including its complete
+// XOR checksum and optional SHA256. Unused bytes after the image are allowed.
+// imageSize is cleared on failure; no flash or boot metadata is written.
+Result validateImagePartition(const esp_partition_t* partition, size_t* imageSize = nullptr);
 
 const char* resultName(Result r);
 

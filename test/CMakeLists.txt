@@ -89,3 +89,5 @@ add_subdirectory(clipping_store)
 add_subdirectory(book_progress_pages)
 
 add_subdirectory(boot_health)
+
+add_subdirectory(firmware_image)

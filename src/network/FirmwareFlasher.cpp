@@ -1,4 +1,5 @@
 #include "FirmwareFlasher.h"
+#include "FirmwareImageValidator.h"
 
 #include <Arduino.h>
 #include <HalStorage.h>
@@ -41,6 +42,8 @@ const char* resultName(Result r) {
       return "TOO_LARGE";
     case Result::BAD_MAGIC:
       return "BAD_MAGIC";
+    case Result::BAD_CHIP:
+      return "BAD_CHIP";
     case Result::BAD_SEGMENTS:
       return "BAD_SEGMENTS";
     case Result::BAD_CHECKSUM:
@@ -235,6 +238,29 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
   mbedtls_sha256_free(&shaCtx);
   file.close();
   return Result::OK;
+}
+
+Result validateImagePartition(const esp_partition_t* partition, size_t* imageSize) {
+  if (imageSize) *imageSize = 0;
+  if (!partition || partition->type != ESP_PARTITION_TYPE_APP) return Result::NO_PARTITION;
+  auto buffer = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[CHUNK]);
+  if (!buffer) return Result::OOM;
+  struct Sha {
+    wc_Sha256 context;
+    bool initialized = wc_InitSha256(&context) == 0;
+    ~Sha() { if (initialized) wc_Sha256Free(&context); }
+    bool update(const uint8_t* bytes, size_t count) {
+      return initialized && wc_Sha256Update(&context, bytes, static_cast<word32>(count)) == 0;
+    }
+    bool finish(uint8_t* digest) { return initialized && wc_Sha256Final(&context, digest) == 0; }
+  } sha;
+  auto read = [partition](size_t offset, uint8_t* data, size_t count) {
+    if (esp_partition_read(partition, offset, data, count) != ESP_OK) return false;
+    // A full app spans megabytes: let the scheduler run during verification.
+    delay(1);
+    return true;
+  };
+  return detail::validatePartitionImage<Result>(partition->size, read, sha, buffer.get(), CHUNK, imageSize);
 }
 
 Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, bool alreadyValidated) {

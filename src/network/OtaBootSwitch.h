@@ -40,6 +40,11 @@ uint32_t computeSeqCrc(uint32_t seq);
 // Returns true on success.
 bool switchTo(const esp_partition_t* dest);
 
+// Explicit user selection of an already installed, fully validated alternate
+// image. Selects VALID to support firmware without IDF probation handling;
+// does not mark it trusted in Paperio BootHealth/NVS. Never use for updates.
+bool switchToInstalled(const esp_partition_t* dest);
+
 // Keep an unconfirmed image on probation across an intentional sleep/restart.
 // PENDING (1) -> NEW (0) clears one flash bit; no sector erase or CRC change.
 bool rearmPending(const esp_partition_t* running);

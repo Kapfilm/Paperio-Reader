@@ -9,7 +9,7 @@ struct esp_partition_t {
   uint32_t type=0,subtype=0,size=0;
   bool encrypted=false;
 };
-constexpr uint32_t ESP_PARTITION_TYPE_DATA=1,ESP_PARTITION_SUBTYPE_DATA_OTA=0;
+constexpr uint32_t ESP_PARTITION_TYPE_APP=0,ESP_PARTITION_TYPE_DATA=1,ESP_PARTITION_SUBTYPE_DATA_OTA=0;
 constexpr uint32_t ESP_PARTITION_SUBTYPE_APP_OTA_0=16,ESP_PARTITION_SUBTYPE_APP_OTA_1=17;
 const esp_partition_t* esp_partition_find_first(uint32_t,uint32_t,const char*);
 int esp_partition_read(const esp_partition_t*,size_t,void*,size_t);

@@ -37,6 +37,7 @@ enum class SettingAction {
   RefreshFrequencyPicker,
   DictionarySelection,
   UsbTransfer,
+  SwitchFirmware,
   TextSettings,
   Submenu,
 };

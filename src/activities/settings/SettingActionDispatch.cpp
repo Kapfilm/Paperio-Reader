@@ -20,6 +20,7 @@
 #include "StatusBarSettingsActivity.h"
 #include "activities/network/SerialTransferActivity.h"
 #include "SyncTimeActivity.h"
+#include "SwitchFirmwareActivity.h"
 #include "SystemInformationActivity.h"
 #include "TextSettingsActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -52,6 +53,8 @@ std::unique_ptr<Activity> createActivityForAction(SettingAction action, GfxRende
       return std::make_unique<OtaUpdateActivity>(renderer, mappedInput);
     case SettingAction::SdFirmwareUpdate:
       return std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput);
+    case SettingAction::SwitchFirmware:
+      return std::make_unique<SwitchFirmwareActivity>(renderer, mappedInput);
     case SettingAction::UsbTransfer:
       return std::make_unique<SerialTransferActivity>(renderer, mappedInput);
     case SettingAction::TextSettings:
