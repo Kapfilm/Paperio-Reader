@@ -239,6 +239,8 @@ void disarmSerialTransferReboot() {
 constexpr char SLEEP_FRAME_FILE[] = "/.crosspoint/sleep_frame.bin";
 
 static void saveSleepFrameBuffer() {
+  // SleepActivity just displayed the moon overlay and swapped the buffers.
+  renderer.syncWriteBufferFromDisplayed();
   FsFile file;
   if (!Storage.openFileForWrite("SLP", SLEEP_FRAME_FILE, file)) {
     return;

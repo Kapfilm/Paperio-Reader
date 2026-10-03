@@ -514,6 +514,16 @@ void EpubReaderActivity::onEnter() {
 void EpubReaderActivity::onExit() {
   Activity::onExit();
   logReaderMemSnapshot("onExit_before_release");
+  // A queued sleep skips input processing, but must still save the last
+  // completed render before destroying the section.
+  if (pendingProgressSave.pending.load(std::memory_order_acquire)) {
+    pendingProgressSave.pending.store(false, std::memory_order_relaxed);
+    saveProgress(pendingProgressSave.spineIndex, pendingProgressSave.page, pendingProgressSave.pageCount);
+  }
+
+  // Return Background-B's borrowed buffer while book orientation, highlights,
+  // fonts and section are still available to reconstruct the displayed page.
+  resetBackgroundBuild();
 
   // If a pre-render left the next page in the frame buffer, redraw the current page so the
   // next activity (notably SleepActivity's OVERLAY mode) sees what the user was looking at.
@@ -534,9 +544,6 @@ void EpubReaderActivity::onExit() {
   APP_STATE.saveToFile();
   // Release any deferred AA page before tearing down the section/epub.
   pendingGrayscale_ = {};
-  // Abort any in-flight Background-B build (deletes its partial cache file) before the
-  // epub it references goes away.
-  resetBackgroundBuild();
   section.reset();  // also aborts an in-flight Background-C build of the current section
   // Background-C may have BORROWED the secondary buffer for headroom (lent, not freed); the
   // build is now aborted (section.reset above released into the arena), so hand the block back.
@@ -1000,6 +1007,9 @@ void EpubReaderActivity::endBackgroundBorrow() {
     }
   }
   buildScratch_.reset();
+  // Returning the secondary seeds it from write, which can still be the next
+  // pre-rendered page. Restore the reader page before declaring it resident.
+  restoreCurrentPageToBufferIfPreRendered();
   renderer.returnSecondaryBuffer();  // cannot fail: the region never entered the heap
   backgroundBorrowActive_ = false;
   secondaryBorrowed_ = false;
@@ -4273,17 +4283,24 @@ void EpubReaderActivity::displayPreRenderedPage(const Page& page, const int orie
 }
 
 void EpubReaderActivity::restoreCurrentPageToBufferIfPreRendered() {
-  if (!preRenderedPage.ready || !section || !epub) {
-    return;
-  }
+  if (!section || !epub) return;
 
-  const RenderLayout layout = computeRenderLayout();
-
-  auto p = section->loadPageFromSectionFile();
-  if (!p) {
-    return;
+  if (renderer.hasSecondaryBuffer() && !secondaryBufferDegraded_) {
+    // The displayed buffer is authoritative, including the status bar. The write
+    // buffer can contain an older frame even when no next-page pre-render ran.
+    renderer.syncWriteBufferFromDisplayed();
+  } else {
+    // Background work can borrow/release the displayed buffer. Reconstruct the
+    // current page before returning that buffer (which seeds it from write).
+    // An active section has no final on-disk page table yet.
+    const RenderLayout layout = computeRenderLayout();
+    auto p = section->hasActiveBuild()
+                 ? section->loadPageFromActiveBuild(static_cast<uint16_t>(section->currentPage))
+                 : section->loadPageFromSectionFile();
+    if (!p) return;
+    renderPageContentOnly(*p, layout.marginTop, layout.marginRight, layout.marginBottom, layout.marginLeft);
+    renderStatusBar();
   }
-  renderPageContentOnly(*p, layout.marginTop, layout.marginRight, layout.marginBottom, layout.marginLeft);
   preRenderedPage.ready = false;
   pendingPreRender = false;
   usePreRenderedBuffer = false;

@@ -1041,6 +1041,8 @@ void SleepActivity::renderBlankSleepScreen() const {
 }
 
 void SleepActivity::renderLastScreenSleepScreen() const {
+  // After a display swap the write buffer may hold a different page.
+  renderer.syncWriteBufferFromDisplayed();
   // Keep whatever is currently in the framebuffer (the reader page) and overlay a small moon
   // icon to signal sleep. main.cpp persists the framebuffer to SD so the next wake can restore
   // it before the boot screen would otherwise paint.

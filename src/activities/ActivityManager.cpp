@@ -181,7 +181,9 @@ void ActivityManager::loop() {
     }
   }
 
-  if (!drainInput && currentActivity) {
+  // A requested transition (especially sleep) must not run one more reader tick:
+  // it could turn the page or start background work after the user stopped reading.
+  if (!drainInput && currentActivity && pendingAction == PendingAction::None) {
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
     currentActivity->loop();
   }
