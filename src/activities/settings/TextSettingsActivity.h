@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
@@ -31,6 +32,9 @@ class TextSettingsActivity final : public Activity {
   void activateRow(int row);
   void switchTab();
   void reloadReaderFont();
+  void updateSizeOptions();
+  uint8_t selectedPointSize() const;
+  std::string sizeLabel(int index) const;
   void renderPreview(int top, int height) const;
   void renderPreviewSample(int top, int height, int labelReserved) const;
   void renderTabBar(const Rect& rect) const;
@@ -41,4 +45,5 @@ class TextSettingsActivity final : public Activity {
   int selectedRow = -1;  // -1 focuses the tab bar
   int previewFontId = 0;
   uint8_t fontCount = 0;
+  std::vector<uint8_t> sizePoints;
 };

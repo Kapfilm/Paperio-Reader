@@ -24,7 +24,7 @@ extern void unloadSdFontIfLoaded();
 // Returns 0 if no SD font with that family name and size is currently loaded.
 // Free function (not stored as a callback in CrossPointSettings) so the linker
 // can resolve it directly without runtime indirection.
-int resolveSdCardFontId(const char* familyName, uint8_t fontSizeEnum);
+int resolveSdCardFontId(const char* familyName, uint8_t fontSizeEnum, uint8_t pointSize = 0);
 
 // Trampolines used by the dynamic font-family SettingInfo. They walk
 // sdFontSystem's registry on each call to translate between

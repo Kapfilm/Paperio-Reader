@@ -2122,7 +2122,8 @@ int EpubReaderActivity::getEffectiveReaderFontId() const {
     return CrossPointSettings::getBuiltinReaderFontId(static_cast<uint8_t>(bookFontFamilyOverride), fontSize);
   }
   if (!bookSdFontFamilyOverride.empty()) {
-    const int id = resolveSdCardFontId(bookSdFontFamilyOverride.c_str(), fontSize);
+    const int id = resolveSdCardFontId(bookSdFontFamilyOverride.c_str(), fontSize,
+                                     bookFontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize);
     if (id != 0) return id;
   }
   // No override: defer to global resolution (which honors SD card font selection).
@@ -4771,7 +4772,8 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
       currentBook.fontSizeOverride >= 0 ? static_cast<uint8_t>(currentBook.fontSizeOverride) : SETTINGS.fontSize;
   int effectiveFontId = 0;
   if (hasLocalSdOverride) {
-    effectiveFontId = resolveSdCardFontId(currentBook.sdFontFamilyOverride.c_str(), effectiveFontSize);
+    effectiveFontId = resolveSdCardFontId(currentBook.sdFontFamilyOverride.c_str(), effectiveFontSize,
+                                          currentBook.fontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize);
   }
   if (effectiveFontId == 0 && currentBook.fontFamilyOverride >= 0) {
     effectiveFontId = CrossPointSettings::getBuiltinReaderFontId(effectiveFontFamily, effectiveFontSize);

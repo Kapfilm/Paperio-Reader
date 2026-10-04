@@ -91,3 +91,7 @@ add_subdirectory(book_progress_pages)
 add_subdirectory(boot_health)
 
 add_subdirectory(firmware_image)
+
+add_subdirectory(reader_font_size)
+
+add_subdirectory(sd_font_size)

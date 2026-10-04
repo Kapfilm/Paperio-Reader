@@ -94,8 +94,9 @@ void FontSelectionActivity::loadPreview(const int index) {
   }
 
   const char* familyName = families[sdIndex].name.c_str();
-  sdFontSystem.ensureLoadedForPreview(renderer, familyName, size);
-  previewFontId = resolveSdCardFontId(familyName, size);
+  const uint8_t pointSize = target == Target::TXT ? 0 : SETTINGS.readerFontPointSize;
+  sdFontSystem.ensureLoadedForPreview(renderer, familyName, size, pointSize);
+  previewFontId = resolveSdCardFontId(familyName, size, pointSize);
   if (previewFontId == 0) {
     previewFontId = CrossPointSettings::getBuiltinReaderFontId(CrossPointSettings::NOTOSANS, size);
   }
@@ -103,7 +104,8 @@ void FontSelectionActivity::loadPreview(const int index) {
 
 void FontSelectionActivity::restoreActiveFont() {
   const char* familyName = target == Target::TXT ? SETTINGS.txtSdFontFamilyName : SETTINGS.sdFontFamilyName;
-  sdFontSystem.ensureLoadedForPreview(renderer, familyName, targetFontSize());
+  sdFontSystem.ensureLoadedForPreview(renderer, familyName, targetFontSize(),
+                                      target == Target::TXT ? 0 : SETTINGS.readerFontPointSize);
 }
 
 void FontSelectionActivity::renderPreviewPane(const int top, const int height, const int fontId,

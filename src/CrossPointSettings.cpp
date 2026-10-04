@@ -193,7 +193,7 @@ int CrossPointSettings::getReaderFontId() const {
   // resolveSdCardFontId() returns 0 if the named family isn't loaded
   // (e.g. SD card removed since selection) — fall through to built-in.
   if (sdFontFamilyName[0] != '\0') {
-    int id = resolveSdCardFontId(sdFontFamilyName, fontSize);
+    int id = resolveSdCardFontId(sdFontFamilyName, fontSize, readerFontPointSize);
     if (id != 0) return id;
   }
   return getBuiltinReaderFontId(fontFamily, fontSize);

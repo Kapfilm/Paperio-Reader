@@ -532,15 +532,17 @@ void ensureSdFontLoadedForPath(const char* path) {
   const uint8_t effectiveSize =
       (book.fontSizeOverride >= 0) ? static_cast<uint8_t>(book.fontSizeOverride) : SETTINGS.fontSize;
 
+  const uint8_t effectivePointSize = book.fontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize;
+
   if (!book.sdFontFamilyOverride.empty()) {
     // Per-book SD font override: load that family at the effective size.
-    sdFontSystem.ensureLoaded(renderer, book.sdFontFamilyOverride.c_str(), effectiveSize, onColdFontLoad);
+    sdFontSystem.ensureLoaded(renderer, book.sdFontFamilyOverride.c_str(), effectiveSize, onColdFontLoad, effectivePointSize);
   } else if (book.fontFamilyOverride >= 0) {
     // Per-book built-in font override: no SD font needed; unload if one was active.
-    sdFontSystem.ensureLoaded(renderer, "", effectiveSize, onColdFontLoad);
+    sdFontSystem.ensureLoaded(renderer, "", effectiveSize, onColdFontLoad, effectivePointSize);
   } else {
     // No family override: use global SD font (if any) at the effective size.
-    sdFontSystem.ensureLoaded(renderer, SETTINGS.sdFontFamilyName, effectiveSize, onColdFontLoad);
+    sdFontSystem.ensureLoaded(renderer, SETTINGS.sdFontFamilyName, effectiveSize, onColdFontLoad, effectivePointSize);
   }
 }
 

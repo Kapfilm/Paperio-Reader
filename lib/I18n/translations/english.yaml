@@ -827,3 +827,5 @@ STR_FIRMWARE_SLOT_INVALID: "No valid compatible firmware in the other slot."
 STR_FIRMWARE_SLOT_SWITCH_FAILED: "Could not select the firmware. Restart cancelled."
 STR_FIRMWARE_SLOT_CHECKING: "Checking installed firmware..."
 STR_FIRMWARE_SLOT_CONFIRM: "Restart into this firmware? Files will not be reflashed. Return using its slot switcher. Updates may overwrite the other slot."
+
+STR_NUMERIC_FONT_SIZES: "Numeric font sizes"

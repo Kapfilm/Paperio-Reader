@@ -232,6 +232,8 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
   // Font family uses a DynamicEnumCtx in SettingsList (no valuePtr) so the generic
   // loop above skips it. Save manually.
   doc["fontFamily"] = s.fontFamily;
+  doc["numericFontSizes"] = s.numericFontSizes;
+  doc["readerFontPointSize"] = s.readerFontPointSize;
   if (s.sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = s.sdFontFamilyName;
   }
@@ -478,6 +480,10 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
   // loop above skips it. Load manually.
   s.fontFamily = clamp(doc["fontFamily"] | (uint8_t)CrossPointSettings::NOTOSANS,
                        CrossPointSettings::BUILTIN_FONT_COUNT, CrossPointSettings::NOTOSANS);
+  s.numericFontSizes = (doc["numericFontSizes"] | 0) == 1 ? 1 : 0;
+  const int pointSize = doc["readerFontPointSize"] | 0;
+  s.readerFontPointSize = s.numericFontSizes && pointSize > 0 && pointSize <= 255
+                              ? static_cast<uint8_t>(pointSize) : 0;
   const char* sfn = doc["sdFontFamilyName"] | "";
   strncpy(s.sdFontFamilyName, sfn, sizeof(s.sdFontFamilyName) - 1);
   s.sdFontFamilyName[sizeof(s.sdFontFamilyName) - 1] = '\0';

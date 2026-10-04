@@ -14,6 +14,7 @@
 #include "activities/RenderLock.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ReaderFontSizeOptions.h"
 
 namespace {
 constexpr int PREVIEW_HEIGHT_PERCENT = 32;
@@ -21,6 +22,9 @@ constexpr int PREVIEW_PADDING = 12;
 constexpr int PREVIEW_LABEL_GAP = 4;
 
 constexpr StrId TAB_IDS[] = {StrId::STR_FONT_TAB, StrId::STR_SIZE_TAB, StrId::STR_LAYOUT_TAB, StrId::STR_STYLE_TAB};
+using reader_font_size::namedPoints;
+using reader_font_size::nearestNamedSize;
+
 constexpr StrId SIZE_IDS[] = {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE};
 constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER,
                                    StrId::STR_ALIGN_RIGHT, StrId::STR_BOOK_S_STYLE};
@@ -55,7 +59,7 @@ int TextSettingsActivity::rowCount() const {
     case Tab::Font:
       return fontCount;
     case Tab::Size:
-      return CrossPointSettings::FONT_SIZE_COUNT;
+      return 1 + static_cast<int>(sizePoints.size());
     case Tab::Layout:
       return LAYOUT_ROW_COUNT;
     case Tab::Style:
@@ -72,8 +76,38 @@ void TextSettingsActivity::switchTab() {
   requestUpdate();
 }
 
+uint8_t TextSettingsActivity::selectedPointSize() const {
+  const uint8_t named = namedPoints[std::min<int>(SETTINGS.fontSize, 3)];
+  const uint8_t target = SETTINGS.numericFontSizes && SETTINGS.readerFontPointSize
+                             ? SETTINGS.readerFontPointSize : named;
+  if (const auto* family = sdFontSystem.registry().findFamily(SETTINGS.sdFontFamilyName)) {
+    if (const auto* file = family->pickClosestSize(target)) return file->pointSize;
+  }
+  return named;
+}
+
+void TextSettingsActivity::updateSizeOptions() {
+  sizePoints.clear();
+  if (SETTINGS.numericFontSizes) {
+    if (const auto* family = sdFontSystem.registry().findFamily(SETTINGS.sdFontFamilyName)) {
+      sizePoints = family->availableSizes();
+    }
+  }
+  if (sizePoints.empty()) sizePoints.assign(std::begin(namedPoints), std::end(namedPoints));
+  if (SETTINGS.numericFontSizes) {
+    SETTINGS.readerFontPointSize = SETTINGS.sdFontFamilyName[0] ? selectedPointSize() : 0;
+  }
+}
+
+std::string TextSettingsActivity::sizeLabel(int index) const {
+  if (index < 0 || index >= static_cast<int>(sizePoints.size())) return {};
+  return SETTINGS.numericFontSizes ? std::to_string(sizePoints[index]) + " pt" : I18N.get(SIZE_IDS[index]);
+}
+
 void TextSettingsActivity::reloadReaderFont() {
-  sdFontSystem.ensureLoadedForPreview(renderer, SETTINGS.sdFontFamilyName, SETTINGS.fontSize);
+  updateSizeOptions();
+  sdFontSystem.ensureLoadedForPreview(renderer, SETTINGS.sdFontFamilyName, SETTINGS.fontSize,
+                                     SETTINGS.numericFontSizes ? SETTINGS.readerFontPointSize : 0);
   previewFontId = SETTINGS.getReaderFontId();
 }
 
@@ -108,7 +142,6 @@ void TextSettingsActivity::loop() {
 }
 
 void TextSettingsActivity::activateRow(const int row) {
-  bool reloadFont = false;
   switch (tab) {
     case Tab::Font:
       if (row >= 0 && row < fontCount && row != fontFamilyDynamicGetter(nullptr)) {
@@ -117,12 +150,28 @@ void TextSettingsActivity::activateRow(const int row) {
         reloadReaderFont();
       }
       break;
-    case Tab::Size:
-      if (row >= 0 && row < CrossPointSettings::FONT_SIZE_COUNT && row != SETTINGS.fontSize) {
-        SETTINGS.fontSize = static_cast<uint8_t>(row);
-        reloadFont = true;
+    case Tab::Size: {
+      RenderLock lock;
+      if (row == 0) {
+        const uint8_t previousPoint = selectedPointSize();
+        SETTINGS.numericFontSizes = !SETTINGS.numericFontSizes;
+        if (SETTINGS.numericFontSizes) {
+          SETTINGS.readerFontPointSize = SETTINGS.sdFontFamilyName[0] ? previousPoint : 0;
+        } else {
+          SETTINGS.fontSize = nearestNamedSize(previousPoint);
+          SETTINGS.readerFontPointSize = 0;
+        }
+      } else if (row > 0 && row <= static_cast<int>(sizePoints.size())) {
+        const int index = row - 1;
+        SETTINGS.fontSize = SETTINGS.numericFontSizes ? nearestNamedSize(sizePoints[index]) : index;
+        SETTINGS.readerFontPointSize = SETTINGS.numericFontSizes && SETTINGS.sdFontFamilyName[0]
+                                          ? sizePoints[index] : 0;
+      } else {
+        break;
       }
+      reloadReaderFont();
       break;
+    }
     case Tab::Layout:
       switch (row) {
         case 0:
@@ -180,10 +229,6 @@ void TextSettingsActivity::activateRow(const int row) {
       break;
   }
 
-  if (reloadFont) {
-    RenderLock lock;
-    reloadReaderFont();
-  }
   SETTINGS.saveToFile();
   requestUpdate();
 }
@@ -193,7 +238,7 @@ std::string TextSettingsActivity::rowTitle(const int row) const {
     case Tab::Font:
       return fontFamilyOptionLabel(static_cast<uint8_t>(row));
     case Tab::Size:
-      return I18N.get(SIZE_IDS[row]);
+      return row == 0 ? tr(STR_NUMERIC_FONT_SIZES) : sizeLabel(row - 1);
     case Tab::Layout: {
       constexpr StrId ids[] = {StrId::STR_PARA_ALIGNMENT, StrId::STR_SCREEN_MARGIN, StrId::STR_LINE_SPACING,
                                StrId::STR_EXTRA_SPACING};
@@ -218,7 +263,10 @@ std::string TextSettingsActivity::rowValue(const int row) const {
     case Tab::Font:
       return row == fontFamilyDynamicGetter(nullptr) ? tr(STR_SELECTED) : "";
     case Tab::Size:
-      return row == SETTINGS.fontSize ? tr(STR_SELECTED) : "";
+      if (row == 0) return state(SETTINGS.numericFontSizes);
+      if (row < 1 || row > static_cast<int>(sizePoints.size())) return {};
+      return (SETTINGS.numericFontSizes ? sizePoints[row - 1] == selectedPointSize()
+                                       : row - 1 == SETTINGS.fontSize) ? tr(STR_SELECTED) : "";
     case Tab::Layout:
       switch (row) {
         case 0:
@@ -269,8 +317,10 @@ void TextSettingsActivity::renderPreview(const int top, const int height) const 
   const int labelReserved = labelHeight + PREVIEW_LABEL_GAP + PREVIEW_PADDING;
   const uint8_t activeFamily = fontFamilyDynamicGetter(nullptr);
   const std::string family = fontFamilyOptionLabel(activeFamily);
+  const std::string size = SETTINGS.numericFontSizes ? std::to_string(selectedPointSize()) + " pt"
+      : I18N.get(SIZE_IDS[std::min<int>(SETTINGS.fontSize, 3)]);
   char label[128];
-  snprintf(label, sizeof(label), "%s \"%s, %s\"", tr(STR_PREVIEW), family.c_str(), I18N.get(SIZE_IDS[SETTINGS.fontSize]));
+  snprintf(label, sizeof(label), "%s \"%s, %s\"", tr(STR_PREVIEW), family.c_str(), size.c_str());
   renderer.drawText(SMALL_FONT_ID, left, top + height - PREVIEW_PADDING - labelHeight, label);
 
   const char* sample = I18N.get(StrId::STR_FONT_PREVIEW_TEXT);

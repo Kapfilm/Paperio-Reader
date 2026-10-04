@@ -270,6 +270,8 @@ class CrossPointSettings {
   // SD card font family name (empty = use built-in fontFamily)
   char sdFontFamilyName[32] = "";
   uint8_t fontSize = MEDIUM;
+  uint8_t numericFontSizes = 0;  // Display/select actual available point sizes in text settings.
+  uint8_t readerFontPointSize = 0;  // SD EPUB/FB2 size; 0 keeps the named size preset.
   // Reader font settings (TXT / MD) — defaults to EPUB settings when not explicitly set
   uint8_t txtFontFamily = NOTOSANS;
   char txtSdFontFamilyName[32] = "";

@@ -1,0 +1,3 @@
+add_executable(ReaderFontSizeTest ReaderFontSizeTest.cpp)
+target_link_libraries(ReaderFontSizeTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(ReaderFontSizeTest)
