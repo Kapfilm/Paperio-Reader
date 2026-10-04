@@ -734,6 +734,7 @@ bool JsonSettingsIO::saveRecentBooks(const RecentBooksStore& store, const char* 
       obj["sdFontFamilyOverride"] = book.sdFontFamilyOverride;
     }
     obj["fontSizeOverride"] = book.fontSizeOverride;
+    obj["fontPointSizeOverride"] = book.fontPointSizeOverride;
     obj["bionicReadingOverride"] = book.bionicReadingOverride;
     obj["paragraphAlignmentOverride"] = book.paragraphAlignmentOverride;
     obj["textAntiAliasingOverride"] = book.textAntiAliasingOverride;
@@ -784,6 +785,8 @@ bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) 
       book.fontFamilyOverride = -1;
     }
     book.fontSizeOverride = clampInt8(obj["fontSizeOverride"] | -1, -1, CrossPointSettings::FONT_SIZE_COUNT - 1, -1);
+    const int fontPointSize = obj["fontPointSizeOverride"] | 0;
+    book.fontPointSizeOverride = fontPointSize > 0 && fontPointSize <= 255 ? static_cast<uint8_t>(fontPointSize) : 0;
     book.bionicReadingOverride = clampInt8(obj["bionicReadingOverride"] | -1, -1, 1, -1);
     book.paragraphAlignmentOverride =
         clampInt8(obj["paragraphAlignmentOverride"] | -1, -1, CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT - 1, -1);

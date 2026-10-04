@@ -19,6 +19,7 @@ struct RecentBook {
   std::string sdFontFamilyOverride;
   // -1 = use global setting, otherwise CrossPointSettings::FONT_SIZE value.
   int8_t fontSizeOverride = -1;
+  uint8_t fontPointSizeOverride = 0;  // 0 inherits named/global size; otherwise exact point size.
   // -1 = use global default, otherwise explicit per-book override (0 = off, 1 = on).
   int8_t bionicReadingOverride = -1;
   // -1 = use global setting, otherwise CrossPointSettings::PARAGRAPH_ALIGNMENT value.
@@ -113,7 +114,7 @@ class RecentBooksStore {
                           int8_t bionicReadingOverride, int8_t paragraphAlignmentOverride,
                           int8_t textAntiAliasingOverride, int8_t hyphenationOverride,
                           int8_t fontSizeNormalizationOverride, int8_t guideDotsOverride,
-                          int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride);
+                          int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride, uint8_t fontPointSizeOverride = 0);
 };
 
 // Helper macro to access recent books store

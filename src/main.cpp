@@ -1,3 +1,4 @@
+#include "util/ReaderFontSizeOptions.h"
 #include <Arduino.h>
 #include <CooperativeAbort.h>
 #include <Epub.h>
@@ -530,11 +531,13 @@ void ensureSdFontLoadedForPath(const char* path) {
   // RecentBooksStore already has the persisted overrides for this path.
   const RecentBook book = RECENT_BOOKS.getBookByPath(path);
   const uint8_t effectiveSize =
-      (book.fontSizeOverride >= 0) ? static_cast<uint8_t>(book.fontSizeOverride) : SETTINGS.fontSize;
+      book.fontPointSizeOverride ? reader_font_size::nearestNamedSize(book.fontPointSizeOverride)
+      : ((book.fontSizeOverride >= 0) ? static_cast<uint8_t>(book.fontSizeOverride) : SETTINGS.fontSize);
 
-  const uint8_t effectivePointSize = book.fontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize;
+  const uint8_t effectivePointSize = book.fontPointSizeOverride ? book.fontPointSizeOverride
+      : (book.fontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize);
 
-  if (!book.sdFontFamilyOverride.empty()) {
+  if (!book.sdFontFamilyOverride.empty() && book.fontFamilyOverride < 0) {
     // Per-book SD font override: load that family at the effective size.
     sdFontSystem.ensureLoaded(renderer, book.sdFontFamilyOverride.c_str(), effectiveSize, onColdFontLoad, effectivePointSize);
   } else if (book.fontFamilyOverride >= 0) {

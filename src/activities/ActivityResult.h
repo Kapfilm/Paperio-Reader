@@ -47,6 +47,8 @@ struct MenuResult {
   int8_t inlineFootnotePreviewsOverride = -1;
   // -1 = global reader interval, otherwise an explicit 70-200 percent override.
   int16_t lineHeightPercentOverride = -1;
+  // Appended to preserve positional initializers in legacy reader menus.
+  uint8_t fontPointSizeOverride = 0;  // 0 inherits named/global size; otherwise exact point size.
 };
 
 struct ChapterResult {

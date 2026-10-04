@@ -482,6 +482,7 @@ class EpubReaderActivity final : public Activity {
   int8_t bookFontFamilyOverride = -1;
   std::string bookSdFontFamilyOverride;
   int8_t bookFontSizeOverride = -1;
+  uint8_t bookFontPointSizeOverride = 0;
   int16_t bookLineHeightPercentOverride = -1;
   int8_t bookBionicReadingOverride = -1;
   int8_t bookParagraphAlignmentOverride = -1;
@@ -720,7 +721,7 @@ class EpubReaderActivity final : public Activity {
   void stopAutomaticPageTurn();
   void applyBookReaderOverrides(int8_t embeddedStyleOverride, int8_t imageRenderingOverride, int8_t fontFamilyOverride,
                                 const std::string& sdFontFamilyOverride, int8_t fontSizeOverride,
-                                bool bionicReadingOverride, int8_t paragraphAlignmentOverride);
+                                bool bionicReadingOverride, int8_t paragraphAlignmentOverride, uint8_t fontPointSizeOverride = 0);
   // Wider variant that also covers AA, hyphenation and guide dots. Used by
   // QuickOverridesActivity; the narrower overload above funnels through here,
   // preserving the AA/hyphenation/guide-dots values currently held on this activity.
@@ -729,7 +730,7 @@ class EpubReaderActivity final : public Activity {
                                 int8_t bionicReadingOverride, int8_t paragraphAlignmentOverride,
                                 int8_t textAntiAliasingOverride, int8_t hyphenationOverride,
                                 int8_t fontSizeNormalizationOverride, int8_t guideDotsOverride,
-                                int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride);
+                                int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride, uint8_t fontPointSizeOverride = 0);
   void openReaderMenu();
   void openQuickOverrides();
   bool getEffectiveEmbeddedStyle() const;

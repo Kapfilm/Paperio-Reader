@@ -23,3 +23,36 @@ TEST(ReaderFontSize, MidpointsPreferSmallerAndExactSizesRoundTrip) {
   EXPECT_EQ(nearestNamedSize(17), 2);
   for (uint8_t i=0;i<4;++i) EXPECT_EQ(nearestNamedSize(namedPointSize(i)),i);
 }
+
+TEST(BookNumericSize, DefaultInheritsRatherThanSelectingFirstNumericSize) {
+  const std::vector<uint8_t> sizes{10,14,20,24,32};
+  EXPECT_EQ(overrideSizeSlot(-1,0,true,sizes),0);
+  const auto choice=choiceForSlot(0,true,sizes);
+  EXPECT_EQ(choice.named,-1); EXPECT_EQ(choice.point,0);
+}
+TEST(BookNumericSize, AllInstalledSizesCanRoundTripBeyondFourPresets) {
+  const std::vector<uint8_t> sizes{10,12,14,16,18,20,24,32};
+  for (uint8_t slot=1;slot<=sizes.size();++slot) {
+    const auto choice=choiceForSlot(slot,true,sizes);
+    EXPECT_EQ(choice.point,sizes[slot-1]);
+    EXPECT_EQ(overrideSizeSlot(choice.named,choice.point,true,sizes),slot);
+  }
+}
+TEST(BookNumericSize, LegacyPresetAndMissingFileUseClosestSmallerOnTie) {
+  const std::vector<uint8_t> sizes{12,16,24};
+  EXPECT_EQ(overrideSizeSlot(1,0,true,sizes),1);
+  EXPECT_EQ(overrideSizeSlot(3,20,true,sizes),2);
+}
+TEST(BookNumericSize, NamedSelectionClearsNumericOverride) {
+  const std::vector<uint8_t> sizes{12,14,16,18};
+  const auto choice=choiceForSlot(2,false,sizes);
+  EXPECT_EQ(choice.named,1); EXPECT_EQ(choice.point,0);
+  EXPECT_EQ(overrideSizeSlot(3,32,false,sizes),4);
+}
+TEST(BookNumericSize, LargestPointAndOptionIndexDoNotOverflow) {
+  std::vector<uint8_t> sizes;
+  for(int point=1;point<=255;++point) sizes.push_back(point);
+  const auto choice=choiceForSlot(255,true,sizes);
+  EXPECT_EQ(choice.point,255);
+  EXPECT_EQ(overrideSizeSlot(choice.named,choice.point,true,sizes),255);
+}

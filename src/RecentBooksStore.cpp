@@ -34,6 +34,7 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
     newBook.fontFamilyOverride = it->fontFamilyOverride;
     newBook.sdFontFamilyOverride = it->sdFontFamilyOverride;
     newBook.fontSizeOverride = it->fontSizeOverride;
+    newBook.fontPointSizeOverride = it->fontPointSizeOverride;
     newBook.bionicReadingOverride = it->bionicReadingOverride;
     newBook.paragraphAlignmentOverride = it->paragraphAlignmentOverride;
     newBook.textAntiAliasingOverride = it->textAntiAliasingOverride;
@@ -106,7 +107,7 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
                             it->sdFontFamilyOverride, it->fontSizeOverride, it->bionicReadingOverride,
                             it->paragraphAlignmentOverride, it->textAntiAliasingOverride, it->hyphenationOverride,
                             it->fontSizeNormalizationOverride, it->guideDotsOverride,
-                            it->inlineFootnotePreviewsOverride, it->lineHeightPercentOverride);
+                            it->inlineFootnotePreviewsOverride, it->lineHeightPercentOverride, it->fontPointSizeOverride);
 }
 
 bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t embeddedStyleOverride,
@@ -150,7 +151,7 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
                             it->sdFontFamilyOverride, it->fontSizeOverride, bionicReadingOverride,
                             it->paragraphAlignmentOverride, it->textAntiAliasingOverride, it->hyphenationOverride,
                             it->fontSizeNormalizationOverride, it->guideDotsOverride,
-                            it->inlineFootnotePreviewsOverride, it->lineHeightPercentOverride);
+                            it->inlineFootnotePreviewsOverride, it->lineHeightPercentOverride, it->fontPointSizeOverride);
 }
 
 bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t embeddedStyleOverride,
@@ -207,7 +208,7 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
                                           const int8_t textAntiAliasingOverride, const int8_t hyphenationOverride,
                                           const int8_t fontSizeNormalizationOverride, const int8_t guideDotsOverride,
                                           const int8_t inlineFootnotePreviewsOverride,
-                                          const int16_t lineHeightPercentOverride) {
+                                          const int16_t lineHeightPercentOverride, const uint8_t fontPointSizeOverride) {
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it == recentBooks.end()) {
@@ -219,6 +220,7 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
   it->fontFamilyOverride = fontFamilyOverride;
   it->sdFontFamilyOverride = sdFontFamilyOverride;
   it->fontSizeOverride = fontSizeOverride;
+  it->fontPointSizeOverride = fontPointSizeOverride;
   it->bionicReadingOverride = bionicReadingOverride;
   it->paragraphAlignmentOverride = paragraphAlignmentOverride;
   it->textAntiAliasingOverride = textAntiAliasingOverride;

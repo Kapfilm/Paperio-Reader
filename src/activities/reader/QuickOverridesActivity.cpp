@@ -5,6 +5,9 @@
 #include <I18n.h>
 
 #include "MappedInputManager.h"
+#include "SdCardFontGlobals.h"
+#include "util/ReaderFontSizeOptions.h"
+#include <algorithm>
 #include "activities/ActivityResult.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -16,13 +19,14 @@ QuickOverridesActivity::QuickOverridesActivity(
     const int8_t initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
     const int8_t initialParagraphAlignmentOverride, const int8_t initialTextAntiAliasingOverride,
     const int8_t initialHyphenationOverride, const int8_t initialFontSizeNormalizationOverride,
-    const int8_t initialInlineFootnotePreviewsOverride)
+    const int8_t initialInlineFootnotePreviewsOverride, const uint8_t initialFontPointSizeOverride)
     : MenuListActivity("QuickOverrides", renderer, mappedInput),
       pendingEmbeddedStyleOverride(initialEmbeddedStyleOverride),
       pendingImageRenderingOverride(initialImageRenderingOverride),
       pendingFontFamilyOverride(initialFontFamilyOverride),
       pendingSdFontFamilyOverride(initialSdFontFamilyOverride),
       pendingFontSizeOverride(initialFontSizeOverride),
+      pendingFontPointSizeOverride(initialFontPointSizeOverride),
       pendingBionicReadingOverride(initialBionicReadingOverride),
       pendingGuideDotsOverride(initialGuideDotsOverride),
       pendingParagraphAlignmentOverride(initialParagraphAlignmentOverride),
@@ -101,18 +105,12 @@ void QuickOverridesActivity::buildMenuItems() {
         }
       }));
 
-  // Font size: default plus every globally available built-in size.
   menuItems.push_back(SettingInfo::DynamicEnumCtx(
       StrId::STR_FONT_SIZE,
       {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE}, self,
-      [](const void* ctx) -> uint8_t {
-        const auto* s = static_cast<const QuickOverridesActivity*>(ctx);
-        return (s->pendingFontSizeOverride < 0) ? 0 : static_cast<uint8_t>(s->pendingFontSizeOverride + 1);
-      },
-      [](void* ctx, uint8_t v) {
-        auto* s = static_cast<QuickOverridesActivity*>(ctx);
-        s->pendingFontSizeOverride = (v == 0) ? -1 : static_cast<int8_t>(v - 1);
-      }));
+      [](const void* ctx) -> uint8_t { return static_cast<const QuickOverridesActivity*>(ctx)->fontSizeSlot(); },
+      [](void* ctx, uint8_t value) { static_cast<QuickOverridesActivity*>(ctx)->selectFontSizeSlot(value); }));
+  refreshFontSizeChoices();
 
   // Bionic: default / on / off
   menuItems.push_back(SettingInfo::DynamicEnumCtx(
@@ -196,6 +194,52 @@ void QuickOverridesActivity::buildMenuItems() {
       }));
 }
 
+void QuickOverridesActivity::refreshFontSizeChoices() {
+  fontSizePoints.clear();
+  if (SETTINGS.numericFontSizes && pendingFontFamilyOverride < 0) {
+    const char* familyName = pendingSdFontFamilyOverride.empty() ? SETTINGS.sdFontFamilyName
+                                                               : pendingSdFontFamilyOverride.c_str();
+    if (const auto* family = sdFontSystem.registry().findFamily(familyName)) {
+      fontSizePoints = family->availableSizes();
+    }
+  }
+  if (fontSizePoints.empty()) {
+    fontSizePoints.assign(std::begin(reader_font_size::namedPoints), std::end(reader_font_size::namedPoints));
+  }
+  for (auto& item : menuItems) {
+    if (item.nameId != StrId::STR_FONT_SIZE) continue;
+    item.enumLabels.clear();
+    if (SETTINGS.numericFontSizes) {
+      item.enumLabels.emplace_back(tr(STR_DEFAULT_VALUE));
+      for (uint8_t point : fontSizePoints) item.enumLabels.push_back(std::to_string(point) + " pt");
+    }
+  }
+}
+
+uint8_t QuickOverridesActivity::fontSizeSlot() const {
+  return reader_font_size::overrideSizeSlot(pendingFontSizeOverride, pendingFontPointSizeOverride,
+                                            SETTINGS.numericFontSizes, fontSizePoints);
+}
+
+void QuickOverridesActivity::selectFontSizeSlot(uint8_t slot) {
+  const auto choice = reader_font_size::choiceForSlot(slot, SETTINGS.numericFontSizes, fontSizePoints);
+  pendingFontSizeOverride = choice.named;
+  pendingFontPointSizeOverride = choice.point;
+}
+
+void QuickOverridesActivity::toggleCurrentItem() {
+  RenderLock lock(*this);
+  if (selectedIndex >= 0 && selectedIndex < static_cast<int>(menuItems.size()) &&
+      menuItems[selectedIndex].nameId == StrId::STR_FONT_SIZE && SETTINGS.numericFontSizes) {
+    // Use a wide count: 255 installed sizes plus Default must not wrap to zero.
+    selectFontSizeSlot(static_cast<uint8_t>((fontSizeSlot() + 1u) % (fontSizePoints.size() + 1)));
+    onSettingToggled(selectedIndex);
+    requestUpdate();
+    return;
+  }
+  MenuListActivity::toggleCurrentItem();
+}
+
 void QuickOverridesActivity::onEnter() {
   MenuListActivity::onEnter();
   // Fast refresh keeps the menu feeling responsive when cycling options. The
@@ -204,7 +248,12 @@ void QuickOverridesActivity::onEnter() {
   renderer.setNextDisplayRefreshMode(HalDisplay::FAST_REFRESH);
 }
 
-void QuickOverridesActivity::onSettingToggled(int /*index*/) {
+void QuickOverridesActivity::onSettingToggled(int index) {
+  if (index >= 0 && index < static_cast<int>(menuItems.size()) &&
+      menuItems[index].nameId == StrId::STR_FONT_FAMILY) {
+    refreshFontSizeChoices();
+    if (pendingFontPointSizeOverride) selectFontSizeSlot(fontSizeSlot());
+  }
   // No persistence on each toggle — overrides are committed on exit through
   // the result handler in the parent reader activity.
   renderer.setNextDisplayRefreshMode(HalDisplay::FAST_REFRESH);
@@ -223,6 +272,7 @@ void QuickOverridesActivity::finishWithResult(bool cancelled) {
   payload.fontFamilyOverride = pendingFontFamilyOverride;
   payload.sdFontFamilyOverride = pendingSdFontFamilyOverride;
   payload.fontSizeOverride = pendingFontSizeOverride;
+  payload.fontPointSizeOverride = pendingFontPointSizeOverride;
   payload.bionicReadingOverride = (pendingBionicReadingOverride > 0) ? 1 : 0;
   payload.guideDotsOverride = pendingGuideDotsOverride;
   payload.paragraphAlignmentOverride = pendingParagraphAlignmentOverride;

@@ -19,13 +19,17 @@ class QuickOverridesActivity final : public MenuListActivity {
                          int8_t initialBionicReadingOverride, int8_t initialGuideDotsOverride,
                          int8_t initialParagraphAlignmentOverride, int8_t initialTextAntiAliasingOverride,
                          int8_t initialHyphenationOverride, int8_t initialFontSizeNormalizationOverride,
-                         int8_t initialInlineFootnotePreviewsOverride);
+                         int8_t initialInlineFootnotePreviewsOverride, uint8_t initialFontPointSizeOverride = 0);
 
   void onEnter() override;
   void render(RenderLock&&) override;
 
  private:
   void buildMenuItems();
+  void refreshFontSizeChoices();
+  uint8_t fontSizeSlot() const;
+  void selectFontSizeSlot(uint8_t slot);
+  void toggleCurrentItem() override;
   void finishWithResult(bool cancelled);
 
   void onBackPressed() override;
@@ -36,6 +40,8 @@ class QuickOverridesActivity final : public MenuListActivity {
   int8_t pendingFontFamilyOverride = -1;
   std::string pendingSdFontFamilyOverride;
   int8_t pendingFontSizeOverride = -1;
+  uint8_t pendingFontPointSizeOverride = 0;
+  std::vector<uint8_t> fontSizePoints;
   int8_t pendingBionicReadingOverride = -1;
   int8_t pendingGuideDotsOverride = -1;
   int8_t pendingParagraphAlignmentOverride = -1;
