@@ -6,7 +6,7 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 
-uint8_t EnumSelectionActivity::optionCount() const {
+uint16_t EnumSelectionActivity::optionCount() const {
   return overrideCount > 0 ? overrideCount : setting.getEnumOptionCount();
 }
 

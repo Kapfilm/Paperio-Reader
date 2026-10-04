@@ -302,9 +302,10 @@ struct SettingInfo {
   // enumLabels contract above). All are no-ops / empty for non-ENUM types.
 
   // Number of selectable options (0 for non-ENUM).
-  [[nodiscard]] uint8_t getEnumOptionCount() const {
+  // The count can be 256 even though each selectable index fits in uint8_t.
+  [[nodiscard]] uint16_t getEnumOptionCount() const {
     if (type != SettingType::ENUM) return 0;
-    return static_cast<uint8_t>(enumLabels.empty() ? enumValues.size() : enumLabels.size());
+    return static_cast<uint16_t>(enumLabels.empty() ? enumValues.size() : enumLabels.size());
   }
 
   // Localised label for option `index` (empty if out of range or non-ENUM).

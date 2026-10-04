@@ -7,9 +7,11 @@
 #include "MappedInputManager.h"
 #include "SdCardFontGlobals.h"
 #include "activities/SliderPickerActivity.h"
+#include "activities/settings/EnumSelectionActivity.h"
 #include "activities/settings/SettingsSubmenuActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ReaderFontSizeOptions.h"
 
 // Keep in sync with the default in EpubReaderActivity.h — see the comment there for rationale.
 #ifndef ENABLE_BENCHMARKS
@@ -68,7 +70,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const int8_t initialParagraphAlignmentOverride, const int8_t initialTextAntiAliasingOverride,
     const int8_t initialHyphenationOverride, const int8_t initialFontSizeNormalizationOverride,
     const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages, const bool isCurrentPageStarred,
-    const bool hasPrintedPages, const bool hasClippings)
+    const bool hasPrintedPages, const bool hasClippings, const uint8_t initialFontPointSizeOverride)
     : MenuListActivity("EpubReaderMenu", renderer, mappedInput),
       currentPageStarred(isCurrentPageStarred),
       pendingOrientation(currentOrientation),
@@ -77,6 +79,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
       pendingFontFamilyOverride(initialFontFamilyOverride),
       pendingSdFontFamilyOverride(initialSdFontFamilyOverride),
       pendingFontSizeOverride(initialFontSizeOverride),
+      pendingFontPointSizeOverride(initialFontPointSizeOverride),
       pendingLineHeightPercentOverride(initialLineHeightPercentOverride),
       pendingTextDarkness(initialTextDarkness),
       pendingBionicReading(initialBionicReadingOverride),
@@ -233,21 +236,9 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
     menuItems.push_back(std::move(familySetting));
   }
 
-  // Reader font size: default plus every globally available built-in size.
+  // Build the size picker when opened, after any pending family change.
   menuItems.push_back(
-      SettingInfo::DynamicEnumCtx(
-          StrId::STR_FONT_SIZE,
-          {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE}, self,
-          [](const void* ctx) -> uint8_t {
-            const auto* s = static_cast<const EpubReaderMenuActivity*>(ctx);
-            return (s->pendingFontSizeOverride < 0) ? 0 : static_cast<uint8_t>(s->pendingFontSizeOverride + 1);
-          },
-          [](void* ctx, uint8_t v) {
-            auto* s = static_cast<EpubReaderMenuActivity*>(ctx);
-            s->pendingFontSizeOverride = (v == 0) ? -1 : static_cast<int8_t>(v - 1);
-          })
-          .withSubmenu(StrId::STR_READER_OVERRIDES)
-          .withSelectorActivity());
+      SettingInfo::Action(StrId::STR_FONT_SIZE, SettingAction::None).withSubmenu(StrId::STR_READER_OVERRIDES));
 
   menuItems.push_back(
       SettingInfo::Action(StrId::STR_LINE_SPACING, SettingAction::None).withSubmenu(StrId::STR_READER_OVERRIDES));
@@ -486,6 +477,7 @@ void EpubReaderMenuActivity::finishWithAction(MenuAction action) {
   payload.guideDotsOverride = pendingGuideDotsOverride;
   payload.inlineFootnotePreviewsOverride = pendingInlineFootnotePreviewsOverride;
   payload.lineHeightPercentOverride = pendingLineHeightPercentOverride;
+  payload.fontPointSizeOverride = pendingFontPointSizeOverride;
   setResult(std::move(payload));
   finish();
 }
@@ -530,6 +522,7 @@ void EpubReaderMenuActivity::onBackPressed() {
   payload.guideDotsOverride = pendingGuideDotsOverride;
   payload.inlineFootnotePreviewsOverride = pendingInlineFootnotePreviewsOverride;
   payload.lineHeightPercentOverride = pendingLineHeightPercentOverride;
+  payload.fontPointSizeOverride = pendingFontPointSizeOverride;
   result.data = std::move(payload);
   setResult(std::move(result));
   finish();
@@ -537,6 +530,7 @@ void EpubReaderMenuActivity::onBackPressed() {
 
 std::string EpubReaderMenuActivity::getItemValueString(int index) const {
   const auto& item = menuItems[index];
+  if (item.nameId == StrId::STR_FONT_SIZE) return fontSizeValueLabel();
 
   // Auto page turn: custom labels
   if (item.nameId == StrId::STR_AUTO_TURN_PAGES_PER_MIN) {
@@ -585,12 +579,6 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
         return std::string(tr(STR_DEFAULT_VALUE)) + " (" + label + ")";
       }
     }
-    if (item.nameId == StrId::STR_FONT_SIZE && pendingFontSizeOverride < 0) {
-      const auto defaultIndex = static_cast<size_t>(SETTINGS.fontSize + 1);
-      if (defaultIndex < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[defaultIndex]) + ")";
-      }
-    }
     if (item.nameId == StrId::STR_PARA_ALIGNMENT && pendingParagraphAlignmentOverride < 0) {
       const auto defaultIndex = static_cast<size_t>(SETTINGS.paragraphAlignment + 1);
       if (defaultIndex < item.enumValues.size()) {
@@ -629,6 +617,7 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
   if (it == submenuData.end()) return;
 
   auto itemValueStringOverride = [this](const SettingInfo& item) -> std::string {
+    if (item.nameId == StrId::STR_FONT_SIZE) return fontSizeValueLabel();
     if (item.nameId == StrId::STR_LINE_SPACING) {
       if (pendingLineHeightPercentOverride < 0) {
         return std::string(tr(STR_DEFAULT_VALUE)) + " (" + std::to_string(SETTINGS.lineHeightPercent) + "%)";
@@ -652,12 +641,6 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
       const auto label = defaultFontFamilyLabel(item);
       if (!label.empty()) {
         return std::string(tr(STR_DEFAULT_VALUE)) + " (" + label + ")";
-      }
-    }
-    if (item.nameId == StrId::STR_FONT_SIZE && pendingFontSizeOverride < 0) {
-      const auto valueIndex = static_cast<size_t>(SETTINGS.fontSize + 1);
-      if (valueIndex < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[valueIndex]) + ")";
       }
     }
     if (item.nameId == StrId::STR_PARA_ALIGNMENT && pendingParagraphAlignmentOverride < 0) {
@@ -705,6 +688,10 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
                                  }
                                }
                                if (menuResult->nameId != -1) {
+                                 if (static_cast<StrId>(menuResult->nameId) == StrId::STR_FONT_SIZE) {
+                                   openFontSizeOverridePicker();
+                                   return;
+                                 }
                                  if (static_cast<StrId>(menuResult->nameId) == StrId::STR_LINE_SPACING) {
                                    openLineHeightOverridePicker();
                                    return;
@@ -718,6 +705,63 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
                              }
                            }
                            requestUpdate();
+                         });
+}
+
+std::vector<uint8_t> EpubReaderMenuActivity::availableFontSizes() const {
+  if (SETTINGS.numericFontSizes && pendingFontFamilyOverride < 0) {
+    const char* familyName = pendingSdFontFamilyOverride.empty() ? SETTINGS.sdFontFamilyName
+                                                                : pendingSdFontFamilyOverride.c_str();
+    if (const auto* family = sdFontSystem.registry().findFamily(familyName)) {
+      auto sizes = family->availableSizes();
+      if (!sizes.empty()) return sizes;
+    }
+  }
+  return {12, 14, 16, 18};
+}
+
+std::string EpubReaderMenuActivity::fontSizeValueLabel() const {
+  const bool inherited = pendingFontSizeOverride < 0 && !pendingFontPointSizeOverride;
+  std::string label;
+  if (SETTINGS.numericFontSizes) {
+    const auto sizes = availableFontSizes();
+    const uint8_t point = inherited ? SETTINGS.readerFontPointSize : pendingFontPointSizeOverride;
+    const int8_t named = inherited ? static_cast<int8_t>(SETTINGS.fontSize) : pendingFontSizeOverride;
+    const auto slot = reader_font_size::overrideSizeSlot(named, point, true, sizes);
+    label = std::to_string(sizes[slot ? slot - 1 : 0]) + " pt";
+  } else {
+    static constexpr StrId names[] = {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE};
+    const uint8_t named = inherited ? SETTINGS.fontSize : pendingFontPointSizeOverride
+        ? reader_font_size::nearestNamedSize(pendingFontPointSizeOverride) : static_cast<uint8_t>(pendingFontSizeOverride);
+    label = I18N.get(names[named < 4 ? named : 1]);
+  }
+  return inherited ? std::string(tr(STR_DEFAULT_VALUE)) + " (" + label + ")" : label;
+}
+
+void EpubReaderMenuActivity::openFontSizeOverridePicker() {
+  fontSizePoints = availableFontSizes();
+  fontSizePickerSetting = std::make_unique<SettingInfo>(SettingInfo::DynamicEnumCtx(
+      StrId::STR_FONT_SIZE,
+      {StrId::STR_DEFAULT_VALUE, StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE}, this,
+      [](const void* ctx) -> uint8_t {
+        const auto* self = static_cast<const EpubReaderMenuActivity*>(ctx);
+        return reader_font_size::overrideSizeSlot(self->pendingFontSizeOverride, self->pendingFontPointSizeOverride,
+                                                  SETTINGS.numericFontSizes, self->fontSizePoints);
+      },
+      [](void* ctx, uint8_t slot) {
+        auto* self = static_cast<EpubReaderMenuActivity*>(ctx);
+        const auto choice = reader_font_size::choiceForSlot(slot, SETTINGS.numericFontSizes, self->fontSizePoints);
+        self->pendingFontSizeOverride = choice.named;
+        self->pendingFontPointSizeOverride = choice.point;
+      }));
+  if (SETTINGS.numericFontSizes) {
+    fontSizePickerSetting->enumLabels.emplace_back(tr(STR_DEFAULT_VALUE));
+    for (uint8_t point : fontSizePoints) fontSizePickerSetting->enumLabels.push_back(std::to_string(point) + " pt");
+  }
+  // Stored on the parent: EnumSelectionActivity holds a reference throughout its lifetime.
+  startActivityForResult(std::make_unique<EnumSelectionActivity>(renderer, mappedInput, *fontSizePickerSetting),
+                         [this](const ActivityResult&) {
+                           openSubmenu(SettingInfo::SubmenuEntry(StrId::STR_READER_OVERRIDES));
                          });
 }
 

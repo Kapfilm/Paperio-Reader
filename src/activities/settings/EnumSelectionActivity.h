@@ -48,7 +48,7 @@ class EnumSelectionActivity final : public Activity {
   void render(RenderLock&&) override;
 
  private:
-  [[nodiscard]] uint8_t optionCount() const;
+  [[nodiscard]] uint16_t optionCount() const;
   [[nodiscard]] std::string optionLabel(uint8_t index) const;
   void handleSelection();
 

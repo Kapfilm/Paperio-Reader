@@ -5260,7 +5260,7 @@ void EpubReaderActivity::openReaderMenu() {
           getEffectiveBionicReading(), bookGuideDotsOverride, bookParagraphAlignmentOverride,
           bookTextAntiAliasingOverride, bookHyphenationOverride, bookFontSizeNormalizationOverride,
           bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages,
-          !clippingStore.empty()),
+          !clippingStore.empty(), bookFontPointSizeOverride),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyOrientation(menu.orientation);
@@ -5271,7 +5271,7 @@ void EpubReaderActivity::openReaderMenu() {
             menu.fontSizeOverride, static_cast<bool>(menu.bionicReadingOverride), menu.paragraphAlignmentOverride,
             menu.textAntiAliasingOverride, menu.hyphenationOverride, menu.fontSizeNormalizationOverride,
             menu.guideDotsOverride, menu.inlineFootnotePreviewsOverride, menu.lineHeightPercentOverride,
-            menu.fontSizeOverride == bookFontSizeOverride ? bookFontPointSizeOverride : 0);
+            menu.fontPointSizeOverride);
         if (!result.isCancelled) {
           onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
         }

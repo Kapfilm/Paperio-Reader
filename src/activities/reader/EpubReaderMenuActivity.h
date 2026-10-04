@@ -2,6 +2,7 @@
 #include <Epub.h>
 #include <I18n.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -55,7 +56,8 @@ class EpubReaderMenuActivity final : public MenuListActivity {
                                   const int8_t initialTextAntiAliasingOverride, const int8_t initialHyphenationOverride,
                                   const int8_t initialFontSizeNormalizationOverride,
                                   const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages,
-                                  const bool isCurrentPageStarred, const bool hasPrintedPages, const bool hasClippings);
+                                  const bool isCurrentPageStarred, const bool hasPrintedPages, const bool hasClippings,
+                                  uint8_t initialFontPointSizeOverride = 0);
 
   void onEnter() override;
   void render(RenderLock&&) override;
@@ -74,6 +76,11 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   void toggleCurrentItem() override;
   void openSubmenu(const SettingInfo& submenuEntry);
   void openLineHeightOverridePicker();
+  void openFontSizeOverridePicker();
+  std::vector<uint8_t> availableFontSizes() const;
+  std::string fontSizeValueLabel() const;
+  std::unique_ptr<SettingInfo> fontSizePickerSetting;
+  std::vector<uint8_t> fontSizePoints;
 
   // Map from StrId to MenuAction for result passing
   static MenuAction actionForNameId(StrId nameId);
@@ -87,6 +94,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   int8_t pendingFontFamilyOverride = -1;
   std::string pendingSdFontFamilyOverride;
   int8_t pendingFontSizeOverride = -1;
+  uint8_t pendingFontPointSizeOverride = 0;
   int16_t pendingLineHeightPercentOverride = -1;
   uint8_t pendingTextDarkness = 1;
   bool pendingBionicReading = false;
