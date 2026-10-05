@@ -12,6 +12,8 @@
 #include "MappedInputManager.h"
 #include "SdCardFontGlobals.h"
 #include "activities/RenderLock.h"
+#include "activities/SliderPickerActivity.h"
+#include "activities/ActivityResult.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ReaderFontSizeOptions.h"
@@ -182,12 +184,28 @@ void TextSettingsActivity::activateRow(const int row) {
           SETTINGS.screenMargin = SETTINGS.screenMargin >= 40 ? 5 : static_cast<uint8_t>(SETTINGS.screenMargin + 5);
           break;
         case 2: {
-          constexpr uint8_t step = 5;
-          const int next = SETTINGS.lineHeightPercent + step;
-          SETTINGS.lineHeightPercent = next > CrossPointSettings::MAX_LINE_HEIGHT_PERCENT
-                                           ? CrossPointSettings::MIN_LINE_HEIGHT_PERCENT
-                                           : static_cast<uint8_t>(next);
-          break;
+          SliderPickerActivity::Config cfg{
+              .titleId = StrId::STR_LINE_SPACING,
+              .hintId = StrId::STR_SLIDER_STEP_HINT,
+              .minValue = CrossPointSettings::MIN_LINE_HEIGHT_PERCENT,
+              .maxValue = CrossPointSettings::MAX_LINE_HEIGHT_PERCENT,
+              .initialValue = SETTINGS.lineHeightPercent,
+              .suffix = "%",
+              .showButtonStepHints = true,
+          };
+          startActivityForResult(std::make_unique<SliderPickerActivity>(renderer, mappedInput, std::move(cfg)),
+                                 [this](const ActivityResult& result) {
+                                   if (!result.isCancelled) {
+                                     if (const auto* selected = std::get_if<PercentResult>(&result.data)) {
+                                       RenderLock lock;
+                                       SETTINGS.lineHeightPercent = CrossPointSettings::clampedLineHeightPercent(
+                                           static_cast<uint8_t>(selected->percent));
+                                       SETTINGS.saveToFile();
+                                     }
+                                   }
+                                   requestUpdate();
+                                 });
+          return;
         }
         case 3:
           SETTINGS.extraParagraphSpacing = !SETTINGS.extraParagraphSpacing;

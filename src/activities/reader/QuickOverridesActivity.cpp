@@ -9,6 +9,7 @@
 #include "util/ReaderFontSizeOptions.h"
 #include <algorithm>
 #include "activities/ActivityResult.h"
+#include "activities/SliderPickerActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -19,7 +20,8 @@ QuickOverridesActivity::QuickOverridesActivity(
     const int8_t initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
     const int8_t initialParagraphAlignmentOverride, const int8_t initialTextAntiAliasingOverride,
     const int8_t initialHyphenationOverride, const int8_t initialFontSizeNormalizationOverride,
-    const int8_t initialInlineFootnotePreviewsOverride, const uint8_t initialFontPointSizeOverride)
+    const int8_t initialInlineFootnotePreviewsOverride, const uint8_t initialFontPointSizeOverride,
+    const int16_t initialLineHeightPercentOverride)
     : MenuListActivity("QuickOverrides", renderer, mappedInput),
       pendingEmbeddedStyleOverride(initialEmbeddedStyleOverride),
       pendingImageRenderingOverride(initialImageRenderingOverride),
@@ -27,6 +29,7 @@ QuickOverridesActivity::QuickOverridesActivity(
       pendingSdFontFamilyOverride(initialSdFontFamilyOverride),
       pendingFontSizeOverride(initialFontSizeOverride),
       pendingFontPointSizeOverride(initialFontPointSizeOverride),
+      pendingLineHeightPercentOverride(initialLineHeightPercentOverride),
       pendingBionicReadingOverride(initialBionicReadingOverride),
       pendingGuideDotsOverride(initialGuideDotsOverride),
       pendingParagraphAlignmentOverride(initialParagraphAlignmentOverride),
@@ -111,6 +114,7 @@ void QuickOverridesActivity::buildMenuItems() {
       [](const void* ctx) -> uint8_t { return static_cast<const QuickOverridesActivity*>(ctx)->fontSizeSlot(); },
       [](void* ctx, uint8_t value) { static_cast<QuickOverridesActivity*>(ctx)->selectFontSizeSlot(value); }));
   refreshFontSizeChoices();
+  menuItems.push_back(SettingInfo::Action(StrId::STR_LINE_SPACING, SettingAction::None));
 
   // Bionic: default / on / off
   menuItems.push_back(SettingInfo::DynamicEnumCtx(
@@ -228,6 +232,11 @@ void QuickOverridesActivity::selectFontSizeSlot(uint8_t slot) {
 }
 
 void QuickOverridesActivity::toggleCurrentItem() {
+  if (selectedIndex >= 0 && selectedIndex < static_cast<int>(menuItems.size()) &&
+      menuItems[selectedIndex].nameId == StrId::STR_LINE_SPACING) {
+    openLineHeightOverridePicker();
+    return;
+  }
   RenderLock lock(*this);
   if (selectedIndex >= 0 && selectedIndex < static_cast<int>(menuItems.size()) &&
       menuItems[selectedIndex].nameId == StrId::STR_FONT_SIZE && SETTINGS.numericFontSizes) {
@@ -273,6 +282,7 @@ void QuickOverridesActivity::finishWithResult(bool cancelled) {
   payload.sdFontFamilyOverride = pendingSdFontFamilyOverride;
   payload.fontSizeOverride = pendingFontSizeOverride;
   payload.fontPointSizeOverride = pendingFontPointSizeOverride;
+  payload.lineHeightPercentOverride = pendingLineHeightPercentOverride;
   payload.bionicReadingOverride = (pendingBionicReadingOverride > 0) ? 1 : 0;
   payload.guideDotsOverride = pendingGuideDotsOverride;
   payload.paragraphAlignmentOverride = pendingParagraphAlignmentOverride;
@@ -302,4 +312,44 @@ void QuickOverridesActivity::render(RenderLock&&) {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+void QuickOverridesActivity::openLineHeightOverridePicker() {
+  constexpr int kDefaultSentinel = CrossPointSettings::MIN_LINE_HEIGHT_PERCENT - 1;
+  const int initialValue = pendingLineHeightPercentOverride < 0 ? kDefaultSentinel : pendingLineHeightPercentOverride;
+  SliderPickerActivity::Config cfg{
+      .titleId = StrId::STR_LINE_SPACING,
+      .hintId = StrId::STR_SLIDER_STEP_HINT,
+      .minValue = kDefaultSentinel,
+      .maxValue = CrossPointSettings::MAX_LINE_HEIGHT_PERCENT,
+      .initialValue = initialValue,
+      .suffix = "%",
+      .zeroLabel = std::string(tr(STR_DEFAULT_VALUE)) + " (" + std::to_string(SETTINGS.lineHeightPercent) + "%)",
+      .showButtonStepHints = true,
+      .firstNumericValue = CrossPointSettings::MIN_LINE_HEIGHT_PERCENT,
+  };
+  startActivityForResult(std::make_unique<SliderPickerActivity>(renderer, mappedInput, std::move(cfg)),
+                         [this](const ActivityResult& result) {
+                           RenderLock lock(*this);
+                           if (!result.isCancelled) {
+                             const auto* selected = std::get_if<PercentResult>(&result.data);
+                             if (selected) {
+                               pendingLineHeightPercentOverride =
+                                   selected->percent < CrossPointSettings::MIN_LINE_HEIGHT_PERCENT
+                                       ? -1
+                                       : static_cast<int16_t>(selected->percent);
+                             }
+                           }
+                           requestUpdate();
+                         });
+}
+
+std::string QuickOverridesActivity::getItemValueString(int index) const {
+  if (menuItems[index].nameId == StrId::STR_LINE_SPACING) {
+    if (pendingLineHeightPercentOverride < 0) {
+      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + std::to_string(SETTINGS.lineHeightPercent) + "%)";
+    }
+    return std::to_string(pendingLineHeightPercentOverride) + "%";
+  }
+  return MenuListActivity::getItemValueString(index);
 }
