@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 140" role="img" aria-labelledby="title">
+  <title id="title">Paper|io</title>
+  <defs>
+    <mask id="eyes" maskUnits="userSpaceOnUse" x="0" y="0" width="120" height="100">
+      <rect width="120" height="100" fill="#fff"/>
+      <rect x="37" y="34" width="12" height="13" fill="#000"/>
+      <rect x="72" y="34" width="12" height="13" fill="#000"/>
+    </mask>
+  </defs>
+  <g transform="translate(90 -8)" shape-rendering="crispEdges" mask="url(#eyes)">
+    <rect x="24" y="24" width="72" height="48" fill="#fff"/>
+    <rect x="12" y="48" width="12" height="16" fill="#fff"/>
+    <rect x="96" y="48" width="12" height="16" fill="#fff"/>
+    <rect x="35" y="72" width="13" height="16" fill="#fff"/>
+    <rect x="53" y="72" width="13" height="16" fill="#fff"/>
+    <rect x="71" y="72" width="13" height="16" fill="#fff"/>
+  </g>
+  <text x="150" y="126" fill="#fff" font-family="Arial, sans-serif" font-size="44" font-weight="700" text-anchor="middle">Paper|io</text>
+</svg>
