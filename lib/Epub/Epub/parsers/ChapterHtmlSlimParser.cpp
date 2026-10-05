@@ -642,8 +642,26 @@ bool ChapterHtmlSlimParser::flushPartWordBuffer() {
 // Emit the current page, keeping paragraphLutPerPage and completedPageCount in lockstep.
 // Callers must ensure currentPage is non-null and carries content; the helper resets
 // currentPage to a fresh Page and zeroes currentPageNextY so the caller can keep building.
+void ChapterHtmlSlimParser::failIndexWrite() {
+  LOG_ERR("EHP", "Chapter index could not be recorded; aborting incomplete cache");
+  indexWriteFailed = true;
+  streamFailed = true;
+  layoutFailed = true;
+  saxParser_.stop();
+}
+
 void ChapterHtmlSlimParser::emitPage(uint32_t xhtmlByteOffset) {
-  paragraphLutPerPage.push_back({xhtmlByteOffset, xpathParagraphIndex, xpathListItemIndex});
+  if (indexWriteFailed) return;
+  if (paragraphIndexWriter) {
+    // Match Section's on-disk page-count validation, and never wrap uint16_t.
+    if (completedPageCount >= 10000 ||
+        !paragraphIndexWriter(xhtmlByteOffset, xpathParagraphIndex, xpathListItemIndex)) {
+      failIndexWrite();
+      return;
+    }
+  } else {
+    paragraphLutPerPage.push_back({xhtmlByteOffset, xpathParagraphIndex, xpathListItemIndex});
+  }
   completePageFn(std::move(currentPage));
   completedPageCount++;
   currentPage.reset(new (std::nothrow) Page());
@@ -719,6 +737,13 @@ void ChapterHtmlSlimParser::stopPreviewIfPageLimitReached() {
 
 bool ChapterHtmlSlimParser::recordAnchorSafely(const std::string& anchor, const uint16_t page) {
   if (anchor.empty() || anchorRecordingDisabled) return false;
+  if (anchorIndexWriter) {
+    if (indexWriteFailed || !anchorIndexWriter(anchor, page)) {
+      failIndexWrite();
+      return false;
+    }
+    return true;
+  }
 
   uint32_t compactId = 0;
   const bool useCompactId = parseCompactGenericAnchor(anchor, compactId);
@@ -769,6 +794,11 @@ void ChapterHtmlSlimParser::queueFb2AnchorSafely(std::string&& anchor, const uin
     // Match the stored-anchor guard: vector growth allocates before freeing its old
     // buffer and allocation failure aborts this firmware without C++ exceptions.
     if (largestBlock < vectorBytes + 512 || freeHeap < vectorBytes + anchor.size() + 2 * 1024) {
+      if (anchorIndexWriter) {
+        // A complete disk-backed FB2 index must not silently lose link targets.
+        failIndexWrite();
+        return;
+      }
       anchorRecordingDisabled = true;
       LOG_ERR("EHP", "FB2 anchor queue stopped (need=%u free=%u max=%u)",
               static_cast<unsigned>(vectorBytes), static_cast<unsigned>(freeHeap),
@@ -1244,7 +1274,8 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
         isFb2Marker || !isNonNavigableInlineElement(name) || isGatheredFootnoteTarget ||
         looksLikeFootnoteAnchor(navigationAnchor);
     if (isTocAnchor || (keepInlineAnchor &&
-                       self->recordedAnchorCount() + self->pendingFb2Anchors.size() < MAX_ANCHORS_PER_CHAPTER)) {
+                       (self->anchorIndexWriter ||
+                        self->recordedAnchorCount() + self->pendingFb2Anchors.size() < MAX_ANCHORS_PER_CHAPTER))) {
       // Generated FB2 markers sit inside paragraphs (including flattened table cells).
       // Record their word position now, then the page only once that line has actually
       // passed the page-overflow check. Generic deferred block anchors point too late
@@ -1822,6 +1853,10 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   if (self->xpathBodyDepth >= 0 && self->depth == self->xpathBodyDepth + 1) {
     self->lastBodyChildByteOffset = self->saxParser_.byteOffset();
     if (strcmp(name, "p") == 0) {
+      if (self->paragraphIndexWriter && self->xpathParagraphIndex == UINT16_MAX) {
+        self->failIndexWrite();
+        return;
+      }
       self->xpathParagraphIndex++;
     }
   }
@@ -1830,6 +1865,10 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   // not at body-child level. The running count must match what the runtime reverse
   // mapper sees so getPageForListItemIndex can snap a KOReader li XPath to a page.
   if (self->xpathBodyDepth >= 0 && strcmp(name, "li") == 0) {
+    if (self->paragraphIndexWriter && self->xpathListItemIndex == UINT16_MAX) {
+      self->failIndexWrite();
+      return;
+    }
     self->xpathListItemIndex++;
   }
 
@@ -2929,7 +2968,7 @@ bool ChapterHtmlSlimParser::finalize() {
     currentTextBlock.reset();
   }
 
-  return success;
+  return success && !indexWriteFailed;
 }
 
 void ChapterHtmlSlimParser::resolveBlockFont(BlockStyle& bs) {

@@ -49,6 +49,15 @@ bool writeStringChecked(FsFile& file, const std::string& value) {
 }
 }  // namespace
 
+bool ClippingStore::archiveForBook(const std::string& filePath, const std::string& backupDirectory) {
+  const std::string original = pathForBook(filePath);
+  if (!Storage.exists(original.c_str())) return true;
+  const std::string archived = backupDirectory + "/clippings.bin";
+  // Existing archives are never replaced; a conflict requires manual recovery.
+  if (Storage.exists(archived.c_str())) return false;
+  return Storage.rename(original.c_str(), archived.c_str());
+}
+
 bool ClippingStore::loadForBook(const std::string& filePath, const std::string& title, const std::string& author) {
   bookFilePath = filePath;
   bookTitle = title;

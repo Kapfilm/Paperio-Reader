@@ -26,6 +26,7 @@ class Section {
   std::string filePath;
   FsFile file;
   std::vector<uint32_t> lut;  // Cached page byte-offsets; loaded once, avoids per-page LUT seek
+  uint32_t diskLutOffset = 0;  // FB2: keep the page index on SD instead of allocating per page
   bool truncatedCache = false;
   bool embeddedStyleFallback = false;
   // Set by the last build when CssParser hit its own low-heap mode mid-parse
@@ -191,7 +192,7 @@ class Section {
   // GitHub user itsthisjustin.
   uint16_t estimatedTotalPages() const;
   // Load any page that has already been written during an active build, using the
-  // in-memory LUT that grows with every onPageComplete(). Opens a temporary read handle
+  // page LUT (on SD for FB2, in memory for EPUB). Opens a temporary read handle
   // on the same file the build is writing to, syncing the writer first so the read handle
   // sees the latest committed pages (the writer is not synced per page). Must be called
   // between build slices, never concurrently with a slice on another task. Returns nullptr

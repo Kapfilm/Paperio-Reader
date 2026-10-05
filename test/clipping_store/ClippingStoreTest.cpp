@@ -88,3 +88,34 @@ TEST_F(ClippingStoreTest, RejectsCorruptAnchorLength) {
   EXPECT_FALSE(loaded.loadForBook("/book.epub", "Book", "Author"));
   EXPECT_TRUE(loaded.empty());
 }
+
+TEST_F(ClippingStoreTest, NativeChapterMigrationArchivesCoordinatesAndAllowsRetry) {
+  ClippingStore original;
+  ASSERT_TRUE(original.loadForBook("/book.fb2", "Book", "Author"));
+  ASSERT_EQ(add(original, "note-1"), ClippingStore::AddResult::Added);
+  const auto path = filePath();
+  std::ifstream input(path, std::ios::binary);
+  const std::string expected((std::istreambuf_iterator<char>(input)), {});
+  input.close();
+  ASSERT_TRUE(Storage.mkdir("/.crosspoint/book.before-native-chapters"));
+  ASSERT_TRUE(ClippingStore::archiveForBook("/book.fb2", "/.crosspoint/book.before-native-chapters"));
+  EXPECT_FALSE(std::filesystem::exists(path));
+  std::ifstream archive(Storage.root + "/.crosspoint/book.before-native-chapters/clippings.bin", std::ios::binary);
+  EXPECT_EQ(std::string((std::istreambuf_iterator<char>(archive)), {}), expected);
+  EXPECT_TRUE(ClippingStore::archiveForBook("/book.fb2", "/.crosspoint/book.before-native-chapters"));
+  ClippingStore newLayout;
+  ASSERT_TRUE(newLayout.loadForBook("/book.fb2", "Book", "Author"));
+  EXPECT_TRUE(newLayout.empty());
+}
+
+TEST_F(ClippingStoreTest, NativeChapterMigrationNeverOverwritesExistingArchive) {
+  ClippingStore original;
+  ASSERT_TRUE(original.loadForBook("/book.fb2", "Book", "Author"));
+  ASSERT_EQ(add(original), ClippingStore::AddResult::Added);
+  ASSERT_TRUE(Storage.mkdir("/.crosspoint/backup"));
+  std::ofstream(Storage.root + "/.crosspoint/backup/clippings.bin") << "original backup";
+  EXPECT_FALSE(ClippingStore::archiveForBook("/book.fb2", "/.crosspoint/backup"));
+  ClippingStore stillThere;
+  ASSERT_TRUE(stillThere.loadForBook("/book.fb2", "Book", "Author"));
+  EXPECT_EQ(stillThere.getAll().size(), 1u);
+}

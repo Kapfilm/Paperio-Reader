@@ -38,6 +38,9 @@ class ClippingStore {
  public:
   enum class AddResult : uint8_t { Added, LimitReached, SaveFailed };
 
+  // Preserve old page/word coordinates before an FB2 pagination migration.
+  static bool archiveForBook(const std::string& filePath, const std::string& backupDirectory);
+
   bool loadForBook(const std::string& filePath, const std::string& title, const std::string& author);
   void unload();
 

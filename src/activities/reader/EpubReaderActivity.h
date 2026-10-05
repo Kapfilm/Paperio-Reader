@@ -497,6 +497,8 @@ class EpubReaderActivity final : public Activity {
   // EPUB highlights/clippings. The vector is bounded to 64 records and loaded
   // once per reader session; text payloads are capped at 512 bytes each.
   ClippingStore clippingStore;
+  bool fb2MigrationNotice = false;
+  bool fb2MigrationFailed = false;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;

@@ -23,4 +23,9 @@ class EspClass {
 inline EspClass ESP;
 
 // millis stub
-inline unsigned long millis() { return 0; }
+inline unsigned long testMillisStep = 0;
+inline unsigned long testMillisValue = 0;
+inline unsigned long millis() {
+  testMillisValue += testMillisStep;
+  return testMillisValue;
+}

@@ -17,6 +17,7 @@
 #include <limits>
 #include <memory>
 #include "Fb2Encoding.h"
+#include "Fb2StateMigration.h"
 #include "native/Fb2ZipOpener.h"
 #include "native/BufferedFb2ScanStorage.h"
 #include "native/FsFileReader.h"
@@ -301,43 +302,12 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 29;  // rebuild with buffered indexes and complete FB2 TOC mapping
-// A single FB2 <section> with more inline images than this gets split into
-// several virtual chapters while its SD-card index is written, so a chapter
-// that's actually opened never needs to extract more than this many images
-// at once. Real-world crash trace: 23 images in one un-split section
-// reliably tripped the reader's own low-heap image-suppression check
-// (MemoryBudget::hasHeapForEpubInlineImage) on every single one of them.
-// Keep chapters bounded without splitting too aggressively through nested
-// markup.  Images are now converted to their SD pixel cache while parsing, so
-// two per virtual chapter no longer requires two live PNG decoders later.
-constexpr uint32_t MAX_IMAGES_PER_CHAPTER = 2;
-
-// Large image-free FB2 <section>s are exposed to the common EPUB reader as
-// several small virtual spine items. This is deliberately based on decoded
-// text bytes rather than "pages": the real page count depends on font,
-// margins and viewport and is only known later in ChapterHtmlSlimParser.
-// ~20 KiB normally lands in the 5-10 page range on X3/X4, so first-open work
-// is bounded without creating hundreds of tiny spine items.
-// 20 KiB produced 2220 virtual spine items for a real 48 MiB FB2. Each item
-// adds index/OPF/cache work and made package creation take over two minutes.
-// 24 KiB is the compromise after real-device traces showed maxAlloc falling
-// to roughly 32-36 KiB while a 40 KiB virtual chapter was being paginated.
-// This leaves headroom for parser/layout allocations without returning all the
-// way to the 20 KiB setting that created ~2220 spine items on a 48 MiB book.
-constexpr uint32_t TARGET_TEXT_BYTES_PER_CHAPTER = 24 * 1024;
-
-uint32_t virtualChapterCount(const Fb2SectionIndexEntry& section) {
-  const uint32_t imageSlices =
-      std::max<uint32_t>(1, (section.imageRefCount + MAX_IMAGES_PER_CHAPTER - 1) / MAX_IMAGES_PER_CHAPTER);
-  const uint32_t textSlices =
-      std::max<uint32_t>(1, (section.approxTextBytes / TARGET_TEXT_BYTES_PER_CHAPTER +
-                                (section.approxTextBytes % TARGET_TEXT_BYTES_PER_CHAPTER != 0)));
-  // An illustrated section still needs the text-size bound. The old either/or
-  // choice produced 50-140 KiB virtual chapters in large illustrated omnibus
-  // books, which exhausted the X4 layout heap and could trigger a reboot.
-  return std::max(imageSlices, textSlices);
-}
+constexpr uint8_t PACKAGE_VERSION = 30;  // one spine per source section; streamed layout indexes
+// A spine is a real source section. Memory limits belong to the streaming
+// renderer and its SD-backed page indexes, not to visible chapter boundaries.
+// Splitting every 24 KiB (or two images) used to flush a partly filled page and
+// restart the chapter counter in the middle of the author's chapter.
+uint32_t virtualChapterCount(const Fb2SectionIndexEntry&) { return 1; }
 
 constexpr char CACHE_MAGIC[] = "FB2IDX";  // 6 bytes, no trailing NUL written
 constexpr size_t CACHE_MAGIC_LEN = 6;
@@ -2215,6 +2185,10 @@ bool Fb2::load(const ProgressFn& onProgress) {
   // Rebuild the cache directory fresh before prepareSource() writes a
   // zip-extracted/transcoded source copy into it - that copy has to survive
   // this wipe, not get created before it and then deleted a moment later.
+  if (!Fb2StateMigration::prepare(cachePath)) {
+    LOG_ERR("FB2", "Could not safely migrate the old chapter layout; original state retained");
+    return false;
+  }
   if (!clearFb2GeneratedCachePreservingUserState(cachePath)) {
     LOG_ERR("FB2", "Aborting package rebuild because user reading state could not be preserved");
     return false;
@@ -2396,8 +2370,8 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
   // to seed BookMetadataCache's progress-bar math, since a chapter isn't a
   // real file with a real size until it's actually been rendered once.
   // Offsets, parent/body indices are scan()-only bookkeeping and aren't
-  // persisted. One record is written per *virtual* chapter, not per FB2
-  // <section> - see splitSectionsForImageLoad().
+  // persisted. One record is written per source FB2 section. The unbounded
+  // ranges keep the reader from treating internal processing batches as chapters.
   phaseStarted = millis();
   chapterCount = 0;
   {
@@ -2407,16 +2381,6 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
     writeCacheHeader(bufferedSections);
     for (const auto& section : scan.sections) {
       const uint32_t sliceCount = virtualChapterCount(section);
-      const uint32_t imageSliceCount =
-          std::max<uint32_t>(1, (section.imageRefCount + MAX_IMAGES_PER_CHAPTER - 1) / MAX_IMAGES_PER_CHAPTER);
-      const uint32_t textSliceCount =
-          std::max<uint32_t>(1, (section.approxTextBytes / TARGET_TEXT_BYTES_PER_CHAPTER +
-                                (section.approxTextBytes % TARGET_TEXT_BYTES_PER_CHAPTER != 0)));
-      // Use one sequential boundary strategy per section. Text-dominant
-      // illustrated sections follow text ranges (images naturally remain at
-      // their source positions); image-dominant sections keep image-boundary
-      // splitting so a picture gallery cannot overload one chapter.
-      const bool splitByText = section.approxTextBytes > 0 && textSliceCount >= imageSliceCount;
       // Bit 7 records a non-standard first-styled-paragraph title. Depths over
       // 127 are not useful to the reader and are clamped before packing.
       const uint8_t level = static_cast<uint8_t>(std::min<uint16_t>(section.level, 127)) |
@@ -2435,23 +2399,6 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
         uint32_t textRangeStart = 0;
         uint32_t textRangeEnd = UINT32_MAX;
         uint32_t approxBytes = section.approxTextBytes;
-
-        if (!splitByText && section.imageRefCount > 0) {
-          imageRangeStart = slice * MAX_IMAGES_PER_CHAPTER;
-          imageRangeEnd =
-              imageRangeStart + MAX_IMAGES_PER_CHAPTER >= section.imageRefCount
-                  ? UINT32_MAX
-                  : imageRangeStart + MAX_IMAGES_PER_CHAPTER;
-        } else if (sliceCount > 1) {
-          const uint32_t bytesPerSlice =
-              std::max<uint32_t>(1, (section.approxTextBytes / sliceCount + (section.approxTextBytes % sliceCount != 0)));
-          textRangeStart = slice * bytesPerSlice;
-          textRangeEnd =
-              slice + 1 >= sliceCount ? UINT32_MAX : textRangeStart + bytesPerSlice;
-          const uint32_t remaining =
-              section.approxTextBytes > textRangeStart ? section.approxTextBytes - textRangeStart : 0;
-          approxBytes = std::min<uint32_t>(remaining, bytesPerSlice);
-        }
 
         bufferedSections.write(reinterpret_cast<const uint8_t*>(&level), sizeof(level));
         bufferedSections.write(reinterpret_cast<const uint8_t*>(&innerStartOffset), sizeof(innerStartOffset));

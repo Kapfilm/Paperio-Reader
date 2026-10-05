@@ -273,6 +273,12 @@ class ChapterHtmlSlimParser final : public Print {
     uint16_t listItemIndex;    // running <li> count at page completion (any depth)
   };
   std::vector<ParagraphLutEntry> paragraphLutPerPage;  // deep LUT: one entry per page
+  // FB2 chapters may span thousands of pages. Section supplies disk-backed sinks
+  // so these indices do not grow with the chapter in RAM.
+  std::function<bool(uint32_t, uint16_t, uint16_t)> paragraphIndexWriter;
+  std::function<bool(const std::string&, uint16_t)> anchorIndexWriter;
+  bool indexWriteFailed = false;
+  void failIndexWrite();
 
   // Active parser for streaming. Stored as a member so page-break sites (addLineToPage,
   // image breaks) can call saxParser_.byteOffset() without threading the parser through
@@ -424,6 +430,12 @@ class ChapterHtmlSlimParser final : public Print {
   [[nodiscard]] bool previewComplete() const { return previewStopRequested; }
   void setPreviewStartOrdinal(const uint32_t ordinal) { previewStartOrdinal = ordinal; }
   void setInlineFootnotePreviews(FootnotePreviews::Lookup* lookup) { inlineFootnotePreviews = lookup; }
+  void setIndexWriters(std::function<bool(uint32_t, uint16_t, uint16_t)> paragraphWriter,
+                       std::function<bool(const std::string&, uint16_t)> anchorWriter) {
+    paragraphIndexWriter = std::move(paragraphWriter);
+    anchorIndexWriter = std::move(anchorWriter);
+  }
+  [[nodiscard]] bool indexSucceeded() const { return !indexWriteFailed; }
 
   // Print interface — fed by Epub::readItemContentsToStream.
   size_t write(uint8_t) override;

@@ -20,6 +20,7 @@
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
 #include <Fb2.h>
+#include <Fb2StateMigration.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
@@ -409,6 +410,29 @@ void EpubReaderActivity::onEnter() {
     logReaderMemSnapshot("onEnter_after_image_manifest");
   }
 
+  // Never apply v29 virtual-spine coordinates to the native-chapter package.
+  // The converter archived the whole old cache and recovered only the source
+  // chapter. Annotations retain their originals in that archive, not false
+  // page/word coordinates in the new layout.
+  if (Fb2StateMigration::needsReaderMigration(epub->getCachePath())) {
+    const std::string source = sourceBookPath(*epub);
+    if (!ClippingStore::archiveForBook(source, Fb2StateMigration::backupPath(epub->getCachePath()))) {
+      fb2MigrationFailed = true;
+      requestUpdate();
+      return;
+    }
+    GLOBAL_BOOKMARKS.removeBySourcePath(source);
+    if (APP_STATE.pendingBookmarkJump.bookPath == source) APP_STATE.pendingBookmarkJump.clear();
+    if (APP_STATE.koReaderSyncSession.epubPath == epub->getPath()) APP_STATE.koReaderSyncSession.clear();
+    APP_STATE.saveToFile();
+    if (!Fb2StateMigration::markReaderMigrated(epub->getCachePath())) {
+      fb2MigrationFailed = true;
+      requestUpdate();
+      return;
+    }
+  }
+  fb2MigrationNotice = Fb2StateMigration::needsNotice(epub->getCachePath());
+
   // Load the persistent baseline (progress.bin) first. Pending session state
   // (sync result, bookmark jump) is then overlaid on top — this is the only order
   // that lets a Kind::Paragraph / Kind::ListItem navTarget set by applyPendingSyncSession
@@ -535,7 +559,7 @@ void EpubReaderActivity::onExit() {
   // Save bookmarks before exit
   bookmarkStore.save();
   clippingStore.unload();
-  if (epub) {
+  if (epub && !fb2MigrationFailed) {
     GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, sourceBookPath(*epub), epub->getCachePath(), epub->getTitle(), false);
   }
 
@@ -581,7 +605,7 @@ void EpubReaderActivity::onExit() {
   currentPageFootnotes.clear();
   currentPageFootnotes.shrink_to_fit();
   // The tracker owns its metadata; load history only after reader allocations are gone.
-  globalReadingSessionTracker().end();
+  if (!fb2MigrationFailed) globalReadingSessionTracker().end();
 }
 
 void EpubReaderActivity::loop() {
@@ -609,6 +633,22 @@ void EpubReaderActivity::loop() {
   }
 
   if (inputDrainGuard.shouldDrain(mappedInput)) {
+    buttonEvents.drain();
+    return;
+  }
+
+  if (fb2MigrationNotice || fb2MigrationFailed) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      finish();
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && !fb2MigrationFailed) {
+      RenderLock lock(*this);
+      if (Fb2StateMigration::acknowledgeNotice(epub->getCachePath())) {
+        fb2MigrationNotice = false;
+      } else {
+        fb2MigrationFailed = true;
+      }
+      requestUpdate();
+    }
     buttonEvents.drain();
     return;
   }
@@ -3616,6 +3656,24 @@ void EpubReaderActivity::renderSectionBuildingPass(RenderLock& lock, const Rende
 // TODO: Failure handling
 void EpubReaderActivity::render(RenderLock&& lock) {
   if (!epub) {
+    return;
+  }
+
+  if (fb2MigrationNotice || fb2MigrationFailed) {
+    renderer.clearScreen();
+    const char* lines[] = {
+        fb2MigrationFailed ? "Ошибка переноса отметок FB2" : "FB2: цельные главы",
+        fb2MigrationFailed ? "Данные сохранены, книга закрыта." : "Проверьте позицию: начало главы.",
+        "Старые закладки и выделения —",
+        "в резервной папке на SD",
+        "с окончанием .before-native-chapters.",
+        fb2MigrationFailed ? "Назад: закрыть книгу" : "OK: читать     Назад: закрыть книгу"};
+    int y = (renderer.getScreenHeight() - 6 * 34) / 2;
+    for (const char* line : lines) {
+      renderer.drawCenteredText(UI_10_FONT_ID, y, line, true);
+      y += 34;
+    }
+    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     return;
   }
 

@@ -6,6 +6,8 @@
 #include <Logging.h>
 #include <Memory.h>
 #include <Serialization.h>
+#include <BufferedFileIO.h>
+#include <CooperativeAbort.h>
 #include <ZipFile.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
@@ -438,25 +440,29 @@ bool Section::loadSectionFile(const BuildParams& p) {
     return false;
   }
 
-  // Load LUT into memory (file is now positioned at the lutOffset field)
+  // Validate the LUT; FB2 keeps it on disk so long chapters cost no per-page RAM.
   uint32_t lutOffset = 0;
   if (!readChecked(lutOffset) || lutOffset < header::kSize || lutOffset > file.size() ||
       static_cast<uint64_t>(pageCount) * sizeof(uint32_t) > file.size() - lutOffset) {
     clearCache();
     return false;
   }
-  lut.resize(pageCount);
+  diskLutOffset = epub->isFb2Package() ? lutOffset : 0;
+  lut.clear();
+  if (!diskLutOffset) lut.resize(pageCount);
   if (!file.seek(lutOffset)) {
     LOG_ERR("SCT", "Deserialization failed: seek to LUT offset %u failed", lutOffset);
     clearCache();
     return false;
   }
-  for (uint32_t& pos : lut) {
+  for (uint32_t i = 0; i < pageCount; ++i) {
+    uint32_t pos = 0;
     if (!readChecked(pos) || pos < header::kSize || pos >= lutOffset) {
       LOG_ERR("SCT", "Deserialization failed: LUT entry %u out of range [%u, %u)", pos, header::kSize, lutOffset);
       clearCache();
       return false;
     }
+    if (!diskLutOffset) lut[i] = pos;
   }
   // Build TOC boundaries by scanning anchor data from the still-open file,
   // matching only the TOC anchors we need (avoids loading all anchors into memory).
@@ -472,6 +478,7 @@ bool Section::loadSectionFile(const BuildParams& p) {
 bool Section::clearCache() {
   file.close();  // Must be closed before removal on FAT32
   lut.clear();
+  diskLutOffset = 0;
   tocBoundaries.clear();
   pageCount = 0;
   currentPage = 0;
@@ -495,6 +502,65 @@ bool Section::clearCache() {
 // phases; see docs/epubreader-control-flow-refactor.md §2.7. Held by Section as a
 // unique_ptr so its address (and thus visitor's completePageFn lut capture) is stable
 // across phase calls and, later, across loop ticks.
+// Short-lived staging index. It is removed on success, failure and cancellation;
+// its contents are copied into the established section-cache format at finalize.
+class SectionIndexSpool {
+ public:
+  FsFile writer;
+  std::string path;
+  std::unique_ptr<serialization::BufferedFileWriter> buffered;
+  bool healthy = true;
+  ~SectionIndexSpool() {
+    buffered.reset();
+    if (writer) writer.close();
+    if (!path.empty()) Storage.remove(path.c_str());
+  }
+  bool open(const std::string& value) {
+    path = value;
+    if (!Storage.openFileForWrite("SCTIDX", path, writer)) return false;
+    buffered.reset(new (std::nothrow) serialization::BufferedFileWriter(writer, 512));
+    return static_cast<bool>(buffered);
+  }
+  template <typename T> bool append(const T& value) {
+    healthy = healthy && buffered && buffered->writePod(value);
+    return healthy;
+  }
+  bool appendBytes(const std::string& value) {
+    healthy = healthy && buffered && buffered->write(value.data(), value.size());
+    return healthy;
+  }
+  bool flush() {
+    healthy = healthy && buffered && buffered->flush();
+    if (healthy) writer.flush();
+    return healthy;
+  }
+  bool copyTo(FsFile& output) {
+    if (!flush()) return false;
+    FsFile input;
+    if (!Storage.openFileForRead("SCTIDX", path, input)) return false;
+    uint8_t buffer[512];
+    size_t remaining = writer.position();
+    while (remaining > 0) {
+      if (CooperativeAbort::shouldAbortLongTask()) {
+        CooperativeAbort::markAborted();
+        return false;
+      }
+      const size_t n = std::min(remaining, sizeof(buffer));
+      if (input.read(buffer, n) != static_cast<int>(n) || output.write(buffer, n) != n) return false;
+      remaining -= n;
+      if (remaining % (8 * 1024) < sizeof(buffer)) esp_task_wdt_reset();
+    }
+    return true;
+  }
+  bool readOffset(uint16_t page, uint32_t& offset) {
+    if (!flush()) return false;
+    FsFile input;
+    return Storage.openFileForRead("SCTIDX", path, input) &&
+           input.seek(static_cast<uint32_t>(page) * sizeof(uint32_t)) &&
+           input.read(&offset, sizeof(offset)) == sizeof(offset);
+  }
+};
+
 struct Section::BuildState {
   BuildParams params;
   std::function<void(int)> progressFn;
@@ -510,6 +576,13 @@ struct Section::BuildState {
   bool statValid = false;
   CssParser* cssParser = nullptr;
   std::vector<uint32_t> lut;
+  bool diskIndices = false;
+  bool indexOk = true;
+  uint32_t paragraphCount = 0;
+  uint32_t anchorCount = 0;
+  SectionIndexSpool pageIndex;
+  SectionIndexSpool paragraphIndex;
+  SectionIndexSpool anchorIndex;
   std::unique_ptr<ChapterHtmlSlimParser> visitor;
   // Live ZIP-side state of the parse, created on the first runBuildParse call and
   // released the moment the compressed stream is exhausted. zip must outlive reader
@@ -712,6 +785,7 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   file.close();
   pageCount = 0;
   this->lut.clear();
+  diskLutOffset = 0;
   cssLowHeapDegraded_ = false;
 
   if (!Storage.openFileForWrite("SCT", filePath, file)) {
@@ -721,6 +795,15 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
                          p.viewportHeight, p.hyphenationEnabled, p.embeddedStyle, p.bionicReadingEnabled,
                          p.imageRendering);
   st.lut.clear();
+  st.diskIndices = epub->isFb2Package();
+  if (st.diskIndices &&
+      (!st.pageIndex.open(filePath + ".pages.tmp") ||
+       !st.paragraphIndex.open(filePath + ".paragraphs.tmp") ||
+       !st.anchorIndex.open(filePath + ".anchors.tmp"))) {
+    file.close();
+    Storage.remove(filePath.c_str());
+    return BuildPhaseResult::Failed;
+  }
 
   // Derive the content base directory and image cache path prefix for the parser
   size_t lastSlash = st.localPath.find_last_of('/');
@@ -783,14 +866,40 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
     }
   }
 
-  // The visitor's completePageFn captures &st.lut: BuildState lives in a stable unique_ptr,
+  // The visitor's completePageFn captures st: BuildState lives in a stable unique_ptr,
   // so this reference is valid for the visitor's whole lifetime, including across slices.
   st.visitor = std::make_unique<ChapterHtmlSlimParser>(
       epub, renderer, p.fontId, p.lineCompression, p.extraParagraphSpacing, p.paragraphAlignment, p.viewportWidth,
       p.viewportHeight, p.hyphenationEnabled, p.fontSizeNormalization, p.bionicReadingEnabled,
-      [this, &st](std::unique_ptr<Page> page) { st.lut.emplace_back(this->onPageComplete(std::move(page))); },
+      [this, &st](std::unique_ptr<Page> page) {
+        if (!st.indexOk) return;
+        const uint32_t offset = this->onPageComplete(std::move(page));
+        if (st.diskIndices) {
+          st.indexOk = offset != 0 && offset != UINT32_MAX && st.pageIndex.append(offset);
+        } else {
+          st.lut.emplace_back(offset);
+        }
+      },
       p.embeddedStyle, st.contentBase, st.imageBasePath, p.imageRendering, std::move(tocAnchors), st.progressFn,
       st.cssParser, epub->getImageManifest(), p.previewAnchor, p.previewMaxPages);
+  if (st.diskIndices) {
+    st.visitor->setIndexWriters(
+        [&st](uint32_t offset, uint16_t paragraph, uint16_t listItem) {
+          st.indexOk = st.indexOk && st.paragraphIndex.append(offset) &&
+                       st.paragraphIndex.append(paragraph) && st.paragraphIndex.append(listItem);
+          if (st.indexOk) ++st.paragraphCount;
+          return st.indexOk;
+        },
+        [&st](const std::string& anchor, uint16_t page) {
+          const uint32_t size = anchor.size();
+          st.indexOk = st.indexOk && st.anchorCount < UINT16_MAX &&
+                       size <= serialization::MAX_STRING_LENGTH &&
+                       st.anchorIndex.append(size) && st.anchorIndex.appendBytes(anchor) &&
+                       st.anchorIndex.append(page);
+          if (st.indexOk) ++st.anchorCount;
+          return st.indexOk;
+        });
+  }
   st.visitor->setExternalPageBreakAnchors(std::move(externalPageBreakAnchors));
   st.visitor->setFontSizeLadder(p.fontSizeLadder);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
@@ -1155,7 +1264,20 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
 
 Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   ChapterHtmlSlimParser& visitor = *st.visitor;
+  // A missing page/index record makes navigation unsafe; never publish it as a
+  // "readable partial" cache (the legacy parser-error fallback below).
+  if (!st.indexOk || !visitor.indexSucceeded()) {
+    file.close();
+    Storage.remove(filePath.c_str());
+    return BuildPhaseResult::Failed;
+  }
   const bool parseComplete = st.streamOk && st.finalizeOk && st.parserStreamOk;
+  if (st.diskIndices && !parseComplete) {
+    LOG_ERR("SCT", "Incomplete FB2 chapter rejected instead of publishing truncated text");
+    file.close();
+    Storage.remove(filePath.c_str());
+    return BuildPhaseResult::Failed;
+  }
   bool success = parseComplete;
   const bool hasParsedPages = pageCount > 0;
   // streamMs is no longer a separate phase (SD-write of temp file is gone); keep the
@@ -1207,6 +1329,7 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
     }
     serialization::writePod(file, pos);
   }
+  if (st.diskIndices && !st.pageIndex.copyTo(file)) hasFailedLutRecords = true;
 
   if (hasFailedLutRecords) {
     LOG_ERR("SCT", "Failed to write LUT due to invalid page positions");
@@ -1219,7 +1342,13 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   const uint32_t anchorMapOffset = file.position();
   const auto& anchors = visitor.getAnchors();
   const auto& compactIdAnchors = visitor.getCompactIdAnchors();
-  serialization::writePod(file, static_cast<uint16_t>(anchors.size() + compactIdAnchors.size()));
+  serialization::writePod(file, static_cast<uint16_t>(st.diskIndices ? st.anchorCount :
+                                                       anchors.size() + compactIdAnchors.size()));
+  if (st.diskIndices && !st.anchorIndex.copyTo(file)) {
+    file.close();
+    Storage.remove(filePath.c_str());
+    return BuildPhaseResult::Failed;
+  }
   for (const auto& [anchor, page] : anchors) {
     serialization::writeString(file, anchor);
     serialization::writePod(file, page);
@@ -1244,14 +1373,20 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   // from the beginning of the XHTML file, reducing SD reads on large chapters.
   const uint32_t paragraphLutOffset = file.position();
   const auto& paragraphLut = visitor.getParagraphLutPerPage();
-  if (paragraphLut.size() != static_cast<size_t>(pageCount)) {
+  const size_t paragraphCount = st.diskIndices ? st.paragraphCount : paragraphLut.size();
+  if (paragraphCount != static_cast<size_t>(pageCount)) {
     LOG_ERR("SCT", "Paragraph LUT size mismatch: lut=%u pageCount=%u", static_cast<uint32_t>(paragraphLut.size()),
             static_cast<uint32_t>(pageCount));
     file.close();
     Storage.remove(filePath.c_str());
     return BuildPhaseResult::Failed;
   }
-  serialization::writePod(file, static_cast<uint16_t>(paragraphLut.size()));
+  serialization::writePod(file, static_cast<uint16_t>(paragraphCount));
+  if (st.diskIndices && !st.paragraphIndex.copyTo(file)) {
+    file.close();
+    Storage.remove(filePath.c_str());
+    return BuildPhaseResult::Failed;
+  }
   for (const auto& entry : paragraphLut) {
     serialization::writePod(file, entry.xhtmlByteOffset);
     serialization::writePod(file, entry.paragraphIndex);
@@ -1289,7 +1424,7 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
     st.cssParser->clearCaches();
   }
 
-  buildTocBoundaries(anchors);
+  if (!st.diskIndices) buildTocBoundaries(anchors);
 
   // Populate in-memory pageBreakLabels from the just-completed parse so the status bar
   // can show printed-page labels without having to reload the section cache from disk.
@@ -1309,6 +1444,8 @@ Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   }
   truncatedCache = !parseComplete;
   this->lut = std::move(st.lut);
+  diskLutOffset = st.diskIndices ? lutOffset : 0;
+  if (st.diskIndices) buildTocBoundariesFromFile(file);
   const uint32_t finalizeMs = millis() - phaseFinalizeStart;
   const uint32_t totalMs = millis() - st.totalStartMs;
   LOG_INF("SCT",
@@ -1482,7 +1619,7 @@ void Section::abortSectionBuild() {
 }
 
 std::unique_ptr<Page> Section::loadPageFromSectionFile() {
-  if (currentPage < 0 || currentPage >= static_cast<int>(lut.size())) {
+  if (currentPage < 0 || currentPage >= pageCount || (!diskLutOffset && currentPage >= static_cast<int>(lut.size()))) {
     LOG_ERR("SCT", "loadPageFromSectionFile: page %d out of LUT range (%u entries)", currentPage,
             static_cast<uint32_t>(lut.size()));
     return nullptr;
@@ -1496,8 +1633,17 @@ std::unique_ptr<Page> Section::loadPageFromSectionFile() {
     }
   }
 
-  if (!file.seek(lut[currentPage])) {
-    LOG_ERR("SCT", "loadPageFromSectionFile: seek to page %d offset %u failed", currentPage, lut[currentPage]);
+  uint32_t offset = 0;
+  if (diskLutOffset) {
+    if (!file.seek(diskLutOffset + static_cast<uint32_t>(currentPage) * sizeof(uint32_t)) ||
+        file.read(&offset, sizeof(offset)) != sizeof(offset) || offset < header::kSize || offset >= diskLutOffset) {
+      return nullptr;
+    }
+  } else {
+    offset = lut[currentPage];
+  }
+  if (!file.seek(offset)) {
+    LOG_ERR("SCT", "loadPageFromSectionFile: seek to page %d offset %u failed", currentPage, offset);
     return nullptr;
   }
   return Page::deserialize(file);
@@ -1519,7 +1665,7 @@ uint16_t Section::estimatedTotalPages() const {
   const int pct = activeBuildPercent();
   if (pct <= 0 || pct >= 100 || pageCount == 0) return pageCount;
   const uint32_t projected = static_cast<uint32_t>(pageCount) * 100u / static_cast<uint32_t>(pct);
-  return projected > pageCount ? static_cast<uint16_t>(projected) : pageCount;
+  return projected > pageCount ? static_cast<uint16_t>(std::min<uint32_t>(projected, 10000u)) : pageCount;
 }
 
 bool Section::activeBuildCssDegraded() const {
@@ -1534,7 +1680,12 @@ std::unique_ptr<Page> Section::loadPageFromActiveBuild(const uint16_t pageIndex)
     LOG_ERR("SCT", "loadPageFromActiveBuild: page %u out of range (built=%u)", pageIndex, pageCount);
     return nullptr;
   }
-  const uint32_t offset = buildState_->lut[pageIndex];
+  uint32_t offset = 0;
+  if (buildState_->diskIndices) {
+    if (!buildState_->indexOk || !buildState_->pageIndex.readOffset(pageIndex, offset)) return nullptr;
+  } else {
+    offset = buildState_->lut[pageIndex];
+  }
   if (offset == 0 || offset == UINT32_MAX) {
     LOG_ERR("SCT", "loadPageFromActiveBuild: bad LUT entry %u for page %u", offset, pageIndex);
     return nullptr;
@@ -1605,6 +1756,7 @@ void Section::warmAllImageCaches(const int xOffset, const int yOffset, const boo
 // because the anchor resolution has fundamentally different iteration patterns
 // (scan in-memory vector vs. stream from file with early exit).
 void Section::buildTocBoundaries(const std::vector<std::pair<std::string, uint16_t>>& anchors) {
+  tocBoundaries.clear();
   const int startTocIndex = epub->getTocIndexForSpineIndex(spineIndex);
   if (startTocIndex < 0) return;
 
@@ -1650,6 +1802,7 @@ void Section::buildTocBoundaries(const std::vector<std::pair<std::string, uint16
 // streams through on-disk anchors matching only those, stopping as soon as all are found.
 // See buildTocBoundaries for the in-memory variant.
 void Section::buildTocBoundariesFromFile(FsFile& f) {
+  tocBoundaries.clear();
   const int startTocIndex = epub->getTocIndexForSpineIndex(spineIndex);
   if (startTocIndex < 0) return;
 
@@ -1786,18 +1939,19 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
     return std::nullopt;
   }
 
-  f.seek(anchorMapOffset);
-  uint16_t count;
-  serialization::readPod(f, count);
+  if (!f.seek(anchorMapOffset)) return std::nullopt;
+  serialization::BufferedFileReader records(f, 512);
+  uint16_t count = 0;
+  if (!records.readPod(count)) return std::nullopt;
   for (uint16_t i = 0; i < count; i++) {
     std::string key;
-    uint16_t page;
-    serialization::readString(f, key);
-    serialization::readPod(f, page);
+    uint16_t page = 0;
+    if (!records.readString(key) || !records.readPod(page)) return std::nullopt;
     if (key == anchor) {
       f.close();
-      return page;
+      return page < pageCount ? std::optional<uint16_t>(page) : std::nullopt;
     }
+    if ((i & 255u) == 0) esp_task_wdt_reset();
   }
 
   f.close();

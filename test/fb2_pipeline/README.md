@@ -47,3 +47,26 @@ python3 test/fb2_pipeline/indexing_regression.py /path/to/baseline/fb2_pipeline 
 ```
 
 The output directory must not exist. The script generates ordinary, long inline-anchor and short-chapter books, tests each as FB2 and FB2.ZIP, runs the full cache recovery/reopen regression, compares every anchor's target chapter, and reports storage operations. Use these counters to assess redundant I/O; host milliseconds do not predict physical SD/display timing.
+
+## Original chapter continuity
+
+`fb2_chapter_continuity NEW_CACHE_ROOT [fixture.fb2.zip]` builds the production
+FB2 converter and real Section/page layout, generates a chapter with 1,200 paragraph
+IDs (>24 KiB and >1,024 anchors), and checks uninterrupted prose pagination, all
+paragraphs, late links/targets, the whole-chapter TOC page range, four images in one
+section, byte-equivalent warm layout fingerprints, a targeted preview after the old
+anchor limit, reading an early page during incremental construction, and removal of
+scratch indices after cancellation. The opening title page is allowed to end early;
+all non-final prose pages must extend below y=600 in the 760-pixel viewport.
+
+```sh
+cmake --build build/fb2-pipeline --target fb2_chapter_continuity -j 4
+build/fb2-pipeline/fb2_chapter_continuity /tmp/fb2-continuity-plain
+# Zip /tmp/fb2-continuity-plain/chapter.fb2, then exercise the same checks:
+build/fb2-pipeline/fb2_chapter_continuity /tmp/fb2-continuity-zip /tmp/fixture.fb2.zip
+```
+
+Both cache directories must be new. The optional input must contain this generated
+fixture, because assertions intentionally use its known paragraph/image/section counts.
+The renderer uses deterministic host font metrics; this does not measure physical SD
+latency or the ESP32 heap peak.

@@ -102,6 +102,84 @@ TEST(EpubFb2AnchorTest, QueueSkipsUnsafeGrowthAndStillRendersText) {
   EXPECT_NE(pageText(*pages.front()).find("READABLE"), std::string::npos);
 }
 
+TEST(EpubDiskIndexTest, MoreThan1024TargetsAndPageIndicesDoNotAccumulateInParser) {
+  GfxRenderer renderer;
+  size_t pages = 0;
+  size_t paragraphs = 0;
+  std::vector<std::pair<std::string, uint16_t>> anchors;
+  ChapterHtmlSlimParser parser(
+      nullptr, renderer, 1, 1.0f, false, 0, 240, 72, false, false, false,
+      [&](std::unique_ptr<Page>) { ++pages; }, false, "", "", 0, {}, nullptr);
+  parser.setIndexWriters(
+      [&](uint32_t, uint16_t, uint16_t) { ++paragraphs; return true; },
+      [&](const std::string& id, uint16_t page) { anchors.emplace_back(id, page); return true; });
+  ASSERT_TRUE(parser.setup(100000));
+  const auto feed = [&](const std::string& s) {
+    return parser.write(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+  };
+  ASSERT_EQ(feed("<html><body>"), 12u);
+  for (int i = 0; i < 1400; ++i) {
+    const std::string p = "<p><span id=\"fb2-target-" + std::to_string(i) + "\"></span>Words for this verse.</p>";
+    ASSERT_EQ(feed(p), p.size());
+  }
+  ASSERT_EQ(feed("</body></html>"), 14u);
+  ASSERT_TRUE(parser.finalize());
+  ASSERT_TRUE(parser.indexSucceeded());
+  EXPECT_EQ(anchors.size(), 1400u);
+  EXPECT_EQ(paragraphs, pages);
+  EXPECT_GT(pages, 30u);
+  for (const auto& a : anchors) EXPECT_LT(a.second, pages);
+  EXPECT_TRUE(parser.getAnchors().empty());
+  EXPECT_TRUE(parser.getCompactIdAnchors().empty());
+  EXPECT_TRUE(parser.getParagraphLutPerPage().empty());
+}
+
+TEST(EpubDiskIndexTest, FailedParagraphOrAnchorWriteRejectsFinalization) {
+  GfxRenderer renderer;
+  for (bool failAnchor : {false, true}) {
+    ChapterHtmlSlimParser parser(
+        nullptr, renderer, 1, 1.0f, false, 0, 240, 72, false, false, false,
+        [](std::unique_ptr<Page>) {}, false, "", "", 0, {}, nullptr);
+    parser.setIndexWriters(
+        [&](uint32_t, uint16_t, uint16_t) { return failAnchor; },
+        [&](const std::string&, uint16_t) { return !failAnchor; });
+    const std::string xhtml = "<html><body><p id=\"id123\">Text with an index.</p></body></html>";
+    ASSERT_TRUE(parser.setup(xhtml.size()));
+    parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size());
+    EXPECT_FALSE(parser.finalize());
+    EXPECT_FALSE(parser.indexSucceeded());
+    EXPECT_FALSE(parser.streamSucceeded());
+  }
+}
+
+TEST(EpubDiskIndexTest, TargetedPreviewDoesNotWriteSkippedAnchorsOrPages) {
+  GfxRenderer renderer;
+  size_t paragraphs = 0;
+  std::vector<std::pair<std::string, uint16_t>> anchors;
+  std::vector<std::string> pages;
+  ChapterHtmlSlimParser parser(
+      nullptr, renderer, 1, 1.0f, false, 0, 240, 72, false, false, false,
+      [&](std::unique_ptr<Page> p) { pages.push_back(pageText(*p)); }, false, "", "", 0, {}, nullptr,
+      nullptr, nullptr, "fb2-target", 2);
+  parser.setIndexWriters(
+      [&](uint32_t, uint16_t, uint16_t) { ++paragraphs; return true; },
+      [&](const std::string& id, uint16_t page) { anchors.emplace_back(id, page); return true; });
+  const std::string xhtml = "<html><body><p id=\"fb2-before\">BEFORE</p>"
+                            "<p id=\"fb2-target\">TARGET</p></body></html>";
+  ASSERT_TRUE(parser.setup(xhtml.size()));
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xhtml.data()), xhtml.size()), xhtml.size());
+  ASSERT_TRUE(parser.finalize());
+  ASSERT_EQ(pages.size(), 1u);
+  EXPECT_EQ(paragraphs, 1u);
+  EXPECT_NE(pages.front().find("TARGET"), std::string::npos);
+  EXPECT_EQ(pages.front().find("BEFORE"), std::string::npos);
+  ASSERT_FALSE(anchors.empty());
+  for (const auto& anchor : anchors) {
+    EXPECT_EQ(anchor.first, "fb2-target");
+    EXPECT_EQ(anchor.second, 0);
+  }
+}
+
 TEST(EpubFb2AnchorTest, InlineTargetsFollowTheirRenderedWordsAcrossPages) {
   GfxRenderer renderer;
   std::vector<std::unique_ptr<Page>> pages;
