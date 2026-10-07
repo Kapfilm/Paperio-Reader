@@ -186,7 +186,7 @@ void MinimalTheme::drawRecentBookCover(GfxRenderer& renderer, const Rect rect,
           const Rect bitmapRect = fittedBitmapRect(bitmap, coverRect);
           renderer.fillRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, kCoverCornerRadius,
                                    Color::White);
-          renderer.drawBitmap(bitmap, bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height);
+          renderer.drawBitmap(bitmap, bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 0, 0, true);
           renderer.drawRoundedRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 1,
                                    kCoverCornerRadius, true);
           hasCover = true;

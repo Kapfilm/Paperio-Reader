@@ -30,6 +30,12 @@ class CrossPointSettings {
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
   enum SLEEP_IMAGE_PICK_MODE { PICK_RANDOM = 0, PICK_SEQUENTIAL = 1, SLEEP_IMAGE_PICK_MODE_COUNT };
+  enum DARK_MODE_SCOPE {
+    DARK_MODE_OFF = 0,
+    DARK_MODE_READER_ONLY = 1,
+    DARK_MODE_EVERYWHERE = 2,
+    DARK_MODE_SCOPE_COUNT
+  };
   enum SLEEP_SCREEN_COVER_FILTER {
     NO_FILTER = 0,
     BLACK_AND_WHITE = 1,
@@ -222,6 +228,9 @@ class CrossPointSettings {
   // Quick Resume on Timeout: keep current page on display with a moon icon when sleeping by timeout,
   // and on wake restore the page directly (skipping the boot screen).
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
+  // X4-only output inversion. X3 remains forced to the light theme until the
+  // panel behavior can be validated on physical hardware.
+  uint8_t darkMode = DARK_MODE_OFF;
   // Status bar settings (statusBar, statusBarProgressBar, statusBarProgressBarThickness retained for migration only)
   uint8_t statusBar = FULL;
   uint8_t statusBarChapterPageCount = 1;

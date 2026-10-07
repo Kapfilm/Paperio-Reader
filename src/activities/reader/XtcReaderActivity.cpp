@@ -259,6 +259,14 @@ void XtcReaderActivity::renderPage() {
     // Display BW with conditional refresh based on pagesUntilFullRefresh
     ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
+    // The panel's grayscale waveform is not compatible with display inversion.
+    // In dark mode the already-rendered 1-bit plane is the intentional fallback.
+    if (renderer.isDarkMode()) {
+      free(row);
+      LOG_DBG("XTR", "Rendered page %lu/%lu (dark-mode monochrome)", currentPage + 1, xtc->getPageCount());
+      return;
+    }
+
     // Pass 2: LSB buffer - mark DARK gray only (XTH value 1)
     // In LUT: 0 bit = apply gray effect, 1 bit = untouched
     renderer.clearScreen(0x00);

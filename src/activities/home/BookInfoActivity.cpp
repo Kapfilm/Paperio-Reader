@@ -303,7 +303,7 @@ void BookInfoActivity::render(RenderLock&&) {
           coverDisplayW = textWidth / 2;
           coverDisplayH = bmp.getHeight() * coverDisplayW / bmp.getWidth();
         }
-        renderer.drawBitmap(bmp, textX, contentTop, coverDisplayW, coverDisplayH);
+        renderer.drawBitmap(bmp, textX, contentTop, coverDisplayW, coverDisplayH, 0, 0, true);
         topSectionBottom = contentTop + coverDisplayH;
 
         const int gap = metrics.contentSidePadding;

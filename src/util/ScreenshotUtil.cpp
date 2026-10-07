@@ -11,7 +11,9 @@
 #include "Bitmap.h"  // Required for BmpHeader struct definition
 
 void ScreenshotUtil::takeScreenshot(GfxRenderer& renderer) {
+  const bool darkMode = renderer.isDarkMode();
   const uint8_t* fb = renderer.getFrameBuffer();
+  if (fb && darkMode) renderer.invertScreen();
   if (fb) {
     String filename_str = "/screenshots/screenshot-" + String(millis()) + ".bmp";
     if (ScreenshotUtil::saveFramebufferAsBmp(filename_str.c_str(), fb, renderer.getDisplayWidth(),
@@ -23,6 +25,7 @@ void ScreenshotUtil::takeScreenshot(GfxRenderer& renderer) {
   } else {
     LOG_ERR("SCR", "Framebuffer not available");
   }
+  if (fb && darkMode) renderer.invertScreen();
 
   // Display a border around the screen to indicate a screenshot was taken
   if (renderer.storeBwBuffer()) {

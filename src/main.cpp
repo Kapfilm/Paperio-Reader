@@ -798,6 +798,11 @@ void setup() {
   logStartupMemory("after_storage_begin");
 
   SETTINGS.loadFromFile();
+  // Dark mode is intentionally enabled only on X4 in this test build. Apply
+  // the global scope before display initialization so the very first frame has
+  // the correct polarity; reader-only mode is selected per activity later.
+  display.setDarkMode(!gpio.deviceIsX3() &&
+                      SETTINGS.darkMode == CrossPointSettings::DARK_MODE_EVERYWHERE);
   // APP_STATE is needed before display init so Quick Resume can skip the on-wake resync
   // and so the seamless-wake path can paint the LoadingIcon over the restored framebuffer.
   APP_STATE.loadFromFile();
@@ -1045,7 +1050,18 @@ void loop() {
           const uint16_t height = display.getDisplayHeight();
           const uint32_t bufferSize = display.getBufferSize();
           logSerial.printf("SCREENSHOT_START:%d:%d:%d\n", width, height, bufferSize);
-          logSerial.write(buf, bufferSize);
+          if (!display.isDarkMode()) {
+            logSerial.write(buf, bufferSize);
+          } else {
+            uint8_t output[64];
+            uint32_t sent = 0;
+            while (sent < bufferSize) {
+              const size_t chunk = std::min<uint32_t>(sizeof(output), bufferSize - sent);
+              for (size_t i = 0; i < chunk; ++i) output[i] = static_cast<uint8_t>(~buf[sent + i]);
+              logSerial.write(output, chunk);
+              sent += chunk;
+            }
+          }
           logSerial.printf("SCREENSHOT_END\n");
         } else {
           // Framebuffers are released during the web server session — nothing to send.

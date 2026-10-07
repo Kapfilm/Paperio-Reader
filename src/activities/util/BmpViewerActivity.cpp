@@ -149,7 +149,7 @@ bool BmpViewerActivity::renderBmpImage(const bool showControls) {
 
   bmpHasGreyscale = bitmap.hasGreyscale();
   // Only render in grayscale when the bitmap actually carries greyscale data AND the user has it enabled.
-  const bool renderGrayscale = bmpHasGreyscale && grayscaleDisplay;
+  const bool renderGrayscale = bmpHasGreyscale && grayscaleDisplay && !renderer.isDarkMode();
 
   // Draw control hints. btn2 only shows the BW/Gray toggle when the bitmap supports greyscale —
   // pure 1-bit BMPs have nothing to toggle. The label shows the *target* mode (what pressing it switches to).
@@ -163,7 +163,7 @@ bool BmpViewerActivity::renderBmpImage(const bool showControls) {
 
   renderer.setRenderMode(GfxRenderer::BW);
   renderer.clearScreen();
-  renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0);
+  renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0, true);
   drawHints();
   renderer.displayBuffer(HalDisplay::HALF_REFRESH);
 
@@ -172,13 +172,13 @@ bool BmpViewerActivity::renderBmpImage(const bool showControls) {
     bitmap.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0);
+    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0, true);
     renderer.copyGrayscaleLsbBuffers();
 
     bitmap.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0);
+    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, 0, 0, true);
     renderer.copyGrayscaleMsbBuffers();
 
     renderer.displayGrayBuffer();
@@ -236,7 +236,7 @@ bool BmpViewerActivity::renderDecodedImage(const bool showControls) {
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   };
 
-  if (!grayscaleDisplay) {
+  if (!grayscaleDisplay || renderer.isDarkMode()) {
     // Pure black-and-white path: single decode with 1-bit Atkinson dither.
     config.monochromeOutput = true;
     renderer.setRenderMode(GfxRenderer::BW);

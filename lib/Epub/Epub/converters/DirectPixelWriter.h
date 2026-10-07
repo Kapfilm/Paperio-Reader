@@ -24,6 +24,7 @@ struct DirectPixelWriter {
   // (originY 0, clipRows panelHeight) so the clip doubles as a bounds guard.
   int originY;
   int clipRows;
+  bool compensateInversion;
 
   // Orientation is collapsed into a linear transform:
   //   phyX = phyXBase + x * phyXStepX + y * phyXStepY
@@ -40,6 +41,10 @@ struct DirectPixelWriter {
     originY = renderer.getWriteOriginY();
     clipRows = renderer.getWriteRows();
     mode = renderer.getRenderMode();
+    // Image pixels should keep their original physical polarity when the rest
+    // of the page is submitted inverted for the dark theme. Caches continue to
+    // store normal 0..3 values; compensation happens only while painting BW.
+    compensateInversion = renderer.isDarkMode();
     displayWidthBytes = renderer.getDisplayWidthBytes();
 
     const int phyW = renderer.getDisplayWidth();
@@ -153,8 +158,16 @@ struct DirectPixelWriter {
     bool state;
     switch (mode) {
       case GfxRenderer::BW:
-        draw = (pixelValue < 3);
-        state = true;
+        if (compensateInversion) {
+          // The display driver inverts the completed frame. Paint both black
+          // and white image pixels with opposite logical polarity so the final
+          // image is not shown as a negative.
+          draw = true;
+          state = (pixelValue == 3);
+        } else {
+          draw = (pixelValue < 3);
+          state = true;
+        }
         break;
       case GfxRenderer::GRAYSCALE_MSB:
         draw = (pixelValue == 1 || pixelValue == 2);

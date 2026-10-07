@@ -89,6 +89,10 @@ void HalDisplay::requestResync(uint8_t settlePasses) {
   }
 }
 
+void HalDisplay::setDarkMode(const bool enabled) { einkDisplay.setInverted(enabled); }
+
+bool HalDisplay::isDarkMode() const { return einkDisplay.isInverted(); }
+
 void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen) {
   HalSpiBus::Lock spiLock;
 

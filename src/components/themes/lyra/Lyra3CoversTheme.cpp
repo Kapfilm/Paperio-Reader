@@ -62,7 +62,7 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
               renderer.fillRect(tileX + hPaddingInSelection, tileY + hPaddingInSelection,
                                 tileWidth - 2 * hPaddingInSelection, coverHeight, false);
               renderer.drawBitmap(bitmap, tileX + hPaddingInSelection, tileY + hPaddingInSelection,
-                                  tileWidth - 2 * hPaddingInSelection, coverHeight, cropX);
+                                  tileWidth - 2 * hPaddingInSelection, coverHeight, cropX, 0, true);
             } else {
               hasCover = false;
             }

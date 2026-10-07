@@ -739,7 +739,7 @@ void MdReaderActivity::renderPage() {
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
-  if (SETTINGS.textAntiAliasing) {
+  if (SETTINGS.textAntiAliasing && !renderer.isDarkMode()) {
     // Same AA pass as EpubReaderActivity — see TxtReaderActivity::renderPage()
     // for why the legacy store/restore helper ghosted after swapBuffers().
     renderer.setFastGrayscaleLut(SETTINGS.fastAntiAliasing);

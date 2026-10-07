@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <HalClock.h>
+#include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <Logging.h>
 #include <esp_heap_caps.h>
@@ -35,6 +36,14 @@
 #ifndef DEBUG_MEMORY_CONSUMPTION
 #define DEBUG_MEMORY_CONSUMPTION 0
 #endif
+
+namespace {
+bool shouldUseDarkModeFor(Activity* activity) {
+  if (gpio.deviceIsX3() || SETTINGS.darkMode == CrossPointSettings::DARK_MODE_OFF) return false;
+  if (SETTINGS.darkMode == CrossPointSettings::DARK_MODE_EVERYWHERE) return true;
+  return activity && activity->isReaderActivity();
+}
+}  // namespace
 
 void ActivityManager::begin() {
   // Create FreeRTOS objects here rather than in the constructor: ActivityManager
@@ -95,6 +104,7 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      renderer.setDarkMode(shouldUseDarkModeFor(currentActivity.get()));
       // Publish "a pass is in flight" from INSIDE the lock, so a transition holding the mutex
       // can read it as proof that no pass can begin behind its back. It stays set across the
       // window where render() drops the mutex (renderContents' pre-waveform unlock), which is
@@ -307,6 +317,7 @@ void ActivityManager::loop() {
       pendingAction = PendingAction::None;
       currentActivity = std::move(pendingActivity);
 
+      renderer.setDarkMode(shouldUseDarkModeFor(currentActivity.get()));
       lock.unlock();  // onEnter may acquire its own lock
       currentActivity->onEnter();
 

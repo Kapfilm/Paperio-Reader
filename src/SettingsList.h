@@ -101,6 +101,10 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.reserve(78);
 
   // --- Display ---
+  settings.push_back(SettingInfo::Enum(StrId::STR_DARK_MODE, &CrossPointSettings::darkMode,
+                                       {StrId::STR_STATE_OFF, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "darkMode",
+                                       StrId::STR_CAT_DISPLAY)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Action(StrId::STR_TIME_TO_SLEEP, SettingAction::SleepTimeoutPicker)
                          .withDisplayGetter(getSleepTimeoutDisplay)
                          .withCategory(StrId::STR_CAT_DISPLAY));

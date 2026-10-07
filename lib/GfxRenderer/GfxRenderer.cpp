@@ -2201,14 +2201,15 @@ static void bitmapFastRow(uint8_t* const frameBuffer, const uint8_t* const outpu
 }
 
 void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, const int maxWidth, const int maxHeight,
-                             const float cropX, const float cropY) const {
+                             const float cropX, const float cropY, const bool preserveColors) const {
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
   // For 1-bit bitmaps, use optimized 1-bit rendering path (no crop support for 1-bit)
   if (bitmap.is1Bit() && cropX == 0.0f && cropY == 0.0f) {
-    drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight);
+    drawBitmap1Bit(bitmap, x, y, maxWidth, maxHeight, preserveColors);
     return;
   }
 
+  const bool compensateInversion = preserveColors && isDarkMode();
   float scale = 1.0f;
   bool isScaled = false;
   int cropPixX = std::floor(bitmap.getWidth() * cropX / 2.0f);
@@ -2305,7 +2306,7 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
       continue;
     }
 
-    if (!isScaled && drawMask != 0x00) {
+    if (!isScaled && drawMask != 0x00 && !compensateInversion) {
       // Fast path: write up to 8 pixels per call directly to the framebuffer.
       switch (drawMask) {
         case 0x07:
@@ -2347,7 +2348,12 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 
       const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
 
-      if (renderModeSnapshot == BW && val < 3) {
+      if (renderModeSnapshot == BW && compensateInversion) {
+        // The whole frame is inverted only when submitted. Draw the opposite
+        // logical polarity inside artwork so its physical black/white colors
+        // remain unchanged in the dark theme.
+        drawPixel(screenX, screenY, val == 3);
+      } else if (renderModeSnapshot == BW && val < 3) {
         drawPixel(screenX, screenY);
       } else if (renderModeSnapshot == GRAYSCALE_MSB && (val == 1 || val == 2)) {
         drawPixel(screenX, screenY, false);
@@ -2362,7 +2368,8 @@ void GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
 }
 
 void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y, const int maxWidth,
-                                 const int maxHeight) const {
+                                 const int maxHeight, const bool preserveColors) const {
+  const bool compensateInversion = preserveColors && isDarkMode();
   float scale = 1.0f;
   bool isScaled = false;
   if (maxWidth > 0) {
@@ -2398,7 +2405,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
   const int widthBytes = getDisplayWidthBytes();
 
   // ── Unscaled fast path (scale == 1.0): draw each source row 1:1. ──────────────
-  if (!isScaled) {
+  if (!isScaled && !compensateInversion) {
     for (int bmpY = 0; bmpY < bitmap.getHeight(); bmpY++) {
       if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
         LOG_ERR("GFX", "Failed to read row %d from 1-bit bitmap", bmpY);
@@ -2412,6 +2419,31 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
       // BW only (1-bit images are never rendered in grayscale passes)
       bitmapFastRow<0x07>(frameBuffer, outputRow, 0, bitmap.getWidth(), x, screenY, orientation, true, displayWidth,
                           displayHeight, widthBytes);
+    }
+    free(outputRow);
+    free(rowBytes);
+    return;
+  }
+
+  // Preserve artwork polarity in dark mode. The display facade will invert
+  // the completed frame, so write every source pixel with opposite logical
+  // polarity here. This intentionally uses the simple path; cover and sleep
+  // artwork are not latency-critical compared with correct cached colors.
+  if (!isScaled && compensateInversion) {
+    for (int bmpY = 0; bmpY < bitmap.getHeight(); bmpY++) {
+      if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
+        LOG_ERR("GFX", "Failed to read row %d from 1-bit bitmap", bmpY);
+        break;
+      }
+      const int bmpYOffset = bitmap.isTopDown() ? bmpY : bitmap.getHeight() - 1 - bmpY;
+      const int screenY = y + bmpYOffset;
+      if (screenY < 0 || screenY >= getScreenHeight()) continue;
+      for (int bmpX = 0; bmpX < bitmap.getWidth(); bmpX++) {
+        const int screenX = x + bmpX;
+        if (screenX < 0 || screenX >= getScreenWidth()) continue;
+        const uint8_t val = outputRow[bmpX / 4] >> (6 - ((bmpX * 2) % 8)) & 0x3;
+        drawPixel(screenX, screenY, val == 3);
+      }
     }
     free(outputRow);
     free(rowBytes);
@@ -2446,9 +2478,16 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     if (dstScreenY >= 0 && dstScreenY < getScreenHeight()) {
       for (int dx = 0; dx < dstW; dx++) {
         // Majority vote: black wins ties (>= half) so thin dark strokes survive.
-        if (totalCount[dx] > 0 && blackCount[dx] * 2 >= totalCount[dx]) {
+        if (totalCount[dx] > 0) {
+          const bool sourceBlack = blackCount[dx] * 2 >= totalCount[dx];
           const int screenX = x + dx;
-          if (screenX >= 0 && screenX < getScreenWidth()) drawPixel(screenX, dstScreenY, true);
+          if (screenX >= 0 && screenX < getScreenWidth()) {
+            if (compensateInversion) {
+              drawPixel(screenX, dstScreenY, !sourceBlack);
+            } else if (sourceBlack) {
+              drawPixel(screenX, dstScreenY, true);
+            }
+          }
         }
       }
     }

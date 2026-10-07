@@ -510,7 +510,7 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
             coverW = contentRect.width / 3;
             coverH = bmp.getHeight() * coverW / bmp.getWidth();
           }
-          renderer.drawBitmap(bmp, contentRect.x, 35, coverW, coverH);
+          renderer.drawBitmap(bmp, contentRect.x, 35, coverW, coverH, 0, 0, true);
           coverColW = coverW + 6;
         }
         bmpFile.close();

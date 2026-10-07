@@ -299,7 +299,7 @@ void TxtReaderActivity::renderPage() {
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
 
-  if (SETTINGS.textAntiAliasing) {
+  if (SETTINGS.textAntiAliasing && !renderer.isDarkMode()) {
     // Same AA pass as EpubReaderActivity: displayBuffer() above ended with
     // swapBuffers(), so the write framebuffer now holds the stale previous
     // frame. renderGrayscalePlanesSequential() reseeds the controller baseline

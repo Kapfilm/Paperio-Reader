@@ -103,6 +103,10 @@ void SettingsActivity::onEnter() {
 
   for (const auto& setting : getSettingsList()) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
+    // This test release is intentionally X4-only until the dark waveform can
+    // be inspected on a physical X3. Keep one universal binary, but do not
+    // expose a setting that the X3 runtime will ignore.
+    if (setting.key && std::strcmp(setting.key, "darkMode") == 0 && gpio.deviceIsX3()) continue;
     if (setting.category == StrId::STR_CAT_READER && isUnifiedTextSetting(setting)) continue;
     if (setting.category == StrId::STR_CAT_SYSTEM &&
         (setting.nameId == StrId::STR_USE_CLOCK || setting.nameId == StrId::STR_CLOCK_FORMAT ||

@@ -596,7 +596,7 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
           // Pre-clear only the exact rendered image area; the black selection background
           // shows through in the surrounding space.
           renderer.fillRect(cellX + offsetX, cellY + offsetY, rendW, rendH, false);
-          renderer.drawBitmap1Bit(bmp, cellX + offsetX, cellY + offsetY, rendW, rendH);
+          renderer.drawBitmap1Bit(bmp, cellX + offsetX, cellY + offsetY, rendW, rendH, true);
           thumbDrawn = true;
         }
       }

@@ -750,7 +750,7 @@ void FinishedBookActivity::render(RenderLock&&) {
             actualCoverWidth = previewWidth;
             actualCoverHeight = bmp.getHeight() * actualCoverWidth / bmp.getWidth();
           }
-          renderer.drawBitmap(bmp, previewX, previewY, actualCoverWidth, actualCoverHeight);
+          renderer.drawBitmap(bmp, previewX, previewY, actualCoverWidth, actualCoverHeight, 0, 0, true);
         }
         coverFile.close();
       }

@@ -219,6 +219,8 @@ class GfxRenderer {
 
   // Fading fix control
   void setFadingFix(const bool enabled) { fadingFix.store(enabled, std::memory_order_relaxed); }
+  void setDarkMode(bool enabled) const { display.setDarkMode(enabled); }
+  bool isDarkMode() const { return display.isDarkMode(); }
 
   // Screen ops
   int getScreenWidth() const;
@@ -321,8 +323,9 @@ class GfxRenderer {
   void drawIcon(const uint8_t bitmap[], int x, int y, int width, int height) const;
   void drawIconInverted(const uint8_t bitmap[], int x, int y, int width, int height) const;
   void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
-                  float cropY = 0) const;
-  void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight) const;
+                  float cropY = 0, bool preserveColors = false) const;
+  void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight,
+                      bool preserveColors = false) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
 
   // Text

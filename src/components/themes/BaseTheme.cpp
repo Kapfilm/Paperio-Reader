@@ -518,7 +518,7 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
           LOG_DBG("THEME", "Rendering bmp");
 
           renderer.fillRect(bookX, bookY, bookWidth, bookHeight, false);
-          renderer.drawBitmap(bitmap, bookX, bookY, bookWidth, bookHeight);
+          renderer.drawBitmap(bitmap, bookX, bookY, bookWidth, bookHeight, 0, 0, true);
 
           // Draw border around the card
           renderer.drawRect(bookX, bookY, bookWidth, bookHeight);

@@ -63,6 +63,11 @@ class HalDisplay {
   // No-op on non-X3 panels. Consumed by the next displayBuffer/refreshDisplay call.
   void requestResync(uint8_t settlePasses = 0);
 
+  // Persistent output inversion. The logical framebuffers stay in light-theme
+  // polarity; FreeInk inverts only while submitting a frame to the panel.
+  void setDarkMode(bool enabled);
+  bool isDarkMode() const;
+
   // Power management
   void deepSleep();
 

@@ -3907,7 +3907,8 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   const int contentTop = orientedMarginTop + getImageOnlyPageYOffset(*page, viewportHeight);
 
   const bool aaEnabledForThisRender =
-      getEffectiveTextAntiAliasing() && renderer.hasSecondaryBuffer() && !secondaryBufferDegraded_;
+      !renderer.isDarkMode() && getEffectiveTextAntiAliasing() && renderer.hasSecondaryBuffer() &&
+      !secondaryBufferDegraded_;
   if (getEffectiveTextAntiAliasing() && !aaEnabledForThisRender) {
     LOG_DBG("ERS", "AA skipped: secondary display buffer unavailable/degraded");
   }

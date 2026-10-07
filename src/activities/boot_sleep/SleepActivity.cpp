@@ -534,7 +534,6 @@ void SleepActivity::onEnter() {
   // renderer's existing turn-off path for this terminal activity regardless
   // of whether the persisted fading-compensation setting was restored.
   renderer.setFadingFix(true);
-  RenderLock lock(*this);
 
   // Quick Resume: paint a moon icon over the current page and keep the framebuffer
   // intact for the next wake. Applies always when the user picked Quick Resume as
@@ -543,6 +542,12 @@ void SleepActivity::onEnter() {
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&
        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+  // Sleep artwork follows its own setting instead of the system theme. Quick
+  // Resume is the exception: it must retain the dark reader page already shown
+  // on the panel rather than flashing it back to light before sleep.
+  RenderLock lock(*this);
+  renderer.setDarkMode(!renderer.isX3() && renderQuickResume &&
+                       SETTINGS.darkMode != CrossPointSettings::DARK_MODE_OFF);
   if (renderQuickResume) {
     return renderLastScreenSleepScreen();
   }
@@ -845,11 +850,11 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
   // whether they exist. Omitting it here would silently drop those images to the
   // 1-bit half-refresh path.
   const bool hasGreyscale =
-      bitmap.hasGreyscale() &&
+      !renderer.isDarkMode() && bitmap.hasGreyscale() &&
       (SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::NO_FILTER ||
        SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::ADAPTIVE_TONE);
 
-  renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
+  renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, true);
 
   if (SETTINGS.sleepScreenCoverFilter == CrossPointSettings::SLEEP_SCREEN_COVER_FILTER::INVERTED_BLACK_AND_WHITE) {
     renderer.invertScreen();
@@ -933,14 +938,14 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap, const BookOver
     bitmap.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
+    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, true);
     drawOverlay();
     renderer.copyGrayscaleLsbBuffers();
 
     bitmap.rewindToData();
     renderer.clearScreen(0x00);
     renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
+    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, true);
     drawOverlay();
     renderer.copyGrayscaleMsbBuffers();
 
@@ -1135,7 +1140,7 @@ void SleepActivity::renderOverlaySleepScreen() const {
     }
 
     // Draw without clearScreen so the reader page remains in the frame buffer beneath
-    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY);
+    renderer.drawBitmap(bitmap, x, y, pageWidth, pageHeight, cropX, cropY, true);
     file.close();
     return true;
   };
