@@ -798,7 +798,7 @@ void setup() {
   logStartupMemory("after_storage_begin");
 
   SETTINGS.loadFromFile();
-  // Dark mode is intentionally enabled only on X4 in this test build. Apply
+  // Dark mode is currently enabled only on X4. Apply
   // the global scope before display initialization so the very first frame has
   // the correct polarity; reader-only mode is selected per activity later.
   display.setDarkMode(!gpio.deviceIsX3() &&
