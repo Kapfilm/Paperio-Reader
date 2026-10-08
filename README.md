@@ -13,8 +13,8 @@
   <img src="assets/screenshots/text-settings.jpg" width="23%" alt="Настройки текста с предпросмотром">
 </p>
 
-<details>
-<summary><strong>Возможности прошивки</strong></summary>
+<details open>
+<summary><h2>Возможности прошивки</h2></summary>
 
 
 Прошивка для электронных книг **XTEINK X3 и X4**.
