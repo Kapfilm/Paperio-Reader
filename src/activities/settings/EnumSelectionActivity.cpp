@@ -50,16 +50,30 @@ void EnumSelectionActivity::handleSelection() {
 }
 
 void EnumSelectionActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+  const int panelTop = overlayPanel ? renderer.getScreenHeight() / 4 : 0;
+  if (overlayPanel) {
+    renderer.syncWriteBufferFromDisplayed();
+    renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12,
+                             true, true, false, false, Color::White);
+    renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12,
+                             true, true, false, false, true);
+  } else {
+    renderer.clearScreen();
+  }
 
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect contentRect = UITheme::getContentRect(renderer, true, false);
+  Rect contentRect = UITheme::getContentRect(renderer, true, false);
+  if (overlayPanel) {
+    const int contentBottom = contentRect.y + contentRect.height;
+    contentRect.y = std::max(contentRect.y, panelTop + 2);
+    contentRect.height = std::max(0, contentBottom - contentRect.y);
+  }
 
-  GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.headerHeight},
+  GUI.drawHeader(renderer, Rect{contentRect.x, contentRect.y + metrics.topPadding, contentRect.width, metrics.headerHeight},
                  I18N.get(setting.nameId));
 
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
+  const int contentTop = contentRect.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight = contentRect.height - (contentTop - contentRect.y) - metrics.verticalSpacing;
 
   const int count = static_cast<int>(optionCount());
   const uint8_t activeIndex = setting.getEnumSelectedIndex();
@@ -74,5 +88,9 @@ void EnumSelectionActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  if (overlayPanel) {
+    renderer.displayWindow(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop);
+  } else {
+    renderer.displayBuffer();
+  }
 }

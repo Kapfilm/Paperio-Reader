@@ -252,6 +252,37 @@ void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
   }
 }
 
+bool BaseTheme::toggleStateFromValue(const std::string& value, bool& enabled) {
+  if (value == tr(STR_STATE_ON)) {
+    enabled = true;
+    return true;
+  }
+  if (value == tr(STR_STATE_OFF)) {
+    enabled = false;
+    return true;
+  }
+  return false;
+}
+
+void BaseTheme::drawToggleSwitch(const GfxRenderer& renderer, const int x, const int y, const bool enabled,
+                                 const bool inverted) const {
+  constexpr int border = 2;
+  constexpr int inset = 4;
+  constexpr int knobWidth = 15;
+  const bool foreground = !inverted;
+  const bool background = inverted;
+
+  renderer.fillRect(x, y, toggleSwitchWidth, toggleSwitchHeight, background);
+  if (enabled) {
+    renderer.fillRect(x, y, toggleSwitchWidth, toggleSwitchHeight, foreground);
+    renderer.fillRect(x + toggleSwitchWidth - inset - knobWidth, y + inset, knobWidth, toggleSwitchHeight - inset * 2,
+                      background);
+  } else {
+    renderer.drawRect(x, y, toggleSwitchWidth, toggleSwitchHeight, border, foreground);
+    renderer.fillRect(x + inset, y + inset, knobWidth, toggleSwitchHeight - inset * 2, foreground);
+  }
+}
+
 void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                          const std::function<std::string(int index)>& rowTitle,
                          const std::function<std::string(int index)>& rowSubtitle,
@@ -332,11 +363,19 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     }
 
     if (rowValue != nullptr) {
-      // Draw value
+      // Draw exact ON/OFF values as switches; other values remain text.
       std::string valueText = rowValue(i);
-      const auto valueTextWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str());
-      renderer.drawText(UI_10_FONT_ID, rect.x + contentWidth - BaseMetrics::values.contentSidePadding - valueTextWidth,
-                        itemY, valueText.c_str(), i != selectedIndex);
+      bool enabled = false;
+      if (toggleStateFromValue(valueText, enabled)) {
+        const int switchX = rect.x + contentWidth - BaseMetrics::values.contentSidePadding - toggleSwitchWidth;
+        const int switchY = itemY + (rowHeight - toggleSwitchHeight) / 2;
+        drawToggleSwitch(renderer, switchX, switchY, enabled, i == selectedIndex);
+      } else {
+        const auto valueTextWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str());
+        renderer.drawText(UI_10_FONT_ID,
+                          rect.x + contentWidth - BaseMetrics::values.contentSidePadding - valueTextWidth, itemY,
+                          valueText.c_str(), i != selectedIndex);
+      }
     }
   }
 }

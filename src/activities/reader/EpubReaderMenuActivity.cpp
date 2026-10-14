@@ -109,6 +109,8 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   }
   menuItems.push_back(SettingInfo::Action(StrId::STR_LOOKUP, SettingAction::None));
   menuItems.push_back(SettingInfo::Action(StrId::STR_SELECT_DICTIONARY, SettingAction::None));
+  // Auto page turn belongs with the other ways to move through a book.
+  menuItems.push_back(SettingInfo::Action(StrId::STR_AUTO_TURN_PAGES_PER_MIN, SettingAction::None));
 
   // Bookmarks, footnotes
   menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_BOOKMARKS));
@@ -349,11 +351,6 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                           })
                           .withSubmenu(StrId::STR_READER_OVERRIDES));
 
-  // Helper functions, reading ruler, auto page turn, orientation
-  menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_UTILS));
-  // Auto page turn: ACTION type with custom cycling in onActionSelected
-  menuItems.push_back(SettingInfo::Action(StrId::STR_AUTO_TURN_PAGES_PER_MIN, SettingAction::None));
-
   // --- Synchronisation (only if credentials are set) ---
   if (KOREADER_STORE.hasCredentials()) {
     menuItems.push_back(SettingInfo::Separator(StrId::STR_KOREADER_SYNC));
@@ -485,6 +482,15 @@ void EpubReaderMenuActivity::finishWithAction(MenuAction action) {
 void EpubReaderMenuActivity::onActionSelected(int index) {
   const auto& item = menuItems[index];
 
+  if (item.nameId == StrId::STR_FONT_SIZE) {
+    openFontSizeOverridePicker();
+    return;
+  }
+  if (item.nameId == StrId::STR_LINE_SPACING) {
+    openLineHeightOverridePicker();
+    return;
+  }
+
   // Auto page turn cycles locally (not a DynamicEnum because labels are raw strings)
   if (item.nameId == StrId::STR_AUTO_TURN_PAGES_PER_MIN) {
     selectedPageTurnOption = (selectedPageTurnOption + 1) % 5;
@@ -550,7 +556,7 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
 
   if (item.nameId == StrId::STR_LINE_SPACING) {
     if (pendingLineHeightPercentOverride < 0) {
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + std::to_string(SETTINGS.lineHeightPercent) + "%)";
+      return std::to_string(SETTINGS.lineHeightPercent) + "%";
     }
     return std::to_string(pendingLineHeightPercentOverride) + "%";
   }
@@ -564,46 +570,40 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
 
   if (item.type == SettingType::ENUM) {
     if (item.nameId == StrId::STR_EMBEDDED_STYLE && pendingEmbeddedStyleOverride < 0) {
-      const auto defaultEffective = (SETTINGS.embeddedStyle != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.embeddedStyle != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_IMAGES && pendingImageRenderingOverride < 0) {
       const auto defaultIndex = static_cast<size_t>(SETTINGS.imageRendering + 1);
       if (defaultIndex < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[defaultIndex]) + ")";
+        return I18N.get(item.enumValues[defaultIndex]);
       }
     }
     if (item.nameId == StrId::STR_FONT_FAMILY && pendingFontFamilyOverride < 0 && pendingSdFontFamilyOverride.empty()) {
       const auto label = defaultFontFamilyLabel(item);
       if (!label.empty()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + label + ")";
+        return label;
       }
     }
     if (item.nameId == StrId::STR_PARA_ALIGNMENT && pendingParagraphAlignmentOverride < 0) {
       const auto defaultIndex = static_cast<size_t>(SETTINGS.paragraphAlignment + 1);
       if (defaultIndex < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[defaultIndex]) + ")";
+        return I18N.get(item.enumValues[defaultIndex]);
       }
     }
     if (item.nameId == StrId::STR_TEXT_AA && pendingTextAntiAliasingOverride < 0) {
-      const auto defaultEffective = (SETTINGS.textAntiAliasing != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.textAntiAliasing != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_HYPHENATION && pendingHyphenationOverride < 0) {
-      const auto defaultEffective = (SETTINGS.hyphenationEnabled != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.hyphenationEnabled != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_GUIDE_DOTS && pendingGuideDotsOverride < 0) {
-      const auto defaultEffective = (SETTINGS.guideDots != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.guideDots != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_INLINE_FOOTNOTE_PREVIEWS && pendingInlineFootnotePreviewsOverride < 0) {
-      const auto defaultEffective = (SETTINGS.inlineFootnotePreviews != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.inlineFootnotePreviews != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_FONT_SIZE_NORMALIZATION && pendingFontSizeNormalizationOverride < 0) {
-      const auto defaultEffective = (SETTINGS.fontSizeNormalization != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.fontSizeNormalization != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
   }
 
@@ -620,7 +620,7 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
     if (item.nameId == StrId::STR_FONT_SIZE) return fontSizeValueLabel();
     if (item.nameId == StrId::STR_LINE_SPACING) {
       if (pendingLineHeightPercentOverride < 0) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + std::to_string(SETTINGS.lineHeightPercent) + "%)";
+        return std::to_string(SETTINGS.lineHeightPercent) + "%";
       }
       return std::to_string(pendingLineHeightPercentOverride) + "%";
     }
@@ -628,53 +628,48 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
       return {};
     }
     if (item.nameId == StrId::STR_EMBEDDED_STYLE && pendingEmbeddedStyleOverride < 0) {
-      const auto defaultEffective = (SETTINGS.embeddedStyle != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.embeddedStyle != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_IMAGES && pendingImageRenderingOverride < 0) {
       const auto valueIndex = static_cast<size_t>(SETTINGS.imageRendering + 1);
       if (valueIndex < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[valueIndex]) + ")";
+        return I18N.get(item.enumValues[valueIndex]);
       }
     }
     if (item.nameId == StrId::STR_FONT_FAMILY && pendingFontFamilyOverride < 0 && pendingSdFontFamilyOverride.empty()) {
       const auto label = defaultFontFamilyLabel(item);
       if (!label.empty()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + label + ")";
+        return label;
       }
     }
     if (item.nameId == StrId::STR_PARA_ALIGNMENT && pendingParagraphAlignmentOverride < 0) {
       const auto valueIndex = static_cast<size_t>(SETTINGS.paragraphAlignment + 1);
       if (valueIndex < item.enumValues.size()) {
-        return std::string(tr(STR_DEFAULT_VALUE)) + " (" + I18N.get(item.enumValues[valueIndex]) + ")";
+        return I18N.get(item.enumValues[valueIndex]);
       }
     }
     if (item.nameId == StrId::STR_TEXT_AA && pendingTextAntiAliasingOverride < 0) {
-      const auto defaultEffective = (SETTINGS.textAntiAliasing != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.textAntiAliasing != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_HYPHENATION && pendingHyphenationOverride < 0) {
-      const auto defaultEffective = (SETTINGS.hyphenationEnabled != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.hyphenationEnabled != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_GUIDE_DOTS && pendingGuideDotsOverride < 0) {
-      const auto defaultEffective = (SETTINGS.guideDots != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.guideDots != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_INLINE_FOOTNOTE_PREVIEWS && pendingInlineFootnotePreviewsOverride < 0) {
-      const auto defaultEffective = (SETTINGS.inlineFootnotePreviews != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.inlineFootnotePreviews != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     if (item.nameId == StrId::STR_FONT_SIZE_NORMALIZATION && pendingFontSizeNormalizationOverride < 0) {
-      const auto defaultEffective = (SETTINGS.fontSizeNormalization != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-      return std::string(tr(STR_DEFAULT_VALUE)) + " (" + defaultEffective + ")";
+      return (SETTINGS.fontSizeNormalization != 0) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     }
     return item.getDisplayValue();
   };
 
   startActivityForResult(std::make_unique<SettingsSubmenuActivity>(renderer, mappedInput, submenuEntry.nameId,
                                                                    it->items, std::move(itemValueStringOverride),
-                                                                   /*persistSettingsOnChange=*/false),
+                                                                   /*persistSettingsOnChange=*/false,
+                                                                   /*overlayPanel=*/true),
                          [this](const ActivityResult& result) {
                            if (!result.isCancelled) {
                              const auto* menuResult = std::get_if<MenuResult>(&result.data);
@@ -735,7 +730,7 @@ std::string EpubReaderMenuActivity::fontSizeValueLabel() const {
         ? reader_font_size::nearestNamedSize(pendingFontPointSizeOverride) : static_cast<uint8_t>(pendingFontSizeOverride);
     label = I18N.get(names[named < 4 ? named : 1]);
   }
-  return inherited ? std::string(tr(STR_DEFAULT_VALUE)) + " (" + label + ")" : label;
+  return label;
 }
 
 void EpubReaderMenuActivity::openFontSizeOverridePicker() {
@@ -759,10 +754,9 @@ void EpubReaderMenuActivity::openFontSizeOverridePicker() {
     for (uint8_t point : fontSizePoints) fontSizePickerSetting->enumLabels.push_back(std::to_string(point) + " pt");
   }
   // Stored on the parent: EnumSelectionActivity holds a reference throughout its lifetime.
-  startActivityForResult(std::make_unique<EnumSelectionActivity>(renderer, mappedInput, *fontSizePickerSetting),
-                         [this](const ActivityResult&) {
-                           openSubmenu(SettingInfo::SubmenuEntry(StrId::STR_READER_OVERRIDES));
-                         });
+  startActivityForResult(std::make_unique<EnumSelectionActivity>(renderer, mappedInput, *fontSizePickerSetting,
+                                                                  nullptr, 0, /*overlayPanel=*/true),
+                         [this](const ActivityResult&) { requestUpdate(); });
 }
 
 void EpubReaderMenuActivity::openLineHeightOverridePicker() {
@@ -779,7 +773,8 @@ void EpubReaderMenuActivity::openLineHeightOverridePicker() {
       .showButtonStepHints = true,
       .firstNumericValue = CrossPointSettings::MIN_LINE_HEIGHT_PERCENT,
   };
-  startActivityForResult(std::make_unique<SliderPickerActivity>(renderer, mappedInput, std::move(cfg)),
+  startActivityForResult(std::make_unique<SliderPickerActivity>(renderer, mappedInput, std::move(cfg),
+                                                                 /*overlayPanel=*/true),
                          [this](const ActivityResult& result) {
                            if (!result.isCancelled) {
                              const auto* selected = std::get_if<PercentResult>(&result.data);
@@ -808,16 +803,185 @@ void EpubReaderMenuActivity::toggleCurrentItem() {
     return;
   }
 
+  if (item.usesSelectorActivity) {
+    startActivityForResult(std::make_unique<EnumSelectionActivity>(renderer, mappedInput, menuItems[selectedIndex],
+                                                                    nullptr, 0, /*overlayPanel=*/true),
+                           [this](const ActivityResult&) { requestUpdate(); });
+    return;
+  }
+
   menuItems[selectedIndex].toggleValue();
   onSettingToggled(selectedIndex);
   requestUpdate();
 }
 
-void EpubReaderMenuActivity::onEnter() { MenuListActivity::onEnter(); }
+const char* EpubReaderMenuActivity::tabLabel(const Tab value) const {
+  static constexpr StrId ids[] = {StrId::STR_READER_TAB_BOOK, StrId::STR_READER_TAB_TEXT,
+                                  StrId::STR_READER_TAB_OPTIONS};
+  return I18N.get(ids[static_cast<size_t>(value)]);
+}
+
+void EpubReaderMenuActivity::prepareTabs() {
+  Tab destination = Tab::Navigation;
+  for (auto& item : menuItems) {
+    if (item.isSeparator) {
+      if (item.nameId == StrId::STR_READER_NAVIGATION) {
+        destination = Tab::Navigation;
+        continue;
+      }
+      if (item.nameId == StrId::STR_READER_BOOKMARKS) {
+        destination = Tab::Navigation;
+        tabItems[static_cast<size_t>(destination)].push_back(std::move(item));
+        continue;
+      }
+      if (item.nameId == StrId::STR_READER_APPEARANCE) {
+        destination = Tab::Settings;
+        continue;
+      }
+      if (item.nameId == StrId::STR_KOREADER_SYNC) {
+        destination = Tab::Tools;
+        tabItems[static_cast<size_t>(destination)].push_back(std::move(item));
+        continue;
+      }
+      if (item.nameId == StrId::STR_READER_TOOLS) {
+        destination = Tab::Tools;
+        continue;
+      }
+    }
+    tabItems[static_cast<size_t>(destination)].push_back(std::move(item));
+  }
+  menuItems.clear();
+
+  // The Tools tab itself is already the requested entry point: expose its
+  // contents directly instead of showing another identically named submenu.
+  auto& tools = tabItems[static_cast<size_t>(Tab::Tools)];
+  for (auto& item : tools) {
+    if (item.submenu == StrId::STR_READER_TOOLS) item.submenu = StrId::STR_NONE_OPT;
+  }
+
+  // Keep the familiar "Per-book overrides" section, but expose its contents
+  // directly on the Appearance page instead of requiring another menu entry.
+  auto& appearance = tabItems[static_cast<size_t>(Tab::Settings)];
+  std::vector<SettingInfo> expandedAppearance;
+  expandedAppearance.reserve(appearance.size() + 1);
+  bool overrideHeadingInserted = false;
+  for (auto& item : appearance) {
+    if (item.submenu == StrId::STR_READER_OVERRIDES) {
+      if (!overrideHeadingInserted) {
+        expandedAppearance.push_back(SettingInfo::Separator(StrId::STR_READER_OVERRIDES));
+        overrideHeadingInserted = true;
+      }
+      item.submenu = StrId::STR_NONE_OPT;
+    }
+    expandedAppearance.push_back(std::move(item));
+  }
+  appearance = std::move(expandedAppearance);
+
+  for (auto& items : tabItems) {
+    SettingInfo::prepareSubmenus(items, submenuData);
+    SettingInfo::insertSubcategorySeparators(items);
+  }
+  submenusPrepared = true;
+}
+
+void EpubReaderMenuActivity::showTab(const Tab nextTab) {
+  tab = nextTab;
+  menuItems = tabItems[static_cast<size_t>(tab)];
+  initMenuList();
+  selectedIndex = -1;
+  requestUpdate();
+}
+
+void EpubReaderMenuActivity::switchTab() {
+  const auto next = (static_cast<size_t>(tab) + 1) % static_cast<size_t>(Tab::Count);
+  showTab(static_cast<Tab>(next));
+}
+
+void EpubReaderMenuActivity::renderTabBar(const Rect& rect) const {
+  constexpr int count = static_cast<int>(Tab::Count);
+  const int sidePadding = UITheme::getInstance().getMetrics().contentSidePadding;
+  const int tabsX = rect.x + sidePadding;
+  const int tabsWidth = std::max(count, rect.width - sidePadding * 2);
+  const int cellWidth = tabsWidth / count;
+  const int fontId = UI_10_FONT_ID;
+  const int textHeight = renderer.getTextHeight(fontId);
+
+  for (int i = 0; i < count; i++) {
+    const int x = tabsX + i * cellWidth;
+    const int width = (i == count - 1) ? tabsX + tabsWidth - x : cellWidth;
+    const bool active = i == static_cast<int>(tab);
+    const bool focused = active && selectedIndex == -1;
+    if (focused) {
+      renderer.fillRoundedRect(x + 3, rect.y + 1, width - 6, rect.height - 4, 6, Color::Black);
+    } else if (active) {
+      renderer.fillRoundedRect(x + 3, rect.y + 1, width - 6, rect.height - 4, 6, Color::LightGray);
+      renderer.drawLine(x + 3, rect.y + rect.height - 3, x + width - 4, rect.y + rect.height - 3, 2, true);
+    }
+
+    const char* label = tabLabel(static_cast<Tab>(i));
+    const std::string fitted = renderer.truncatedText(fontId, label, width - 8);
+    const int textWidth = renderer.getTextWidth(fontId, fitted.c_str());
+    const int textX = x + std::max(0, (width - textWidth) / 2);
+    const int textY = rect.y + std::max(0, (rect.height - textHeight) / 2);
+    renderer.drawText(fontId, textX, textY, fitted.c_str(), !focused);
+  }
+  renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1);
+}
+
+void EpubReaderMenuActivity::onEnter() {
+  Activity::onEnter();
+  if (!submenusPrepared) prepareTabs();
+  showTab(Tab::Navigation);
+}
+
+void EpubReaderMenuActivity::loop() {
+  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    onBackPressed();
+    return;
+  }
+  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
+    if (selectedIndex < 0) {
+      switchTab();
+    } else {
+      toggleCurrentItem();
+    }
+    return;
+  }
+
+  buttonNavigator.onNextPress([this] {
+    if (selectedIndex < 0) {
+      selectedIndex = buttonNavigator.nextIndex(-1);
+    } else {
+      const int next = buttonNavigator.nextIndex(selectedIndex);
+      selectedIndex = next <= selectedIndex ? -1 : next;
+    }
+    requestUpdate();
+  });
+  buttonNavigator.onPreviousPress([this] {
+    if (selectedIndex < 0) {
+      selectedIndex = buttonNavigator.previousIndex(0);
+    } else {
+      const int previous = buttonNavigator.previousIndex(selectedIndex);
+      selectedIndex = previous >= selectedIndex ? -1 : previous;
+    }
+    requestUpdate();
+  });
+}
 
 void EpubReaderMenuActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-  const Rect contentRect = UITheme::getContentRect(renderer, true, false);
+  // Overlay the menu on the displayed reader page. Only the lower three
+  // quarters are cleared, so the top quarter remains readable as context.
+  renderer.syncWriteBufferFromDisplayed();
+  const int panelTop = renderer.getScreenHeight() / 4;
+  renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12,
+                           true, true, false, false, Color::White);
+  renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12,
+                           true, true, false, false, true);
+
+  Rect contentRect = UITheme::getContentRect(renderer, true, false);
+  const int contentBottom = contentRect.y + contentRect.height;
+  contentRect.y = std::max(contentRect.y, panelTop + 2);
+  contentRect.height = std::max(0, contentBottom - contentRect.y);
 
   // Title
   const std::string truncTitle =
@@ -834,16 +998,28 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
                    std::to_string(totalPages) + std::string(tr(STR_PAGES_SEPARATOR));
   }
   progressLine += std::string(tr(STR_BOOK_PREFIX)) + std::to_string(bookProgressPercent) + "%";
-  renderer.drawCenteredText(UI_10_FONT_ID, 45, progressLine.c_str());
+  renderer.drawCenteredText(UI_10_FONT_ID, 48 + contentRect.y, progressLine.c_str());
+
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  // Match the main Settings header: one 3 px separator immediately before the tabs.
+  // Give the chapter/progress summary a little more breathing room before
+  // the separator and tabs.
+  const int tabTop = 86 + contentRect.y;
+  renderer.drawLine(contentRect.x, tabTop - 3, contentRect.x + contentRect.width - 1, tabTop - 3, 3, true);
+  renderTabBar(Rect{contentRect.x, tabTop, contentRect.width, metrics.tabBarHeight});
 
   // Menu Items
-  const int startY = 75 + contentRect.y;
+  const int startY = tabTop + metrics.tabBarHeight + metrics.verticalSpacing;
   const int listHeight = contentRect.height - (startY - contentRect.y);
   drawMenuList(Rect{contentRect.x, startY, contentRect.width, listHeight});
 
   // Footer / Hints
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const char* confirm = tr(STR_SELECT);
+  if (selectedIndex == -1) {
+    confirm = tabLabel(static_cast<Tab>((static_cast<size_t>(tab) + 1) % static_cast<size_t>(Tab::Count)));
+  }
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirm, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  renderer.displayWindow(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop);
 }

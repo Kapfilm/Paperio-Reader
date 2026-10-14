@@ -2063,7 +2063,9 @@ void EpubReaderActivity::applyBookReaderOverrides(
   // (hasRefreshOverridePending() at the popup then also arms forceHalfRefreshAfterPopup_ for the
   // first content page). Reached only when something actually changed (early-out above), so routine
   // no-op reopens of the menu don't pay for it.
-  ReaderUtils::enforceExitFullRefresh(renderer);
+  // The reader menu is a lower-screen overlay. A HALF refresh here produces a
+  // visible full-panel flash; keep its first paint on the differential fast path.
+  renderer.setNextDisplayRefreshMode(HalDisplay::FAST_REFRESH);
 
   RenderLock lock(*this);
   if (section) {
@@ -5311,7 +5313,12 @@ void EpubReaderActivity::openReaderMenu() {
   // KB) — the tag 2.05 "Confirm reboots" crash.
   const bool hasPrintedPages = epub->hasNumericPrintedPages();
 
-  ReaderUtils::enforceExitFullRefresh(renderer);
+  // The reader menu is painted with displayWindow(), so it does not consume
+  // the renderer's one-shot refresh override. Arming HALF_REFRESH here would
+  // leave it pending until the reader is shown again and make closing the menu
+  // flash the whole panel black. Keep the return paint differential instead:
+  // it restores the page over the former menu area without a black transition.
+  renderer.setNextDisplayRefreshMode(HalDisplay::FAST_REFRESH);
   startActivityForResult(
       std::make_unique<EpubReaderMenuActivity>(
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,

@@ -146,21 +146,40 @@ void SettingsSubmenuActivity::onSettingToggled(int /*index*/) {
 }
 
 void SettingsSubmenuActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+  const int panelTop = overlayPanel ? renderer.getScreenHeight() / 4 : 0;
+  if (overlayPanel) {
+    renderer.syncWriteBufferFromDisplayed();
+    renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12,
+                             true, true, false, false, Color::White);
+    renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12,
+                             true, true, false, false, true);
+  } else {
+    renderer.clearScreen();
+  }
 
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect contentRect = UITheme::getContentRect(renderer, true, false);
+  Rect contentRect = UITheme::getContentRect(renderer, true, false);
+  if (overlayPanel) {
+    const int contentBottom = contentRect.y + contentRect.height;
+    contentRect.y = std::max(contentRect.y, panelTop + 2);
+    contentRect.height = std::max(0, contentBottom - contentRect.y);
+  }
 
-  GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.headerHeight},
+  GUI.drawHeader(renderer, Rect{contentRect.x, contentRect.y + metrics.topPadding, contentRect.width, metrics.headerHeight},
                  I18N.get(titleId));
 
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
+  const int contentTop = contentRect.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentHeight = contentRect.height - (contentTop - contentRect.y) - metrics.verticalSpacing;
   drawMenuList(Rect{contentRect.x, contentTop, contentRect.width, contentHeight});
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+  if (overlayPanel) {
+    needsHalfRefresh = false;
+    renderer.displayWindow(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop);
+    return;
+  }
   const bool halfRefresh = gpio.deviceIsX3() && needsHalfRefresh;
   needsHalfRefresh = false;
   renderer.displayBuffer(halfRefresh ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);

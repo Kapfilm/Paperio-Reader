@@ -297,9 +297,17 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
 
     int valueWidth = 0;
     std::string valueText;
+    bool toggleEnabled = false;
+    bool isToggleValue = false;
     if (rowValue != nullptr) {
-      valueText = renderer.truncatedText(UI_10_FONT_ID, rowValue(i).c_str(), kMaxListValueWidth);
-      valueWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str()) + kListHorizontalPadding;
+      valueText = rowValue(i);
+      isToggleValue = toggleStateFromValue(valueText, toggleEnabled);
+      if (isToggleValue) {
+        valueWidth = toggleSwitchWidth + kListHorizontalPadding;
+      } else {
+        valueText = renderer.truncatedText(UI_10_FONT_ID, valueText.c_str(), kMaxListValueWidth);
+        valueWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str()) + kListHorizontalPadding;
+      }
       rowTextWidth -= valueWidth;
     }
 
@@ -349,13 +357,19 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
     }
 
     if (!valueText.empty()) {
-      if (selected && highlightValue) {
-        renderer.fillRoundedRect(
-            rect.x + contentWidth - LyraMetrics::values.contentSidePadding - kListHorizontalPadding - valueWidth, itemY,
-            valueWidth + kListHorizontalPadding, rowHeight, kButtonCornerRadius, Color::Black);
+      if (isToggleValue) {
+        const int switchX = rect.x + contentWidth - LyraMetrics::values.contentSidePadding - toggleSwitchWidth;
+        const int switchY = itemY + (rowHeight - toggleSwitchHeight) / 2;
+        drawToggleSwitch(renderer, switchX, switchY, toggleEnabled, selected);
+      } else {
+        if (selected && highlightValue) {
+          renderer.fillRoundedRect(
+              rect.x + contentWidth - LyraMetrics::values.contentSidePadding - kListHorizontalPadding - valueWidth,
+              itemY, valueWidth + kListHorizontalPadding, rowHeight, kButtonCornerRadius, Color::Black);
+        }
+        renderer.drawText(UI_10_FONT_ID, rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueWidth,
+                          itemY + 6, valueText.c_str(), !selected);
       }
-      renderer.drawText(UI_10_FONT_ID, rect.x + contentWidth - LyraMetrics::values.contentSidePadding - valueWidth,
-                        itemY + 6, valueText.c_str(), !selected);
     }
   }
 }
