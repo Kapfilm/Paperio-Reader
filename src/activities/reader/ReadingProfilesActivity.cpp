@@ -35,11 +35,19 @@ std::string ReadingProfilesActivity::getItemValueString(int index) const {
 }
 
 void ReadingProfilesActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-  const Rect content = UITheme::getContentRect(renderer, true, true);
+  renderer.syncWriteBufferFromDisplayed();
+  const int panelTop = renderer.getScreenHeight() / 4;
+  renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12,
+                           true, true, false, false, Color::White);
+  renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12,
+                           true, true, false, false, true);
+  Rect content = UITheme::getContentRect(renderer, true, true);
+  const int contentBottom = content.y + content.height;
+  content.y = std::max(content.y, panelTop + 2);
+  content.height = std::max(0, contentBottom - content.y);
   renderer.drawCenteredText(UI_12_FONT_ID, content.y + 10, tr(STR_READING_PROFILES));
   drawMenuList(Rect{content.x, content.y + 50, content.width, content.height - 50});
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_PREV), tr(STR_NEXT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+  renderer.displayWindow(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop);
 }

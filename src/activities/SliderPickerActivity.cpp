@@ -85,9 +85,19 @@ void SliderPickerActivity::loop() {
 }
 
 void SliderPickerActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+  const int panelTop = overlayPanel ? renderer.getScreenHeight() / 4 : 0;
+  if (overlayPanel) {
+    renderer.syncWriteBufferFromDisplayed();
+    renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12,
+                             true, true, false, false, Color::White);
+    renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12,
+                             true, true, false, false, true);
+  } else {
+    renderer.clearScreen();
+  }
 
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, I18N.get(cfg.titleId), true, EpdFontFamily::BOLD);
+  const int localTop = panelTop;
+  renderer.drawCenteredText(UI_12_FONT_ID, localTop + 15, I18N.get(cfg.titleId), true, EpdFontFamily::BOLD);
 
   std::string valueText;
   if (!cfg.zeroLabel.empty() && value == cfg.minValue) {
@@ -95,13 +105,13 @@ void SliderPickerActivity::render(RenderLock&&) {
   } else {
     valueText = std::to_string(value) + cfg.suffix;
   }
-  renderer.drawCenteredText(UI_12_FONT_ID, 90, valueText.c_str(), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, localTop + 90, valueText.c_str(), true, EpdFontFamily::BOLD);
 
   const Rect contentRect = UITheme::getContentRect(renderer, true, false);
   constexpr int barWidth = 360;
   constexpr int barHeight = 16;
   const int barX = contentRect.x + (contentRect.width - barWidth) / 2;
-  constexpr int barY = 140;
+  const int barY = localTop + 140;
 
   renderer.drawRect(barX, barY, barWidth, barHeight);
 
@@ -127,5 +137,9 @@ void SliderPickerActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "-", "+");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayBuffer();
+  if (overlayPanel) {
+    renderer.displayWindow(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop);
+  } else {
+    renderer.displayBuffer();
+  }
 }

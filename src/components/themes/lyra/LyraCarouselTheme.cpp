@@ -652,10 +652,17 @@ void LyraCarouselTheme::drawList(const GfxRenderer& renderer, Rect rect, int ite
 
     int valueWidth = 0;
     std::string valueText;
+    bool toggleEnabled = false;
+    bool isToggleValue = false;
     if (rowValue != nullptr) {
       valueText = rowValue(i);
-      valueText = renderer.truncatedText(UI_10_FONT_ID, valueText.c_str(), maxValWidth);
-      valueWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str()) + hPad;
+      isToggleValue = toggleStateFromValue(valueText, toggleEnabled);
+      if (isToggleValue) {
+        valueWidth = toggleSwitchWidth + hPad;
+      } else {
+        valueText = renderer.truncatedText(UI_10_FONT_ID, valueText.c_str(), maxValWidth);
+        valueWidth = renderer.getTextWidth(UI_10_FONT_ID, valueText.c_str()) + hPad;
+      }
       rowTextWidth -= valueWidth;
     }
 
@@ -689,14 +696,20 @@ void LyraCarouselTheme::drawList(const GfxRenderer& renderer, Rect rect, int ite
     }
 
     if (!valueText.empty()) {
-      if (sel && highlightValue) {
-        renderer.fillRoundedRect(
-            rect.x + contentWidth - LyraCarouselMetrics::values.contentSidePadding - hPad - valueWidth, itemY,
-            valueWidth + hPad, rowHeight, cornerRadius, Color::Black);
+      if (isToggleValue) {
+        const int switchX = rect.x + contentWidth - LyraCarouselMetrics::values.contentSidePadding - toggleSwitchWidth;
+        const int switchY = itemY + (rowHeight - toggleSwitchHeight) / 2;
+        drawToggleSwitch(renderer, switchX, switchY, toggleEnabled, sel);
+      } else {
+        if (sel && highlightValue) {
+          renderer.fillRoundedRect(
+              rect.x + contentWidth - LyraCarouselMetrics::values.contentSidePadding - hPad - valueWidth, itemY,
+              valueWidth + hPad, rowHeight, cornerRadius, Color::Black);
+        }
+        renderer.drawText(UI_10_FONT_ID,
+                          rect.x + contentWidth - LyraCarouselMetrics::values.contentSidePadding - valueWidth,
+                          itemY + 6, valueText.c_str(), !sel);
       }
-      renderer.drawText(UI_10_FONT_ID,
-                        rect.x + contentWidth - LyraCarouselMetrics::values.contentSidePadding - valueWidth, itemY + 6,
-                        valueText.c_str(), !sel);
     }
   }
 }

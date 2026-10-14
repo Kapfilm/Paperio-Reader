@@ -2,6 +2,7 @@
 #include <Epub.h>
 #include <I18n.h>
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -60,10 +61,18 @@ class EpubReaderMenuActivity final : public MenuListActivity {
                                   uint8_t initialFontPointSizeOverride = 0);
 
   void onEnter() override;
+  void loop() override;
   void render(RenderLock&&) override;
 
  private:
+  enum class Tab : uint8_t { Navigation, Settings, Tools, Count };
+
   void buildMenuItems(bool hasFootnotes, bool hasStarredPages, bool hasPrintedPages, bool hasClippings);
+  void prepareTabs();
+  void showTab(Tab nextTab);
+  void switchTab();
+  void renderTabBar(const Rect& rect) const;
+  const char* tabLabel(Tab value) const;
 
   bool currentPageStarred = false;
   void finishWithAction(MenuAction action);
@@ -106,6 +115,9 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   int8_t pendingInlineFootnotePreviewsOverride = -1;
 
   static constexpr const char* pageTurnLabels[] = {"", "1", "3", "6", "12"};
+
+  std::array<std::vector<SettingInfo>, static_cast<size_t>(Tab::Count)> tabItems;
+  Tab tab = Tab::Navigation;
 
   std::string title = "Reader Menu";
   int currentPage = 0;

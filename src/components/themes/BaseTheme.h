@@ -125,7 +125,15 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
 
 class BaseTheme {
  public:
+  static constexpr int toggleSwitchWidth = 48;
+  static constexpr int toggleSwitchHeight = 24;
+
   virtual ~BaseTheme() = default;
+
+  // Exact ON/OFF list values are rendered as compact switches. Composite values
+  // such as "Default (ON)" intentionally remain text.
+  static bool toggleStateFromValue(const std::string& value, bool& enabled);
+  void drawToggleSwitch(const GfxRenderer& renderer, int x, int y, bool enabled, bool inverted = false) const;
 
   // Component drawing methods
   virtual void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total) const;

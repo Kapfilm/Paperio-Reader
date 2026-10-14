@@ -30,10 +30,12 @@ class SliderPickerActivity : public Activity {
     int firstNumericValue = 0;
   };
 
-  explicit SliderPickerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, Config config)
+  explicit SliderPickerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, Config config,
+                                bool overlayPanel = false)
       : Activity("SliderPicker", renderer, mappedInput),
         value(std::max(config.minValue, std::min(config.maxValue, config.initialValue))),
-        cfg(std::move(config)) {}
+        cfg(std::move(config)),
+        overlayPanel(overlayPanel) {}
 
   void onEnter() override;
   void onExit() override;
@@ -43,6 +45,7 @@ class SliderPickerActivity : public Activity {
  private:
   int value;
   Config cfg;
+  bool overlayPanel;
   ButtonNavigator buttonNavigator;
 
   void adjustValue(int delta);

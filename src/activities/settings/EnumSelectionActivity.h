@@ -36,11 +36,12 @@ class EnumSelectionActivity final : public Activity {
   using LabelOverrideFn = std::string (*)(uint8_t index);
 
   EnumSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const SettingInfo& setting,
-                        LabelOverrideFn labelOverride = nullptr, uint8_t overrideCount = 0)
+                        LabelOverrideFn labelOverride = nullptr, uint8_t overrideCount = 0, bool overlayPanel = false)
       : Activity("EnumSelect", renderer, mappedInput),
         setting(setting),
         labelOverride(labelOverride),
-        overrideCount(overrideCount) {}
+        overrideCount(overrideCount),
+        overlayPanel(overlayPanel) {}
 
   void onEnter() override;
   void onExit() override;
@@ -55,6 +56,7 @@ class EnumSelectionActivity final : public Activity {
   const SettingInfo& setting;
   LabelOverrideFn labelOverride;
   uint8_t overrideCount;
+  bool overlayPanel;
 
   ButtonNavigator buttonNavigator;
   int selectedIndex = 0;
