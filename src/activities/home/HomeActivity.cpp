@@ -120,7 +120,7 @@ int getHomeCoverRenderHeight(const HomeScreenLayout& layout) {
 // dispatches Confirm based on action) and render() (which draws labels/icons).
 void HomeActivity::rebuildMenuEntries() {
   menuEntries.clear();
-  menuEntries.reserve(7);
+  menuEntries.reserve(8);
 
   menuEntries.push_back({MenuAction::FileBrowser, StrId::STR_BROWSE_FILES, Folder});
   // In Minimal the recent-books grid is promoted to the second bottom button,
@@ -139,6 +139,7 @@ void HomeActivity::rebuildMenuEntries() {
   if (SETTINGS.useWeather) {
     menuEntries.push_back({MenuAction::Weather, StrId::STR_WEATHER, Weather});
   }
+  menuEntries.push_back({MenuAction::Games, StrId::STR_GAMES, Games});
   menuEntries.push_back({MenuAction::Settings, StrId::STR_SETTINGS_TITLE, Settings});
   menuEntriesDirty = false;
 }
@@ -158,24 +159,18 @@ void HomeActivity::loadRecentBooks(int maxBooks) {
       continue;
     }
 
-    // Check for a sidecar cover — takes priority over embedded cover.
-    // Also catches books registered before sidecar support (empty coverBmpPath).
-    const std::string sidecar = ReaderActivity::sidecarCoverPath(book.path);
-    if (!sidecar.empty()) {
-      const std::string bookCacheDir = ReaderActivity::bookCacheDir(book.path);
-      const bool sidecarAlreadyStored =
-          book.coverBmpPath == sidecar || (book.coverBmpPath.rfind(bookCacheDir + "/", 0) == 0 &&
-                                           book.coverBmpPath.find("[HEIGHT]") != std::string::npos);
-      LOG_DBG("HOME", "Sidecar for %s: stored=%s alreadyStored=%d", book.path.c_str(), book.coverBmpPath.c_str(),
-              sidecarAlreadyStored ? 1 : 0);
-      if (!sidecarAlreadyStored) {
-        LOG_DBG("HOME", "Updating coverBmpPath to sidecar: %s", sidecar.c_str());
-        RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, sidecar);
-        RecentBook updated = book;
-        updated.coverBmpPath = sidecar;
-        recentBooks.push_back(updated);
-        continue;
-      }
+    // Never trust the persisted cover path here. Older builds may have stored a
+    // raw sidecar or a thumbnail belonging to a previous custom-cover revision.
+    // Recompute the canonical path from the current source on every Home entry.
+    const std::string placeholder = ReaderActivity::coverThumbPlaceholder(book.path);
+    if (book.coverBmpPath != placeholder) {
+      LOG_DBG("HOME", "Refreshing cover path for %s: %s -> %s", book.path.c_str(), book.coverBmpPath.c_str(),
+              placeholder.c_str());
+      RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
+      RecentBook updated = book;
+      updated.coverBmpPath = placeholder;
+      recentBooks.push_back(updated);
+      continue;
     }
 
     recentBooks.push_back(book);
@@ -948,8 +943,7 @@ void HomeActivity::render(RenderLock&&) {
     coverRectW = contentRect.width;
     coverRectH = std::min(metrics.homeCoverTileHeight, contentRect.height - metrics.homeTopPadding);
     GUI.drawRecentBookCover(renderer, Rect{coverRectX, coverRectY, coverRectW, coverRectH}, recentBooks, 0,
-                            coverRendered, coverBufferStored, bufferRestored,
-                            []() { return false; });
+                            coverRendered, coverBufferStored, bufferRestored, []() { return false; });
 
     const auto labels = mappedInput.mapLabels(tr(STR_MENU), tr(STR_BOOKS), tr(STR_BUTTON_SETTINGS),
                                               recentBooks.empty() ? "" : tr(STR_READ));
@@ -1066,6 +1060,9 @@ void HomeActivity::dispatchMenuAction(MenuAction action) {
       break;
     case MenuAction::Weather:
       activityManager.goToWeather();
+      break;
+    case MenuAction::Games:
+      activityManager.goToGames();
       break;
     case MenuAction::Settings:
       activityManager.goToSettings();

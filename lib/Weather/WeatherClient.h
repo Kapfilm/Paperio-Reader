@@ -12,7 +12,7 @@ class WeatherClient {
 
   /// Search for cities by name via Open-Meteo geocoding API.
   /// Returns up to 5 results.
-  static std::vector<GeocodingResult> searchCity(const std::string& query);
+  static std::vector<GeocodingResult> searchCity(const std::string& query, bool* requestSucceeded = nullptr);
 
  private:
   static WeatherData fetchFromApi(const WeatherSettingsStore& settings);

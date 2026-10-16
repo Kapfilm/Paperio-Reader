@@ -25,6 +25,7 @@ class WeatherSettingsActivity final : public MenuListActivity {
  private:
   std::vector<GeocodingResult> searchResults;
   bool showingSearchResults = false;
+  bool citySearchFailed = false;
   std::string searchQuery;
 
   void buildMenuItems();
@@ -34,6 +35,7 @@ class WeatherSettingsActivity final : public MenuListActivity {
   void onSettingToggled(int index) override;
 
   void launchCitySearch();
+  void performCitySearch(const std::string& query);
   void launchLatitudeEntry();
   void launchLongitudeEntry();
 };

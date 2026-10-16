@@ -7,8 +7,8 @@
 
 #include <algorithm>
 
-#include "ImageFormatDetector.h"
 #include "../Epub.h"
+#include "ImageFormatDetector.h"
 #include "converters/GifToFramebufferConverter.h"
 #include "converters/JpegToFramebufferConverter.h"
 #include "converters/PngToFramebufferConverter.h"
@@ -28,6 +28,8 @@ bool parseImageDimensions(const uint8_t* buf, size_t n, ImageDimensions& dims) {
       return PngToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
     case ImageFormatDetector::Format::Gif:
       return GifToFramebufferConverter::getDimensionsFromBuffer(buf, n, dims);
+    case ImageFormatDetector::Format::Bmp:
+      return false;
     case ImageFormatDetector::Format::Unknown:
       return false;
   }
@@ -160,8 +162,7 @@ const ImageManifestEntry* EpubImageManifest::ensureResolved(const std::string& e
   return result;
 }
 
-const ImageManifestEntry* EpubImageManifest::ensureResolved(const Epub& epub,
-                                                            const std::string& epubEntryPath) {
+const ImageManifestEntry* EpubImageManifest::ensureResolved(const Epub& epub, const std::string& epubEntryPath) {
   if (!epub.isFb2Package()) return ensureResolved(epub.getPath(), epubEntryPath);
   if (const ImageManifestEntry* hit = find(epubEntryPath)) return hit;
 
@@ -169,7 +170,8 @@ const ImageManifestEntry* EpubImageManifest::ensureResolved(const Epub& epub,
   if (!headerBuf) return nullptr;
   const size_t bytesRead = epub.readItemHeaderBytes(epubEntryPath, headerBuf.get(), kHeaderBufSize);
   ImageDimensions dims = {0, 0};
-  if (bytesRead == 0 || !parseImageDimensions(headerBuf.get(), bytesRead, dims) || dims.width <= 0 || dims.height <= 0) {
+  if (bytesRead == 0 || !parseImageDimensions(headerBuf.get(), bytesRead, dims) || dims.width <= 0 ||
+      dims.height <= 0) {
     return nullptr;
   }
 
@@ -178,9 +180,7 @@ const ImageManifestEntry* EpubImageManifest::ensureResolved(const Epub& epub,
   e.width = dims.width;
   e.height = dims.height;
   auto it = std::lower_bound(entries_.begin(), entries_.end(), epubEntryPath,
-                             [](const ImageManifestEntry& a, const std::string& k) {
-                               return a.epubEntryPath < k;
-                             });
+                             [](const ImageManifestEntry& a, const std::string& k) { return a.epubEntryPath < k; });
   const ImageManifestEntry* result = &*entries_.insert(it, std::move(e));
   dirty_ = true;
   return result;

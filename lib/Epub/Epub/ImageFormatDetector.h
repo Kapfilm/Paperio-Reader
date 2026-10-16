@@ -9,7 +9,7 @@
 // Used by cover detection, image manifest resolution, and image converters.
 class ImageFormatDetector {
  public:
-  enum class Format : uint8_t { Unknown, Jpeg, Png, Gif };
+  enum class Format : uint8_t { Unknown, Jpeg, Png, Gif, Bmp };
 
   // Detect image format from buffer header by sniffing magic bytes.
   // Returns Format::Unknown if the buffer is too small or format is not recognized.
@@ -31,6 +31,11 @@ class ImageFormatDetector {
       return Format::Gif;
     }
 
+    // BMP: starts with the ASCII signature "BM".
+    if (len >= 2 && buf[0] == 'B' && buf[1] == 'M') {
+      return Format::Bmp;
+    }
+
     return Format::Unknown;
   }
 
@@ -43,6 +48,8 @@ class ImageFormatDetector {
         return bufLen >= 8;
       case Format::Gif:
         return bufLen >= 10;  // Need at least logical-screen header
+      case Format::Bmp:
+        return bufLen >= 2;
       case Format::Unknown:
         return false;
     }

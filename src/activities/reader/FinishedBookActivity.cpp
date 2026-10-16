@@ -7,9 +7,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <JpegToBmpConverter.h>
 #include <Logging.h>
-#include <PngToBmpConverter.h>
 #include <Txt.h>
 #include <Xtc.h>
 #include <esp_task_wdt.h>
@@ -32,6 +30,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookArchiveUtils.h"
+#include "util/BookCoverUtils.h"
 
 namespace {
 std::string extractFolderPath(const std::string& filePath) {
@@ -72,73 +71,23 @@ std::string findUniquePathWithSuffix(const std::string& basePath) {
 
 std::string findUniqueCompletedSidecarPath(const std::string& basePath) { return findUniquePathWithSuffix(basePath); }
 
-std::string convertSidecarToBmp(const std::string& cacheDir, const std::string& sidecarPath, int width, int height,
-                                const std::string& fileName) {
-  if (!Storage.exists(cacheDir.c_str())) {
-    Storage.mkdir(cacheDir.c_str());
-  }
-  const std::string bmpPath = cacheDir + "/" + fileName;
-  if (Storage.exists(bmpPath.c_str())) {
-    return bmpPath;
-  }
-
-  FsFile src;
-  if (!Storage.openFileForRead("FIN", sidecarPath, src)) {
-    return "";
-  }
-  FsFile dst;
-  if (!Storage.openFileForWrite("FIN", bmpPath, dst)) {
-    src.close();
-    return "";
-  }
-
-  bool ok = false;
-  if (FsHelpers::hasJpgExtension(sidecarPath)) {
-    ok = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(src, dst, width, height);
-  } else if (FsHelpers::hasPngExtension(sidecarPath)) {
-    ok = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, dst, width, height);
-  } else if (FsHelpers::hasBmpExtension(sidecarPath)) {
-    uint8_t buffer[1024];
-    while (src.available()) {
-      size_t bytesRead = src.read(buffer, sizeof(buffer));
-      dst.write(buffer, bytesRead);
-    }
-    ok = true;
-  }
-
-  src.close();
-  dst.close();
-  if (!ok) {
-    Storage.remove(bmpPath.c_str());
-    return "";
-  }
-  return bmpPath;
-}
-
 std::string getSidecarCoverBmpPath(const std::string& bookPath, int width, int height) {
   const std::string sidecarPath = ReaderActivity::sidecarCoverPath(bookPath);
   if (sidecarPath.empty()) {
     return "";
   }
 
-  if (FsHelpers::hasBmpExtension(sidecarPath)) {
-    return sidecarPath;
-  }
-
-  const std::string fileName = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
-  return convertSidecarToBmp(ReaderActivity::bookCacheDir(bookPath), sidecarPath, width, height, fileName);
+  const std::string fileName = ReaderActivity::coverThumbFileName(bookPath, width, height);
+  return ReaderActivity::convertSidecarToBmp(ReaderActivity::bookCacheDir(bookPath), sidecarPath, width, height,
+                                             fileName);
 }
 
 bool moveSidecarFilesToCompleted(const std::string& currentBookPath, const std::string& targetBookPath) {
-  const auto srcDot = currentBookPath.rfind('.');
-  const auto dstDot = targetBookPath.rfind('.');
-  if (srcDot == std::string::npos || dstDot == std::string::npos) {
-    return false;
-  }
-
-  const std::string srcBase = currentBookPath.substr(0, srcDot);
-  const std::string dstBase = targetBookPath.substr(0, dstDot);
-  const char* extensions[] = {".bmp", ".jpg", ".jpeg", ".png", ".BMP", ".JPG", ".JPEG", ".PNG"};
+  const std::string srcBase = BookCoverUtils::basePath(currentBookPath);
+  const std::string dstBase = BookCoverUtils::basePath(targetBookPath);
+  const char* extensions[] = {".cover.jpg", ".cover.jpeg", ".cover.png", ".cover.bmp", ".cover.JPG", ".cover.JPEG",
+                              ".cover.PNG", ".cover.BMP",  ".cover.rev", ".bmp",       ".jpg",       ".jpeg",
+                              ".png",       ".BMP",        ".JPG",       ".JPEG",      ".PNG"};
   bool success = true;
   for (const char* ext : extensions) {
     const std::string srcSidecar = srcBase + ext;
@@ -237,8 +186,7 @@ NextBookMetadata loadNextBookMetadata(const std::string& nextBookPath) {
 }
 
 bool isSupportedBookFile(const std::string& fileName) {
-  return FsHelpers::hasEpubExtension(fileName) || isFb2BookPath(fileName) ||
-         FsHelpers::hasXtcExtension(fileName) ||
+  return FsHelpers::hasEpubExtension(fileName) || isFb2BookPath(fileName) || FsHelpers::hasXtcExtension(fileName) ||
          FsHelpers::hasTxtExtension(fileName) || FsHelpers::hasMarkdownExtension(fileName);
 }
 

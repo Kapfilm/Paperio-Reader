@@ -29,6 +29,7 @@ class HomeActivity final : public Activity {
     OpdsBrowser,
     FileTransfer,
     Weather,
+    Games,
     Settings,
   };
 

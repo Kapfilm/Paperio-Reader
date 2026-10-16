@@ -36,10 +36,13 @@ class ReaderActivity final : public Activity {
  public:
   static std::string sidecarCoverPath(const std::string& bookPath);
   static std::string bookCacheDir(const std::string& bookPath);
+  static std::string coverThumbFileName(const std::string& bookPath, int width, int height);
+  static std::string coverThumbFileName(const std::string& bookPath, int height);
 
   // Grid cover thumbnails. The on-disk result is source-agnostic and identical no matter
-  // where the cover came from: "<bookCacheDir>/thumb_<W>x<H>.bmp" (or "thumb_<H>.bmp" for the
-  // single-height themes), registered in RecentBooks via the template coverThumbPlaceholder()
+  // where the cover came from. Managed custom covers include their revision in
+  // the filename so a stale thumbnail cannot shadow a newly selected image.
+  // The path is registered in RecentBooks via the template coverThumbPlaceholder()
   // returns. A sidecar image beside the book always takes precedence over the embedded cover
   // as the *source*; the embedded cover is only parsed when no sidecar exists.
   static std::string coverThumbPlaceholder(const std::string& bookPath);

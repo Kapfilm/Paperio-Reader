@@ -16,10 +16,14 @@
 #include <ctime>
 #include <memory>
 
+#include "BookCoverMenuActivity.h"
 #include "ReadingStats.h"
+#include "RecentBooksStore.h"
+#include "activities/reader/ReaderActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookArchiveUtils.h"
+#include "util/BookCoverUtils.h"
 
 namespace {
 
@@ -101,6 +105,12 @@ void BookInfoActivity::renderLoading() {
 void BookInfoActivity::loadData() {
   loadSucceeded = false;
   loadError.clear();
+  title.clear();
+  author.clear();
+  series.clear();
+  seriesIndex.clear();
+  description.clear();
+  coverBmpPath.clear();
 
   // Get file size
   HalFile f = Storage.open(filePath.c_str());
@@ -136,12 +146,12 @@ void BookInfoActivity::loadData() {
     seriesIndex = epub.getSeriesIndex();
     description = epub.getDescription();
 
-    // Generate thumbnail if not present yet, then record its path
+    // Use the shared cover path so a managed/legacy sidecar takes priority
+    // over the embedded EPUB/FB2 cover here just as it does on Home.
     const auto& metrics = UITheme::getInstance().getMetrics();
-    const std::string thumbPath = epub.getThumbBmpPath(metrics.homeCoverHeight);
-    if (!Storage.exists(thumbPath.c_str())) {
-      epub.generateThumbBmp(metrics.homeCoverHeight);
-    }
+    const std::string thumbPath = ReaderActivity::bookCacheDir(filePath) + "/" +
+                                  ReaderActivity::coverThumbFileName(filePath, metrics.homeCoverHeight);
+    ReaderActivity::ensureCoverThumb(filePath, metrics.homeCoverHeight);
     coverBmpPath = Storage.exists(thumbPath.c_str()) ? thumbPath : "";
     loadSucceeded = true;
   } else if (FsHelpers::hasXtcExtension(filePath)) {
@@ -179,6 +189,66 @@ void BookInfoActivity::loadData() {
   }
 }
 
+bool BookInfoActivity::supportsCustomCover() const {
+  if (FsHelpers::hasEpubExtension(filePath) || isFb2BookPath(filePath)) return true;
+  if (!isBookZipPath(filePath)) return false;
+  const BookArchiveType type = detectBookArchiveType(filePath);
+  return type == BookArchiveType::Epub || type == BookArchiveType::Fb2;
+}
+
+void BookInfoActivity::refreshAfterCoverChange() {
+  // Home's carousel keeps a pre-rendered cover strip in RAM even while another
+  // activity is on top. The thumbnail files below are regenerated correctly,
+  // but that frame would otherwise continue showing the previous cover until a
+  // reboot or an unrelated cache invalidation.
+  {
+    RenderLock lock;
+    UITheme::getInstance().getMutableTheme().invalidateFrameCache();
+  }
+  fullRenderDone = false;
+  partialRenderCount = 0;
+  descLines.clear();
+  descWrappedWidth = 0;
+  loadData();
+  RECENT_BOOKS.updateBook(filePath, title, author, series, ReaderActivity::coverThumbPlaceholder(filePath));
+  requestUpdate(true);
+}
+
+void BookInfoActivity::openCoverPicker() {
+  const size_t slash = filePath.find_last_of('/');
+  const std::string initialPath = slash == std::string::npos || slash == 0 ? "/" : filePath.substr(0, slash);
+  startActivityForResult(std::make_unique<FileBrowserActivity>(renderer, mappedInput, initialPath, std::string{},
+                                                               FileBrowserActivity::Mode::PickImage),
+                         [this](const ActivityResult& result) {
+                           if (result.isCancelled) return;
+                           const auto* selected = std::get_if<FilePathResult>(&result.data);
+                           if (!selected || selected->path.empty()) return;
+                           if (!BookCoverUtils::install(filePath, selected->path)) {
+                             LOG_ERR("BookInfo", "Failed to install custom cover %s", selected->path.c_str());
+                           }
+                           refreshAfterCoverChange();
+                         });
+}
+
+void BookInfoActivity::openCoverMenu() {
+  startActivityForResult(
+      std::make_unique<BookCoverMenuActivity>(renderer, mappedInput, BookCoverUtils::hasCustomCover(filePath)),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled) return;
+        const auto* menu = std::get_if<MenuResult>(&result.data);
+        if (!menu) return;
+        switch (static_cast<BookCoverMenuActivity::Action>(menu->action)) {
+          case BookCoverMenuActivity::Action::Set:
+            openCoverPicker();
+            return;
+          case BookCoverMenuActivity::Action::Reset:
+            BookCoverUtils::reset(filePath);
+            refreshAfterCoverChange();
+            return;
+        }
+      });
+}
+
 void BookInfoActivity::onEnter() {
   Activity::onEnter();
   fullRenderDone = false;
@@ -193,6 +263,8 @@ void BookInfoActivity::onEnter() {
 void BookInfoActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     finish();
+  } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && loadSucceeded && supportsCustomCover()) {
+    openCoverMenu();
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
     if (descPage > 0) {
       descPage--;
@@ -438,6 +510,7 @@ void BookInfoActivity::renderDescriptionAndHints() {
 
   const char* prevLabel = (descPage > 0) ? tr(STR_PREV) : "";
   const char* nextLabel = (descPage + 1 < descTotalPages) ? tr(STR_NEXT) : "";
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", prevLabel, nextLabel);
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_BACK), supportsCustomCover() ? tr(STR_COVER) : "", prevLabel, nextLabel);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

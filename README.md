@@ -19,9 +19,10 @@
 
 Firmware for **XTEINK X3 and X4** e-readers.
 
-Current version: **PaperioReader 2.1.8**.
+Current version: **Paperio Reader 2.2.0**.
 
 - EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H, and Markdown.
+- Replace an EPUB or FB2 book cover from the SD card with a JPG, JPEG, PNG, or BMP image, and restore the embedded cover at any time.
 - Fast rendering, background indexing, and cautious preloading of the next image.
 - Footnotes, table of contents, link navigation, and return to the previous reading position.
 - EPUB CSS and tables, floating images, hyphenation, superscript, and subscript.
@@ -32,13 +33,14 @@ Current version: **PaperioReader 2.1.8**.
 - Mini and Lyra themes; recent books and library views with a 2×2 cover grid.
 - Bookmarks, named pages, highlights, and a unified bookmark list for all books.
 - Reading statistics, clock, weather, and KOReader synchronization.
+- Offline games: Sudoku with three difficulty levels, notes, hints, a timer, saved progress, and statistics; plus Sokoban with 155 levels, undo, level selection, and saved progress.
 - Configurable short, double, and long button presses.
 - Transparent sleep screens, an information overlay, and a white background for both quick and full sleep.
 - Wi-Fi, web-based file access, USB Serial transfer, firmware installation from an SD card, and over-the-air updates.
 - Switching between Paperio and inkMOD in the second slot, with emergency recovery. Installation requirements and limitations are described below.
 
 OTA updates are available under `Settings → System → System Update → Check for updates`.
-For manual installation, use [firmware.bin version 2.1.8](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.1.8/firmware.bin).
+For manual installation, use [firmware.bin version 2.2.0](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.0/firmware.bin).
 
 The changelog is available on the [Releases page](https://github.com/Kapfilm/Paperio-Reader/releases).
 
@@ -137,6 +139,42 @@ the value by **1%**, and the side buttons by **10%**. OK saves the selection;
 
 
 </details>
+
+</details>
+
+<details>
+<summary><strong>Custom book covers</strong></summary>
+
+
+Custom covers are available for EPUB, FB2, and FB2.ZIP books. Open a book's
+information screen, press **Cover**, and select an image from the SD card. JPG,
+JPEG, PNG, and BMP files are supported. The image is copied beside the book as
+a managed sidecar, so the original book file is never modified.
+
+The home screen, recent-books view, book information screen, and finished-book
+screen regenerate their thumbnails immediately after a cover is changed. Open
+the same menu and choose **Restore embedded cover** to remove the custom image
+and return to the cover stored inside the book.
+
+
+</details>
+
+<details>
+<summary><strong>Games</strong></summary>
+
+
+Open **Games** from the home screen or from
+`Settings → System → Tools → Games`. All games work offline.
+
+- **Sudoku** provides Easy, Medium, and Hard puzzles, pencil notes, hints,
+  error checking, a timer, automatic saving, and per-difficulty statistics.
+- **Sokoban** includes all 155 levels shipped by the integrated CrossMux game,
+  a level selector, move and push counters, undo, and saved level progress.
+
+In Sokoban, use the directional buttons to move, the confirm button to open the
+level selector, the power button to undo the last move, and Back to return to
+the Games screen.
+
 
 </details>
 
@@ -259,7 +297,7 @@ Starting with version 2.1.4, **Settings → System → System Update → Switch 
 
 Before using this feature for the first time, both firmware images must be installed once in separate slots:
 
-1. Install [Paperio 2.1.8](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.1.8/firmware.bin) using the regular SD update and leave a normal operating screen open for at least one minute.
+1. Install [Paperio 2.2.0](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.0/firmware.bin) using the regular SD update and leave a normal operating screen open for at least one minute.
 2. Use the SD update in Paperio to install a compatible **inkMOD application image** for your reader. It will occupy the second slot, while Paperio remains in the first. Use an inkMOD version that supports slot switching. A full flash image containing the bootloader and partition table is not suitable for this operation.
 3. In inkMOD, select the option to switch to the other slot. Paperio will start. To return to inkMOD, use the new “Switch firmware slot” option in Paperio.
 
@@ -475,8 +513,8 @@ Replace `yourname` with your account name. The `help` command displays help, and
 pio run -e gh_release
 ```
 
-A release is created by pushing a version-number tag, such as `2.1.8`. GitHub Actions attaches
-`firmware-Paperio-Reader-2.1.8.bin` and an OTA-compatible copy named `firmware.bin`.
+A release is created by pushing a version-number tag, such as `2.2.0`. GitHub Actions attaches
+`firmware-Paperio-Reader-2.2.0.bin` and an OTA-compatible copy named `firmware.bin`.
 
 
 </details>
@@ -498,6 +536,10 @@ A release is created by pushing a version-number tag, such as `2.1.8`. GitHub Ac
 Special thanks to the developer of **[inkMOD — @alpzoloto-sudo](https://github.com/alpzoloto-sudo/inkmod)** for the open-source FB2 implementation. Paperio Reader uses parts of the inkMOD source code: the FB2 parser, XML tokenizer, ZIP/DEFLATE reader, Base64 decoder, reader adapters, and encoding tables. This foundation was adapted for Paperio Reader and further improved with fixes for indexing, covers, and footnotes.
 
 The upstream version and commit are listed in the [FB2 code provenance document](lib/Fb2/UPSTREAM.md). The MIT license terms and copyright notices have been preserved. Thank you for creating work that can be studied and built upon.
+
+Sudoku, Sokoban, and the four-square Games icon are adapted from
+**[CrossMux](https://github.com/0x1abin/crossmux)**. Its MIT license and source
+revision are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 
 </details>

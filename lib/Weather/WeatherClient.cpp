@@ -11,9 +11,16 @@
 
 namespace {
 constexpr char WEATHER_CACHE_FILE[] = "/.crosspoint/weather_cache.json";
+constexpr const char* FORECAST_API_BASES[] = {
+    // The standard forecast host is not reachable from some networks while
+    // Open-Meteo's official Previous Runs endpoint exposes the same latest
+    // forecast fields and response schema without an API key.
+    "https://previous-runs-api.open-meteo.com/v1/forecast?",
+    "https://api.open-meteo.com/v1/forecast?",
+};
 
-std::string buildForecastUrl(const WeatherSettingsStore& settings) {
-  std::string url = "https://api.open-meteo.com/v1/forecast?";
+std::string buildForecastUrl(const WeatherSettingsStore& settings, const char* apiBase) {
+  std::string url = apiBase;
   url += "latitude=" + std::to_string(settings.getLatitude());
   url += "&longitude=" + std::to_string(settings.getLongitude());
   url +=
@@ -115,14 +122,22 @@ WeatherData WeatherClient::getWeather(const WeatherSettingsStore& settings, bool
 WeatherData WeatherClient::fetchFromApi(const WeatherSettingsStore& settings) {
   WeatherData data;
   data.requestSignature = buildRequestSignature(settings);
-  std::string url = buildForecastUrl(settings);
   LOG_DBG("WEA", "fetchFromApi[1] start");
-  LOG_DBG("WEA", "fetchFromApi[2] url length=%zu", url.size());
   LOG_DBG("WEA", "Fetching weather from API");
 
   std::string response;
-  LOG_DBG("WEA", "fetchFromApi[3] HttpDownloader::fetchUrl before");
-  if (!HttpDownloader::fetchUrl(url, response)) {
+  bool fetched = false;
+  for (size_t apiIndex = 0; apiIndex < sizeof(FORECAST_API_BASES) / sizeof(FORECAST_API_BASES[0]); apiIndex++) {
+    const std::string url = buildForecastUrl(settings, FORECAST_API_BASES[apiIndex]);
+    LOG_DBG("WEA", "fetchFromApi[2] source=%zu url length=%zu", apiIndex + 1, url.size());
+    response.clear();
+    if (HttpDownloader::fetchUrl(url, response)) {
+      fetched = true;
+      break;
+    }
+    LOG_ERR("WEA", "Forecast source %zu failed", apiIndex + 1);
+  }
+  if (!fetched) {
     data.errorMessage = "Network error";
     LOG_ERR("WEA", "Failed to fetch weather data");
     return data;
@@ -356,8 +371,9 @@ bool WeatherClient::loadCache(WeatherData& data) {
   return true;
 }
 
-std::vector<GeocodingResult> WeatherClient::searchCity(const std::string& query) {
+std::vector<GeocodingResult> WeatherClient::searchCity(const std::string& query, bool* requestSucceeded) {
   std::vector<GeocodingResult> results;
+  if (requestSucceeded) *requestSucceeded = false;
 
   std::string url = "https://geocoding-api.open-meteo.com/v1/search?name=" + urlEncode(query);
   url += "&count=5&language=en";
@@ -374,6 +390,8 @@ std::vector<GeocodingResult> WeatherClient::searchCity(const std::string& query)
     LOG_ERR("WEA", "Geocoding parse error: %s", error.c_str());
     return results;
   }
+
+  if (requestSucceeded) *requestSucceeded = true;
 
   JsonArray arr = doc["results"].as<JsonArray>();
   for (JsonObject obj : arr) {

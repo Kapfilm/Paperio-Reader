@@ -284,6 +284,10 @@ void WeatherActivity::checkAndConnectWifi() {
 }
 
 void WeatherActivity::launchWifiSelection() {
+  // Release the secondary framebuffer before the radio is initialized. Waiting
+  // until fetchWeather() is too late: WiFi association itself needs a large
+  // contiguous allocation on the ESP32-C3.
+  trimMemoryForNetworkSession(renderer, "WEA");
   state = State::WIFI_SELECTION;
   requestUpdate();
 
@@ -325,13 +329,21 @@ void WeatherActivity::fetchWeather() {
 
   trimMemoryForNetworkSession(renderer, "WEA");
   LOG_DBG("WEA", "fetchWeather[3] WeatherClient::getWeather before");
-  weatherData = WeatherClient::getWeather(WEATHER_SETTINGS, true);
-  LOG_DBG("WEA", "fetchWeather[4] WeatherClient::getWeather after valid=%d", weatherData.valid ? 1 : 0);
-  if (weatherData.valid) {
+  WeatherData freshData = WeatherClient::getWeather(WEATHER_SETTINGS, true);
+  LOG_DBG("WEA", "fetchWeather[4] WeatherClient::getWeather after valid=%d", freshData.valid ? 1 : 0);
+  if (freshData.valid) {
+    weatherData = std::move(freshData);
+    state = State::WEATHER_DISPLAY;
+  } else if (weatherData.valid) {
+    // Keep a stale forecast visible when a background refresh fails. The old
+    // implementation replaced it with an error screen during API outages.
+    LOG_ERR("WEA", "Refresh failed; retaining cached weather data");
     state = State::WEATHER_DISPLAY;
   } else {
     state = State::ERROR;
-    errorMessage = weatherData.errorMessage.empty() ? tr(STR_WEATHER_FETCH_FAILED) : weatherData.errorMessage.c_str();
+    errorMessage = freshData.errorMessage.empty() || freshData.errorMessage == "Network error"
+                       ? tr(STR_WEATHER_FETCH_FAILED)
+                       : freshData.errorMessage.c_str();
   }
   showRefreshPopup = false;
   requestUpdate();

@@ -54,6 +54,10 @@ class BookInfoActivity final : public Activity {
   void renderLoading();
   void loadData();
   void renderDescriptionAndHints();
+  bool supportsCustomCover() const;
+  void openCoverMenu();
+  void openCoverPicker();
+  void refreshAfterCoverChange();
 
  public:
   explicit BookInfoActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string filePath)

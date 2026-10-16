@@ -29,6 +29,7 @@
 #include "fontIds.h"
 #include "util/BookArchiveUtils.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookCoverUtils.h"
 
 // Legacy global function (for backward compat if needed elsewhere)
 void sortFileList(std::vector<std::string>& strs) {
@@ -72,12 +73,14 @@ void FileBrowserActivity::loadFiles() {
       bool shouldAdd = false;
       if (mode == Mode::PickFirmware) {
         shouldAdd = FsHelpers::checkFileExtension(filename, ".bin");
+      } else if (mode == Mode::PickImage) {
+        shouldAdd = FsHelpers::hasJpgExtension(filename) || FsHelpers::hasPngExtension(filename) ||
+                    FsHelpers::hasBmpExtension(filename);
       } else {
         shouldAdd = FsHelpers::hasEpubExtension(filename) || isFb2OrZipBookPath(filename) ||
-                    FsHelpers::hasXtcExtension(filename) ||
-                    FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-                    FsHelpers::hasBmpExtension(filename) || FsHelpers::hasJpgExtension(filename) ||
-                    FsHelpers::hasPngExtension(filename);
+                    FsHelpers::hasXtcExtension(filename) || FsHelpers::hasTxtExtension(filename) ||
+                    FsHelpers::hasMarkdownExtension(filename) || FsHelpers::hasBmpExtension(filename) ||
+                    FsHelpers::hasJpgExtension(filename) || FsHelpers::hasPngExtension(filename);
       }
       if (shouldAdd) {
         files.emplace_back(filename);
@@ -110,13 +113,18 @@ bool FileBrowserActivity::acceptFileForBrowser(const char* name, bool isDir) {
   // File: check extension
   std::string_view filename{name};
   return FsHelpers::hasEpubExtension(filename) || isFb2OrZipBookPath(filename) ||
-         FsHelpers::hasXtcExtension(filename) ||
-         FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-         FsHelpers::hasBmpExtension(filename) || FsHelpers::hasJpgExtension(filename) ||
-         FsHelpers::hasPngExtension(filename);
+         FsHelpers::hasXtcExtension(filename) || FsHelpers::hasTxtExtension(filename) ||
+         FsHelpers::hasMarkdownExtension(filename) || FsHelpers::hasBmpExtension(filename) ||
+         FsHelpers::hasJpgExtension(filename) || FsHelpers::hasPngExtension(filename);
 }
 
 void FileBrowserActivity::tryOpenFileIndex() {
+  // The SD-backed index uses the general Books filter. Pickers stay in-memory
+  // so unsupported files can never leak into their result lists.
+  if (mode != Mode::Books) {
+    fileIndex = nullptr;
+    return;
+  }
   // For large folders (64+ entries), use SD-backed index to keep RAM bounded
   if (files.size() < FILE_INDEX_THRESHOLD) {
     fileIndex = nullptr;
@@ -268,7 +276,7 @@ void FileBrowserActivity::loop() {
           onGoHome();
           return;
         }
-        // PickFirmware: long Back = same as short Back (cancel / up dir)
+        // Picker modes: long Back = same as short Back (cancel / up dir)
       }
       if (ev.type == ButtonEventManager::PressType::Short || ev.type == ButtonEventManager::PressType::Long) {
         if (basepath != "/") {
@@ -281,8 +289,8 @@ void FileBrowserActivity::loop() {
           const size_t idx = findEntry(dirName);
           selectorIndex = (idx < entryCount()) ? static_cast<int>(idx) : 0;
           requestUpdate();
-        } else if (mode == Mode::PickFirmware) {
-          // At root in PickFirmware: cancel back to caller.
+        } else if (mode != Mode::Books) {
+          // At root in a picker: cancel back to caller.
           ActivityResult res;
           res.isCancelled = true;
           setResult(std::move(res));
@@ -311,8 +319,8 @@ void FileBrowserActivity::loop() {
         loadFiles();
         selectorIndex = 0;
         requestUpdate();
-      } else if (mode == Mode::PickFirmware) {
-        // Firmware picker: return the selected path to the caller.
+      } else if (mode != Mode::Books) {
+        // Picker: return the selected path to the caller.
         std::string cleanBasePath = basepath;
         if (cleanBasePath.back() != '/') cleanBasePath += "/";
         ActivityResult res{FilePathResult{cleanBasePath + entry}};
@@ -343,6 +351,7 @@ void FileBrowserActivity::loop() {
     }
 
     if (ev.button == MappedInputManager::Button::Left && ev.type == ButtonEventManager::PressType::Long) {
+      if (mode != Mode::Books) return;
       if (entryCount() == 0) {
         return;
       }
@@ -362,6 +371,7 @@ void FileBrowserActivity::loop() {
     }
 
     if (ev.button == MappedInputManager::Button::Right && ev.type == ButtonEventManager::PressType::Short) {
+      if (mode != Mode::Books) return;
       // Open the context menu for any selection. openContextMenu() shows
       // file-specific actions for supported files and the browser display
       // options (sort + visibility) for directories / unsupported types.
@@ -398,17 +408,23 @@ void FileBrowserActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect contentRect = UITheme::getContentRect(renderer, true, true);
 
-  std::string folderName =
-      (mode == Mode::PickFirmware)
-          ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
-          : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
+  std::string folderName;
+  if (mode == Mode::PickFirmware) {
+    folderName = tr(STR_SELECT_FIRMWARE_FILE);
+  } else if (mode == Mode::PickImage) {
+    folderName = tr(STR_SELECT_COVER_IMAGE);
+  } else {
+    folderName = (basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1);
+  }
   GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.headerHeight},
                  folderName.c_str());
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
   if (entryCount() == 0) {
-    const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
+    const char* emptyMsg = mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES)
+                           : mode == Mode::PickImage  ? tr(STR_NO_COVER_IMAGES)
+                                                      : tr(STR_NO_FILES_FOUND);
     renderer.drawText(UI_10_FONT_ID, contentRect.x + metrics.contentSidePadding, contentTop + 20, emptyMsg);
   } else {
     GUI.drawList(
@@ -647,8 +663,7 @@ void FileBrowserActivity::handleContextMenuAction(int action, const std::string&
       return;
     }
     case Action::FetchAndOpen: {
-      if (KOREADER_STORE.hasCredentials() &&
-          (FsHelpers::hasEpubExtension(fullPath) || isFb2OrZipBookPath(fullPath))) {
+      if (KOREADER_STORE.hasCredentials() && (FsHelpers::hasEpubExtension(fullPath) || isFb2OrZipBookPath(fullPath))) {
         auto& sync = APP_STATE.koReaderSyncSession;
         sync.autoPullEpubPath = fullPath;
         sync.exitToHomeAfterSync = false;
@@ -823,6 +838,7 @@ void FileBrowserActivity::doRemove(const std::string& fullPath, const std::strin
             deleted = Storage.remove(fullPath.c_str());
           }
           if (deleted) {
+            if (!isDirectory) BookCoverUtils::reset(fullPath);
             LOG_DBG("FBR", "Deleted successfully");
             loadFiles();
             if (entryCount() == 0) {

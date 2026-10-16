@@ -1,4 +1,3 @@
-#include "network/BootHealth.h"
 #include "ActivityManager.h"
 
 #include <Arduino.h>
@@ -18,10 +17,12 @@
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
+#include "games/GamesMenuActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/GlobalBookmarksActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
+#include "network/BootHealth.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "network/SerialTransferActivity.h"
 #include "reader/KOReaderSyncActivity.h"
@@ -378,6 +379,8 @@ void ActivityManager::goToSerialTransfer() {
 }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
+
+void ActivityManager::goToGames() { replaceActivity(std::make_unique<GamesMenuActivity>(renderer, mappedInput)); }
 
 void ActivityManager::goToClockSettings() {
   replaceActivity(std::make_unique<ClockSettingsActivity>(renderer, mappedInput));

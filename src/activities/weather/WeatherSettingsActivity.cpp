@@ -8,6 +8,7 @@
 #include <WiFi.h>
 
 #include "MappedInputManager.h"
+#include "activities/NetworkMemoryTrim.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
@@ -33,6 +34,7 @@ void WeatherSettingsActivity::buildMenuItems() {
 void WeatherSettingsActivity::onEnter() {
   MenuListActivity::onEnter();
   showingSearchResults = false;
+  citySearchFailed = false;
 }
 
 void WeatherSettingsActivity::loop() {
@@ -44,7 +46,9 @@ void WeatherSettingsActivity::loop() {
     }
 
     if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-      if (!searchResults.empty() && selectedIndex < static_cast<int>(searchResults.size())) {
+      if (citySearchFailed) {
+        performCitySearch(searchQuery);
+      } else if (!searchResults.empty() && selectedIndex < static_cast<int>(searchResults.size())) {
         const auto& result = searchResults[selectedIndex];
         WEATHER_SETTINGS.setLocation(result.latitude, result.longitude, result.name + ", " + result.country);
         WEATHER_SETTINGS.saveToFile();
@@ -55,8 +59,11 @@ void WeatherSettingsActivity::loop() {
       return;
     }
 
-    buttonNavigator.onNextList(selectedIndex, static_cast<int>(searchResults.size()), [this] { requestUpdate(); });
-    buttonNavigator.onPreviousList(selectedIndex, static_cast<int>(searchResults.size()), [this] { requestUpdate(); });
+    if (!searchResults.empty()) {
+      buttonNavigator.onNextList(selectedIndex, static_cast<int>(searchResults.size()), [this] { requestUpdate(); });
+      buttonNavigator.onPreviousList(selectedIndex, static_cast<int>(searchResults.size()),
+                                     [this] { requestUpdate(); });
+    }
     return;
   }
 
@@ -152,22 +159,34 @@ void WeatherSettingsActivity::launchCitySearch() {
                            const auto& kb = std::get<KeyboardResult>(result.data);
                            if (kb.text.empty()) return;
 
+                           searchQuery = kb.text;
+                           // Weather settings can be opened on top of the large SettingsActivity.
+                           // Free the secondary framebuffer before WiFi/TLS needs a contiguous block.
+                           trimMemoryForNetworkSession(renderer, "WEA");
+
                            if (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
                              startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
                                                     [this, query = kb.text](const ActivityResult& wifiResult) {
                                                       if (wifiResult.isCancelled) return;
-                                                      searchResults = WeatherClient::searchCity(query);
-                                                      showingSearchResults = !searchResults.empty();
-                                                      selectedIndex = 0;
-                                                      requestUpdate();
+                                                      // DHCP may be complete before DNS/TLS is fully ready.
+                                                      delay(600);
+                                                      performCitySearch(query);
                                                     });
                            } else {
-                             searchResults = WeatherClient::searchCity(kb.text);
-                             showingSearchResults = !searchResults.empty();
-                             selectedIndex = 0;
-                             requestUpdate();
+                             performCitySearch(kb.text);
                            }
                          });
+}
+
+void WeatherSettingsActivity::performCitySearch(const std::string& query) {
+  searchQuery = query;
+  trimMemoryForNetworkSession(renderer, "WEA");
+  bool requestSucceeded = false;
+  searchResults = WeatherClient::searchCity(query, &requestSucceeded);
+  citySearchFailed = !requestSucceeded;
+  showingSearchResults = true;
+  selectedIndex = 0;
+  requestUpdate();
 }
 
 void WeatherSettingsActivity::launchLatitudeEntry() {
@@ -226,7 +245,8 @@ void WeatherSettingsActivity::render(RenderLock&&) {
         contentRect.height - (metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing * 2);
 
     if (searchResults.empty()) {
-      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + contentHeight / 2, tr(STR_NO_ENTRIES));
+      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + contentHeight / 2,
+                                citySearchFailed ? tr(STR_WEATHER_FETCH_FAILED) : tr(STR_NO_ENTRIES));
     } else {
       GUI.drawList(
           renderer, Rect(contentRect.x, contentTop, contentRect.width, contentHeight),
@@ -241,7 +261,8 @@ void WeatherSettingsActivity::render(RenderLock&&) {
           nullptr, nullptr, nullptr, true);
     }
 
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    const char* confirmLabel = citySearchFailed ? tr(STR_RETRY) : (searchResults.empty() ? "" : tr(STR_SELECT));
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;

@@ -1,6 +1,7 @@
 #include "ReaderActivity.h"
 
 #include <Bitmap.h>
+#include <BmpToBmpConverter.h>
 #include <CooperativeAbort.h>
 #include <Fb2.h>
 #include <FsHelpers.h>
@@ -28,6 +29,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookArchiveUtils.h"
+#include "util/BookCoverUtils.h"
 
 #ifndef DEBUG_MEMORY_CONSUMPTION
 #define DEBUG_MEMORY_CONSUMPTION 0
@@ -56,8 +58,7 @@ bool resolveCoverPackagePath(const std::string& bookPath, std::string& packagePa
     return Storage.exists(packagePath.c_str());
   }
 
-  if (isFb2BookPath(bookPath) ||
-      (isBookZipPath(bookPath) && detectBookArchiveType(bookPath) == BookArchiveType::Fb2)) {
+  if (isFb2BookPath(bookPath) || (isBookZipPath(bookPath) && detectBookArchiveType(bookPath) == BookArchiveType::Fb2)) {
     Fb2 fb2(bookPath, "/.crosspoint");
     packagePath = fb2.getPackagePath();
     fb2Origin = true;
@@ -87,8 +88,7 @@ ReaderActivity::CoverExtractSession::~CoverExtractSession() {
   // reader_ destructor closes entry; zip_ destructor is harmless
 }
 
-bool ReaderActivity::CoverExtractSession::beginFileCopy(const std::string& sourcePath,
-                                                        const std::string& destPath) {
+bool ReaderActivity::CoverExtractSession::beginFileCopy(const std::string& sourcePath, const std::string& destPath) {
   destPath_ = destPath;
   workPath_ = destPath + ".part";
   if (!Storage.openFileForRead("CEX", sourcePath, source_) || source_.isDirectory()) {
@@ -252,11 +252,15 @@ bool ReaderActivity::isImageFile(const std::string& path) {
 }
 
 std::string ReaderActivity::sidecarCoverPath(const std::string& bookPath) {
-  const auto sep = bookPath.find_last_of("/\\");
-  auto dot = bookPath.rfind('.');
-  if (dot == std::string::npos || (sep != std::string::npos && dot < sep)) return "";
-  if (FsHelpers::checkFileExtension(bookPath, ".fb2.zip")) dot -= 4;
-  const std::string base = bookPath.substr(0, dot);
+  // Covers installed from Book Info use a distinct .cover.* suffix so an
+  // unrelated legacy sidecar is never overwritten. Managed covers win.
+  const std::string custom = BookCoverUtils::findCustomCover(bookPath);
+  if (!custom.empty()) {
+    LOG_DBG("SIDECAR", "Found managed custom cover: %s", custom.c_str());
+    return custom;
+  }
+
+  const std::string base = BookCoverUtils::basePath(bookPath);
   for (const char* ext : {".jpg", ".jpeg", ".png", ".bmp", ".JPG", ".JPEG", ".PNG", ".BMP"}) {
     const std::string candidate = base + ext;
     if (Storage.exists(candidate.c_str())) {
@@ -277,6 +281,21 @@ std::string ReaderActivity::bookCacheDir(const std::string& bookPath) {
   if (FsHelpers::hasEpubExtension(bookPath)) return Epub(bookPath, "/.crosspoint").getCachePath();
   if (FsHelpers::hasXtcExtension(bookPath)) return Xtc(bookPath, "/.crosspoint").getCachePath();
   return Txt(bookPath, "/.crosspoint").getCachePath();
+}
+
+namespace {
+std::string coverThumbPrefix(const std::string& bookPath) {
+  const uint32_t revision = BookCoverUtils::customCoverRevision(bookPath);
+  return revision == 0 ? "thumb_" : "thumb_custom_" + std::to_string(revision) + "_";
+}
+}  // namespace
+
+std::string ReaderActivity::coverThumbFileName(const std::string& bookPath, const int width, const int height) {
+  return coverThumbPrefix(bookPath) + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
+}
+
+std::string ReaderActivity::coverThumbFileName(const std::string& bookPath, const int height) {
+  return coverThumbPrefix(bookPath) + std::to_string(height) + ".bmp";
 }
 
 std::string ReaderActivity::convertSidecarToBmp(const std::string& cacheDir, const std::string& sidecarPath, int width,
@@ -308,20 +327,7 @@ std::string ReaderActivity::convertSidecarToBmp(const std::string& cacheDir, con
   } else if (FsHelpers::hasPngExtension(sidecarPath)) {
     ok = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(src, dst, width, height, crop);
   } else if (FsHelpers::hasBmpExtension(sidecarPath)) {
-    // Verbatim copy is only usable when the sidecar already fits the slot: the themes
-    // draw thumbs 1:1, and an oversized BMP would be rescaled at draw time, aliasing
-    // its dithered pixels into a grid. (It would also fail isCoverThumbComplete's
-    // oversize check and trigger an endless re-copy loop.) Reject instead; after the
-    // transient budget the book gets a placeholder.
-    Bitmap bmp(src);
-    if (bmp.parseHeaders() == BmpReaderError::Ok && bmp.getWidth() <= width && bmp.getHeight() <= height &&
-        src.seek(0)) {
-      uint8_t buffer[1024];
-      while (src.available()) dst.write(buffer, src.read(buffer, sizeof(buffer)));
-      ok = true;
-    } else {
-      LOG_DBG("COVER", "Sidecar BMP unusable for %dx%d slot (must fit 1:1): %s", width, height, sidecarPath.c_str());
-    }
+    ok = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(src, dst, width, height, crop);
   }
   src.close();
   dst.close();
@@ -336,7 +342,7 @@ std::string ReaderActivity::convertSidecarToBmp(const std::string& cacheDir, con
 }
 
 std::string ReaderActivity::coverThumbPlaceholder(const std::string& bookPath) {
-  return bookCacheDir(bookPath) + "/thumb_[HEIGHT].bmp";
+  return bookCacheDir(bookPath) + "/" + coverThumbPrefix(bookPath) + "[HEIGHT].bmp";
 }
 
 bool ReaderActivity::isCoverThumbComplete(const std::string& path, int expectedWidth, int expectedHeight) {
@@ -474,7 +480,7 @@ void healStaleEpubSentinel(const std::string& bookPath, const std::string& thumb
 
 ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int width, int height, bool crop) {
   const std::string dir = bookCacheDir(bookPath);
-  const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
+  const std::string name = coverThumbFileName(bookPath, width, height);
   const std::string file = dir + "/" + name;
   if (thumbFileValid(file, width, height)) return ThumbResult::Ok;
   removeStaleThumb(file);
@@ -532,7 +538,7 @@ ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int wi
 
 ThumbResult ReaderActivity::ensureCoverThumb(const std::string& bookPath, int height) {
   const std::string dir = bookCacheDir(bookPath);
-  const std::string name = "thumb_" + std::to_string(height) + ".bmp";
+  const std::string name = coverThumbFileName(bookPath, height);
   const std::string file = dir + "/" + name;
   if (thumbFileValid(file, height * 6 / 10, height)) return ThumbResult::Ok;
   removeStaleThumb(file);
@@ -660,14 +666,14 @@ std::unique_ptr<PngDecodeSession> beginPngThumbSessionImpl(const std::string& bo
 
 std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int width,
                                                                        int height, PngThumbFiles& filesOut, bool crop) {
-  const std::string name = "thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
+  const std::string name = coverThumbFileName(bookPath, width, height);
   return beginPngThumbSessionImpl(bookPath, width, height, name, filesOut, crop);
 }
 
 std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std::string& bookPath, int height,
                                                                        PngThumbFiles& filesOut) {
   // Single-height thumbs scale to height*0.6 wide (mirrors the synchronous single-height decode).
-  const std::string name = "thumb_" + std::to_string(height) + ".bmp";
+  const std::string name = coverThumbFileName(bookPath, height);
   return beginPngThumbSessionImpl(bookPath, height * 6 / 10, height, name, filesOut, true);
 }
 
@@ -840,7 +846,8 @@ void ReaderActivity::onEnter() {
              (isBookZipPath(initialBookPath) && detectBookArchiveType(initialBookPath) == BookArchiveType::Fb2)) {
     const bool needsIndexing = [&]() {
       Fb2 probe(initialBookPath, "/.crosspoint");
-      return probe.needsPreparation() || Epub(probe.getPackagePath(), "/.crosspoint").needsFirstOpenIndexing(SETTINGS.embeddedStyle == 0);
+      return probe.needsPreparation() ||
+             Epub(probe.getPackagePath(), "/.crosspoint").needsFirstOpenIndexing(SETTINGS.embeddedStyle == 0);
     }();
     if (needsIndexing) {
       RenderLock lock;

@@ -1,6 +1,7 @@
 #include "Epub.h"
 
 #include <Bitmap.h>
+#include <BmpToBmpConverter.h>
 #include <CooperativeAbort.h>
 #include <Fb2.h>
 #include <FsHelpers.h>
@@ -1065,13 +1066,19 @@ bool Epub::ensureCoverImageCached() const {
     Storage.remove(coverCachePath.c_str());
   }
 
-  // Sidecar cover: a .jpg/.jpeg/.png/.bmp file alongside the EPUB takes priority
-  // over the embedded cover image (same resolution, no ZIP decompression needed).
-  const auto sep = filepath.find_last_of("/\\");
-  const auto dot = filepath.rfind('.');
+  // Sidecar cover: a managed .cover.jpg/.cover.png, then a legacy
+  // .jpg/.jpeg/.png/.bmp beside the source book, takes priority over the
+  // embedded image. FB2 is read through a generated package, so resolve that
+  // package back to the user's original .fb2/.zip before looking beside it.
+  const std::string coverBookPath = isFb2Origin ? Fb2::resolveOriginalPath(filepath) : filepath;
+  const auto sep = coverBookPath.find_last_of("/\\");
+  auto dot = coverBookPath.rfind('.');
+  if (FsHelpers::checkFileExtension(coverBookPath, ".fb2.zip") && dot != std::string::npos && dot >= 4) dot -= 4;
   if (dot != std::string::npos && (sep == std::string::npos || dot > sep)) {
-    const std::string base = filepath.substr(0, dot);
-    for (const char* ext : {".jpg", ".jpeg", ".png", ".bmp", ".JPG", ".JPEG", ".PNG", ".BMP"}) {
+    const std::string base = coverBookPath.substr(0, dot);
+    for (const char* ext :
+         {".cover.jpg", ".cover.jpeg", ".cover.png", ".cover.bmp", ".cover.JPG", ".cover.JPEG", ".cover.PNG",
+          ".cover.BMP", ".jpg", ".jpeg", ".png", ".bmp", ".JPG", ".JPEG", ".PNG", ".BMP"}) {
       const std::string candidate = base + ext;
       if (Storage.exists(candidate.c_str())) {
         LOG_DBG("EBP", "Using sidecar cover: %s", candidate.c_str());
@@ -1148,11 +1155,12 @@ bool coverBmpComplete(const std::string& path) {
     return false;
   }
   Bitmap bmp(f);
-  // Also require 8 bpp: covers cached by an earlier firmware are 2-bit, which still
+  // Reject 2 bpp: covers cached by an earlier firmware are 2-bit, which still
   // parses fine but has already been quantized to four levels. Treating those as
   // valid would pin every existing book to the old format forever, so reject them
   // here and let the caller regenerate once.
-  const bool ok = bmp.parseHeaders() == BmpReaderError::Ok && bmp.isComplete() && bmp.getBpp() == 8;
+  // BMP sidecars may legitimately be 1/4/8/24/32 bpp; all are drawable.
+  const bool ok = bmp.parseHeaders() == BmpReaderError::Ok && bmp.isComplete() && bmp.getBpp() != 2;
   f.close();
   return ok;
 }
@@ -1174,6 +1182,8 @@ bool Epub::generateCoverBmp(bool cropped) const {
     LOG_DBG("EBP", "Generating BMP from JPEG cover image (%s mode)", cropped ? "cropped" : "fit");
   } else if (detectedFormat == ImageFormatDetector::Format::Png) {
     LOG_DBG("EBP", "Generating BMP from PNG cover image (%s mode)", cropped ? "cropped" : "fit");
+  } else if (detectedFormat == ImageFormatDetector::Format::Bmp) {
+    LOG_DBG("EBP", "Using BMP cover image (%s mode)", cropped ? "cropped" : "fit");
   } else {
     LOG_ERR("EBP", "Cover image has unsupported format");
     coverImage.close();
@@ -1193,8 +1203,15 @@ bool Epub::generateCoverBmp(bool cropped) const {
   bool success = false;
   if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     success = JpegToBmpConverter::jpegFileToBmpStream(coverImage, coverBmp, cropped, /*grayscale8Bit=*/true);
-  } else {
+  } else if (detectedFormat == ImageFormatDetector::Format::Png) {
     success = PngToBmpConverter::pngFileToBmpStream(coverImage, coverBmp, cropped, /*grayscale8Bit=*/true);
+  } else {
+    uint8_t buffer[1024];
+    success = coverImage.seek(0);
+    while (success && coverImage.available()) {
+      const int count = coverImage.read(buffer, sizeof(buffer));
+      if (count <= 0 || coverBmp.write(buffer, count) != static_cast<size_t>(count)) success = false;
+    }
   }
 
   coverImage.close();
@@ -1278,9 +1295,12 @@ ThumbResult Epub::generateThumbBmp(int height, bool allowExtract) const {
   if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     LOG_DBG("EBP", "Generating thumb BMP from JPEG cover image");
     success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, thumbW, height);
-  } else {
+  } else if (detectedFormat == ImageFormatDetector::Format::Png) {
     LOG_DBG("EBP", "Generating thumb BMP from PNG cover image");
     success = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, thumbW, height);
+  } else if (detectedFormat == ImageFormatDetector::Format::Bmp) {
+    LOG_DBG("EBP", "Generating thumb BMP from BMP cover image");
+    success = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, thumbW, height);
   }
 
   coverImage.close();
@@ -1353,9 +1373,12 @@ ThumbResult Epub::generateThumbBmp(int width, int height, bool allowExtract, boo
   if (detectedFormat == ImageFormatDetector::Format::Jpeg) {
     LOG_DBG("EBP", "Generating %dx%d thumb BMP from JPEG cover image", width, height);
     success = JpegToBmpConverter::jpegFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, width, height, crop);
-  } else {
+  } else if (detectedFormat == ImageFormatDetector::Format::Png) {
     LOG_DBG("EBP", "Generating %dx%d thumb BMP from PNG cover image", width, height);
     success = PngToBmpConverter::pngFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, width, height, crop);
+  } else if (detectedFormat == ImageFormatDetector::Format::Bmp) {
+    LOG_DBG("EBP", "Generating %dx%d thumb BMP from BMP cover image", width, height);
+    success = BmpToBmpConverter::bmpFileTo1BitBmpStreamWithSize(coverImage, thumbBmp, width, height, crop);
   }
 
   coverImage.close();
@@ -1762,8 +1785,7 @@ bool Epub::hasReliableToc() const {
   // Its chapter names and targets come from the same section index, so the
   // generic EPUB coverage heuristic must not replace them with Section N.
   // Apply this when reading too, to repair existing fix1 metadata caches.
-  const bool reliable = isFb2Origin ? bookMetadataCache->getTocCount() > 0
-                                    : bookMetadataCache->isTocReliable();
+  const bool reliable = isFb2Origin ? bookMetadataCache->getTocCount() > 0 : bookMetadataCache->isTocReliable();
   tocReliability = reliable ? TocReliability::Reliable : TocReliability::Unreliable;
   return reliable;
 }
@@ -1946,7 +1968,8 @@ int Epub::resolveHrefToSpineIndex(const std::string& href, const int sourceSpine
       const size_t basename = target.find_last_of('/') + 1;
       const size_t digitsBegin = basename + prefixLength;
       if (target.size() <= digitsBegin + suffixLength || target.compare(basename, prefixLength, prefix) != 0 ||
-          target.compare(target.size() - suffixLength, suffixLength, suffix) != 0) return -1;
+          target.compare(target.size() - suffixLength, suffixLength, suffix) != 0)
+        return -1;
       const size_t end = target.size() - suffixLength;
       if (end > digitsBegin + 1 && target[digitsBegin] == '0') return -1;
       int index = 0;
@@ -1967,7 +1990,9 @@ int Epub::resolveHrefToSpineIndex(const std::string& href, const int sourceSpine
       // or a basename fallback accepting arbitrary directories.
       const size_t textDir = indexedHref.rfind("/text/");
       return target.compare(0, 5, "text/") == 0 && textDir != std::string::npos &&
-                     indexedHref.substr(textDir + 1) == target ? index : -1;
+                     indexedHref.substr(textDir + 1) == target
+                 ? index
+                 : -1;
     }
     for (int i = 0; i < getSpineItemsCount(); ++i) {
       if (getSpineItem(i).href == target) return i;

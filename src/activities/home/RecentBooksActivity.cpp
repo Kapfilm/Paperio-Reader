@@ -126,6 +126,11 @@ std::string gridThumbPath(const std::string& coverBmpPath, int tw, int th) {
 
 void RecentBooksActivity::loadRecentBooks() {
   recentBooks = RECENT_BOOKS.getBooks();
+  // As on Home, derive the thumbnail path from the current cover revision
+  // instead of displaying a stale path persisted by an older firmware.
+  for (auto& book : recentBooks) {
+    book.coverBmpPath = ReaderActivity::coverThumbPlaceholder(book.path);
+  }
   // Cache each book's reading progress once so the grid badge avoids an SD read
   // per cell per repaint. Progress can only change by opening a book, which exits
   // this activity, so the cache stays valid for the activity's lifetime.
@@ -231,8 +236,7 @@ bool RecentBooksActivity::loadNextCover() {
         // Failure to start a session may mean a transient JPEG decode failure,
         // memory pressure or an unavailable FB2 package. Only a proven absence
         // may become a durable blank thumbnail.
-        if (result == ThumbResult::StructurallyAbsent &&
-            ReaderActivity::writeCoverPlaceholderBmp(thumbPath, tw, th)) {
+        if (result == ThumbResult::StructurallyAbsent && ReaderActivity::writeCoverPlaceholderBmp(thumbPath, tw, th)) {
           LOG_DBG("RBA", "No extractable cover for %s — wrote placeholder", book.path.c_str());
           RECENT_BOOKS.updateBook(book.path, book.title, book.author, book.series, placeholder);
           book.coverBmpPath = placeholder;
@@ -339,7 +343,23 @@ void RecentBooksActivity::showSelectedBookInfo() {
   const std::string& path = recentBooks[selectorIndex].path;
   if (FsHelpers::hasEpubExtension(path) || isFb2OrZipBookPath(path) || FsHelpers::hasXtcExtension(path)) {
     startActivityForResult(std::make_unique<BookInfoActivity>(renderer, mappedInput, path),
-                           [this](const ActivityResult&) { requestUpdate(); });
+                           [this](const ActivityResult&) {
+                             // BookInfo can replace the cover while this activity remains on the
+                             // stack. Restart the lazy cover pass and force a full redraw instead of
+                             // repainting the already-rendered old thumbnail.
+                             loadRecentBooks();
+                             coversLoaded = false;
+                             coversLoading = false;
+                             firstRenderDone = false;
+                             nextCoverIndex = 0;
+                             prevSelectorIndex = -1;
+                             fullRedrawNeeded = true;
+                             extractSession.reset();
+                             pngSession.reset();
+                             pngSessionFiles.close();
+                             pngSessionFailed = false;
+                             requestUpdate(true);
+                           });
   }
 }
 
