@@ -179,6 +179,14 @@ Open **Games** from the home screen or from
   automatic progress saving, and switchable controls that follow either the
   empty cell or the moving tile.
 
+<p align="center">
+  <img src="assets/screenshots/game-sudoku.png" alt="Sudoku" width="18%">
+  <img src="assets/screenshots/game-sokoban.png" alt="Sokoban" width="18%">
+  <img src="assets/screenshots/game-kakuro.png" alt="Kakuro" width="18%">
+  <img src="assets/screenshots/game-hangman.png" alt="Hangman" width="18%">
+  <img src="assets/screenshots/game-15-puzzle.png" alt="15 Puzzle" width="18%">
+</p>
+
 In Sokoban, use the directional buttons to move, the confirm button to open the
 level selector, the power button to undo the last move, and Back to return to
 the Games screen.
