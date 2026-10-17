@@ -244,20 +244,26 @@ void SokobanGameActivity::drawBoard(const Rect& content) {
 }
 
 void SokobanGameActivity::drawWon() {
+  const int width = renderer.getScreenWidth();
   const int height = renderer.getScreenHeight();
   const int titleH = renderer.getTextHeight(NOTOSANS_14_FONT_ID);
   const int bodyH = renderer.getTextHeight(UI_12_FONT_ID);
-  constexpr int gap = 14;
-  const int y = gameCenteredBlockY(0, height, titleH + bodyH * 2 + gap * 2);
+  constexpr int titleToLineGap = 16;
+  constexpr int lineToStatsGap = 18;
+  constexpr int dividerWidth = 280;
+  constexpr int dividerThickness = 2;
+  const int blockHeight = titleH + titleToLineGap + dividerThickness + lineToStatsGap + bodyH;
+  const int y = gameCenteredBlockY(0, height, blockHeight);
+  const int dividerY = y + titleH + titleToLineGap;
 
   char result[80];
   snprintf(result, sizeof(result), "%s: %d · %s: %d", tr(STR_SOKOBAN_MOVES), moves, tr(STR_SOKOBAN_PUSHES),
            board.pushes);
-  renderer.drawCenteredText(NOTOSANS_14_FONT_ID, y, tr(STR_SOKOBAN_WIN));
-  renderer.drawCenteredText(UI_12_FONT_ID, y + titleH + gap, result);
-  renderer.drawCenteredText(UI_12_FONT_ID, y + titleH + bodyH + gap * 2, tr(STR_SOKOBAN_WIN_HINT));
+  renderer.drawCenteredText(NOTOSANS_14_FONT_ID, y, tr(STR_SOKOBAN_WIN), true, EpdFontFamily::BOLD);
+  renderer.drawLine((width - dividerWidth) / 2, dividerY, (width + dividerWidth) / 2, dividerY, dividerThickness, true);
+  renderer.drawCenteredText(UI_12_FONT_ID, dividerY + dividerThickness + lineToStatsGap, result);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_NEXT), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 

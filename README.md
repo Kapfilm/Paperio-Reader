@@ -19,7 +19,7 @@
 
 Firmware for **XTEINK X3 and X4** e-readers.
 
-Current version: **Paperio Reader 2.2.0**.
+Current version: **Paperio Reader 2.2.1**.
 
 - EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H, and Markdown.
 - Replace an EPUB or FB2 book cover from the SD card with a JPG, JPEG, PNG, or BMP image, and restore the embedded cover at any time.
@@ -33,14 +33,14 @@ Current version: **Paperio Reader 2.2.0**.
 - Mini and Lyra themes; recent books and library views with a 2×2 cover grid.
 - Bookmarks, named pages, highlights, and a unified bookmark list for all books.
 - Reading statistics, clock, weather, and KOReader synchronization.
-- Offline games: Sudoku with three difficulty levels, notes, hints, a timer, saved progress, and statistics; plus Sokoban with 155 levels, undo, level selection, and saved progress.
+- Offline games: Sudoku, Sokoban, Kakuro, Hangman, and 15 Puzzle, with saved progress and game-specific statistics.
 - Configurable short, double, and long button presses.
 - Transparent sleep screens, an information overlay, and a white background for both quick and full sleep.
 - Wi-Fi, web-based file access, USB Serial transfer, firmware installation from an SD card, and over-the-air updates.
 - Switching between Paperio and inkMOD in the second slot, with emergency recovery. Installation requirements and limitations are described below.
 
 OTA updates are available under `Settings → System → System Update → Check for updates`.
-For manual installation, use [firmware.bin version 2.2.0](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.0/firmware.bin).
+For manual installation, use [firmware.bin version 2.2.1](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.1/firmware.bin).
 
 The changelog is available on the [Releases page](https://github.com/Kapfilm/Paperio-Reader/releases).
 
@@ -170,6 +170,14 @@ Open **Games** from the home screen or from
   error checking, a timer, automatic saving, and per-difficulty statistics.
 - **Sokoban** includes all 155 levels shipped by the integrated CrossMux game,
   a level selector, move and push counters, undo, and saved level progress.
+- **Kakuro** provides Easy, Medium, and Hard cross-sum puzzles, hints, error
+  checking, a timer, saved progress, and statistics.
+- **Hangman** provides English and Russian word sets grouped by category,
+  Easy and Hard difficulty, hints, saved games, win/loss statistics, and a
+  two-player mode where one player enters a word for the other to guess.
+- **15 Puzzle** provides a solvable shuffled 4×4 board, move counter,
+  automatic progress saving, and switchable controls that follow either the
+  empty cell or the moving tile.
 
 In Sokoban, use the directional buttons to move, the confirm button to open the
 level selector, the power button to undo the last move, and Back to return to
@@ -513,8 +521,8 @@ Replace `yourname` with your account name. The `help` command displays help, and
 pio run -e gh_release
 ```
 
-A release is created by pushing a version-number tag, such as `2.2.0`. GitHub Actions attaches
-`firmware-Paperio-Reader-2.2.0.bin` and an OTA-compatible copy named `firmware.bin`.
+A release is created by pushing a version-number tag, such as `2.2.1`. GitHub Actions attaches
+`firmware-Paperio-Reader-2.2.1.bin` and an OTA-compatible copy named `firmware.bin`.
 
 
 </details>

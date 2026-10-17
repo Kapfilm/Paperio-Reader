@@ -4030,7 +4030,7 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     // The controller retains the previous frame in RED RAM, so X4 can continue
     // normal FAST turns in single-buffer mode. Keep the user's periodic HALF
     // cadence for ghost clearing instead of flashing FULL on every action.
-    pageRefreshMode = ReaderUtils::nextRefreshCycleMode(pagesUntilFullRefresh);
+    pageRefreshMode = ReaderUtils::nextRefreshCycleMode(renderer, pagesUntilFullRefresh);
   } else if (forceRefreshModeNextRender_ >= 0) {
     // Manual force-refresh button: apply the requested mode for this one render. A manual refresh
     // gives its own clean baseline, so consume any armed post-popup HALF too rather than letting it
@@ -4050,7 +4050,7 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     pageRefreshMode = HalDisplay::HALF_REFRESH;
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
   } else {
-    pageRefreshMode = ReaderUtils::nextRefreshCycleMode(pagesUntilFullRefresh);
+    pageRefreshMode = ReaderUtils::nextRefreshCycleMode(renderer, pagesUntilFullRefresh);
   }
   // Inline AA is X4-only: X4 waits out the waveform inside the trigger, so the
   // async split hands that window to the plane renders. X3 returns pre-waveform

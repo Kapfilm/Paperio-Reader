@@ -165,6 +165,9 @@ void SettingsActivity::onEnter() {
   addToMoved(controlsSettings, lastControlsSub,
              std::move(SettingInfo::Action(StrId::STR_BTN_ACTIONS_OVERVIEW, SettingAction::ButtonActionsOverview)
                            .withSubcategory(StrId::STR_MENU_BTN_ACTIONS)));
+  // Backup/restore is related to the controls, but it is not another button action.
+  // Keep it visually separate while reusing the standard settings divider style.
+  controlsSettings.push_back(SettingInfo::Separator(StrId::STR_NONE_OPT));
   addToMoved(controlsSettings, lastControlsSub,
              std::move(SettingInfo::Action(StrId::STR_BUTTON_SETTINGS_BACKUP, SettingAction::ButtonSettingsBackup)
                            .withSubcategory(StrId::STR_MENU_BTN_ACTIONS)));

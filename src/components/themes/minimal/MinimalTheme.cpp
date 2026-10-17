@@ -28,8 +28,9 @@ constexpr int kMenuRowHeight = 64;
 constexpr int kMenuPanelTop = 210;
 constexpr int kMenuPanelRadius = 7;
 constexpr int kMenuPanelPadding = 8;
-constexpr int kMenuIndexInset = 13;
-constexpr int kMenuIndexColumnWidth = 36;
+constexpr int kMenuIconInset = 12;
+constexpr int kMenuIconSize = 32;
+constexpr int kMenuIconGap = 12;
 constexpr int kMenuSelectionTriangleWidth = 14;
 constexpr int kMenuSelectionTriangleHeight = 20;
 constexpr int kMenuSelectionTriangleRightInset = 20;
@@ -104,7 +105,6 @@ void drawProgress(const GfxRenderer& renderer, const Rect& coverRect, const Rece
 
 void MinimalTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, const char* title,
                               const char* subtitle) const {
-  (void)subtitle;
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
   const bool showPercentage =
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
@@ -119,13 +119,25 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, cons
     renderer.drawText(SMALL_FONT_ID, rect.x + MinimalMetrics::values.contentSidePadding, rect.y + 5, clockStr);
   }
 
+  constexpr int titleInset = 12;
+  const int maxSubtitleWidth = rect.width / 2;
+  const std::string safeSubtitle =
+      subtitle != nullptr ? renderer.truncatedText(SMALL_FONT_ID, subtitle, maxSubtitleWidth) : std::string{};
+  const int subtitleWidth = renderer.getTextWidth(SMALL_FONT_ID, safeSubtitle.c_str());
+
   if (title != nullptr) {
-    constexpr int titleInset = 12;
-    const int maxWidth = batteryX - rect.x - titleInset - MinimalMetrics::values.contentSidePadding;
-    const std::string safeTitle = renderer.truncatedText(UI_12_FONT_ID, title, maxWidth, EpdFontFamily::BOLD);
+    const int subtitleGap = !safeSubtitle.empty() ? MinimalMetrics::values.contentSidePadding : 0;
+    const int maxTitleWidth =
+        rect.width - titleInset - MinimalMetrics::values.contentSidePadding - subtitleWidth - subtitleGap;
+    const std::string safeTitle = renderer.truncatedText(UI_12_FONT_ID, title, maxTitleWidth, EpdFontFamily::BOLD);
     renderer.drawText(UI_12_FONT_ID, rect.x + titleInset, rect.y + MinimalMetrics::values.batteryBarHeight + 3,
                       safeTitle.c_str(), true, EpdFontFamily::BOLD);
     renderer.drawLine(rect.x, rect.y + rect.height - 3, rect.x + rect.width - 1, rect.y + rect.height - 3, 3, true);
+  }
+
+  if (!safeSubtitle.empty()) {
+    renderer.drawText(SMALL_FONT_ID, rect.x + rect.width - MinimalMetrics::values.contentSidePadding - subtitleWidth,
+                      rect.y + 50, safeSubtitle.c_str());
   }
 }
 
@@ -205,7 +217,6 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
                                   const int selectedIndex, const std::function<std::string(int index)>& buttonLabel,
                                   const std::function<UIIcon(int index)>& rowIcon) const {
   (void)rect;
-  (void)rowIcon;
   if (buttonCount <= 0) return;
 
   const int panelWidth = std::min(kMenuPanelWidth, renderer.getScreenWidth() - 80);
@@ -231,15 +242,22 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
       renderer.fillRectDither(rowX, rowY, rowWidth, 1, Color::LightGray);
     }
 
-    char indexLabel[4];
-    snprintf(indexLabel, sizeof(indexLabel), "%02d", i + 1);
     const int textY = rowY + (kMenuRowHeight - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
-    renderer.drawText(SMALL_FONT_ID, rowX + kMenuIndexInset,
-                      rowY + (kMenuRowHeight - renderer.getLineHeight(SMALL_FONT_ID)) / 2, indexLabel, !selected);
+    const int iconX = rowX + kMenuIconInset;
+    const int iconY = rowY + (kMenuRowHeight - kMenuIconSize) / 2;
+    if (rowIcon != nullptr) {
+      if (const uint8_t* icon = iconForName(rowIcon(i), kMenuIconSize)) {
+        if (selected) {
+          renderer.drawIconInverted(icon, iconX, iconY, kMenuIconSize, kMenuIconSize);
+        } else {
+          renderer.drawIcon(icon, iconX, iconY, kMenuIconSize, kMenuIconSize);
+        }
+      }
+    }
 
-    const int labelX = rowX + kMenuIndexInset + kMenuIndexColumnWidth;
-    const int labelMaxWidth = rowWidth - kMenuIndexInset - kMenuIndexColumnWidth - kMenuSelectionTriangleRightInset -
-                              kMenuSelectionTriangleWidth - 8;
+    const int labelX = iconX + kMenuIconSize + kMenuIconGap;
+    const int labelMaxWidth =
+        rowX + rowWidth - labelX - kMenuSelectionTriangleRightInset - kMenuSelectionTriangleWidth - 8;
     const std::string label = renderer.truncatedText(UI_12_FONT_ID, buttonLabel(i).c_str(), labelMaxWidth);
     renderer.drawText(UI_12_FONT_ID, labelX, textY, label.c_str(), !selected);
   }

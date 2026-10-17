@@ -13,6 +13,15 @@ namespace ReaderUtils {
 
 constexpr unsigned long GO_HOME_MS = 1000;
 
+// X3's fast differential waveform is intentionally very short and can retain
+// traces when many text pages are turned in succession. Keep the user's chosen
+// cadence on other panels, but never let X3 go more than five pages without a
+// ghost-clearing refresh.
+inline int effectiveRefreshFrequency(const GfxRenderer& renderer) {
+  const int configured = SETTINGS.getRefreshFrequency();
+  return renderer.isX3() && configured > 5 ? 5 : configured;
+}
+
 // Round-half-up integer division clamped to [0, 100], used as the percent byte appended to
 // progress.bin so the home screen can render a per-book badge without re-loading the document.
 // All reader types must funnel through this so the displayed value matches across formats.
@@ -121,11 +130,12 @@ inline PageTurnResult detectTiltPageTurn() {
 }
 
 inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
-  const int freq = SETTINGS.getRefreshFrequency();
+  const int freq = effectiveRefreshFrequency(renderer);
   if (freq == 0) {
     renderer.displayBuffer();
     return;
   }
+  if (pagesUntilFullRefresh > freq) pagesUntilFullRefresh = freq;
   if (pagesUntilFullRefresh <= 1) {
     LOG_DBG("RCY", "displayWithRefreshCycle: HALF (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -141,11 +151,12 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
 // Split out of triggerWithRefreshCycle() so callers that fire the refresh
 // through a different mechanism (e.g. triggerDisplayAsync for the inline AA
 // path) share the exact same cycle policy and logging.
-inline HalDisplay::RefreshMode nextRefreshCycleMode(int& pagesUntilFullRefresh) {
-  const int freq = SETTINGS.getRefreshFrequency();
+inline HalDisplay::RefreshMode nextRefreshCycleMode(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
+  const int freq = effectiveRefreshFrequency(renderer);
   if (freq == 0) {
     return HalDisplay::FAST_REFRESH;
   }
+  if (pagesUntilFullRefresh > freq) pagesUntilFullRefresh = freq;
   if (pagesUntilFullRefresh <= 1) {
     LOG_DBG("RCY", "triggerWithRefreshCycle: HALF (counter=%d freq=%d)", pagesUntilFullRefresh, freq);
     pagesUntilFullRefresh = freq;
@@ -160,7 +171,7 @@ inline HalDisplay::RefreshMode nextRefreshCycleMode(int& pagesUntilFullRefresh) 
 // completeDisplay() must be called later (on the same task) to wait for the
 // waveform and do post-refresh SPI work.
 inline void triggerWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntilFullRefresh) {
-  renderer.triggerDisplay(nextRefreshCycleMode(pagesUntilFullRefresh));
+  renderer.triggerDisplay(nextRefreshCycleMode(renderer, pagesUntilFullRefresh));
 }
 
 inline void enforceExitFullRefresh(const GfxRenderer& renderer) {

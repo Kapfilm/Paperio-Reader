@@ -324,7 +324,7 @@ void BookInfoActivity::render(RenderLock&&) {
   if (!loadSucceeded) {
     const auto lastSlash = filePath.find_last_of('/');
     const std::string fileName = (lastSlash == std::string::npos) ? filePath : filePath.substr(lastSlash + 1);
-    const auto titleLines = renderer.wrappedText(UI_12_FONT_ID, fileName.c_str(), textWidth, 2);
+    const auto titleLines = renderer.wrappedText(UI_12_FONT_ID, fileName.c_str(), textWidth, 2, EpdFontFamily::BOLD);
     const auto errorLines = renderer.wrappedText(
         UI_10_FONT_ID, loadError.empty() ? tr(STR_ERROR_GENERAL_FAILURE) : loadError.c_str(), textWidth, 3);
 
@@ -344,7 +344,8 @@ void BookInfoActivity::render(RenderLock&&) {
     if (fileSizeBytes > 0 && y + lineHeightSmall <= contentBottom) {
       y += metrics.verticalSpacing;
       const std::string sizeLine = std::string(tr(STR_FILE_SIZE)) + ": " + formatFileSize(fileSizeBytes);
-      renderer.drawText(UI_10_FONT_ID, textX, y, sizeLine.c_str());
+      const std::string fittedSize = renderer.truncatedText(UI_10_FONT_ID, sizeLine.c_str(), textWidth);
+      renderer.drawText(UI_10_FONT_ID, textX, y, fittedSize.c_str());
     }
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
@@ -390,10 +391,11 @@ void BookInfoActivity::render(RenderLock&&) {
   int metaY = contentTop;
 
   if (!title.empty()) {
-    const auto lines = renderer.wrappedText(UI_12_FONT_ID, title.c_str(), metaWidth, 4);
+    const auto lines = renderer.wrappedText(UI_12_FONT_ID, title.c_str(), metaWidth, 4, EpdFontFamily::BOLD);
     for (const auto& line : lines) {
       if (metaY + lineHeightLarge > contentBottom) break;
-      renderer.drawText(UI_12_FONT_ID, metaX, metaY, line.c_str(), true, EpdFontFamily::BOLD);
+      const std::string fitted = renderer.truncatedText(UI_12_FONT_ID, line.c_str(), metaWidth, EpdFontFamily::BOLD);
+      renderer.drawText(UI_12_FONT_ID, metaX, metaY, fitted.c_str(), true, EpdFontFamily::BOLD);
       metaY += lineHeightLarge;
     }
     metaY += 4;
@@ -403,7 +405,8 @@ void BookInfoActivity::render(RenderLock&&) {
     const auto lines = renderer.wrappedText(UI_10_FONT_ID, author.c_str(), metaWidth, 2);
     for (const auto& line : lines) {
       if (metaY + lineHeightSmall > contentBottom) break;
-      renderer.drawText(UI_10_FONT_ID, metaX, metaY, line.c_str());
+      const std::string fitted = renderer.truncatedText(UI_10_FONT_ID, line.c_str(), metaWidth);
+      renderer.drawText(UI_10_FONT_ID, metaX, metaY, fitted.c_str());
       metaY += lineHeightSmall;
     }
     metaY += 2;
@@ -415,7 +418,8 @@ void BookInfoActivity::render(RenderLock&&) {
     const auto lines = renderer.wrappedText(UI_10_FONT_ID, seriesLine.c_str(), metaWidth, 2);
     for (const auto& line : lines) {
       if (metaY + lineHeightSmall > contentBottom) break;
-      renderer.drawText(UI_10_FONT_ID, metaX, metaY, line.c_str());
+      const std::string fitted = renderer.truncatedText(UI_10_FONT_ID, line.c_str(), metaWidth);
+      renderer.drawText(UI_10_FONT_ID, metaX, metaY, fitted.c_str());
       metaY += lineHeightSmall;
     }
     metaY += 2;
@@ -437,8 +441,14 @@ void BookInfoActivity::render(RenderLock&&) {
     const auto drawStatRow = [&](const char* label, const std::string& value) {
       if (value.empty() || metaY + lineHeightSmall > contentBottom) return;
       const std::string line = std::string(label) + ": " + value;
-      renderer.drawText(UI_10_FONT_ID, metaX, metaY, line.c_str());
-      metaY += lineHeightSmall;
+      const int availableLines = std::max(1, (contentBottom - metaY) / lineHeightSmall);
+      const auto lines = renderer.wrappedText(UI_10_FONT_ID, line.c_str(), metaWidth, availableLines);
+      for (const auto& wrappedLine : lines) {
+        if (metaY + lineHeightSmall > contentBottom) break;
+        const std::string fitted = renderer.truncatedText(UI_10_FONT_ID, wrappedLine.c_str(), metaWidth);
+        renderer.drawText(UI_10_FONT_ID, metaX, metaY, fitted.c_str());
+        metaY += lineHeightSmall;
+      }
     };
 
     char pctBuf[8];
@@ -502,7 +512,8 @@ void BookInfoActivity::renderDescriptionAndHints() {
       const int bandBottom = descBandY + descBandHeight;
       for (int i = startLine; i < endLine; ++i) {
         if (y + lineHeightSmall > bandBottom) break;
-        renderer.drawText(UI_10_FONT_ID, descBandX, y, descLines[i].c_str());
+        const std::string fitted = renderer.truncatedText(UI_10_FONT_ID, descLines[i].c_str(), descBandWidth);
+        renderer.drawText(UI_10_FONT_ID, descBandX, y, fitted.c_str());
         y += lineHeightSmall;
       }
     }
