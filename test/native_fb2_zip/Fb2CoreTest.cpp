@@ -124,6 +124,81 @@ TEST(NativeFb2Parser, RendersLinksStylesImagesAndDecodesBinary) {
   EXPECT_EQ(decoded, "Ma");
 }
 
+class SemanticRecordingSink final : public Fb2ContentSink {
+ public:
+  void onTitleBegin(uint8_t level) override { events += "<h" + std::to_string(level) + ">"; }
+  void onTitleEnd(uint8_t level) override { events += "</h" + std::to_string(level) + ">"; }
+  void onTitleLineBreak() override { events += "<br>"; }
+  void onEpigraphBegin() override { events += "<epigraph>"; }
+  void onEpigraphEnd() override { events += "</epigraph>"; }
+  void onCiteBegin() override { events += "<cite>"; }
+  void onCiteEnd() override { events += "</cite>"; }
+  void onTextAuthorBegin() override { ++authorBlocks; events += "<author>"; }
+  void onTextAuthorEnd() override { events += "</author>"; }
+  void onText(const std::string& value, Fb2InlineStyle style) override {
+    events += value;
+    const uint8_t bits = static_cast<uint8_t>(style);
+    if (value.find("Quote") != std::string::npos &&
+        (bits & static_cast<uint8_t>(Fb2InlineStyle::Italic))) quoteIsItalic = true;
+    if (value.find("Aside") != std::string::npos &&
+        (bits & static_cast<uint8_t>(Fb2InlineStyle::Italic))) annotationIsItalic = true;
+    if (value.find("CodeRun") != std::string::npos &&
+        (bits & static_cast<uint8_t>(Fb2InlineStyle::Code))) codeIsMarked = true;
+  }
+  void onImage(const std::string& id) override { imageId = id; }
+  void onLinkBegin(const std::string& target) override { linkTarget = target; }
+
+  std::string events;
+  std::string imageId;
+  std::string linkTarget;
+  int authorBlocks = 0;
+  bool quoteIsItalic = false;
+  bool annotationIsItalic = false;
+  bool codeIsMarked = false;
+};
+
+TEST(NativeFb2Parser, RendersBodyTitleAndItalicBodyEpigraph) {
+  CoreMemoryReader reader(R"fb2(<FictionBook><body>
+    <title><p>Main <emphasis>Title</emphasis></p><empty-line/><p>Second line</p></title>
+    <epigraph><p>Quote before the first chapter.</p><text-author>Author</text-author></epigraph>
+    <section><title><p>Chapter</p></title><p>Body</p></section>
+  </body></FictionBook>)fb2");
+  SemanticRecordingSink sink;
+  Fb2Parser parser;
+  ASSERT_TRUE(parser.renderBodyPreambleForFirstSection(reader, sink));
+  EXPECT_NE(sink.events.find("<h0>Main Title<br><br>Second line</h0>"), std::string::npos);
+  EXPECT_NE(sink.events.find("<epigraph>"), std::string::npos);
+  EXPECT_TRUE(sink.quoteIsItalic);
+  EXPECT_EQ(sink.authorBlocks, 1);
+}
+
+TEST(NativeFb2Parser, PreservesSemanticStylesInSectionAndRichTitle) {
+  CoreMemoryReader reader(R"fb2(<FictionBook><body><section id="s1">
+    <title><p><a href="#target">Chapter</a></p><p><image href="#title-image"/></p></title>
+    <p><code>CodeRun</code></p>
+    <annotation><p>Aside text.</p></annotation>
+    <epigraph><p>Quote in chapter.</p></epigraph>
+    <poem><date>1830</date></poem>
+    <p id="target">Body</p>
+  </section></body></FictionBook>)fb2");
+  Fb2ScanResult result;
+  Fb2Parser parser;
+  ASSERT_TRUE(parser.scan(reader, result));
+  ASSERT_EQ(result.sections.size(), 1U);
+
+  SemanticRecordingSink title;
+  ASSERT_TRUE(parser.renderSectionTitle(reader, result.sections[0], title, 0));
+  EXPECT_EQ(title.linkTarget, "target");
+  EXPECT_EQ(title.imageId, "title-image");
+
+  SemanticRecordingSink body;
+  ASSERT_TRUE(parser.renderSection(reader, result.sections[0], body));
+  EXPECT_TRUE(body.codeIsMarked);
+  EXPECT_TRUE(body.annotationIsItalic);
+  EXPECT_TRUE(body.quoteIsItalic);
+  EXPECT_EQ(body.authorBlocks, 1);  // poem date uses the attribution layout
+}
+
 TEST(NativeFb2Parser, InfersCalibreStyledFirstParagraphAsSectionTitleWithoutDuplicatingIt) {
   constexpr const char* book = R"fb2(<FictionBook><body><section><p> </p>
     <p><strong>  Chapter from Calibre  </strong></p><p>Body text.</p>

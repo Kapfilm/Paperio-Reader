@@ -464,6 +464,13 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   halTiltSensor.deepSleep();
 
+  // Never cut X3 power while the gauge is inside CONFIG UPDATE. Exit the
+  // transaction and reseal it even if sleep is requested midway through the
+  // incremental capacity correction.
+  if (gpio.deviceIsX3() && powerManager.isGaugeCapacityLoadPending()) {
+    powerManager.abandonGaugeCapacityLoad();
+  }
+
   display.deepSleep();
   LOG_DBG("MAIN", "Entering deep sleep (powerBtn isPressed=%d, rawPin=%d)", gpio.isPressed(HalGPIO::BTN_POWER),
           digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
@@ -970,14 +977,28 @@ void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
+  static int lastObservedBatteryPercent = -1;
 
   gpio.update();
+  powerManager.pollBatteryPercentage();
+  const int observedBatteryPercent = static_cast<int>(powerManager.getBatteryPercentage());
+  const bool batteryPercentChanged =
+      lastObservedBatteryPercent >= 0 && observedBatteryPercent != lastObservedBatteryPercent;
+  lastObservedBatteryPercent = observedBatteryPercent;
   buttonEventManager.update();
   serviceBootPowerRelease();
   HalClock::updatePeriodic(SETTINGS.ntpServer);
   halTiltSensor.update(static_cast<CrossPointTiltPageTurn::Value>(SETTINGS.tiltPageTurn),
                        static_cast<CrossPointOrientation::Value>(SETTINGS.orientation),
                        activityManager.isReaderActivity());
+
+  // X3 only: the BQ27220 can return to TI's 3000 mAh default after gauge
+  // power loss. Correct DesignCapacity and Learned FCC to the real 650 mAh in
+  // short, non-blocking steps. Serialize the shared I2C work with rendering.
+  if (gpio.deviceIsX3() && powerManager.isGaugeCapacityLoadPending() && !RenderLock::peek()) {
+    RenderLock lock;
+    powerManager.loadGaugeCapacity();
+  }
 
   renderer.setFadingFix(SETTINGS.fadingFix);
   renderer.setTextDarkness(SETTINGS.textDarkness);
@@ -1155,6 +1176,17 @@ void loop() {
   // Refresh the battery icon when USB is plugged or unplugged.
   // Placed after sleep guards so we never queue a render that won't be processed.
   if (gpio.wasUsbStateChanged()) {
+    activityManager.requestUpdate();
+  } else if (batteryPercentChanged && SETTINGS.statusBarBattery) {
+    // pollBatteryPercentage() updates the X4 estimate while the reader is idle, but an
+    // e-ink panel only changes when a render is requested. Previously the periodic reader
+    // repaint was driven solely by the optional clock, so with the clock disabled a new
+    // percentage remained in the cache until a button press happened to redraw the page.
+    // Refresh any current screen while the battery indicator is enabled: the home screen
+    // and menus show it too, and otherwise their value would still wait for a key press.
+    // One request per whole percentage (roughly every 40-120 seconds across the X4
+    // charge curve) keeps background charging visible without repainting every
+    // 1.5-second ADC poll.
     activityManager.requestUpdate();
   }
 

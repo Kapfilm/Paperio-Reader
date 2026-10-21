@@ -53,14 +53,21 @@ bool readExact(IByteReader& r, void* dst, size_t len) {
 class BufferedSliceReader final : public IByteReader {
 public:
     BufferedSliceReader(IByteReader& source, uint64_t base, uint64_t length)
-        : source_(source), base_(base), length_(length),
-          buffer_(new (std::nothrow) uint8_t[kZipReadAheadSize]) {}
+        : source_(source), base_(base), length_(length) {}
 
     size_t read(void* dst, size_t len) override {
         if (cursor_ >= length_ || len == 0) return 0;
         const uint64_t left = length_ - cursor_;
         if (len > left) len = static_cast<size_t>(left);
 
+        // Allocate on first actual read, not in the constructor. During
+        // DEFLATE this means inflateRaw() has already secured its mandatory
+        // 32 KiB window; this optional speed-up can then fall back to direct
+        // reads instead of starving the decompressor on a fragmented heap.
+        if (!buffer_ && !bufferAllocationAttempted_) {
+            buffer_.reset(new (std::nothrow) uint8_t[kZipReadAheadSize]);
+            bufferAllocationAttempted_ = true;
+        }
         if (!buffer_) {
             if (!source_.seek(base_ + cursor_)) return 0;
             const size_t got = source_.read(dst, len);
@@ -118,6 +125,7 @@ private:
     uint64_t length_ = 0;
     uint64_t cursor_ = 0;
     std::unique_ptr<uint8_t[]> buffer_;
+    bool bufferAllocationAttempted_ = false;
     uint64_t bufferStart_ = 0;
     size_t bufferLen_ = 0;
 };
@@ -129,10 +137,16 @@ private:
 // falls back to direct streaming.
 class BufferedZipOutput {
 public:
-    explicit BufferedZipOutput(const ZipOutputFn& out)
-        : out_(out), buffer_(new (std::nothrow) uint8_t[kZipOutputBatchSize]) {}
+    explicit BufferedZipOutput(const ZipOutputFn& out) : out_(out) {}
 
     void append(const uint8_t* data, size_t len) {
+        // As with compressed-input read-ahead, allocate only after DEFLATE's
+        // mandatory window exists. Failure is harmless: the caller's output
+        // callback still receives the same bytes directly.
+        if (!buffer_ && !bufferAllocationAttempted_) {
+            buffer_.reset(new (std::nothrow) uint8_t[kZipOutputBatchSize]);
+            bufferAllocationAttempted_ = true;
+        }
         if (!buffer_) {
             out_(data, len);
             return;
@@ -160,6 +174,7 @@ private:
 
     const ZipOutputFn& out_;
     std::unique_ptr<uint8_t[]> buffer_;
+    bool bufferAllocationAttempted_ = false;
     size_t buffered_ = 0;
 };
 

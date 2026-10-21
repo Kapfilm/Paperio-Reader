@@ -20,8 +20,10 @@ constexpr char RECENT_BOOKS_FILE_JSON[] = "/.crosspoint/recent.json";
 RecentBooksStore RecentBooksStore::instance;
 
 void RecentBooksStore::addBook(const std::string& path, const std::string& title, const std::string& author,
-                               const std::string& series, const std::string& coverBmpPath) {
+                               const std::string& series, const std::string& coverBmpPath,
+                               const std::string& sourceFormat) {
   RecentBook newBook{path, title, author, series, coverBmpPath};
+  newBook.sourceFormat = sourceFormat;
 
   pruneMissing();
 
@@ -43,6 +45,7 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
     newBook.guideDotsOverride = it->guideDotsOverride;
     newBook.inlineFootnotePreviewsOverride = it->inlineFootnotePreviewsOverride;
     newBook.lineHeightPercentOverride = it->lineHeightPercentOverride;
+    if (newBook.sourceFormat.empty()) newBook.sourceFormat = it->sourceFormat;
     recentBooks.erase(it);
   }
 

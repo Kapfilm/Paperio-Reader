@@ -1,8 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -152,6 +155,33 @@ TEST(NativeFb2Zip, FindsEocdAcrossChunkedCommentSearch) {
   ZipEntryInfo entry;
   ASSERT_TRUE(findFb2EntryInZip(reader, entry));
   EXPECT_EQ(entry.filename, "books/Test.FB2");
+}
+
+TEST(NativeFb2Zip, ExtractsOptionalRealWorldRegressionArchive) {
+  const char* path = std::getenv("FB2_ZIP_REGRESSION_BOOK");
+  if (!path || !*path) GTEST_SKIP() << "FB2_ZIP_REGRESSION_BOOK is not set";
+
+  std::ifstream input(path, std::ios::binary);
+  ASSERT_TRUE(input.good()) << path;
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  ASSERT_FALSE(bytes.empty());
+
+  MemoryReader reader(std::move(bytes));
+  ZipEntryInfo entry;
+  ASSERT_TRUE(findFb2EntryInZip(reader, entry));
+  ASSERT_GT(entry.uncompressedSize, 0U);
+
+  std::string prefix;
+  uint64_t extractedBytes = 0;
+  ASSERT_TRUE(extractZipEntry(reader, entry, [&](const uint8_t* data, size_t len) {
+    if (prefix.size() < 4096) {
+      const size_t copy = std::min<size_t>(len, 4096 - prefix.size());
+      prefix.append(reinterpret_cast<const char*>(data), copy);
+    }
+    extractedBytes += len;
+  }));
+  EXPECT_EQ(extractedBytes, entry.uncompressedSize);
+  EXPECT_NE(prefix.find("<FictionBook"), std::string::npos);
 }
 
 TEST(NativeFb2Base64, PreservesPaddingAndWhitespace) {

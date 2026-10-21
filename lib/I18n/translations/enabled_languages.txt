@@ -1,0 +1,3 @@
+# Languages linked into Paperio Reader firmware.
+EN
+RU

@@ -103,6 +103,18 @@ TEST_F(Fb2StateMigrationTest, NewPackagesAndFreshBooksAreUnchanged) {
   EXPECT_EQ(read(cache + "/progress.bin"), original);
   EXPECT_FALSE(fs::exists(Fb2StateMigration::backupPath(cache)));
 }
+TEST_F(Fb2StateMigrationTest, StyleVersionBumpsPreserveNativeChapterState) {
+  for (const int version : {31, 32, 33}) {
+    fs::remove_all(cache);
+    seed(3, version);
+    const auto progress = read(cache + "/progress.bin");
+    const auto bookmarks = read(cache + "/bookmarks.bin");
+    EXPECT_TRUE(Fb2StateMigration::prepare(cache)) << "version " << version;
+    EXPECT_EQ(read(cache + "/progress.bin"), progress) << "version " << version;
+    EXPECT_EQ(read(cache + "/bookmarks.bin"), bookmarks) << "version " << version;
+    EXPECT_FALSE(fs::exists(Fb2StateMigration::backupPath(cache))) << "version " << version;
+  }
+}
 TEST_F(Fb2StateMigrationTest, NoSavedPositionDoesNotInventProgress) {
   seed(); fs::remove(cache + "/progress.bin");
   ASSERT_TRUE(Fb2StateMigration::prepare(cache));

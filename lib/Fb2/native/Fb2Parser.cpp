@@ -508,14 +508,19 @@ bool Fb2Parser::renderAnnotation(IByteReader& reader, Fb2ContentSink& sink,
     bool inAnnotation = false;
     bool paragraphOpen = false;
     int boldDepth = 0, italicDepth = 0, underlineDepth = 0, strikeDepth = 0, supDepth = 0, subDepth = 0;
+    int codeDepth = 0;
     auto currentStyle = [&]() {
         Fb2InlineStyle st = Fb2InlineStyle::Regular;
         if (boldDepth) st = st | Fb2InlineStyle::Bold;
+        // An FB2 annotation is typographically distinct from the main text.
+        // Keep it italic even when publisher CSS is disabled by the reader.
+        st = st | Fb2InlineStyle::Italic;
         if (italicDepth) st = st | Fb2InlineStyle::Italic;
         if (underlineDepth) st = st | Fb2InlineStyle::Underline;
         if (strikeDepth) st = st | Fb2InlineStyle::Strikethrough;
         if (supDepth) st = st | Fb2InlineStyle::Superscript;
         if (subDepth) st = st | Fb2InlineStyle::Subscript;
+        if (codeDepth) st = st | Fb2InlineStyle::Code;
         return st;
     };
 
@@ -543,6 +548,14 @@ bool Fb2Parser::renderAnnotation(IByteReader& reader, Fb2ContentSink& sink,
             else if (name == "strikethrough") ++strikeDepth;
             else if (name == "sup") ++supDepth;
             else if (name == "sub") ++subDepth;
+            else if (name == "code") ++codeDepth;
+            else if (name == "image") {
+                if (const char* href = firstOf(xml, {"l:href", "xlink:href", "href"})) sink.onImage(stripHash(href));
+            }
+            else if (name == "a") {
+                if (const char* href = firstOf(xml, {"l:href", "xlink:href", "href"})) sink.onLinkBegin(stripHash(href));
+                else sink.onLinkBegin(std::string());
+            }
             if (const char* id = xml.attr("id")) { if (*id) sink.onAnchor(id); }
             continue;
         }
@@ -561,6 +574,8 @@ bool Fb2Parser::renderAnnotation(IByteReader& reader, Fb2ContentSink& sink,
             else if (name == "strikethrough") --strikeDepth;
             else if (name == "sup") --supDepth;
             else if (name == "sub") --subDepth;
+            else if (name == "code") { if (codeDepth > 0) --codeDepth; }
+            else if (name == "a") sink.onLinkEnd();
         }
     }
 }
@@ -569,29 +584,31 @@ bool Fb2Parser::renderBodyPreambleForFirstSection(
     IByteReader& reader,
     Fb2ContentSink& sink,
     const reader::ReaderCancellationToken* cancellationToken) {
-    // Body-level epigraphs are legal FB2 and are common before the first
+    // The first body may have its own title and epigraph before the first
     // section. scan() deliberately indexes only <section> nodes, so recover
-    // that tiny preamble here. This pass terminates at the first section and
-    // therefore does not turn chapter rendering into a whole-book rescan.
+    // that small preamble here without turning chapter rendering into a
+    // whole-book rescan.
     Fb2XmlReader xml(reader, 4096);
     xml.seekTo(0);
 
     bool inBody = false;
+    bool inBodyTitle = false;
     bool inEpigraph = false;
-    bool inTextAuthor = false;
+    bool titleParagraphSeen = false;
     int boldDepth = 0, italicDepth = 0, underlineDepth = 0, strikeDepth = 0, supDepth = 0, subDepth = 0;
-    int smallCapsDepth = 0;
+    int smallCapsDepth = 0, codeDepth = 0;
     std::vector<bool> styleTagIsSmallCaps;
 
     auto currentStyle = [&]() {
         Fb2InlineStyle style = Fb2InlineStyle::Regular;
         if (boldDepth > 0) style = style | Fb2InlineStyle::Bold;
-        if (italicDepth > 0) style = style | Fb2InlineStyle::Italic;
+        if (italicDepth > 0 || inEpigraph) style = style | Fb2InlineStyle::Italic;
         if (underlineDepth > 0) style = style | Fb2InlineStyle::Underline;
         if (strikeDepth > 0) style = style | Fb2InlineStyle::Strikethrough;
         if (supDepth > 0) style = style | Fb2InlineStyle::Superscript;
         if (subDepth > 0) style = style | Fb2InlineStyle::Subscript;
         if (smallCapsDepth > 0) style = style | Fb2InlineStyle::SmallCaps;
+        if (codeDepth > 0) style = style | Fb2InlineStyle::Code;
         return style;
     };
 
@@ -617,30 +634,46 @@ bool Fb2Parser::renderBodyPreambleForFirstSection(
         if (tok == Fb2Token::EndTag && name == "body") return true;
 
         if (tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) {
-            if (name == "epigraph") {
+            if (!inBodyTitle && !inEpigraph && name == "title") {
+                inBodyTitle = true;
+                titleParagraphSeen = false;
+                sink.onTitleBegin(0);
+                if (const char* id = xml.attr("id")) { if (*id) sink.onAnchor(id); }
+                continue;
+            }
+            if (!inBodyTitle && !inEpigraph && name == "epigraph") {
                 inEpigraph = true;
                 sink.onEpigraphBegin();
                 if (const char* id = xml.attr("id")) { if (*id) sink.onAnchor(id); }
                 continue;
             }
-            if (!inEpigraph) continue;
+            if (!inBodyTitle && !inEpigraph) continue;
 
-            if (name == "p") sink.onParagraphBegin();
-            else if (name == "empty-line") sink.onEmptyLine();
+            if (inBodyTitle && name == "p") {
+                if (titleParagraphSeen) sink.onTitleLineBreak();
+                titleParagraphSeen = true;
+            }
+            else if (inBodyTitle && name == "empty-line") sink.onTitleLineBreak();
+            else if (inEpigraph && name == "p") sink.onParagraphBegin();
+            else if (inEpigraph && name == "empty-line") sink.onEmptyLine();
             else if (name == "poem") sink.onPoemBegin();
             else if (name == "stanza") sink.onStanzaBegin();
             else if (name == "v") sink.onVerseBegin();
-            else if (name == "text-author") { inTextAuthor = true; sink.onTextAuthorBegin(); }
+            else if (name == "text-author" || name == "date") sink.onTextAuthorBegin();
             else if (name == "strong" || name == "b") ++boldDepth;
             else if (name == "emphasis" || name == "i") ++italicDepth;
             else if (name == "underline" || name == "u") ++underlineDepth;
             else if (name == "strikethrough") ++strikeDepth;
             else if (name == "sup") ++supDepth;
             else if (name == "sub") ++subDepth;
+            else if (name == "code") ++codeDepth;
             else if (name == "style") {
                 const bool isSC = isSmallCapsStyleName(xml.attr("name") ? xml.attr("name") : "");
                 styleTagIsSmallCaps.push_back(isSC);
                 if (isSC) ++smallCapsDepth;
+            }
+            else if (name == "image") {
+                if (const char* href = firstOf(xml, {"l:href", "xlink:href", "href"})) sink.onImage(stripHash(href));
             }
             else if (name == "a") {
                 if (const char* href = firstOf(xml, {"l:href", "xlink:href", "href"})) sink.onLinkBegin(stripHash(href));
@@ -650,23 +683,29 @@ bool Fb2Parser::renderBodyPreambleForFirstSection(
             continue;
         }
 
-        if (tok == Fb2Token::Text && inEpigraph) {
+        if (tok == Fb2Token::Text && (inBodyTitle || inEpigraph)) {
             emitTextNormalizingCombiningStrike(sink, xml.text(), currentStyle());
             continue;
         }
 
-        if (tok == Fb2Token::EndTag && inEpigraph) {
-            if (name == "p") sink.onParagraphEnd();
+        if (tok == Fb2Token::EndTag && (inBodyTitle || inEpigraph)) {
+            if (inBodyTitle && name == "title") {
+                sink.onTitleEnd(0);
+                inBodyTitle = false;
+                continue;
+            }
+            if (inEpigraph && name == "p") sink.onParagraphEnd();
             else if (name == "poem") sink.onPoemEnd();
             else if (name == "stanza") sink.onStanzaEnd();
             else if (name == "v") sink.onVerseEnd();
-            else if (name == "text-author") { sink.onTextAuthorEnd(); inTextAuthor = false; }
+            else if (name == "text-author" || name == "date") sink.onTextAuthorEnd();
             else if (name == "strong" || name == "b") --boldDepth;
             else if (name == "emphasis" || name == "i") --italicDepth;
             else if (name == "underline" || name == "u") --underlineDepth;
             else if (name == "strikethrough") --strikeDepth;
             else if (name == "sup") --supDepth;
             else if (name == "sub") --subDepth;
+            else if (name == "code") { if (codeDepth > 0) --codeDepth; }
             else if (name == "style") {
                 if (!styleTagIsSmallCaps.empty()) {
                     const bool was = styleTagIsSmallCaps.back();
@@ -675,7 +714,7 @@ bool Fb2Parser::renderBodyPreambleForFirstSection(
                 }
             }
             else if (name == "a") sink.onLinkEnd();
-            else if (name == "epigraph") {
+            else if (inEpigraph && name == "epigraph") {
                 sink.onEpigraphEnd();
                 inEpigraph = false;
             }
@@ -748,6 +787,7 @@ bool Fb2Parser::renderSectionTitle(IByteReader& reader,
     bool emitted = false;
     bool titleParagraphSeen = false;
     int boldDepth = 0, italicDepth = 0, underlineDepth = 0, strikeDepth = 0, supDepth = 0, subDepth = 0;
+    int codeDepth = 0;
     auto style = [&]() {
         Fb2InlineStyle st = Fb2InlineStyle::Regular;
         if (boldDepth) st = st | Fb2InlineStyle::Bold;
@@ -756,6 +796,7 @@ bool Fb2Parser::renderSectionTitle(IByteReader& reader,
         if (strikeDepth) st = st | Fb2InlineStyle::Strikethrough;
         if (supDepth) st = st | Fb2InlineStyle::Superscript;
         if (subDepth) st = st | Fb2InlineStyle::Subscript;
+        if (codeDepth) st = st | Fb2InlineStyle::Code;
         return st;
     };
     for (;;) {
@@ -783,6 +824,14 @@ bool Fb2Parser::renderSectionTitle(IByteReader& reader,
             else if (name == "strikethrough") ++strikeDepth;
             else if (name == "sup") ++supDepth;
             else if (name == "sub") ++subDepth;
+            else if (name == "code") ++codeDepth;
+            else if (name == "image") {
+                if (const char* href = firstOf(xml, {"l:href", "xlink:href", "href"})) sink.onImage(stripHash(href));
+            }
+            else if (name == "a") {
+                if (const char* href = firstOf(xml, {"l:href", "xlink:href", "href"})) sink.onLinkBegin(stripHash(href));
+                else sink.onLinkBegin(std::string());
+            }
             if (const char* id = xml.attr("id")) { if (*id) sink.onAnchor(id); }
             continue;
         }
@@ -795,6 +844,8 @@ bool Fb2Parser::renderSectionTitle(IByteReader& reader,
             else if (name == "strikethrough") --strikeDepth;
             else if (name == "sup") --supDepth;
             else if (name == "sub") --subDepth;
+            else if (name == "code") { if (codeDepth > 0) --codeDepth; }
+            else if (name == "a") sink.onLinkEnd();
         }
     }
 }
@@ -807,17 +858,19 @@ bool Fb2Parser::renderSection(IByteReader& reader,
     xml.seekTo(section.innerStartOffset);
 
     int boldDepth = 0, italicDepth = 0, underlineDepth = 0, strikeDepth = 0, supDepth = 0, subDepth = 0;
-    int smallCapsDepth = 0;
+    int smallCapsDepth = 0, codeDepth = 0;
+    int epigraphDepth = 0, annotationDepth = 0;
     std::vector<bool> styleTagIsSmallCaps;
     auto currentStyle = [&]() {
         Fb2InlineStyle s = Fb2InlineStyle::Regular;
         if (boldDepth > 0) s = s | Fb2InlineStyle::Bold;
-        if (italicDepth > 0) s = s | Fb2InlineStyle::Italic;
+        if (italicDepth > 0 || epigraphDepth > 0 || annotationDepth > 0) s = s | Fb2InlineStyle::Italic;
         if (underlineDepth > 0) s = s | Fb2InlineStyle::Underline;
         if (strikeDepth > 0) s = s | Fb2InlineStyle::Strikethrough;
         if (supDepth > 0) s = s | Fb2InlineStyle::Superscript;
         if (subDepth > 0) s = s | Fb2InlineStyle::Subscript;
         if (smallCapsDepth > 0) s = s | Fb2InlineStyle::SmallCaps;
+        if (codeDepth > 0) s = s | Fb2InlineStyle::Code;
         return s;
     };
 
@@ -913,8 +966,10 @@ bool Fb2Parser::renderSection(IByteReader& reader,
             else if (name == "stanza") sink.onStanzaBegin();
             else if (name == "v") sink.onVerseBegin();
             else if (name == "cite") sink.onCiteBegin();
-            else if (name == "epigraph") sink.onEpigraphBegin();
+            else if (name == "epigraph") { ++epigraphDepth; sink.onEpigraphBegin(); }
+            else if (name == "annotation") { ++annotationDepth; sink.onCiteBegin(); }
             else if (name == "text-author") { inTextAuthor = true; sink.onTextAuthorBegin(); }
+            else if (name == "date") sink.onTextAuthorBegin();
             else if (name == "subtitle") { inSubtitle = true; sink.onSubtitleBegin(); }
             else if (name == "strong" || name == "b") boldDepth++;
             else if (name == "emphasis" || name == "i") italicDepth++;
@@ -922,6 +977,7 @@ bool Fb2Parser::renderSection(IByteReader& reader,
             else if (name == "strikethrough") strikeDepth++;
             else if (name == "sup") supDepth++;
             else if (name == "sub") subDepth++;
+            else if (name == "code") codeDepth++;
             else if (name == "style") {
                 bool isSC = isSmallCapsStyleName(xml.attr("name") ? xml.attr("name") : "");
                 styleTagIsSmallCaps.push_back(isSC);
@@ -965,8 +1021,10 @@ bool Fb2Parser::renderSection(IByteReader& reader,
             else if (name == "stanza") sink.onStanzaEnd();
             else if (name == "v") sink.onVerseEnd();
             else if (name == "cite") sink.onCiteEnd();
-            else if (name == "epigraph") sink.onEpigraphEnd();
+            else if (name == "epigraph") { sink.onEpigraphEnd(); if (epigraphDepth > 0) --epigraphDepth; }
+            else if (name == "annotation") { sink.onCiteEnd(); if (annotationDepth > 0) --annotationDepth; }
             else if (name == "text-author") { sink.onTextAuthorEnd(); inTextAuthor = false; }
+            else if (name == "date") sink.onTextAuthorEnd();
             else if (name == "subtitle") { sink.onSubtitleEnd(); inSubtitle = false; }
             else if (name == "strong" || name == "b") boldDepth--;
             else if (name == "emphasis" || name == "i") italicDepth--;
@@ -974,6 +1032,7 @@ bool Fb2Parser::renderSection(IByteReader& reader,
             else if (name == "strikethrough") strikeDepth--;
             else if (name == "sup") supDepth--;
             else if (name == "sub") subDepth--;
+            else if (name == "code") { if (codeDepth > 0) --codeDepth; }
             else if (name == "style") {
                 if (!styleTagIsSmallCaps.empty()) {
                     bool was = styleTagIsSmallCaps.back();

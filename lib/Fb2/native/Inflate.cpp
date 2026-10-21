@@ -1,10 +1,10 @@
 #include "Inflate.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <memory>
 #include <new>
-#include <vector>
 
 namespace {
 
@@ -79,7 +79,8 @@ private:
 
 struct Huff {
     uint16_t counts[16] = {0};
-    std::vector<uint16_t> symbols;
+    std::unique_ptr<uint16_t[]> symbols;
+    size_t symbolCapacity = 0;
 
     static constexpr int kFastBits = 8;
     static constexpr uint16_t kFastMiss = 0xffffu;
@@ -94,7 +95,14 @@ struct Huff {
         return r;
     }
 
-    void build(const uint8_t* code_lengths, int n) {
+    bool build(const uint8_t* code_lengths, int n) {
+        if (n <= 0) return false;
+        if (symbolCapacity < static_cast<size_t>(n)) {
+            auto replacement = std::unique_ptr<uint16_t[]>(new (std::nothrow) uint16_t[static_cast<size_t>(n)]);
+            if (!replacement) return false;
+            symbols = std::move(replacement);
+            symbolCapacity = static_cast<size_t>(n);
+        }
         fast.fill(kFastMiss);
         for (int i = 0; i < 16; i++) counts[i] = 0;
         for (int i = 0; i < n; i++) counts[code_lengths[i]]++;
@@ -104,7 +112,7 @@ struct Huff {
         offsets[1] = 0;
         for (int len = 1; len < 15; len++) offsets[len + 1] = offsets[len] + counts[len];
 
-        symbols.assign(static_cast<size_t>(n), 0);
+        std::fill_n(symbols.get(), static_cast<size_t>(n), static_cast<uint16_t>(0));
         for (int i = 0; i < n; i++) {
             uint8_t len = code_lengths[i];
             if (len != 0) symbols[offsets[len]++] = static_cast<uint16_t>(i);
@@ -127,6 +135,7 @@ struct Huff {
                 fast[slot] = packed;
             }
         }
+        return true;
     }
 
     int decode(BitReader& br) const {
@@ -243,7 +252,11 @@ private:
     size_t outLen_ = 0;
 };
 
-bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
+// Keep this separate from inflateRaw(). On ESP32-C3, inlining used to merge
+// the bit-reader, output window and all dynamic-Huffman scratch arrays into a
+// single >4 KiB stack frame. That left too little headroom for error handling
+// on the loop task and could trip the hardware stack guard while opening ZIPs.
+__attribute__((noinline)) bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
     outFinal = br.getBits(1) != 0;
     uint32_t btype = br.getBits(2);
     if (!br.ok()) return false;
@@ -273,11 +286,11 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
         for (int i = 144; i < 256; i++) litLenLens[i] = 9;
         for (int i = 256; i < 280; i++) litLenLens[i] = 7;
         for (int i = 280; i < 288; i++) litLenLens[i] = 8;
-        litLen.build(litLenLens, 288);
+        if (!litLen.build(litLenLens, 288)) return false;
 
         uint8_t distLens[30];
         for (int i = 0; i < 30; i++) distLens[i] = 5;
-        dist.build(distLens, 30);
+        if (!dist.build(distLens, 30)) return false;
     } else {
         uint32_t hlit = br.getBits(5) + 257;
         uint32_t hdist = br.getBits(5) + 1;
@@ -289,7 +302,7 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
             clcLens[kCodeLenOrder[i]] = static_cast<uint8_t>(br.getBits(3));
         }
         Huff clc;
-        clc.build(clcLens, 19);
+        if (!clc.build(clcLens, 19)) return false;
 
         std::array<uint8_t, 318> lens{};
         const uint32_t lensCount = hlit + hdist;
@@ -313,8 +326,8 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
             }
             if (!br.ok()) return false;
         }
-        litLen.build(lens.data(), static_cast<int>(hlit));
-        dist.build(lens.data() + hlit, static_cast<int>(hdist));
+        if (!litLen.build(lens.data(), static_cast<int>(hlit)) ||
+            !dist.build(lens.data() + hlit, static_cast<int>(hdist))) return false;
     }
 
     for (;;) {
@@ -343,12 +356,17 @@ bool inflateBlock(BitReader& br, Window& win, bool& outFinal) {
 } // namespace
 
 bool inflateRaw(IByteReader& in, uint32_t compressedLimit, const InflateOutputFn& out) {
-    BitReader br(in, compressedLimit);
-    Window win(out);
-    if (!win.valid()) return false;
+    // These objects each own a roughly 1 KiB inline buffer. Keep them off the
+    // task stack and allocate the mandatory DEFLATE window first. All
+    // allocations are non-throwing so low-memory input fails cleanly instead
+    // of entering the C++ exception unwinder beside the stack guard.
+    auto win = std::unique_ptr<Window>(new (std::nothrow) Window(out));
+    if (!win || !win->valid()) return false;
+    auto br = std::unique_ptr<BitReader>(new (std::nothrow) BitReader(in, compressedLimit));
+    if (!br) return false;
     bool final = false;
     do {
-        if (!inflateBlock(br, win, final)) return false;
+        if (!inflateBlock(*br, *win, final)) return false;
     } while (!final);
     return true;
 }

@@ -253,6 +253,10 @@ enum class Fb2InlineStyle : uint8_t {
     // in Fb2Parser.cpp — and folds them into this bit so callers don't have
     // to duplicate that heuristic.
     SmallCaps = 64,
+    // FB2 <code> has no direct equivalent in the compact EPUB word-style
+    // flags.  Keep the semantic bit until XHTML emission so generated books
+    // can still distinguish code runs from ordinary prose.
+    Code = 128,
 };
 inline Fb2InlineStyle operator|(Fb2InlineStyle a, Fb2InlineStyle b) {
     return static_cast<Fb2InlineStyle>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));

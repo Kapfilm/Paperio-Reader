@@ -128,7 +128,13 @@ bool prepare(const std::string& cachePath) {
   uint8_t header[7];
   if (index.read(header, sizeof(header)) != sizeof(header) || std::memcmp(header, "FB2IDX", 6))
     return !hasUnversionedState;
-  if (header[6] == 30) return true;
+  // v29 is the only layout that used artificial chapter slices and needs its
+  // position translated. Every newer package keeps one spine per native FB2
+  // section, so style/cache-version bumps (v30, v31, v32, ...) may rebuild in
+  // place while preserving progress and bookmarks. Treating only exactly v30
+  // as safe made a v31 book with saved progress abort immediately when v32
+  // started indexing.
+  if (header[6] >= 30) return true;
   if (header[6] != 29) return !hasUnversionedState;
   // Never overwrite an existing archive, including after a firmware rollback.
   if (Storage.exists(backup.c_str())) return false;

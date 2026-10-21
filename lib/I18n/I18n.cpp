@@ -99,7 +99,14 @@ void I18n::loadSettings() {
     if (found) {
       LOG_INF("I18N", "Loaded language code: %s (%d)", code.c_str(), static_cast<int>(_language));
     } else {
-      LOG_ERR("I18N", "Unknown language code in settings: %s", code.c_str());
+      // A firmware update may remove a previously available language. Migrate
+      // such settings to English and persist the supported code, so subsequent
+      // boots do not repeatedly attempt to load the removed language.
+      _language = Language::EN;
+      LOG_INF("I18N", "Language code no longer available: %s; migrating to EN", code.c_str());
+      file.close();
+      saveSettings();
+      return;
     }
     file.close();
     return;
@@ -109,8 +116,8 @@ void I18n::loadSettings() {
   if (version == 1) {
     uint8_t lang;
     serialization::readPod(file, lang);
-    if (lang < static_cast<size_t>(Language::_COUNT)) {
-      _language = static_cast<Language>(lang);
+    if (lang < V1_LANGUAGE_COUNT) {
+      _language = V1_LANGUAGES[lang];
       LOG_INF("I18N", "Migrating v1 language index: %d -> %s", static_cast<int>(_language), getLanguageCode(_language));
       file.close();
       saveSettings();

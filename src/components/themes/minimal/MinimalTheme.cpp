@@ -1,6 +1,7 @@
 #include "MinimalTheme.h"
 
 #include <Bitmap.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <HalStorage.h>
@@ -16,6 +17,7 @@
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
+#include "util/BookArchiveUtils.h"
 
 namespace {
 constexpr int kCoverCornerRadius = 8;
@@ -23,6 +25,9 @@ constexpr int kButtonCornerRadius = 6;
 constexpr int kProgressBarHeight = 6;
 constexpr int kProgressBlockGap = 8;
 constexpr int kProgressLabelGap = 5;
+constexpr int kFormatBadgeHorizontalPadding = 5;
+constexpr int kFormatBadgeVerticalPadding = 1;
+constexpr int kFormatBadgeCornerRadius = 2;
 constexpr int kMenuPanelWidth = 384;
 constexpr int kMenuRowHeight = 64;
 constexpr int kMenuPanelTop = 210;
@@ -54,6 +59,19 @@ Rect fittedBitmapRect(const Bitmap& bitmap, const Rect& target) {
   return Rect{target.x + (target.width - width) / 2, target.y + (target.height - height) / 2, width, height};
 }
 
+const char* bookFormatLabel(const RecentBook& book) {
+  if (book.sourceFormat == "FB2") return "FB2";
+  if (book.sourceFormat == "EPUB") return "EPUB";
+  if (FsHelpers::hasEpubExtension(book.path)) return "EPUB";
+  if (isFb2BookPath(book.path)) return "FB2";
+  if (isBookZipPath(book.path)) {
+    const BookArchiveType archiveType = detectBookArchiveType(book.path);
+    if (archiveType == BookArchiveType::Fb2) return "FB2";
+    if (archiveType == BookArchiveType::Epub) return "EPUB";
+  }
+  return nullptr;
+}
+
 void drawMissingCover(const GfxRenderer& renderer, const Rect& coverRect, const RecentBook* book) {
   renderer.drawRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, 1, kCoverCornerRadius, true);
   const int dividerY = coverRect.y + coverRect.height / 3;
@@ -82,8 +100,23 @@ void drawMissingCover(const GfxRenderer& renderer, const Rect& coverRect, const 
 
 void drawProgress(const GfxRenderer& renderer, const Rect& coverRect, const RecentBook& book) {
   const int progress = UITheme::getBookProgressPercent(book);
-  if (progress < 0) return;
   const int barY = coverRect.y + coverRect.height + kProgressBlockGap;
+  const int labelY = barY + kProgressBarHeight + kProgressLabelGap;
+
+  // Keep the book type visually paired with the page count below the cover.
+  // A compact outlined badge reads clearly without competing with the cover art.
+  if (const char* format = bookFormatLabel(book)) {
+    const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, format, EpdFontFamily::BOLD);
+    const int badgeWidth = textWidth + 2 * kFormatBadgeHorizontalPadding;
+    const int badgeHeight = renderer.getLineHeight(SMALL_FONT_ID) + 2 * kFormatBadgeVerticalPadding;
+    const int badgeY = labelY - kFormatBadgeVerticalPadding;
+    renderer.fillRoundedRect(coverRect.x, badgeY, badgeWidth, badgeHeight, kFormatBadgeCornerRadius, Color::White);
+    renderer.drawRoundedRect(coverRect.x, badgeY, badgeWidth, badgeHeight, 1, kFormatBadgeCornerRadius, true);
+    renderer.drawText(SMALL_FONT_ID, coverRect.x + kFormatBadgeHorizontalPadding, labelY, format, true,
+                      EpdFontFamily::BOLD);
+  }
+
+  if (progress < 0) return;
   renderer.fillRectDither(coverRect.x, barY, coverRect.width, kProgressBarHeight, Color::LightGray);
   if (progress > 0) {
     renderer.fillRectDither(coverRect.x, barY, coverRect.width * std::min(progress, 100) / 100, kProgressBarHeight,
@@ -98,8 +131,7 @@ void drawProgress(const GfxRenderer& renderer, const Rect& coverRect, const Rece
     snprintf(label, sizeof(label), "%d%%", progress);
   }
   const int labelWidth = renderer.getTextWidth(UI_10_FONT_ID, label);
-  renderer.drawText(UI_10_FONT_ID, coverRect.x + coverRect.width - labelWidth,
-                    barY + kProgressBarHeight + kProgressLabelGap, label);
+  renderer.drawText(UI_10_FONT_ID, coverRect.x + coverRect.width - labelWidth, labelY, label);
 }
 }  // namespace
 

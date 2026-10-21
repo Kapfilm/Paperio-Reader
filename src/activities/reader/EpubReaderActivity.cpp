@@ -500,8 +500,13 @@ void EpubReaderActivity::onEnter() {
   if (!series.empty() && !epub->getSeriesIndex().empty()) {
     series += " #" + epub->getSeriesIndex();
   }
+  // Persist the actual source type. A generic `book.zip` can contain either
+  // FB2 or EPUB; the prepared FB2 package has a different path, which makes
+  // this distinction reliable after a successful open and avoids re-probing
+  // the archive from the Mini home-screen renderer.
+  const char* sourceFormat = sourcePath == epub->getPath() ? "EPUB" : "FB2";
   RECENT_BOOKS.addBook(sourcePath, epub->getTitle(), epub->getAuthor(), series,
-                       ReaderActivity::coverThumbPlaceholder(sourcePath));
+                       ReaderActivity::coverThumbPlaceholder(sourcePath), sourceFormat);
   const RecentBook currentBook = RECENT_BOOKS.getBookByPath(sourcePath);
   bookEmbeddedStyleOverride = currentBook.embeddedStyleOverride;
   bookImageRenderingOverride = currentBook.imageRenderingOverride;
@@ -663,21 +668,29 @@ void EpubReaderActivity::loop() {
       return;
     }
 
-    if (!section) {
-      requestUpdate();
-      return;
-    }
-
-    // Skips page turn if renderingMutex is busy
-    if (RenderLock::peek()) {
-      lastPageTurnTime = millis();
-      return;
-    }
-
-    if ((millis() - lastPageTurnTime) >= pageTurnDuration) {
+    // Do not let unrelated renders restart the automatic-turn countdown.  The old code
+    // sampled the render mutex on every loop tick and assigned lastPageTurnTime whenever it
+    // happened to be busy.  A next-page pre-render, deferred AA pass, or the once-per-minute
+    // clock/battery redraw could therefore keep moving a one-minute deadline forward forever.
+    // This looked like a reader freeze after enough pages for the two minute cadences to line
+    // up.  Only consult the mutex once the turn is actually due; if it is busy, retain the
+    // expired deadline and retry on the next loop tick.
+    const unsigned long now = millis();
+    if (section && (now - lastPageTurnTime) >= pageTurnDuration && !RenderLock::peek()) {
+      // Rate-limit the attempt before pageTurn(): advancing can legitimately fail while an
+      // incremental section is resolving a non-page target, or at a malformed/empty chapter.
+      // Leaving an expired deadline in that case made every loop iteration call pageTurn()
+      // and return before the normal button-event path.  After a long unattended session that
+      // presented as a completely frozen reader until reset.  A successful turn writes the
+      // timestamp again, so this only changes the failure path.
+      lastPageTurnTime = now;
       pageTurn(true);
       return;
     }
+    // If the render task is busy, or a cross-chapter turn has temporarily cleared `section`,
+    // keep running the ordinary input/background path below.  The expired deadline is retained
+    // while the mutex is busy, so the turn is retried promptly once rendering settles, but user
+    // input can still stop auto-turning or leave the reader instead of being starved by retries.
   }
 
   bool buttonPrevTurn = false;

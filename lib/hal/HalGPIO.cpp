@@ -446,29 +446,27 @@ bool HalGPIO::isUsbConnected() const {
     //
     // Current() is the primary signal: it is signed, and current flowing INTO
     // the battery (positive, above a noise floor) only happens on a charger.
-    // DSG alone must NOT be trusted as "charger present": the gauge clears DSG
-    // whenever the pack isn't actively discharging above its detection
-    // threshold, which includes plain idle/relaxation on battery. Treating
-    // DSG=0 as connected made the UI latch to the charging bolt shortly after
-    // unplugging and never recover (issue #86). FC (fully charged) is the one
-    // resting state that does imply a charger, since it only latches while
-    // topped off on the charger, so it stays as a secondary signal.
+    // DSG and FC must NOT be trusted as "charger present": DSG also clears at
+    // rest and FC remains latched after a full battery is unplugged. The latter
+    // was why the bolt could stay visible until reboot. Use only signed charge
+    // current, cached briefly to avoid an I2C transaction on every loop pass.
+    const unsigned long now = millis();
+    constexpr unsigned long X3_CHARGE_POLL_MS = 1000;
+    if (x3ChargeKnown_ && (now - x3ChargeLastPollMs_) < X3_CHARGE_POLL_MS) return x3Charging_;
+
     for (uint8_t attempt = 0; attempt < 2; ++attempt) {
-      uint16_t flags = 0;
-      if (X3GPIO::readI2CReg16LE(I2C_ADDR_BQ27220, BQ27220_FLAGS_REG, &flags)) {
-        const bool discharging = (flags & BQ27220_FLAG_DSG) != 0;
-        if (!discharging && (flags & BQ27220_FLAG_FC) != 0) {
-          return true;  // topped off on the charger
-        }
-        int16_t currentMa = 0;
-        if (X3GPIO::readBQ27220CurrentMA(&currentMa) && currentMa > USB_CHARGE_CURRENT_MIN_MA) {
-          return true;  // measurable current into the battery
-        }
-        return false;
+      int16_t currentMa = 0;
+      if (X3GPIO::readBQ27220CurrentMA(&currentMa)) {
+        x3Charging_ = currentMa > USB_CHARGE_CURRENT_MIN_MA;
+        x3ChargeKnown_ = true;
+        x3ChargeLastPollMs_ = now;
+        return x3Charging_;
       }
       delay(2);
     }
-    return false;
+    // A transient bus error must not synthesize an edge. Keep the last known
+    // state and retry on the next pass (last-poll timestamp is unchanged).
+    return x3ChargeKnown_ ? x3Charging_ : false;
   }
   // X4: U0RXD/GPIO20 reads HIGH when USB is connected
   return digitalRead(UART0_RXD) == HIGH;

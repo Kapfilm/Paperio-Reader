@@ -31,13 +31,15 @@ EpdFont ui12Bold(&inter_ui_12_bold);
 
 // Glyph bitmaps remain in flash. Switching changes only pointers in the existing
 // font map: measuring, truncating and drawing all see the same real font metrics.
-EpdFontFamily smallDefault(&smallRegular);
+EpdFontFamily smallDefault(&smallRegular, &smallBold);
 EpdFontFamily smallDark(&smallBold);
 EpdFontFamily ui10Default(&ui10Regular, &ui10Bold);
 EpdFontFamily ui10Dark(&ui10Bold, &ui10Bold);
 EpdFontFamily ui12Default(&ui12Regular, &ui12Bold);
 EpdFontFamily ui12Dark(&ui12Bold, &ui12Bold);
-EpdFontFamily smallGolos(&golos8Medium);
+// Golos has no bundled 8 px semibold face; use the compact Noto Sans bold
+// variant when a caller explicitly requests bold at SMALL_FONT_ID.
+EpdFontFamily smallGolos(&golos8Medium, &smallBold);
 EpdFontFamily ui10Golos(&golos10Medium, &golos10Semibold);
 EpdFontFamily ui12Golos(&golos12Medium, &golos12Semibold);
 }  // namespace

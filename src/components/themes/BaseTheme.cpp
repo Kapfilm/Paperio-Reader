@@ -918,10 +918,16 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   // Draw Battery
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
+  const int batteryX = metrics.statusBarHorizontalMargin + orientedMarginLeft + 1;
+  int batteryStatusWidth = 0;
   if (SETTINGS.statusBarBattery) {
-    GUI.drawBatteryLeft(renderer,
-                        Rect{metrics.statusBarHorizontalMargin + orientedMarginLeft + 1, textY, metrics.batteryWidth,
-                             metrics.batteryHeight},
+    batteryStatusWidth = metrics.batteryWidth;
+    if (showBatteryPercentage) {
+      const std::string percentageText = std::to_string(powerManager.getBatteryPercentage()) + "%";
+      batteryStatusWidth +=
+          BaseTheme::batteryPercentSpacing + renderer.getTextWidth(SMALL_FONT_ID, percentageText.c_str());
+    }
+    GUI.drawBatteryLeft(renderer, Rect{batteryX, textY, metrics.batteryWidth, metrics.batteryHeight},
                         showBatteryPercentage);
   }
 
@@ -931,9 +937,9 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     char clockStr[16];
     HalClock::formatTime(clockStr, sizeof(clockStr), !SETTINGS.clockFormat12h);
     clockTextWidth = renderer.getTextWidth(SMALL_FONT_ID, clockStr);
-    const int batterySize = SETTINGS.statusBarBattery ? (showBatteryPercentage ? 50 : 20) : 0;
-    renderer.drawText(SMALL_FONT_ID, metrics.statusBarHorizontalMargin + orientedMarginLeft + batterySize + 8, textY,
-                      clockStr);
+    constexpr int statusItemGap = 8;
+    const int clockX = batteryX + batteryStatusWidth + (SETTINGS.statusBarBattery ? statusItemGap : 0);
+    renderer.drawText(SMALL_FONT_ID, clockX, textY, clockStr);
   }
 
   // Draw Title
@@ -941,7 +947,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     const int rendererableScreenWidth =
         screenWidth - (metrics.statusBarHorizontalMargin * 2) - orientedMarginLeft - orientedMarginRight;
 
-    const int batterySize = SETTINGS.statusBarBattery ? (showBatteryPercentage ? 50 : 20) : 0;
+    const int batterySize = SETTINGS.statusBarBattery ? batteryStatusWidth : 0;
     const int clockSize = clockTextWidth > 0 ? clockTextWidth + 8 : 0;
     const int titleMarginLeft = batterySize + clockSize + 30;
     const int titleMarginRight = progressTextWidth + 30;

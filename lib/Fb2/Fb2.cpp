@@ -302,7 +302,7 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 30;  // one spine per source section; streamed layout indexes
+constexpr uint8_t PACKAGE_VERSION = 33;  // compact FB2 heading scale; rebuild generated CSS/package cache
 // A spine is a real source section. Memory limits belong to the streaming
 // renderer and its SD-backed page indexes, not to visible chapter boundaries.
 // Splitting every 24 KiB (or two images) used to flush a partly filled page and
@@ -1034,7 +1034,11 @@ class StreamSink : public Fb2ContentSink {
     writeBytes(out_, "\"></span>");
   }
   bool streamsTableCells() const override { return true; }
-  void onParagraphBegin() override { writeBytes(out_, "<p>"); }
+  void onParagraphBegin() override {
+    if (epigraphDepth_ > 0) writeBytes(out_, "<p class=\"epigraph-text\">");
+    else if (citeDepth_ > 0) writeBytes(out_, "<p class=\"cite-text\">");
+    else writeBytes(out_, "<p>");
+  }
   void onParagraphEnd() override { writeBytes(out_, "</p>"); }
 
   void onSubtitle(const std::string& text) override {
@@ -1076,10 +1080,16 @@ class StreamSink : public Fb2ContentSink {
   void onVerseBegin() override { writeBytes(out_, "<p class=\"v\">"); }
   void onVerseEnd() override { writeBytes(out_, "</p>"); }
 
-  void onCiteBegin() override { writeBytes(out_, "<blockquote class=\"cite\">"); }
-  void onCiteEnd() override { writeBytes(out_, "</blockquote>"); }
-  void onEpigraphBegin() override { writeBytes(out_, "<div class=\"epigraph\">"); }
-  void onEpigraphEnd() override { writeBytes(out_, "</div>"); }
+  void onCiteBegin() override { ++citeDepth_; writeBytes(out_, "<blockquote class=\"cite\">"); }
+  void onCiteEnd() override {
+    writeBytes(out_, "</blockquote>");
+    if (citeDepth_ > 0) --citeDepth_;
+  }
+  void onEpigraphBegin() override { ++epigraphDepth_; writeBytes(out_, "<div class=\"epigraph\">"); }
+  void onEpigraphEnd() override {
+    writeBytes(out_, "</div>");
+    if (epigraphDepth_ > 0) --epigraphDepth_;
+  }
   void onTextAuthor(const std::string& text) override {
     onTextAuthorBegin(); writeXmlEscaped(out_, text); onTextAuthorEnd();
   }
@@ -1101,6 +1111,7 @@ class StreamSink : public Fb2ContentSink {
     if (has(Fb2InlineStyle::Underline)) writeBytes(out_, "<span class=\"underline\">");
     if (has(Fb2InlineStyle::Strikethrough)) writeBytes(out_, "<span class=\"strike\">");
     if (has(Fb2InlineStyle::SmallCaps)) writeBytes(out_, "<span class=\"smallcaps\">");
+    if (has(Fb2InlineStyle::Code)) writeBytes(out_, "<span class=\"code\">");
     if (has(Fb2InlineStyle::Superscript)) writeBytes(out_, "<sup>");
     if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "<sub>");
 
@@ -1119,6 +1130,7 @@ class StreamSink : public Fb2ContentSink {
 
     if (has(Fb2InlineStyle::Subscript)) writeBytes(out_, "</sub>");
     if (has(Fb2InlineStyle::Superscript)) writeBytes(out_, "</sup>");
+    if (has(Fb2InlineStyle::Code)) writeBytes(out_, "</span>");
     if (has(Fb2InlineStyle::SmallCaps)) writeBytes(out_, "</span>");
     if (has(Fb2InlineStyle::Strikethrough)) writeBytes(out_, "</span>");
     if (has(Fb2InlineStyle::Underline)) writeBytes(out_, "</span>");
@@ -1177,6 +1189,8 @@ class StreamSink : public Fb2ContentSink {
   std::string imageIndexPath_;
   LinkResolver resolveLink_;
   std::vector<uint16_t> stanzaIndexStack_;
+  uint8_t epigraphDepth_ = 0;
+  uint8_t citeDepth_ = 0;
   bool linkWasEmitted_ = false;  // whether onLinkBegin actually wrote an <a> for the currently-open link
 };
 
@@ -1798,7 +1812,12 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
     // read-ahead/Huffman state. A successful 32 KiB staging allocation can
     // otherwise fragment the C3 heap enough for the inflater window to fail.
     // Use the large staging buffer only with generous contiguous headroom.
-    size_t flushBufSize = 8 * 1024;
+    // Keep the default deliberately small. The ZIP layer also needs a mandatory
+    // contiguous 32 KiB DEFLATE window; on a fragmented C3 heap even an 8 KiB
+    // staging allocation can leave plenty of total free memory but no block
+    // large enough for that window. Four KiB still batches four inflater output
+    // chunks and is used only during the one-time extraction to SD.
+    size_t flushBufSize = 4 * 1024;
     if (!fusedScanStarted) {
       const uint32_t freeHeap = ESP.getFreeHeap();
       const uint32_t maxAlloc = ESP.getMaxAllocHeap();
@@ -1806,6 +1825,8 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
         flushBufSize = 32 * 1024;
       } else if (freeHeap >= 88 * 1024 && maxAlloc >= 56 * 1024) {
         flushBufSize = 16 * 1024;
+      } else if (freeHeap >= 72 * 1024 && maxAlloc >= 48 * 1024) {
+        flushBufSize = 8 * 1024;
       }
     }
     auto flushBuf = std::unique_ptr<uint8_t[]>(new (std::nothrow) uint8_t[flushBufSize]);
@@ -1815,6 +1836,10 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
     }
     if (!flushBuf && flushBufSize > 8 * 1024) {
       flushBufSize = 8 * 1024;
+      flushBuf.reset(new (std::nothrow) uint8_t[flushBufSize]);
+    }
+    if (!flushBuf && flushBufSize > 4 * 1024) {
+      flushBufSize = 4 * 1024;
       flushBuf.reset(new (std::nothrow) uint8_t[flushBufSize]);
     }
     if (!flushBuf) {
@@ -3432,25 +3457,31 @@ bool Fb2::writeStyleFile() const {
       packagePath + "/OEBPS/style.css",
       "body { text-align: justify; }\n"
       "h1, h2, h3, h4, h5, h6 { text-align: center; font-weight: bold; margin: 1em 0 0.7em 0; }\n"
-      ".subtitle { text-align: center; }\n"
+      "h1 { font-size: 1.25em; }\n"
+      "h2 { font-size: 1.15em; }\n"
+      "h3 { font-size: 1.08em; }\n"
+      "h4, h5, h6 { font-size: 1em; }\n"
+      ".subtitle { text-align: center; font-size: 1.1em; font-weight: bold; margin: 0.7em 0 0.45em 0; }\n"
       "p { margin: 0.25em 0; }\n"
       ".epigraph, .cite { margin: 0.7em 1.5em; text-indent: 0; }\n"
+      ".epigraph-text, .cite-text { margin-left: 1.5em; margin-right: 1.5em; text-indent: 0; }\n"
+      ".epigraph-text { font-style: italic; }\n"
       ".poem { margin: 0.7em 1em; }\n"
       ".epigraph > .poem { margin-bottom: 0; }\n"
       ".stanza { margin: 0; padding: 0; }\n"
       ".stanza-break { margin-top: 0.5em; }\n"
       ".v { text-indent: 0; text-align: left; margin: 0; }\n"
-      ".text-author { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }\n"
+      ".text-author { text-align: right; text-indent: 0; font-style: italic; margin: 0.5em 0 0 0; }\n"
       ".epigraph > .text-author { margin-top: 0.5em; }\n"
       ".fb2-book-author { text-align: center; margin: 0.6em 0 0 0; }\n"
       ".fb2-book-title { text-align: center; margin: 0.6em 0 0.6em 0; }\n"
       ".fb2-book-date { text-align: right; text-indent: 0; margin: 0.5em 0 0 0; }\n"
       ".empty-line { margin: 0; text-indent: 0; }\n"
-      ".annotation { }\n"
+      ".annotation { font-style: italic; }\n"
       ".strike { text-decoration: line-through; }\n"
       ".underline { text-decoration: underline; }\n"
       ".smallcaps { font-variant: small-caps; }\n"
-      ".code { font-family: monospace; }\n"
+      ".code { font-size: 0.9em; }\n"
       "table { border-collapse: collapse; }\n"
       "td, th { border: 1px solid; padding: 0.2em 0.5em; }\n"
       "img { display: block; margin: 0.5em auto; max-width: 100%; }\n");

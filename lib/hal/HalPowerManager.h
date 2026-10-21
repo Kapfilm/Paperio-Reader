@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cassert>
 
+#include "Bq27220Capacity.h"
 #include "HalGPIO.h"
 
 class HalPowerManager;
@@ -24,6 +25,27 @@ class HalPowerManager {
   mutable int _batteryCachedPercent = 0;         // Last read battery percentage — X3: 0-100, X4: 0-1000 (scaled)
   mutable bool _batterySeeded = false;           // True once the smoothing filter has a first real sample (X4)
   mutable unsigned long _batteryLastPollMs = 0;  // Timestamp of last battery read in milliseconds
+
+  // X4 has only an ADC voltage estimate. USB raises the terminal voltage long
+  // before the cell is full, so retain a stable estimate and permit it to move
+  // only at a physically plausible charge/discharge rate. The integer value is
+  // also persisted occasionally so sleep/reboot does not reset the filter.
+  mutable bool _x4UsbStateKnown = false;
+  mutable bool _x4LastUsbConnected = false;
+  mutable uint32_t _x4LastFilterMs = 0;
+  mutable uint32_t _x4RateBudgetMs = 0;
+  mutable uint32_t _x4LastPersistMs = 0;
+  mutable uint32_t _x4UnpluggedAtMs = 0;
+  mutable int _x4LastPersistedPercent = -1;
+  // A charge that reached 100% while USB was present is a calibrated full
+  // cycle. Keep that knowledge after unplugging: the X4 ADC immediately loses
+  // its charge-raised surface voltage and otherwise mistakes relaxation for an
+  // 11% discharge. This flag is also seeded from a persisted 100% so a sleep
+  // wake does not discard the completed cycle.
+  mutable bool _x4FullCycle = false;
+  mutable uint32_t _x4FullUnpluggedAtMs = 0;
+
+  Bq27220Capacity gaugeCapacity;
 
   enum LockMode { None, NormalSpeed };
   std::atomic<LockMode> currentLockMode{None};
@@ -43,8 +65,19 @@ class HalPowerManager {
   static constexpr int LOW_POWER_FREQ = 10;                    // MHz
   static constexpr unsigned long IDLE_POWER_SAVING_MS = 3000;  // ms
   static constexpr unsigned long BATTERY_POLL_MS = 1500;       // ms
+  static constexpr uint16_t X3_BATTERY_MAH = 650;
 
   void begin();
+
+  // Called from loop() so ADC/I2C work and persistence happen outside the
+  // render task. getBatteryPercentage() remains a cache-first fallback for
+  // very early boot.
+  void pollBatteryPercentage() const;
+
+  // X3 BQ27220 capacity correction, executed incrementally from loop().
+  void loadGaugeCapacity();
+  bool isGaugeCapacityLoadPending() const { return gaugeCapacity.result() == Bq27220Capacity::Result::Pending; }
+  void abandonGaugeCapacityLoad();
 
   // Control CPU frequency for power saving
   void setPowerSaving(bool enabled);

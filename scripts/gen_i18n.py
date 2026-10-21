@@ -36,6 +36,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 
+ENABLED_LANGUAGES_FILENAME = "enabled_languages.txt"
+
+
 # ---------------------------------------------------------------------------
 # YAML file reading (simple key: "value" format, no PyYAML dependency)
 # ---------------------------------------------------------------------------
@@ -135,6 +138,31 @@ def load_translations(
     parsed: Dict[str, Dict[str, str]] = {}
     for yf in yaml_files:
         parsed[yf.name] = parse_yaml_file(str(yf))
+
+    # Products can keep the complete translation source catalog while only
+    # linking a selected language set into the firmware. One language code per
+    # line; blank lines and comments are ignored.
+    enabled_languages_file = yaml_dir / ENABLED_LANGUAGES_FILENAME
+    if enabled_languages_file.is_file():
+        enabled_codes = {
+            line.split("#", 1)[0].strip().upper()
+            for line in enabled_languages_file.read_text(encoding="utf-8").splitlines()
+            if line.split("#", 1)[0].strip()
+        }
+        available_codes = {
+            data.get("_language_code", "").upper() for data in parsed.values()
+        }
+        unknown_codes = sorted(enabled_codes - available_codes)
+        if unknown_codes:
+            raise ValueError(
+                f"{enabled_languages_file}: unknown language code(s): "
+                + ", ".join(unknown_codes)
+            )
+        parsed = {
+            name: data
+            for name, data in parsed.items()
+            if data.get("_language_code", "").upper() in enabled_codes
+        }
 
     # Identify the English file (must exist)
     english_file = None
@@ -605,15 +633,21 @@ def generate_keys_header(
 
     # V1 language.bin migration table -- frozen enum order from commit 2f969a9.
     # Maps the old uint8_t index stored on disk to the current Language enum.
-    # If a Language enum value listed here is ever removed, this will fail to
-    # compile, signalling that the migration table needs updating.
+    # Languages no longer included in this firmware migrate to English.
     v1_codes = [
         "EN", "ES", "FR", "DE", "CS", "PT", "RU", "SV", "RO", "CA", "UK",
         "BE", "IT", "PL", "FI", "DA", "NL", "TR", "KK", "HU", "LT", "SI",
     ]
     lines.append("// V1 language.bin migration table (frozen enum order from 2f969a9)")
     lines.append("constexpr Language V1_LANGUAGES[] = {")
-    lines.append("    " + ", ".join(f"Language::{c}" for c in v1_codes) + ",")
+    lines.append(
+        "    "
+        + ", ".join(
+            f"Language::{c}" if c in languages else "Language::EN"
+            for c in v1_codes
+        )
+        + ","
+    )
     lines.append("};")
     lines.append(
         f"constexpr uint8_t V1_LANGUAGE_COUNT = {len(v1_codes)};"
@@ -906,7 +940,10 @@ def main(
 
     out = Path(output_dir)
     targets = [out / "I18nKeys.h", out / "I18nStrings.h", out / "I18nStrings.cpp"]
-    sources = list(Path(translations_dir).glob("*.yaml"))
+    sources = list(Path(translations_dir).glob("*.yaml")) + [Path(__file__)]
+    enabled_languages_file = Path(translations_dir) / ENABLED_LANGUAGES_FILENAME
+    if enabled_languages_file.is_file():
+        sources.append(enabled_languages_file)
     if all(t.exists() for t in targets):
         oldest_target = min(t.stat().st_mtime for t in targets)
         newest_source = max(s.stat().st_mtime for s in sources)

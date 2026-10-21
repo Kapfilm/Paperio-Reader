@@ -743,6 +743,9 @@ bool JsonSettingsIO::saveRecentBooks(const RecentBooksStore& store, const char* 
     obj["guideDotsOverride"] = book.guideDotsOverride;
     obj["inlineFootnotePreviewsOverride"] = book.inlineFootnotePreviewsOverride;
     obj["lineHeightPercentOverride"] = book.lineHeightPercentOverride;
+    if (!book.sourceFormat.empty()) {
+      obj["sourceFormat"] = book.sourceFormat;
+    }
   }
 
   String json;
@@ -801,6 +804,8 @@ bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) 
                                       lineHeightOverride <= CrossPointSettings::MAX_LINE_HEIGHT_PERCENT))
             ? static_cast<int16_t>(lineHeightOverride)
             : -1;
+    book.sourceFormat = obj["sourceFormat"] | std::string("");
+    if (book.sourceFormat != "FB2" && book.sourceFormat != "EPUB") book.sourceFormat.clear();
     store.recentBooks.push_back(book);
   }
 

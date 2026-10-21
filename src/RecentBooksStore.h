@@ -36,6 +36,11 @@ struct RecentBook {
   int8_t inlineFootnotePreviewsOverride = -1;
   // -1 = use global setting, otherwise explicit 70-200 percent line height.
   int16_t lineHeightPercentOverride = -1;
+  // Stable source format recorded when the reader opens the book. Generic
+  // .zip names do not reveal whether they contain EPUB or FB2, and probing the
+  // SD archive during every Home redraw can fail while cover work owns the
+  // card. Empty keeps backward compatibility with older recent.json files.
+  std::string sourceFormat;
 
   bool operator==(const RecentBook& other) const { return path == other.path; }
 };
@@ -66,7 +71,7 @@ class RecentBooksStore {
 
   // Add a book to the recent list (moves to front if already exists)
   void addBook(const std::string& path, const std::string& title, const std::string& author, const std::string& series,
-               const std::string& coverBmpPath);
+               const std::string& coverBmpPath, const std::string& sourceFormat = {});
 
   void updateBook(const std::string& path, const std::string& title, const std::string& author,
                   const std::string& series, const std::string& coverBmpPath);
