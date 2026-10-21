@@ -36,6 +36,9 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
+      - name: Generate translations
+        run: python3 scripts/gen_i18n.py --strip-unused
+
       - name: Build Paperio Reader
         env:
           CROSSPOINT_RELEASE_VERSION: ${{ github.ref_name }}
