@@ -5,6 +5,10 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <atomic>
+
+#include "X3ChargeStatus.h"
+
 // Display SPI pins (custom pins for XteinkX4, not hardware SPI defaults)
 #define EPD_SCLK 8   // SPI Clock
 #define EPD_MOSI 10  // SPI MOSI (Master Out Slave In)
@@ -31,7 +35,7 @@
 #define BQ27220_VOLT_REG 0x08    // Voltage() command code (mV)
 #define BQ27220_FLAGS_REG 0x0A   // BatteryStatus() / Flags() command code (bit0=DSG, bit9=FC)
 #define BQ27220_FLAG_DSG 0x0001  // DSG bit: 1 = discharging, 0 = charging OR merely at rest
-#define BQ27220_FLAG_FC 0x0200   // FC bit: 1 = fully charged (only latches while on the charger)
+#define BQ27220_FLAG_FC 0x0200   // Full-charge flag; can remain set after USB is removed
 // Minimum Current() reading (mA, positive = into the battery) that counts as
 // "on the charger". A small guard band above 0 keeps gauge noise around rest
 // from being read as charging.
@@ -55,9 +59,8 @@ class HalGPIO {
 
   bool lastUsbConnected = false;
   bool usbStateChanged = false;
-  mutable bool x3ChargeKnown_ = false;
-  mutable bool x3Charging_ = false;
-  mutable unsigned long x3ChargeLastPollMs_ = 0;
+  X3ChargeStatus x3ChargeStatus_;
+  std::atomic<uint8_t> x3PowerSnapshot_{0};
 
  public:
   enum class DeviceType : uint8_t { X4, X3 };
@@ -218,9 +221,24 @@ class HalGPIO {
   // mirroring the press type(s) configured to put the device to sleep. requiredDurationMs
   // is only used by the longHold gesture.
   // Call as early as possible so cold-boot initialization cannot hide a short press.
-  WakeCheck verifyPowerButtonWakeup(WakeGestures gestures, uint16_t requiredDurationMs);
+  WakeCheck verifyPowerButtonWakeup(WakeGestures gestures, uint16_t requiredDurationMs, bool trustedQuickWake = false);
 
   // Check if USB is connected
+  struct PowerStatus {
+    bool externalPowerKnown = false;
+    bool externalPowerPresent = false;
+    bool chargingKnown = false;
+    bool charging = false;
+  };
+  PowerStatus getPowerStatus() const;
+  // Loop-owned I2C poll; prime once after Wire.begin() before wake decisions.
+  // Getters only read the snapshot and are safe to call from rendering.
+  void pollPowerStatus();
+  bool isExternalPowerKnown() const { return deviceIsX4(); }
+  bool isBatteryCharging() const { return getPowerStatus().charging; }
+  // Legacy UI/wake heuristic: real VBUS on X4, positive charging current on
+  // X3. For decisions needing actual cable presence inspect PowerStatus;
+  // externalPowerKnown is false on X3 even when charging has finished.
   bool isUsbConnected() const;
 
   // Returns true once per edge (plug or unplug) since the last update()

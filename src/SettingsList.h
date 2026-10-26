@@ -155,11 +155,6 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                        "uiTheme", StrId::STR_CAT_DISPLAY)
                          .withSelectorActivity());
 
-  settings.push_back(SettingInfo::Enum(StrId::STR_UI_FONT_STYLE, &CrossPointSettings::uiFontStyle,
-                                       {StrId::STR_DEFAULT_VALUE, StrId::STR_UI_FONT_DARK, StrId::STR_UI_FONT_GOLOS},
-                                       "uiFontStyle", StrId::STR_CAT_DISPLAY)
-                         .withSelectorActivity());
-
   // --- Reader ---
   // General reader settings
   settings.push_back(

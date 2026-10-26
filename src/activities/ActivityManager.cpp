@@ -13,7 +13,6 @@
 #include "CrossPointState.h"
 #include "OpdsServerStore.h"
 #include "SdCardFontGlobals.h"
-#include "UiFonts.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
@@ -111,11 +110,6 @@ void ActivityManager::renderTaskLoop() {
       // window where render() drops the mutex (renderContents' pre-waveform unlock), which is
       // exactly the window a plain RenderLock cannot see — see RenderLock(ExclusiveActivityAccess).
       renderPassActive.store(true, std::memory_order_release);
-      const uint8_t uiFontStyle = SETTINGS.uiFontStyle;
-      if (uiFontStyle != uiFontStyleApplied) {
-        applyUiFontStyle(renderer, uiFontStyle);
-        uiFontStyleApplied = uiFontStyle;
-      }
       const bool healthScreen = currentActivity->getName() != "Boot" && currentActivity->getName() != "Sleep" &&
                                 currentActivity->getName() != "SdFirmwareUpdate";
       currentActivity->render(std::move(lock));

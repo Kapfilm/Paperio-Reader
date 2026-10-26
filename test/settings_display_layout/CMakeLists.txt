@@ -1,0 +1,4 @@
+add_executable(SettingsDisplayLayoutTest SettingsDisplayLayoutTest.cpp)
+target_include_directories(SettingsDisplayLayoutTest PRIVATE ${REPO_ROOT}/src ${REPO_ROOT}/lib/EpdFont)
+target_link_libraries(SettingsDisplayLayoutTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(SettingsDisplayLayoutTest)

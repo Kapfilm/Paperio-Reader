@@ -89,7 +89,7 @@ class MenuListActivity : public Activity {
   virtual void toggleCurrentItem();
 
   // Draw the list into the given rect using GUI.drawList().
-  void drawMenuList(const Rect& rect);
+  void drawMenuList(const Rect& rect, int rowHeightOverride = 0);
 
   // Override to provide custom value display for specific items.
   // Default returns SettingInfo::getDisplayValue().

@@ -21,25 +21,33 @@ class Bq27220Capacity {
   explicit Bq27220Capacity(uint16_t targetMah = 0) : target(targetMah) {}
 
   void tick(Bus& bus, uint32_t nowMs);
-  void abandon(Bus& bus);
+  // Bounded sleep-time cleanup. False means CONFIG UPDATE/security state could
+  // not be verified: the caller must defer sleep rather than cut gauge power.
+  bool abandon(Bus& bus);
 
   Result result() const { return outcome; }
   uint16_t designCapacity() const { return dc; }
 
  private:
-  enum class Step : uint8_t { Check, Keys, WaitEnter, WaitExit };
+  enum class Step : uint8_t { Check, Keys, WaitEnter, Exit, WaitExit, Seal, VerifySeal };
 
   bool writeParam(Bus& bus, uint16_t address);
   void wait(Step next, uint32_t nowMs);
   void finish(Bus& bus, uint32_t nowMs, bool ok);
-  void seal(Bus& bus);
+  void seal(Bus& bus, uint32_t nowMs);
 
   uint16_t target;
   Step step = Step::Check;
   Result outcome = Result::Pending;
   uint8_t key = 0;
+  uint8_t retries = 0;
+  uint8_t restarts = 0;
   bool failed = false;
   bool inConfig = false;
+  // Set before any command that may unseal/change configuration, even if its
+  // acknowledgement is lost. Cleared only by a verified sealed, non-CFG state.
+  bool cleanupNeeded = false;
+  bool customCapacity = false;
   bool wrote = false;
   uint16_t dc = 0;
   uint32_t sentAt = 0;

@@ -95,3 +95,9 @@ add_subdirectory(firmware_image)
 add_subdirectory(reader_font_size)
 
 add_subdirectory(sd_font_size)
+
+add_subdirectory(x4_battery)
+add_subdirectory(x3_battery)
+add_subdirectory(battery_calibration_log)
+add_subdirectory(settings_display_layout)
+add_subdirectory(quick_wake)

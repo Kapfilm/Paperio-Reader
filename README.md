@@ -19,7 +19,7 @@
 
 Firmware for **XTEINK X3 and X4** e-readers.
 
-Current version: **Paperio Reader 2.2.2**.
+Current version: **Paperio Reader 2.2.3**.
 
 - EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H, and Markdown.
 - Replace an EPUB or FB2 book cover from the SD card with a JPG, JPEG, PNG, or BMP image, and restore the embedded cover at any time.
@@ -40,7 +40,7 @@ Current version: **Paperio Reader 2.2.2**.
 - Switching between Paperio and inkMOD in the second slot, with emergency recovery. Installation requirements and limitations are described below.
 
 OTA updates are available under `Settings → System → System Update → Check for updates`.
-For manual installation, use [firmware.bin version 2.2.2](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.2/firmware.bin).
+For manual installation, use [firmware.bin version 2.2.3](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.3/firmware.bin).
 
 The changelog is available on the [Releases page](https://github.com/Kapfilm/Paperio-Reader/releases).
 
@@ -529,8 +529,8 @@ Replace `yourname` with your account name. The `help` command displays help, and
 pio run -e gh_release
 ```
 
-A release is created by pushing a version-number tag, such as `2.2.2`. GitHub Actions attaches
-`firmware-Paperio-Reader-2.2.2.bin` and an OTA-compatible copy named `firmware.bin`.
+A release is created by pushing a version-number tag, such as `2.2.3`. GitHub Actions attaches
+`firmware-Paperio-Reader-2.2.3.bin` and an OTA-compatible copy named `firmware.bin`.
 
 
 </details>

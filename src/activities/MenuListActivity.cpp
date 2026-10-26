@@ -53,11 +53,11 @@ void MenuListActivity::toggleCurrentItem() {
 
 std::string MenuListActivity::getItemValueString(int index) const { return menuItems[index].getDisplayValue(); }
 
-void MenuListActivity::drawMenuList(const Rect& rect) {
+void MenuListActivity::drawMenuList(const Rect& rect, const int rowHeightOverride) {
   const int count = static_cast<int>(menuItems.size());
   GUI.drawList(
       renderer, rect, count, selectedIndex, [this](int index) { return menuItems[index].getTitle(); }, nullptr, nullptr,
-      [this](int index) { return getItemValueString(index); }, true);
+      [this](int index) { return getItemValueString(index); }, true, rowHeightOverride);
 }
 
 void MenuListActivity::prepareSubmenus() { SettingInfo::prepareSubmenus(menuItems, submenuData); }

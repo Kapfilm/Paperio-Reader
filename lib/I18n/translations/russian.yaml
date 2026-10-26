@@ -824,9 +824,6 @@ STR_PROFILE_NORMAL_DETAIL: "Средний, интервал 100%"
 STR_PROFILE_LARGE_DETAIL: "Очень крупный, интервал 130%"
 STR_PROFILE_COMPACT_DETAIL: "Мелкий, интервал 90%"
 
-STR_UI_FONT_STYLE: "Шрифт интерфейса"
-STR_UI_FONT_DARK: "Тёмный"
-STR_UI_FONT_GOLOS: "Golos Text"
 
 STR_SWITCH_FIRMWARE: "Переключить прошивку"
 STR_FIRMWARE_SLOT_INVALID: "В другом слоте нет исправной совместимой прошивки."

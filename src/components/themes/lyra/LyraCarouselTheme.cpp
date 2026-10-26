@@ -598,15 +598,17 @@ void LyraCarouselTheme::drawList(const GfxRenderer& renderer, Rect rect, int ite
                                  const std::function<std::string(int index)>& rowTitle,
                                  const std::function<std::string(int index)>& rowSubtitle,
                                  const std::function<UIIcon(int index)>& rowIcon,
-                                 const std::function<std::string(int index)>& rowValue, bool highlightValue) const {
+                                 const std::function<std::string(int index)>& rowValue, bool highlightValue,
+                                 int rowHeightOverride) const {
   constexpr int hPad = 8;
   constexpr int listIconSz = 24;
   constexpr int mainMenuIconSz = 32;
   constexpr int maxValWidth = 200;
   constexpr int cornerRadius = 6;
 
-  const int rowHeight = (rowSubtitle != nullptr) ? LyraCarouselMetrics::values.listWithSubtitleRowHeight
-                                                 : LyraCarouselMetrics::values.listRowHeight;
+  int rowHeight = (rowSubtitle != nullptr) ? LyraCarouselMetrics::values.listWithSubtitleRowHeight
+                                           : LyraCarouselMetrics::values.listRowHeight;
+  if (rowHeightOverride > 0 && rowSubtitle == nullptr) rowHeight = rowHeightOverride;
   const int pageItems = rect.height / rowHeight;
   if (pageItems <= 0 || itemCount <= 0) return;
   const int totalPages = (itemCount + pageItems - 1) / pageItems;

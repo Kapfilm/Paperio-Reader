@@ -826,9 +826,6 @@ STR_PROFILE_NORMAL_DETAIL: "Medium, 100% spacing"
 STR_PROFILE_LARGE_DETAIL: "Extra large, 130% spacing"
 STR_PROFILE_COMPACT_DETAIL: "Small, 90% spacing"
 
-STR_UI_FONT_STYLE: "Interface font"
-STR_UI_FONT_DARK: "Dark"
-STR_UI_FONT_GOLOS: "Golos Text"
 
 STR_SWITCH_FIRMWARE: "Switch firmware slot"
 STR_FIRMWARE_SLOT_INVALID: "No valid compatible firmware in the other slot."

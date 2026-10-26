@@ -1,4 +1,3 @@
-#include "util/ReaderFontSizeOptions.h"
 #include <Arduino.h>
 #include <CooperativeAbort.h>
 #include <Epub.h>
@@ -16,11 +15,15 @@
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Preferences.h>
+#include <QuickWakePolicy.h>
 #include <SPI.h>
 #include <WiFi.h>
 #include <builtinFonts/all.h>
 #include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
+#include <esp_sleep.h>
+#include <esp_system.h>
 
 #include <cstring>
 #include <vector>
@@ -37,7 +40,6 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
-#include "network/BootHealth.h"
 #include "UiFonts.h"
 #include "WeatherSettingsStore.h"
 #include "activities/Activity.h"
@@ -46,7 +48,9 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
+#include "network/BootHealth.h"
 #include "util/ButtonNavigator.h"
+#include "util/ReaderFontSizeOptions.h"
 #include "util/ScreenshotUtil.h"
 
 #ifdef ENABLE_BOOT_HEAP_DIAGNOSTICS
@@ -239,6 +243,35 @@ void disarmSerialTransferReboot() {
 // The buffer is persisted to SD only when the user actually enabled the feature.
 constexpr char SLEEP_FRAME_FILE[] = "/.crosspoint/sleep_frame.bin";
 
+// Survives X4's latch cutting MCU/RTC power, and can be read before SD init.
+// This records the actual previous sleep transition, not the selected setting.
+constexpr char QUICK_WAKE_NAMESPACE[] = "cpwake";
+constexpr char QUICK_WAKE_KEY[] = "quick";
+
+static quick_wake::MarkerMode readQuickWakeMarker() {
+  Preferences prefs;
+  if (!prefs.begin(QUICK_WAKE_NAMESPACE, true)) return quick_wake::MarkerMode::None;
+  const auto mode = quick_wake::decodeMarker(prefs.getUChar(QUICK_WAKE_KEY, 0));
+  prefs.end();
+  return mode;
+}
+
+static bool writeQuickWakeMarker(quick_wake::MarkerMode mode) {
+  Preferences prefs;
+  if (!prefs.begin(QUICK_WAKE_NAMESPACE, false)) return false;
+  const bool saved = prefs.putUChar(QUICK_WAKE_KEY, static_cast<uint8_t>(mode)) == sizeof(uint8_t);
+  prefs.end();
+  return saved;
+}
+
+static quick_wake::BootCause earlyWakeCause() {
+  if (esp_reset_reason() == ESP_RST_POWERON) return quick_wake::BootCause::PowerOn;
+  if (esp_reset_reason() == ESP_RST_DEEPSLEEP && esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO) {
+    return quick_wake::BootCause::ButtonDeepSleep;
+  }
+  return quick_wake::BootCause::Other;
+}
+
 static void saveSleepFrameBuffer() {
   // SleepActivity just displayed the moon overlay and swapped the buffers.
   renderer.syncWriteBufferFromDisplayed();
@@ -281,6 +314,12 @@ static bool loadSleepFrameBuffer() {
 // Set near the end of setup() so a wake-press held a bit too long does not bounce straight
 // back into deep sleep before the user sees the page.
 static unsigned long allowSleepAt = 0;
+static bool gaugeSleepRetryPending = false;
+static uint32_t gaugeSleepRetryAt = 0;
+
+bool gaugeSleepRetryDue() {
+  return !gaugeSleepRetryPending || static_cast<int32_t>(static_cast<uint32_t>(millis()) - gaugeSleepRetryAt) >= 0;
+}
 // Swallow the still-held wake press and its release bounce without delaying setup().
 static bool bootPowerReleasePending = false;
 static unsigned long bootPowerHighSince = 0;
@@ -408,6 +447,7 @@ static void serviceBootPowerRelease() {
 
 // Enter deep sleep mode. fromTimeout=true marks an auto-sleep (gates "Quick Resume on Timeout").
 void enterDeepSleep(bool fromTimeout = false) {
+  if (!gaugeSleepRetryDue()) return;
   LOG_DBG("MAIN", "enterDeepSleep called at millis=%lu, powerBtn isPressed=%d, rawPin=%d", millis(),
           gpio.isPressed(HalGPIO::BTN_POWER), digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
   // The web server activity releases BOTH framebuffers for WiFi heap
@@ -417,6 +457,24 @@ void enterDeepSleep(bool fromTimeout = false) {
   if (renderer.getFrameBuffer() == nullptr) {
     silentRestartToSleep(fromTimeout);
     return;  // not reached — silentRestartToSleep() restarts the chip
+  }
+  // Keep the gauge transaction intact if its exit cannot yet be confirmed.
+  // Check before tearing down the UI, clock, WiFi or input sampler.
+  if (gpio.deviceIsX3()) {
+    bool gaugeReady = false;
+    {
+      RenderLock lock;
+      gaugeReady = powerManager.abandonGaugeCapacityLoad();
+    }
+    if (!gaugeReady) {
+      // Keep the normal loop/idle governor running instead of repeatedly
+      // spending five seconds on a failed cleanup on every auto-sleep pass.
+      gaugeSleepRetryPending = true;
+      gaugeSleepRetryAt = static_cast<uint32_t>(millis()) + 30000;
+      LOG_ERR("PWR", "Sleep deferred: gauge configuration exit not confirmed; retry in 30s");
+      return;
+    }
+    gaugeSleepRetryPending = false;
   }
   // Stop the background sampler before tearing down the display/power rails so no
   // ADC read races with that teardown. From here sleep prep reads the power pin
@@ -438,10 +496,9 @@ void enterDeepSleep(bool fromTimeout = false) {
     APP_STATE.readerActivityLoadCount = 0;
   }
 
-  const bool isQuickResumeSleep =
-      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
-      (fromTimeout &&
-       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+  const bool isQuickResumeSleep = quick_wake::isQuickSleep(
+      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME, fromTimeout,
+      SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
   APP_STATE.showBootScreen = !isQuickResumeSleep;
 
   APP_STATE.saveToFile();
@@ -464,17 +521,15 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   halTiltSensor.deepSleep();
 
-  // Never cut X3 power while the gauge is inside CONFIG UPDATE. Exit the
-  // transaction and reseal it even if sleep is requested midway through the
-  // incremental capacity correction.
-  if (gpio.deviceIsX3() && powerManager.isGaugeCapacityLoadPending()) {
-    powerManager.abandonGaugeCapacityLoad();
-  }
-
   display.deepSleep();
   LOG_DBG("MAIN", "Entering deep sleep (powerBtn isPressed=%d, rawPin=%d)", gpio.isPressed(HalGPIO::BTN_POWER),
           digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
 
+  // Arm only after sleep preparation has committed. Ordinary sleep replaces
+  // any older quick marker; a failed boot cannot turn all future wakes short.
+  if (!writeQuickWakeMarker(quick_wake::markerForSleep(isQuickResumeSleep, gpio.deviceIsX4()))) {
+    LOG_ERR("SLP", "Could not save quick-wake state; next wake may require a long press");
+  }
   powerManager.startDeepSleep(gpio, keepLpAlive);
 }
 
@@ -538,15 +593,18 @@ void ensureSdFontLoadedForPath(const char* path) {
   // RecentBooksStore already has the persisted overrides for this path.
   const RecentBook book = RECENT_BOOKS.getBookByPath(path);
   const uint8_t effectiveSize =
-      book.fontPointSizeOverride ? reader_font_size::nearestNamedSize(book.fontPointSizeOverride)
-      : ((book.fontSizeOverride >= 0) ? static_cast<uint8_t>(book.fontSizeOverride) : SETTINGS.fontSize);
+      book.fontPointSizeOverride
+          ? reader_font_size::nearestNamedSize(book.fontPointSizeOverride)
+          : ((book.fontSizeOverride >= 0) ? static_cast<uint8_t>(book.fontSizeOverride) : SETTINGS.fontSize);
 
-  const uint8_t effectivePointSize = book.fontPointSizeOverride ? book.fontPointSizeOverride
-      : (book.fontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize);
+  const uint8_t effectivePointSize = book.fontPointSizeOverride
+                                         ? book.fontPointSizeOverride
+                                         : (book.fontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize);
 
   if (!book.sdFontFamilyOverride.empty() && book.fontFamilyOverride < 0) {
     // Per-book SD font override: load that family at the effective size.
-    sdFontSystem.ensureLoaded(renderer, book.sdFontFamilyOverride.c_str(), effectiveSize, onColdFontLoad, effectivePointSize);
+    sdFontSystem.ensureLoaded(renderer, book.sdFontFamilyOverride.c_str(), effectiveSize, onColdFontLoad,
+                              effectivePointSize);
   } else if (book.fontFamilyOverride >= 0) {
     // Per-book built-in font override: no SD font needed; unload if one was active.
     sdFontSystem.ensureLoaded(renderer, "", effectiveSize, onColdFontLoad, effectivePointSize);
@@ -606,8 +664,14 @@ void setup() {
   // whichever press type(s) the user configured to put the device to sleep.
   SETTINGS.loadStartupFromNvs();
   markBootPhase(BootPhase::NvsSettings);
-  bootWakeCheck =
-      gpio.verifyPowerButtonWakeup(wakeGestureFromSettings(), CrossPointSettings::getPowerWakeHoldDuration());
+  const auto quickWakeMode = readQuickWakeMarker();
+  const bool quickWakeArmed = quick_wake::armed(quickWakeMode);
+  const auto wakeCause = earlyWakeCause();
+  const bool trustedReleasedQuickWake = quick_wake::allowReleasedWake(quickWakeMode, wakeCause);
+  HalGPIO::WakeGestures bootWakeGestures = wakeGestureFromSettings();
+  if (quick_wake::allowShortWake(quickWakeMode, wakeCause)) bootWakeGestures.shortAllowed = true;
+  bootWakeCheck = gpio.verifyPowerButtonWakeup(bootWakeGestures, CrossPointSettings::getPowerWakeHoldDuration(),
+                                               trustedReleasedQuickWake);
   markBootPhase(BootPhase::WakeGate);
 
   // print_errors=true: the corrupt block's address and overwritten values go to the
@@ -618,7 +682,6 @@ void setup() {
 #else
   heap_caps_check_integrity_all(/*print_errors=*/true);
 #endif
-
 
   // Heap integrity check — must run before any allocation.
   //
@@ -764,6 +827,12 @@ void setup() {
     return;
   }
 
+  // The charger-only and rejected-wake paths above deliberately retain the
+  // one-shot marker. A real accepted wake or an unrelated reboot consumes it.
+  if (quickWakeArmed && !writeQuickWakeMarker(quick_wake::MarkerMode::None)) {
+    LOG_ERR("SLP", "Could not consume quick-wake state");
+  }
+
   // Recovery firmware mode: hold left side button (BTN_UP) together with the power button at
   // boot to skip directly to the SD-card firmware update screen. Useful on devices where USB
   // flashing has been locked down (e.g. recent X3 firmware).
@@ -802,14 +871,14 @@ void setup() {
     return;
   }
   markBootPhase(BootPhase::SdMount);
+  powerManager.beginBatteryCalibration();
   logStartupMemory("after_storage_begin");
 
   SETTINGS.loadFromFile();
   // Dark mode is currently enabled only on X4. Apply
   // the global scope before display initialization so the very first frame has
   // the correct polarity; reader-only mode is selected per activity later.
-  display.setDarkMode(!gpio.deviceIsX3() &&
-                      SETTINGS.darkMode == CrossPointSettings::DARK_MODE_EVERYWHERE);
+  display.setDarkMode(!gpio.deviceIsX3() && SETTINGS.darkMode == CrossPointSettings::DARK_MODE_EVERYWHERE);
   // APP_STATE is needed before display init so Quick Resume can skip the on-wake resync
   // and so the seamless-wake path can paint the LoadingIcon over the restored framebuffer.
   APP_STATE.loadFromFile();
@@ -1138,7 +1207,7 @@ void loop() {
   }
 
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
-  if (millis() - lastActivityTime >= sleepTimeoutMs) {
+  if (millis() - lastActivityTime >= sleepTimeoutMs && gaugeSleepRetryDue()) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
     enterDeepSleep(/*fromTimeout=*/true);
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start

@@ -1,0 +1,7 @@
+add_executable(X4BatteryEstimatorTest X4BatteryEstimatorTest.cpp)
+target_link_libraries(X4BatteryEstimatorTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(X4BatteryEstimatorTest)
+
+add_executable(X4BatteryDisplayScaleTest X4BatteryDisplayScaleTest.cpp)
+target_link_libraries(X4BatteryDisplayScaleTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(X4BatteryDisplayScaleTest)

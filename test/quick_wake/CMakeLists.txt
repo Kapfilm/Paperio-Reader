@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.16)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  project(quick_wake_tests LANGUAGES CXX)
+  enable_testing()
+endif()
+
+add_executable(quick_wake_tests quick_wake_tests.cpp)
+target_compile_features(quick_wake_tests PRIVATE cxx_std_17)
+target_compile_options(quick_wake_tests PRIVATE -Wall -Wextra -Werror -pedantic)
+target_include_directories(quick_wake_tests PRIVATE ../../lib/hal)
+add_test(NAME quick_wake_tests COMMAND quick_wake_tests)

@@ -7,6 +7,8 @@
 #include <XteinkDetect.h>
 #include <esp_sleep.h>
 
+#include "QuickWakePolicy.h"
+
 // Global HalGPIO instance
 HalGPIO gpio;
 
@@ -267,6 +269,7 @@ void HalGPIO::update() {
     accumReleased_ = 0;
     portEXIT_CRITICAL(&inputMux_);
   }
+  pollPowerStatus();
   const bool connected = isUsbConnected();
   usbStateChanged = (connected != lastUsbConnected);
   lastUsbConnected = connected;
@@ -369,7 +372,8 @@ const char* HalGPIO::wakeVerdictName(WakeVerdict verdict) {
   return "?";
 }
 
-HalGPIO::WakeCheck HalGPIO::verifyPowerButtonWakeup(WakeGestures gestures, uint16_t requiredDurationMs) {
+HalGPIO::WakeCheck HalGPIO::verifyPowerButtonWakeup(WakeGestures gestures, uint16_t requiredDurationMs,
+                                                    bool trustedQuickWake) {
   constexpr unsigned long BOUNCE_TOLERANCE_MS = 100;
   // A second deliberate press can arrive well before the longer release
   // confirmation window. Keep the decisions separate so a quick double-click
@@ -388,6 +392,9 @@ HalGPIO::WakeCheck HalGPIO::verifyPowerButtonWakeup(WakeGestures gestures, uint1
 
   pinMode(InputManager::POWER_BUTTON_PIN, INPUT_PULLUP);
   if (digitalRead(InputManager::POWER_BUTTON_PIN) != LOW) {
+    if (quick_wake::acceptReleasedTap(gestures.shortAllowed, trustedQuickWake)) {
+      return {WakeVerdict::ShortPress, stamp(millis()), 0};
+    }
     return {WakeVerdict::NotPressed, stamp(millis()), 0};
   }
 
@@ -438,38 +445,41 @@ HalGPIO::WakeCheck HalGPIO::verifyPowerButtonWakeup(WakeGestures gestures, uint1
   }
 }
 
-bool HalGPIO::isUsbConnected() const {
+void HalGPIO::pollPowerStatus() {
   if (deviceIsX3()) {
-    // X3: GPIO20 is repurposed as I2C SDA, so the X4 pin-level USB detect is
-    // unusable here — the I2C pull-ups would always report HIGH. Probe the
-    // BQ27220 fuel gauge instead.
-    //
-    // Current() is the primary signal: it is signed, and current flowing INTO
-    // the battery (positive, above a noise floor) only happens on a charger.
-    // DSG and FC must NOT be trusted as "charger present": DSG also clears at
-    // rest and FC remains latched after a full battery is unplugged. The latter
-    // was why the bolt could stay visible until reboot. Use only signed charge
-    // current, cached briefly to avoid an I2C transaction on every loop pass.
-    const unsigned long now = millis();
-    constexpr unsigned long X3_CHARGE_POLL_MS = 1000;
-    if (x3ChargeKnown_ && (now - x3ChargeLastPollMs_) < X3_CHARGE_POLL_MS) return x3Charging_;
-
-    for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+    // GPIO20 is SDA on X3; there is no independent VBUS signal in this board
+    // interface. FC and DSG are gauge states, not cable-presence signals (TI
+    // SLUUBD4A sections 2.7 and 4.9.13). Report external power as unknown.
+    const uint32_t now = millis();
+    if (x3ChargeStatus_.pollDue(now)) {
+      bool success = false;
       int16_t currentMa = 0;
-      if (X3GPIO::readBQ27220CurrentMA(&currentMa)) {
-        x3Charging_ = currentMa > USB_CHARGE_CURRENT_MIN_MA;
-        x3ChargeKnown_ = true;
-        x3ChargeLastPollMs_ = now;
-        return x3Charging_;
+      for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+        if (X3GPIO::readBQ27220CurrentMA(&currentMa)) {
+          success = true;
+          break;
+        }
+        if (attempt == 0) delay(2);
       }
-      delay(2);
+      x3ChargeStatus_.record(success, currentMa, now);
     }
-    // A transient bus error must not synthesize an edge. Keep the last known
-    // state and retry on the next pass (last-poll timestamp is unchanged).
-    return x3ChargeKnown_ ? x3Charging_ : false;
+    const uint8_t snapshot = (x3ChargeStatus_.chargingKnown(now) ? 1 : 0) | (x3ChargeStatus_.charging(now) ? 2 : 0);
+    x3PowerSnapshot_.store(snapshot, std::memory_order_relaxed);
   }
-  // X4: U0RXD/GPIO20 reads HIGH when USB is connected
-  return digitalRead(UART0_RXD) == HIGH;
+}
+
+HalGPIO::PowerStatus HalGPIO::getPowerStatus() const {
+  if (deviceIsX3()) {
+    const uint8_t snapshot = x3PowerSnapshot_.load(std::memory_order_relaxed);
+    return {false, false, (snapshot & 1) != 0, (snapshot & 2) != 0};
+  }
+  // X4: U0RXD/GPIO20 detects VBUS, not the charger's active/full phase.
+  return {true, digitalRead(UART0_RXD) == HIGH, false, false};
+}
+
+bool HalGPIO::isUsbConnected() const {
+  const PowerStatus status = getPowerStatus();
+  return status.externalPowerKnown ? status.externalPowerPresent : status.charging;
 }
 
 HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {

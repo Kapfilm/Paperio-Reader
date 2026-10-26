@@ -299,9 +299,11 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
                             const std::function<std::string(int index)>& rowTitle,
                             const std::function<std::string(int index)>& rowSubtitle,
                             const std::function<UIIcon(int index)>& rowIcon,
-                            const std::function<std::string(int index)>& rowValue, bool highlightValue) const {
-  const int rowHeight =
+                            const std::function<std::string(int index)>& rowValue, bool highlightValue,
+                            int rowHeightOverride) const {
+  int rowHeight =
       rowSubtitle != nullptr ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  if (rowHeightOverride > 0 && rowSubtitle == nullptr) rowHeight = rowHeightOverride;
   const int pageItems = rect.height / rowHeight;
   if (pageItems <= 0 || itemCount <= 0) return;
 

@@ -148,8 +148,8 @@ class BaseTheme {
                         const std::function<std::string(int index)>& rowTitle,
                         const std::function<std::string(int index)>& rowSubtitle = nullptr,
                         const std::function<UIIcon(int index)>& rowIcon = nullptr,
-                        const std::function<std::string(int index)>& rowValue = nullptr,
-                        bool highlightValue = false) const;
+                        const std::function<std::string(int index)>& rowValue = nullptr, bool highlightValue = false,
+                        int rowHeightOverride = 0) const;
   virtual void drawListSeparator(const GfxRenderer& renderer, Rect rowRect, int textX, int textWidth,
                                  const std::string& title) const;
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,

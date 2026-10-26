@@ -17,6 +17,7 @@
 #include "activities/SliderPickerActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/SettingsDisplayLayout.h"
 
 namespace {
 std::string activeDictionaryName(void*) {
@@ -178,6 +179,11 @@ void SettingsActivity::onEnter() {
              SettingInfo::Action(StrId::STR_DICTIONARY, SettingAction::DictionarySelection)
                  .withDisplayGetter(activeDictionaryName));
 
+  // Keep reading history at the bottom of the Reading options group.
+  addToMoved(readerSettings, lastReaderSub,
+             std::move(SettingInfo::Action(StrId::STR_READING_STATS, SettingAction::ReadingStats)
+                           .withSubcategory(StrId::STR_MENU_READER_TWEAKS)));
+
   addToMoved(systemSettings, lastSystemSub, SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   addToMoved(systemSettings, lastSystemSub,
              std::move(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network)
@@ -224,9 +230,6 @@ void SettingsActivity::onEnter() {
                            .withSubmenu(StrId::STR_SYSTEM_UPDATE)));
   addToMoved(systemSettings, lastSystemSub,
              std::move(SettingInfo::Action(StrId::STR_SYSTEM_INFO, SettingAction::SystemInfo)
-                           .withSubcategory(StrId::STR_MENU_SYS_SYSTEM)));
-  addToMoved(systemSettings, lastSystemSub,
-             std::move(SettingInfo::Action(StrId::STR_READING_STATS, SettingAction::ReadingStats)
                            .withSubcategory(StrId::STR_MENU_SYS_SYSTEM)));
 
   SettingInfo::prepareSubmenus(displaySettings, submenuData);
@@ -427,7 +430,8 @@ void SettingsActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const Rect contentRect = UITheme::getContentRect(renderer, true, false);
 
-  GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.headerHeight},
+  GUI.drawHeader(renderer,
+                 Rect{contentRect.x, contentRect.y + metrics.topPadding, contentRect.width, metrics.headerHeight},
                  tr(STR_SETTINGS_TITLE), CROSSPOINT_VERSION);
 
   std::vector<TabInfo> tabs;
@@ -435,19 +439,23 @@ void SettingsActivity::render(RenderLock&&) {
   for (int i = 0; i < categoryCount; i++) {
     tabs.push_back({I18N.get(categoryNames[i]), selectedCategoryIndex == i});
   }
-  GUI.drawTabBar(
-      renderer, Rect{contentRect.x, metrics.topPadding + metrics.headerHeight, contentRect.width, metrics.tabBarHeight},
-      tabs, selectedSettingIndex == 0);
+  GUI.drawTabBar(renderer,
+                 Rect{contentRect.x, contentRect.y + metrics.topPadding + metrics.headerHeight, contentRect.width,
+                      metrics.tabBarHeight},
+                 tabs, selectedSettingIndex == 0);
 
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
+  const int gap = SettingsDisplayLayout::sectionGap(metrics.verticalSpacing);
+  const int listHeight = SettingsDisplayLayout::listHeight(contentRect.height, metrics.topPadding, metrics.headerHeight,
+                                                           metrics.tabBarHeight, gap);
+  const int contentTop = contentRect.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + gap;
+  const int rowHeight =
+      SettingsDisplayLayout::rowHeight(listHeight, settingsCount, metrics.listRowHeight,
+                                       renderer.getLineHeight(UI_10_FONT_ID), BaseTheme::toggleSwitchHeight);
   const auto& settings = *currentSettings;
   GUI.drawList(
-      renderer,
-      Rect{contentRect.x, contentTop, contentRect.width,
-           contentRect.height -
-               (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing * 2)},
-      settingsCount, selectedSettingIndex - 1, [&settings](int index) { return settings[index].getTitle(); }, nullptr,
-      nullptr, [&settings](int i) { return settings[i].getDisplayValue(); }, true);
+      renderer, Rect{contentRect.x, contentTop, contentRect.width, listHeight}, settingsCount, selectedSettingIndex - 1,
+      [&settings](int index) { return settings[index].getTitle(); }, nullptr, nullptr,
+      [&settings](int i) { return settings[i].getDisplayValue(); }, true, rowHeight);
 
   // Draw help text
   const int nextCategory = (selectedCategoryIndex + 1) % categoryCount;

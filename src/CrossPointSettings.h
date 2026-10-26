@@ -279,7 +279,7 @@ class CrossPointSettings {
   // SD card font family name (empty = use built-in fontFamily)
   char sdFontFamilyName[32] = "";
   uint8_t fontSize = MEDIUM;
-  uint8_t numericFontSizes = 0;  // Display/select actual available point sizes in text settings.
+  uint8_t numericFontSizes = 0;     // Display/select actual available point sizes in text settings.
   uint8_t readerFontPointSize = 0;  // SD EPUB/FB2 size; 0 keeps the named size preset.
   // Reader font settings (TXT / MD) — defaults to EPUB settings when not explicitly set
   uint8_t txtFontFamily = NOTOSANS;
@@ -324,8 +324,6 @@ class CrossPointSettings {
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // UI Theme
   uint8_t uiTheme = MINIMAL;
-  // Interface typography: 0 = original, 1 = dark, 2 = Golos Text Medium.
-  uint8_t uiFontStyle = 0;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
   // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)

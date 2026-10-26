@@ -12,6 +12,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ReaderFontSizeOptions.h"
+#include "util/SettingsDisplayLayout.h"
 
 // Keep in sync with the default in EpubReaderActivity.h — see the comment there for rationale.
 #ifndef ENABLE_BENCHMARKS
@@ -705,8 +706,8 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
 
 std::vector<uint8_t> EpubReaderMenuActivity::availableFontSizes() const {
   if (SETTINGS.numericFontSizes && pendingFontFamilyOverride < 0) {
-    const char* familyName = pendingSdFontFamilyOverride.empty() ? SETTINGS.sdFontFamilyName
-                                                                : pendingSdFontFamilyOverride.c_str();
+    const char* familyName =
+        pendingSdFontFamilyOverride.empty() ? SETTINGS.sdFontFamilyName : pendingSdFontFamilyOverride.c_str();
     if (const auto* family = sdFontSystem.registry().findFamily(familyName)) {
       auto sizes = family->availableSizes();
       if (!sizes.empty()) return sizes;
@@ -726,8 +727,10 @@ std::string EpubReaderMenuActivity::fontSizeValueLabel() const {
     label = std::to_string(sizes[slot ? slot - 1 : 0]) + " pt";
   } else {
     static constexpr StrId names[] = {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE};
-    const uint8_t named = inherited ? SETTINGS.fontSize : pendingFontPointSizeOverride
-        ? reader_font_size::nearestNamedSize(pendingFontPointSizeOverride) : static_cast<uint8_t>(pendingFontSizeOverride);
+    const uint8_t named = inherited ? SETTINGS.fontSize
+                          : pendingFontPointSizeOverride
+                              ? reader_font_size::nearestNamedSize(pendingFontPointSizeOverride)
+                              : static_cast<uint8_t>(pendingFontSizeOverride);
     label = I18N.get(names[named < 4 ? named : 1]);
   }
   return label;
@@ -754,8 +757,8 @@ void EpubReaderMenuActivity::openFontSizeOverridePicker() {
     for (uint8_t point : fontSizePoints) fontSizePickerSetting->enumLabels.push_back(std::to_string(point) + " pt");
   }
   // Stored on the parent: EnumSelectionActivity holds a reference throughout its lifetime.
-  startActivityForResult(std::make_unique<EnumSelectionActivity>(renderer, mappedInput, *fontSizePickerSetting,
-                                                                  nullptr, 0, /*overlayPanel=*/true),
+  startActivityForResult(std::make_unique<EnumSelectionActivity>(renderer, mappedInput, *fontSizePickerSetting, nullptr,
+                                                                 0, /*overlayPanel=*/true),
                          [this](const ActivityResult&) { requestUpdate(); });
 }
 
@@ -774,7 +777,7 @@ void EpubReaderMenuActivity::openLineHeightOverridePicker() {
       .firstNumericValue = CrossPointSettings::MIN_LINE_HEIGHT_PERCENT,
   };
   startActivityForResult(std::make_unique<SliderPickerActivity>(renderer, mappedInput, std::move(cfg),
-                                                                 /*overlayPanel=*/true),
+                                                                /*overlayPanel=*/true),
                          [this](const ActivityResult& result) {
                            if (!result.isCancelled) {
                              const auto* selected = std::get_if<PercentResult>(&result.data);
@@ -805,7 +808,7 @@ void EpubReaderMenuActivity::toggleCurrentItem() {
 
   if (item.usesSelectorActivity) {
     startActivityForResult(std::make_unique<EnumSelectionActivity>(renderer, mappedInput, menuItems[selectedIndex],
-                                                                    nullptr, 0, /*overlayPanel=*/true),
+                                                                   nullptr, 0, /*overlayPanel=*/true),
                            [this](const ActivityResult&) { requestUpdate(); });
     return;
   }
@@ -973,10 +976,10 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   // quarters are cleared, so the top quarter remains readable as context.
   renderer.syncWriteBufferFromDisplayed();
   const int panelTop = renderer.getScreenHeight() / 4;
-  renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12,
-                           true, true, false, false, Color::White);
-  renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12,
-                           true, true, false, false, true);
+  renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12, true,
+                           true, false, false, Color::White);
+  renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12, true,
+                           true, false, false, true);
 
   Rect contentRect = UITheme::getContentRect(renderer, true, false);
   const int contentBottom = contentRect.y + contentRect.height;
@@ -1009,9 +1012,12 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   renderTabBar(Rect{contentRect.x, tabTop, contentRect.width, metrics.tabBarHeight});
 
   // Menu Items
-  const int startY = tabTop + metrics.tabBarHeight + metrics.verticalSpacing;
+  const int startY = tabTop + metrics.tabBarHeight + SettingsDisplayLayout::sectionGap(metrics.verticalSpacing);
   const int listHeight = contentRect.height - (startY - contentRect.y);
-  drawMenuList(Rect{contentRect.x, startY, contentRect.width, listHeight});
+  const int rowHeight =
+      SettingsDisplayLayout::rowHeight(listHeight, static_cast<int>(menuItems.size()), metrics.listRowHeight,
+                                       renderer.getLineHeight(UI_10_FONT_ID), BaseTheme::toggleSwitchHeight);
+  drawMenuList(Rect{contentRect.x, startY, contentRect.width, listHeight}, rowHeight);
 
   // Footer / Hints
   const char* confirm = tr(STR_SELECT);
