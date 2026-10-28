@@ -1,3 +1,4 @@
+#include "Fb2ParagraphIndex.h"
 #include "ChapterHtmlSlimParser.h"
 
 #include <Arduino.h>
@@ -1843,6 +1844,14 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
     self->xpathBodyDepth = self->depth;
   }
 
+  const bool isFb2 = self->epub && self->epub->isFb2Package();
+  if (isFb2 && strcmp(name, "p") == 0) {
+    // FB2's generated XHTML has a root <section>; its real source p[N]
+    // coordinate is supplied by the native parser, excluding synthetic blocks.
+    const uint16_t sourceParagraph = parseFb2SourceParagraph(getAttribute(atts, "data-fb2-p"));
+    if (sourceParagraph > 0) self->xpathParagraphIndex = sourceParagraph;
+  }
+
   // Count <p> sibling indices at body-child level. Must happen BEFORE the display:none
   // check so that hidden <p> elements are still counted, matching ChapterXPathIndexer's
   // counting (pure XML, no CSS). This ensures paragraph indices in the section cache LUT
@@ -1852,7 +1861,7 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
   // body-child boundary, otherwise partialBaseDepth can misidentify wrapped paragraphs.
   if (self->xpathBodyDepth >= 0 && self->depth == self->xpathBodyDepth + 1) {
     self->lastBodyChildByteOffset = self->saxParser_.byteOffset();
-    if (strcmp(name, "p") == 0) {
+    if (!isFb2 && strcmp(name, "p") == 0) {
       if (self->paragraphIndexWriter && self->xpathParagraphIndex == UINT16_MAX) {
         self->failIndexWrite();
         return;

@@ -231,6 +231,7 @@ class CrossPointSettings {
   // X4-only output inversion. X3 remains forced to the light theme until the
   // panel behavior can be validated on physical hardware.
   uint8_t darkMode = DARK_MODE_OFF;
+  uint8_t uiTextSize = 0;  // X3 only: 0 normal, 1 enlarged.
   // Status bar settings (statusBar, statusBarProgressBar, statusBarProgressBarThickness retained for migration only)
   uint8_t statusBar = FULL;
   uint8_t statusBarChapterPageCount = 1;
@@ -341,6 +342,7 @@ class CrossPointSettings {
   uint8_t imageDithering = IMAGE_DITHER_BAYER;
   // Tilt-based page turning (X3 only — requires QMI8658 IMU)
   uint8_t tiltPageTurn = 0;
+  uint8_t tiltDirection = 0;  // left/right, reverse, fore/aft, reverse
   // Action when the computed tilt value crosses the positive threshold.
   uint8_t tiltPositiveAction = TILT_ACT_NEXT_PAGE;
   // Action when the computed tilt value crosses the negative threshold.
@@ -419,6 +421,8 @@ class CrossPointSettings {
     BTN_CREATE_CLIPPING,
     BTN_DICTIONARY_LOOKUP,
     BTN_DICTIONARY_SELECT,
+    BTN_KOREADER_PULL,
+    BTN_KOREADER_PUSH,
     BUTTON_ACTION_COUNT
   };
 

@@ -946,3 +946,18 @@ STR_KAKURO_PLACE: "Place"
 STR_KAKURO_CANCEL: "Cancel"
 STR_KAKURO_MENU: "Menu"
 STR_KAKURO_ERRORS: "Errors"
+
+STR_UI_TEXT_SIZE: "Interface text size"
+STR_UI_TEXT_NORMAL: "Normal"
+STR_UI_TEXT_LARGE: "Larger"
+
+STR_TILT_DIRECTION: "Tilt direction"
+STR_TILT_SIDE: "Left / right"
+STR_TILT_SIDE_REVERSE: "Left / right (reverse)"
+STR_TILT_FORWARD: "Forward / back"
+STR_TILT_FORWARD_REVERSE: "Forward / back (reverse)"
+
+STR_TILT_FIRST_ACTION: "First direction"
+STR_TILT_REVERSE_ACTION: "Reverse direction"
+
+STR_PAGE_WITHOUT_PERCENT_FORMAT: "Page %d, overall —"

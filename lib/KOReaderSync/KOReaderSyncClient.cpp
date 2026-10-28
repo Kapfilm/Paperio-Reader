@@ -17,6 +17,7 @@
 #include <memory>
 
 #include "KOReaderCredentialStore.h"
+#include "KOReaderProgressReply.h"
 
 int KOReaderSyncClient::lastHttpCode = 0;
 int KOReaderSyncClient::lastEspError = 0;
@@ -44,6 +45,7 @@ std::unique_ptr<crosspoint::SecureHttpClient> g_sessionHttp;
 // numbers, and HTTP status. Single-threaded sync flow makes static safe.
 char g_failureDetailBuf[160] = {0};
 char g_lastResponsePreview[160] = {0};
+bool g_invalidProgressReply = false;
 
 std::string previewBody(const char* body, const size_t maxLen = 120) {
   if (!body || !*body) {
@@ -84,6 +86,7 @@ void beginRequest(const char* operation) {
   KOReaderSyncClient::lastHeapAtFailure = ESP.getFreeHeap();
   KOReaderSyncClient::lastContigHeapAtFailure = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_DEFAULT);
   g_lastResponsePreview[0] = '\0';
+  g_invalidProgressReply = false;
 }
 
 // Skip a leading UTF-8 BOM (EF BB BF) and ASCII whitespace, returning a pointer
@@ -91,7 +94,7 @@ void beginRequest(const char* operation) {
 // payload starts with '{' (JSON) rather than '<' (HTML captive-portal page).
 const char* skipBomAndWhitespace(const char* p) {
   // UTF-8 BOM
-  if (static_cast<unsigned char>(p[0]) == 0xEF && static_cast<unsigned char>(p[1]) == 0xBB &&
+  if (strlen(p) >= 3 && static_cast<unsigned char>(p[0]) == 0xEF && static_cast<unsigned char>(p[1]) == 0xBB &&
       static_cast<unsigned char>(p[2]) == 0xBF) {
     p += 3;
   }
@@ -398,7 +401,8 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
   beginRequest("get progress");
   if (!checkHeapForTls()) return NETWORK_ERROR;
 
-  std::string url = KOREADER_STORE.getBaseUrl() + "/syncs/progress/" + documentHash;
+  std::string url =
+      KOREADER_STORE.getBaseUrl() + "/syncs/progress/" + documentHash + "?position_kinds=locator,percentage";
   LOG_DBG("KOSync", "Getting progress: %s (heap: %u, contig: %u)", url.c_str(), lastHeapAtFailure,
           lastContigHeapAtFailure);
 
@@ -445,44 +449,9 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
   }
 
   if (err != ESP_OK) return NETWORK_ERROR;
-  if (httpCode >= 300 && httpCode < 400) return REDIRECT_ERROR;
-
-  if (httpCode == 200 && !responseBody.empty()) {
-    JsonDocument doc;
-    const DeserializationError error = deserializeJson(doc, responseBody);
-
-    if (error) {
-      LOG_ERR("KOSync", "JSON parse failed: %s", error.c_str());
-      return JSON_ERROR;
-    }
-
-    // kosync convention: no stored progress for the document is signalled by
-    // HTTP 200 with an empty body ("{}"), not by 404. Detect that here so the
-    // caller doesn't apply a zeroed-out position as if it were real progress.
-    if (doc["progress"].isNull()) {
-      std::string jsonDump;
-      serializeJson(doc, jsonDump);
-      LOG_INF("KOSync", "Empty progress payload — treating as not found | payload=%s", jsonDump.c_str());
-      return NOT_FOUND;
-    }
-
-    outProgress.document = documentHash;
-    outProgress.progress = doc["progress"].as<std::string>();
-    outProgress.percentage = doc["percentage"].as<float>();
-    outProgress.device = doc["device"].as<std::string>();
-    outProgress.deviceId = doc["device_id"].as<std::string>();
-    outProgress.timestamp = doc["timestamp"].as<int64_t>();
-
-    LOG_INF("KOSync", "Got progress: %.2f%% at %s", outProgress.percentage * 100, outProgress.progress.c_str());
-    return OK;
-  }
-
-  if (httpCode == 401) return AUTH_FAILED;
-  if (httpCode == 404) {
-    LOG_INF("KOSync", "GET progress returned 404 for %s - treating as NOT_FOUND", url.c_str());
-    return NOT_FOUND;
-  }
-  return SERVER_ERROR;
+  const Error result = koreader_reply::parseProgressHttpReply(httpCode, responseBody, documentHash, outProgress);
+  g_invalidProgressReply = result == JSON_ERROR || result == INVALID_RESPONSE;
+  return result;
 }
 
 KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgress& progress) {
@@ -600,6 +569,11 @@ const char* KOReaderSyncClient::lastFailureDetail() {
       snprintf(g_failureDetailBuf, sizeof(g_failureDetailBuf), "%s: %s (heap %u/%u contig)", lastOperation,
                esp_err_to_name(lastEspError), lastHeapAtFailure, lastContigHeapAtFailure);
     }
+    return g_failureDetailBuf;
+  }
+  if (g_invalidProgressReply) {
+    snprintf(g_failureDetailBuf, sizeof(g_failureDetailBuf),
+             "get progress: invalid progress response (or captive portal)");
     return g_failureDetailBuf;
   }
   // Invalid-response case: HTTP 200/202 but body was not JSON (e.g. captive portal HTML).

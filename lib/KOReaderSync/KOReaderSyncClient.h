@@ -19,7 +19,7 @@ struct KOReaderMetadata {
 struct KOReaderProgress {
   std::string document;                      // Document hash
   std::string progress;                      // XPath-like progress string
-  float percentage;                          // Progress percentage (0.0 to 1.0)
+  float percentage;                          // [0,1], or NaN for locator-only server replies
   std::string device;                        // Device name
   std::string deviceId;                      // Device ID
   int64_t timestamp;                         // Unix timestamp of last update

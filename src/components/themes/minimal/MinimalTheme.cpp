@@ -18,6 +18,7 @@
 #include "components/icons/cover.h"
 #include "fontIds.h"
 #include "util/BookArchiveUtils.h"
+#include "util/TabBarLayout.h"
 
 namespace {
 constexpr int kCoverCornerRadius = 8;
@@ -251,7 +252,9 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
   (void)rect;
   if (buttonCount <= 0) return;
 
-  const int panelWidth = std::min(kMenuPanelWidth, renderer.getScreenWidth() - 80);
+  const bool enlarged = renderer.isX3() && SETTINGS.uiTextSize != 0;
+  const int panelWidth =
+      enlarged ? renderer.getScreenWidth() - 64 : std::min(kMenuPanelWidth, renderer.getScreenWidth() - 80);
   const int panelHeight = buttonCount * kMenuRowHeight + kMenuPanelPadding * 2 + 2;
   const int panelX = (renderer.getScreenWidth() - panelWidth) / 2;
   const int panelY = std::max(MinimalMetrics::values.homeTopPadding, kMenuPanelTop - panelHeight / 4);
@@ -270,8 +273,10 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
       const int yPoints[3] = {centerY - kMenuSelectionTriangleHeight / 2, centerY + kMenuSelectionTriangleHeight / 2,
                               centerY};
       renderer.fillPolygon(xPoints, yPoints, 3, false);
-    } else if (i > 0) {
-      renderer.fillRectDither(rowX, rowY, rowWidth, 1, Color::LightGray);
+    }
+    if (i > 0) {
+      const int separatorInset = 14;
+      renderer.drawLine(rowX + separatorInset, rowY, rowX + rowWidth - separatorInset - 1, rowY, !selected);
     }
 
     const int textY = rowY + (kMenuRowHeight - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
@@ -301,8 +306,11 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
                             const std::function<UIIcon(int index)>& rowIcon,
                             const std::function<std::string(int index)>& rowValue, bool highlightValue,
                             int rowHeightOverride) const {
-  int rowHeight =
-      rowSubtitle != nullptr ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  const bool enlargedUi = renderer.isX3() && SETTINGS.uiTextSize != 0;
+  const int subtitleY = enlargedUi ? 7 + renderer.getLineHeight(UI_10_FONT_ID) + 4 : 24;
+  const int subtitleStep = enlargedUi ? renderer.getLineHeight(SMALL_FONT_ID) + 3 : 16;
+  int rowHeight = rowSubtitle != nullptr ? UITheme::getInstance().getMetrics().listWithSubtitleRowHeight
+                                         : UITheme::getInstance().getMetrics().listRowHeight;
   if (rowHeightOverride > 0 && rowSubtitle == nullptr) rowHeight = rowHeightOverride;
   const int pageItems = rect.height / rowHeight;
   if (pageItems <= 0 || itemCount <= 0) return;
@@ -400,11 +408,11 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
         const auto line1 = renderer.truncatedText(SMALL_FONT_ID, subtitleText.substr(0, newline).c_str(), rowTextWidth);
         const auto line2 =
             renderer.truncatedText(SMALL_FONT_ID, subtitleText.substr(newline + 1).c_str(), rowTextWidth);
-        renderer.drawText(SMALL_FONT_ID, textX, itemY + 24, line1.c_str(), !selected);
-        renderer.drawText(SMALL_FONT_ID, textX, itemY + 40, line2.c_str(), !selected);
+        renderer.drawText(SMALL_FONT_ID, textX, itemY + subtitleY, line1.c_str(), !selected);
+        renderer.drawText(SMALL_FONT_ID, textX, itemY + subtitleY + subtitleStep, line2.c_str(), !selected);
       } else {
         const auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
-        renderer.drawText(SMALL_FONT_ID, textX, itemY + 30, subtitle.c_str(), !selected);
+        renderer.drawText(SMALL_FONT_ID, textX, itemY + (enlargedUi ? subtitleY : 30), subtitle.c_str(), !selected);
       }
     }
 
@@ -426,23 +434,53 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
   }
 }
 
-void MinimalTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
-                              bool selected) const {
+void MinimalTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs, bool selected,
+                              bool fullWidth) const {
   int currentX = rect.x + LyraMetrics::values.contentSidePadding;
-  for (const auto& tab : tabs) {
-    const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR);
+  std::vector<int> widths;
+  if (fullWidth) {
+    widths.reserve(tabs.size());
+    for (const auto& tab : tabs) {
+      widths.push_back(renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR) +
+                       2 * kListHorizontalPadding);
+    }
+  }
+
+  for (size_t index = 0; index < tabs.size(); ++index) {
+    const auto& tab = tabs[index];
+    int horizontalPadding = kListHorizontalPadding;
+    const char* label = tab.label;
+    std::string clippedLabel;
+    int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label, EpdFontFamily::REGULAR);
+    if (fullWidth) {
+      const auto cell = TabBarLayout::cell(widths, static_cast<int>(index), rect.x, rect.width,
+                                           LyraMetrics::values.contentSidePadding);
+      if (cell.width <= 0) continue;
+      horizontalPadding = std::min(horizontalPadding, cell.width / 2);
+      const int textSpace = std::max(0, cell.width - 2 * horizontalPadding);
+      if (textWidth > textSpace) {
+        clippedLabel = renderer.truncatedText(UI_10_FONT_ID, label, textSpace);
+        textWidth = renderer.getTextWidth(UI_10_FONT_ID, clippedLabel.c_str(), EpdFontFamily::REGULAR);
+        if (textWidth > textSpace) {
+          clippedLabel.clear();
+          textWidth = 0;
+        }
+        label = clippedLabel.c_str();
+      }
+      currentX = cell.x + (cell.width - textWidth - 2 * horizontalPadding) / 2;
+    }
     if (tab.selected) {
       if (selected) {
-        renderer.fillRoundedRect(currentX, rect.y + 1, textWidth + 2 * kListHorizontalPadding, rect.height - 4,
+        renderer.fillRoundedRect(currentX, rect.y + 1, textWidth + 2 * horizontalPadding, rect.height - 4,
                                  kButtonCornerRadius, Color::Black);
       } else {
-        renderer.drawRoundedRect(currentX, rect.y, textWidth + 2 * kListHorizontalPadding, rect.height - 3, 1,
+        renderer.drawRoundedRect(currentX, rect.y, textWidth + 2 * horizontalPadding, rect.height - 3, 1,
                                  kButtonCornerRadius, true);
       }
     }
-    renderer.drawText(UI_10_FONT_ID, currentX + kListHorizontalPadding, rect.y + 6, tab.label,
-                      !(tab.selected && selected), EpdFontFamily::REGULAR);
-    currentX += textWidth + LyraMetrics::values.tabSpacing + 2 * kListHorizontalPadding;
+    renderer.drawText(UI_10_FONT_ID, currentX + horizontalPadding, rect.y + 6, label, !(tab.selected && selected),
+                      EpdFontFamily::REGULAR);
+    currentX += textWidth + LyraMetrics::values.tabSpacing + 2 * horizontalPadding;
   }
   renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);
 }

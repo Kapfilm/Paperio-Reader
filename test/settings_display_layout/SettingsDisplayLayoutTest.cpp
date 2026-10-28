@@ -14,7 +14,7 @@ namespace {
 // After removing the interface-font selector, the X4 Display category has
 // 15 rows including the three section dividers and the Refresh submenu row.
 constexpr int kDisplayRowsX4 = 15;
-constexpr int kDisplayRowsX3 = 14;  // Dark mode is hidden on X3.
+constexpr int kDisplayRowsX3 = 16;  // X3 also has the interface text-size selector.
 
 int heightFor(int screenHeight, const ThemeMetrics& metrics, bool bottomHints) {
   return SettingsDisplayLayout::listHeight(screenHeight - (bottomHints ? metrics.buttonHintsHeight : 0),
@@ -79,4 +79,11 @@ TEST(SettingsDisplayLayout, EmptyAndTinyAreasRemainSafe) {
   EXPECT_GT(SettingsDisplayLayout::rowHeight(0, 15, 40, 25, 24), 0);
   EXPECT_EQ(SettingsDisplayLayout::rowHeight(600, 0, 40, 25, 24), 40);
   EXPECT_EQ(SettingsDisplayLayout::rowHeight(600, 0, 0, 25, 24), 1);
+}
+
+TEST(SettingsDisplayLayout, EnlargedX3KeepsTextReadableAndAllowsPagination) {
+  const int height = heightFor(792, MinimalMetrics::values, true);
+  const int row = SettingsDisplayLayout::rowHeight(height, 16, 40, 30, BaseTheme::toggleSwitchHeight);
+  EXPECT_GE(row, 39);
+  EXPECT_LT(height / row, 16);
 }

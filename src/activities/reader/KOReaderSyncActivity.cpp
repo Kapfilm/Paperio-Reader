@@ -1,7 +1,7 @@
 #include "KOReaderSyncActivity.h"
 
-#include <GfxRenderer.h>
 #include <Fb2.h>
+#include <GfxRenderer.h>
 #include <HalClock.h>
 #include <I18n.h>
 #include <Logging.h>
@@ -11,9 +11,11 @@
 #include <esp_wifi.h>
 
 #include <cctype>
+#include <cmath>
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "Fb2SyncPosition.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderDocumentId.h"
 #include "MappedInputManager.h"
@@ -48,98 +50,24 @@ bool shouldSyncNtpNow() {
   return age >= NTP_RESYNC_MIN_INTERVAL_SEC;
 }
 
-std::string syncSourcePath(const std::string& packageOrBookPath) {
-  return Fb2::resolveOriginalPath(packageOrBookPath);
-}
+std::string syncSourcePath(const std::string& packageOrBookPath) { return Fb2::resolveOriginalPath(packageOrBookPath); }
 
 bool isFb2BackedPath(const std::string& packageOrBookPath) {
   return syncSourcePath(packageOrBookPath) != packageOrBookPath;
 }
 
-bool readXPathIndex(const std::string& xpath, const std::string& marker, size_t from, int& value, size_t& next) {
-  const size_t markerPos = xpath.find(marker, from);
-  if (markerPos == std::string::npos) return false;
-  const size_t first = markerPos + marker.size();
-  size_t last = first;
-  int parsed = 0;
-  while (last < xpath.size() && std::isdigit(static_cast<unsigned char>(xpath[last]))) {
-    parsed = parsed * 10 + (xpath[last] - '0');
-    if (parsed > UINT16_MAX) return false;
-    ++last;
-  }
-  if (last == first || last >= xpath.size() || xpath[last] != ']' || parsed <= 0) return false;
-  value = parsed;
-  next = last + 1;
-  return true;
-}
-
-bool parseCanonicalFb2XPath(const std::string& raw, uint16_t& bodyIndex, std::vector<uint16_t>& sectionPath,
-                            uint16_t& paragraphIndex) {
-  std::string xpath = raw;
-  for (char& c : xpath) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  const size_t fictionBook = xpath.find("/fictionbook");
-  const size_t body = fictionBook == std::string::npos ? std::string::npos : xpath.find("/body", fictionBook);
-  if (body == std::string::npos) return false;
-
-  bodyIndex = 1;
-  sectionPath.clear();
-  paragraphIndex = 0;
-  size_t pos = body + 5;
-  if (pos < xpath.size() && xpath[pos] == '[') {
-    int value = 0;
-    size_t next = pos;
-    if (!readXPathIndex(xpath, "[", pos, value, next)) return false;
-    bodyIndex = static_cast<uint16_t>(value);
-    pos = next;
-  }
-
-  while (sectionPath.size() < 32) {
-    int value = 0;
-    size_t next = pos;
-    if (!readXPathIndex(xpath, "/section[", pos, value, next)) break;
-    const size_t paragraph = xpath.find("/p[", pos);
-    const size_t section = xpath.find("/section[", pos);
-    if (paragraph != std::string::npos && paragraph < section) break;
-    sectionPath.push_back(static_cast<uint16_t>(value));
-    pos = next;
-  }
-  int paragraph = 0;
-  size_t ignored = pos;
-  if (readXPathIndex(xpath, "/p[", pos, paragraph, ignored)) {
-    paragraphIndex = static_cast<uint16_t>(paragraph);
-  }
-  return !sectionPath.empty();
-}
-
-void refineFb2RemotePosition(const std::shared_ptr<Epub>& epub, const std::string& xpath,
+bool refineFb2RemotePosition(const std::shared_ptr<Epub>& epub, const std::string& xpath, const bool hasPercentage,
                              CrossPointPosition& position) {
-  int ordinal = 0;
-  uint16_t paragraph = 0;
-  uint16_t body = 1;
-  std::vector<uint16_t> sectionPath;
-  if (parseCanonicalFb2XPath(xpath, body, sectionPath, paragraph)) {
-    Fb2::findOriginalSectionBySourcePath(epub->getCachePath(), body, sectionPath, ordinal);
-  } else {
-    // Compatibility with older shallow CREngine positions emitted by early builds.
-    size_t next = 0;
-    readXPathIndex(xpath, "/DocFragment[", 0, ordinal, next);
-    int paragraphValue = 0;
-    if (readXPathIndex(xpath, "/p[", next, paragraphValue, next)) paragraph = paragraphValue;
-  }
+  fb2_sync::Locator locator;
+  if (!fb2_sync::parseLocator(xpath, locator)) return false;
+  int ordinal = locator.legacyOrdinal;
+  if (!locator.sections.empty() &&
+      !Fb2::findOriginalSectionBySourcePath(epub->getCachePath(), locator.body, locator.sections, ordinal))
+    return false;
   int first = -1;
   int last = -1;
-  if (ordinal <= 0 || !Fb2::getChapterRangeForOriginalSectionOrdinal(epub->getCachePath(), ordinal, first, last)) {
-    return;
-  }
-  if (position.spineIndex < first || position.spineIndex > last) position.spineIndex = first;
-  if (paragraph > 0) {
-    position.paragraphIndex = paragraph;
-    position.hasParagraphIndex = true;
-  }
-  position.pageNumber = 0;
-  position.totalPages = 0;
-  LOG_DBG("KOSync", "FB2 source position: section=%d spine=%d..%d selected=%d paragraph=%u", ordinal, first, last,
-          position.spineIndex, paragraph);
+  if (!Fb2::getChapterRangeForOriginalSectionOrdinal(epub->getCachePath(), ordinal, first, last)) return false;
+  return fb2_sync::applyLocator(locator, first, last, hasPercentage, position);
 }
 }  // namespace
 
@@ -222,9 +150,9 @@ bool KOReaderSyncActivity::handleAutoPushPreflight() {
     requestUpdate(true);
     return false;
   }
-  // Auto-push must not overwrite progress that is already further along on the server.
+  // Auto-push must not overwrite a later position, or one whose percentage is unknown.
   if (syncIntent == KOReaderSyncIntentState::AUTO_PUSH && warmupResult == KOReaderSyncClient::OK &&
-      warmupProgress.percentage > localProgress.percentage) {
+      (!std::isfinite(warmupProgress.percentage) || warmupProgress.percentage > localProgress.percentage)) {
     LOG_DBG("KOSync", "AUTO_PUSH skipped: remote %.4f >= local %.4f", warmupProgress.percentage,
             localProgress.percentage);
     KOReaderSyncClient::endPersistentSession();
@@ -687,8 +615,13 @@ void KOReaderSyncActivity::render(RenderLock&&) {
     snprintf(remoteChapterStr, sizeof(remoteChapterStr), "  %s", remoteChapter.c_str());
     renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 185, remoteChapterStr);
     char remotePageStr[64];
-    snprintf(remotePageStr, sizeof(remotePageStr), tr(STR_PAGE_OVERALL_FORMAT), remotePosition.pageNumber + 1,
-             remoteProgress.percentage * 100);
+    if (std::isfinite(remoteProgress.percentage)) {
+      snprintf(remotePageStr, sizeof(remotePageStr), tr(STR_PAGE_OVERALL_FORMAT), remotePosition.pageNumber + 1,
+               remoteProgress.percentage * 100);
+    } else {
+      snprintf(remotePageStr, sizeof(remotePageStr), tr(STR_PAGE_WITHOUT_PERCENT_FORMAT),
+               remotePosition.pageNumber + 1);
+    }
     renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 210, remotePageStr);
 
     if (!remoteProgress.device.empty()) {
@@ -824,8 +757,20 @@ bool KOReaderSyncActivity::ensureRemotePositionMapped(const bool closeSessionBef
   // First get a percentage-based estimate; the source-aware refinement below
   // then snaps it to the exact original FB2 section and paragraph when present.
   if (fb2Backed) koPos.xpath.clear();
-  remotePosition = ProgressMapper::toCrossPoint(epub, koPos, currentSpineIndex, totalPagesInSpine);
-  if (fb2Backed) refineFb2RemotePosition(epub, remoteProgress.progress, remotePosition);
+  const bool hasPercentage = std::isfinite(koPos.percentage);
+  bool hasExactEpubLocator = false;
+  remotePosition =
+      ProgressMapper::toCrossPoint(epub, koPos, currentSpineIndex, totalPagesInSpine, &hasExactEpubLocator);
+  if (!fb2Backed && !hasPercentage && !hasExactEpubLocator) {
+    releaseEpubForMapping();
+    return false;
+  }
+  const bool hasFb2Locator =
+      fb2Backed && refineFb2RemotePosition(epub, remoteProgress.progress, hasPercentage, remotePosition);
+  if (fb2Backed && !hasPercentage && !hasFb2Locator) {
+    releaseEpubForMapping();
+    return false;
+  }
   computeRemoteChapter();
   releaseEpubForMapping();
   hasRemoteProgress = true;
@@ -855,16 +800,12 @@ bool KOReaderSyncActivity::computeLocalProgressAndChapter() {
   if (isFb2BackedPath(epubPath)) {
     int originalSectionOrdinal = currentSpineIndex + 1;
     Fb2::getOriginalSectionOrdinal(epub->getCachePath(), currentSpineIndex, originalSectionOrdinal);
-    const int paragraph = hasLocalParagraphIndex ? std::max(1, static_cast<int>(localParagraphIndex)) : 1;
-    const std::string canonical = Fb2::buildCanonicalSourceSectionXPath(epub->getCachePath(), originalSectionOrdinal);
-    if (!canonical.empty()) {
-      localProgress.xpath = canonical + "/p[" + std::to_string(paragraph) + "]/text().0";
-    } else {
-      char xpointer[112];
-      snprintf(xpointer, sizeof(xpointer), "/body/DocFragment[%d]/body/section/p[%d]/text().0",
-               std::max(1, originalSectionOrdinal), paragraph);
-      localProgress.xpath = xpointer;
+    const uint16_t paragraph = hasLocalParagraphIndex ? localParagraphIndex : 0;
+    std::string canonical = Fb2::buildCanonicalSourceSectionXPath(epub->getCachePath(), originalSectionOrdinal);
+    if (canonical.empty()) {
+      canonical = "/body/DocFragment[" + std::to_string(std::max(1, originalSectionOrdinal)) + "]/body/section";
     }
+    localProgress.xpath = fb2_sync::makeLocator(canonical, paragraph, currentPage);
     LOG_DBG("KOSync", "FB2 source-compatible sync point: %s", localProgress.xpath.c_str());
   }
 

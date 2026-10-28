@@ -15,6 +15,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/TabBarLayout.h"
 
 // Internal constants
 namespace {
@@ -289,8 +290,8 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<UIIcon(int index)>& rowIcon,
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
                          int rowHeightOverride) const {
-  int rowHeight =
-      (rowSubtitle != nullptr) ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
+  int rowHeight = (rowSubtitle != nullptr) ? UITheme::getInstance().getMetrics().listWithSubtitleRowHeight
+                                           : UITheme::getInstance().getMetrics().listRowHeight;
   if (rowHeightOverride > 0 && rowSubtitle == nullptr) rowHeight = rowHeightOverride;
   int pageItems = rect.height / rowHeight;
 
@@ -362,8 +363,10 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
         subtitleText.replace(nl, 1, " \u2022 ");
       }
       auto subtitle = renderer.truncatedText(UI_10_FONT_ID, subtitleText.c_str(), textWidth);
-      renderer.drawText(UI_10_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding, itemY + 30, subtitle.c_str(),
-                        i != selectedIndex);
+      renderer.drawText(
+          UI_10_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding,
+          itemY + ((renderer.isX3() && SETTINGS.uiTextSize != 0) ? renderer.getLineHeight(UI_12_FONT_ID) + 4 : 30),
+          subtitle.c_str(), i != selectedIndex);
     }
 
     if (rowValue != nullptr) {
@@ -453,7 +456,7 @@ void BaseTheme::drawSubHeader(const GfxRenderer& renderer, Rect rect, const char
 }
 
 void BaseTheme::drawTabBar(const GfxRenderer& renderer, const Rect rect, const std::vector<TabInfo>& tabs,
-                           bool selected) const {
+                           bool selected, bool fullWidth) const {
   constexpr int underlineHeight = 2;  // Height of selection underline
   constexpr int underlineGap = 4;     // Gap between text and underline
 
@@ -461,21 +464,53 @@ void BaseTheme::drawTabBar(const GfxRenderer& renderer, const Rect rect, const s
 
   int currentX = rect.x + BaseMetrics::values.contentSidePadding;
 
-  for (const auto& tab : tabs) {
-    const int textWidth =
-        renderer.getTextWidth(UI_12_FONT_ID, tab.label, tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
+  std::vector<int> widths;
+  if (fullWidth) {
+    widths.reserve(tabs.size());
+    for (const auto& tab : tabs) {
+      widths.push_back(
+          renderer.getTextWidth(UI_12_FONT_ID, tab.label, tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR) +
+          6);
+    }
+  }
+
+  for (size_t index = 0; index < tabs.size(); ++index) {
+    const auto& tab = tabs[index];
+    int horizontalPadding = 3;
+    const auto style = tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    const char* label = tab.label;
+    std::string clippedLabel;
+    int textWidth = renderer.getTextWidth(UI_12_FONT_ID, label, style);
+    if (fullWidth) {
+      const auto cell = TabBarLayout::cell(widths, static_cast<int>(index), rect.x, rect.width,
+                                           BaseMetrics::values.contentSidePadding);
+      if (cell.width <= 0) continue;
+      horizontalPadding = std::min(horizontalPadding, cell.width / 2);
+      const int textSpace = std::max(0, cell.width - 2 * horizontalPadding);
+      if (textWidth > textSpace) {
+        clippedLabel = renderer.truncatedText(UI_12_FONT_ID, label, textSpace, style);
+        textWidth = renderer.getTextWidth(UI_12_FONT_ID, clippedLabel.c_str(), style);
+        if (textWidth > textSpace) {
+          clippedLabel.clear();
+          textWidth = 0;
+        }
+        label = clippedLabel.c_str();
+      }
+      currentX = cell.x + (cell.width - textWidth) / 2;
+    }
 
     // Draw underline for selected tab
     if (tab.selected) {
       if (selected) {
-        renderer.fillRect(currentX - 3, rect.y, textWidth + 6, lineHeight + underlineGap);
+        renderer.fillRect(currentX - horizontalPadding, rect.y, textWidth + 2 * horizontalPadding,
+                          lineHeight + underlineGap);
       } else {
         renderer.fillRect(currentX, rect.y + lineHeight + underlineGap, textWidth, underlineHeight);
       }
     }
 
     // Draw tab label
-    renderer.drawText(UI_12_FONT_ID, currentX, rect.y, tab.label, !(tab.selected && selected),
+    renderer.drawText(UI_12_FONT_ID, currentX, rect.y, label, !(tab.selected && selected),
                       tab.selected ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR);
 
     currentX += textWidth + BaseMetrics::values.tabSpacing;
@@ -838,8 +873,11 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     constexpr int bookmarkWidth = 28;
     constexpr int bookmarkHeight = 48;
     constexpr int notchDepth = 12;
-    const int bookmarkX = screenWidth - orientedMarginRight - bookmarkWidth;
-    const int bookmarkY = orientedMarginTop + paddingBottom;
+    // X3 anchors the ribbon to the panel corner. The polygon scan skips its
+    // minimum Y, so extend the top by one pixel to fill row zero.
+    // X4 keeps the existing bezel compensation.
+    const int bookmarkX = screenWidth - (renderer.isX3() ? 0 : orientedMarginRight) - bookmarkWidth;
+    const int bookmarkY = renderer.isX3() ? -1 : orientedMarginTop + paddingBottom;
     const int centerX = bookmarkX + bookmarkWidth / 2;
     const int xPoints[5] = {bookmarkX, bookmarkX + bookmarkWidth, bookmarkX + bookmarkWidth, centerX, bookmarkX};
     const int yPoints[5] = {bookmarkY, bookmarkY, bookmarkY + bookmarkHeight, bookmarkY + bookmarkHeight - notchDepth,

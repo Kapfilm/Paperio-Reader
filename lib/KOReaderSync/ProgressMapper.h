@@ -65,10 +65,12 @@ class ProgressMapper {
    * @param koPos KOReader position
    * @param currentSpineIndex Index of the currently open spine item (for density estimation)
    * @param totalPagesInCurrentSpine Total pages in the current spine item (for density estimation)
+   * @param resolvedExactAnchor Optional output: true only when content resolved the exact XPath
    * @return CrossPoint position
    */
   static CrossPointPosition toCrossPoint(const std::shared_ptr<Epub>& epub, const KOReaderPosition& koPos,
-                                         int currentSpineIndex = -1, int totalPagesInCurrentSpine = 0);
+                                         int currentSpineIndex = -1, int totalPagesInCurrentSpine = 0,
+                                         bool* resolvedExactAnchor = nullptr);
 
  private:
   /**

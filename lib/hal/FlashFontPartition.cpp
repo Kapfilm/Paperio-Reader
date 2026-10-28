@@ -279,6 +279,12 @@ void unmap() {
 
 // --- Query API ---
 
+size_t capacityBytes() {
+  const esp_partition_t* part =
+      esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+  return part ? part->size : 0;
+}
+
 bool hasValidIndex() {
   const esp_partition_t* part = findPartition();
   if (!part) return false;

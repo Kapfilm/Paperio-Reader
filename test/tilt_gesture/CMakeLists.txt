@@ -1,0 +1,3 @@
+add_executable(TiltGestureTest TiltGestureTest.cpp)
+target_link_libraries(TiltGestureTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(TiltGestureTest)

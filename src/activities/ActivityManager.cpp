@@ -13,6 +13,7 @@
 #include "CrossPointState.h"
 #include "OpdsServerStore.h"
 #include "SdCardFontGlobals.h"
+#include "UiFonts.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
@@ -39,7 +40,7 @@
 
 namespace {
 bool shouldUseDarkModeFor(Activity* activity) {
-  if (gpio.deviceIsX3() || SETTINGS.darkMode == CrossPointSettings::DARK_MODE_OFF) return false;
+  if (SETTINGS.darkMode == CrossPointSettings::DARK_MODE_OFF) return false;
   if (SETTINGS.darkMode == CrossPointSettings::DARK_MODE_EVERYWHERE) return true;
   return activity && activity->isReaderActivity();
 }
@@ -104,6 +105,11 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      if (applyUiTextSize(renderer, gpio.deviceIsX3() && SETTINGS.uiTextSize != 0)) {
+        UITheme::getInstance().reload();
+        UITheme::getInstance().getMutableTheme().invalidateFrameCache();
+        renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
+      }
       renderer.setDarkMode(shouldUseDarkModeFor(currentActivity.get()));
       // Publish "a pass is in flight" from INSIDE the lock, so a transition holding the mutex
       // can read it as proof that no pass can begin behind its back. It stays set across the

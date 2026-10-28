@@ -96,6 +96,7 @@ bool HalTiltSensor::wake() {
     _lastPollMs = millis();
     _lastTiltMs = millis();
     _wakeMs = millis();
+    _gesture.reset(_wakeMs);
     LOG_INF("GYR", "QMI8658 woke up");
     return true;
   } else {
@@ -115,7 +116,7 @@ bool HalTiltSensor::deepSleep() {
 
   if (writeReg(REG_CTRL7, CTRL7_DISABLE_ALL) && writeReg(REG_CTRL1, CTRL1_BASE | CTRL1_SENSOR_DISABLE)) {
     clearPendingEvents();
-    _inTilt = false;
+    _gesture.reset(millis());
     _sleepMs = millis();
     LOG_INF("GYR", "QMI8658 entered sleep mode");
     return true;
@@ -125,8 +126,8 @@ bool HalTiltSensor::deepSleep() {
   }
 }
 
-void HalTiltSensor::update(CrossPointTiltPageTurn::Value mode, CrossPointOrientation::Value orientation,
-                           bool inReader) {
+void HalTiltSensor::update(CrossPointTiltPageTurn::Value mode, CrossPointOrientation::Value orientation, bool inReader,
+                           uint8_t direction) {
   if (!_available) {
     return;
   }
@@ -158,45 +159,20 @@ void HalTiltSensor::update(CrossPointTiltPageTurn::Value mode, CrossPointOrienta
     return;
   }
 
-  float tiltAxis;
-  switch (orientation) {
-    case CrossPointOrientation::PORTRAIT:
-      tiltAxis = mode == CrossPointTiltPageTurn::TILT_INVERTED ? -gx : gx;
-      break;
-    case CrossPointOrientation::INVERTED:
-      tiltAxis = mode == CrossPointTiltPageTurn::TILT_INVERTED ? gx : -gx;
-      break;
-    case CrossPointOrientation::LANDSCAPE_CW:
-      tiltAxis = mode == CrossPointTiltPageTurn::TILT_INVERTED ? gy : -gy;
-      break;
-    case CrossPointOrientation::LANDSCAPE_CCW:
-      tiltAxis = mode == CrossPointTiltPageTurn::TILT_INVERTED ? -gy : gy;
-      break;
-    default:
-      tiltAxis = gx;
-      break;
+  if (_lastDirection != direction || _lastOrientation != static_cast<uint8_t>(orientation)) {
+    clearPendingEvents();
+    _gesture.reset(now);
+    _lastDirection = direction;
+    _lastOrientation = static_cast<uint8_t>(orientation);
+    return;
   }
-
-  if (_inTilt) {
-    if (fabsf(tiltAxis) < NEUTRAL_RATE_DPS) {
-      _inTilt = false;
-    }
-  } else {
-    if ((now - _lastTiltMs) >= COOLDOWN_MS) {
-      if (tiltAxis > RATE_THRESHOLD_DPS) {
-        _tiltForwardEvent = true;
-        _hadActivity = true;
-        _inTilt = true;
-        _lastTiltMs = now;
-        LOG_INF("GYR", "Forward Trigger=(%.1f) dps", tiltAxis);
-      } else if (tiltAxis < -RATE_THRESHOLD_DPS) {
-        _tiltBackEvent = true;
-        _hadActivity = true;
-        _inTilt = true;
-        _lastTiltMs = now;
-        LOG_INF("GYR", "Backward Trigger=(%.1f) dps", tiltAxis);
-      }
-    }
+  const float rate = tilt_gesture::axis(gx, gy, static_cast<uint8_t>(orientation), direction);
+  const int event = _gesture.update(rate, now);
+  if (event != 0) {
+    _tiltForwardEvent = event > 0;
+    _tiltBackEvent = event < 0;
+    _hadActivity = true;
+    LOG_INF("GYR", "Tilt direction=%u event=%d rate=%.1f dps", direction, event, rate);
   }
 }
 

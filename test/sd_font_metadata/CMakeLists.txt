@@ -1,0 +1,5 @@
+add_executable(SdFontMetadataTest SdFontMetadataTest.cpp ../../lib/EpdFont/SdCardFont.cpp ../../lib/Utf8/Utf8.cpp)
+target_include_directories(SdFontMetadataTest BEFORE PRIVATE shims ../../lib/EpdFont ../../lib/Utf8)
+target_compile_definitions(SdFontMetadataTest PRIVATE FONT_FIXTURE="${REPO_ROOT}/assets/sd-fonts/NotoSansExtended/NotoSansExtended_16.cpfont")
+target_link_libraries(SdFontMetadataTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(SdFontMetadataTest)

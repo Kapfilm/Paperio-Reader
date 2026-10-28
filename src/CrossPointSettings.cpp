@@ -36,6 +36,13 @@ void enforceFixedShortActions(CrossPointSettings& settings) {
 }  // namespace
 
 void CrossPointSettings::normalizeDependentSettings(CrossPointSettings& settings) {
+  if (settings.uiTextSize > 1) settings.uiTextSize = 0;
+  if (settings.tiltPageTurn == 2) {
+    settings.tiltPageTurn = 1;
+    settings.tiltDirection = 1;
+  }
+  if (settings.tiltPageTurn > 1) settings.tiltPageTurn = 0;
+  if (settings.tiltDirection > 3) settings.tiltDirection = 0;
   if (settings.sleepScreen == SLEEP_SCREEN_MODE::QUICK_RESUME) {
     settings.quickResumeSleepScreen = QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
   }

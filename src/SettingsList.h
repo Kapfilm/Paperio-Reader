@@ -86,7 +86,9 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                                StrId::STR_BTN_ACT_IGNORE,
                                                StrId::STR_BTN_ACT_CREATE_CLIPPING,
                                                StrId::STR_BTN_ACT_DICTIONARY_LOOKUP,
-                                               StrId::STR_BTN_ACT_SELECT_DICTIONARY};
+                                               StrId::STR_BTN_ACT_SELECT_DICTIONARY,
+                                               StrId::STR_PULL_PROGRESS_FROM_OTHER_DEVICES,
+                                               StrId::STR_PUSH_PROGRESS_FROM_THIS_DEVICE};
 
   // Prepend the per-button default action to the shared options list.
   auto makeBtnActionOptions = [&](StrId defaultAction) {
@@ -101,6 +103,10 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.reserve(78);
 
   // --- Display ---
+  settings.push_back(SettingInfo::Enum(StrId::STR_UI_TEXT_SIZE, &CrossPointSettings::uiTextSize,
+                                       {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_TEXT_LARGE}, "uiTextSize",
+                                       StrId::STR_CAT_DISPLAY)
+                         .withDeviceTarget(SettingDeviceTarget::X3));
   settings.push_back(SettingInfo::Enum(StrId::STR_DARK_MODE, &CrossPointSettings::darkMode,
                                        {StrId::STR_STATE_OFF, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "darkMode",
                                        StrId::STR_CAT_DISPLAY)
@@ -376,12 +382,19 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                          StrId::STR_CAT_CONTROLS)
                          .withSubmenu(StrId::STR_TILT_PAGE_TURN)
                          .withDeviceTarget(SettingDeviceTarget::X3));
-  settings.push_back(SettingInfo::Enum(StrId::STR_DIR_RIGHT, &CrossPointSettings::tiltPositiveAction,
+  settings.push_back(SettingInfo::Enum(StrId::STR_TILT_DIRECTION, &CrossPointSettings::tiltDirection,
+                                       {StrId::STR_TILT_SIDE, StrId::STR_TILT_SIDE_REVERSE, StrId::STR_TILT_FORWARD,
+                                        StrId::STR_TILT_FORWARD_REVERSE},
+                                       "tiltDirection", StrId::STR_CAT_CONTROLS)
+                         .withSubmenu(StrId::STR_TILT_PAGE_TURN)
+                         .withDeviceTarget(SettingDeviceTarget::X3)
+                         .withSelectorActivity());
+  settings.push_back(SettingInfo::Enum(StrId::STR_TILT_FIRST_ACTION, &CrossPointSettings::tiltPositiveAction,
                                        {StrId::STR_NONE_OPT, StrId::STR_NEXT_PAGE, StrId::STR_PREV_PAGE},
                                        "tiltPositiveAction", StrId::STR_CAT_CONTROLS)
                          .withSubmenu(StrId::STR_TILT_PAGE_TURN)
                          .withDeviceTarget(SettingDeviceTarget::X3));
-  settings.push_back(SettingInfo::Enum(StrId::STR_DIR_LEFT, &CrossPointSettings::tiltNegativeAction,
+  settings.push_back(SettingInfo::Enum(StrId::STR_TILT_REVERSE_ACTION, &CrossPointSettings::tiltNegativeAction,
                                        {StrId::STR_NONE_OPT, StrId::STR_NEXT_PAGE, StrId::STR_PREV_PAGE},
                                        "tiltNegativeAction", StrId::STR_CAT_CONTROLS)
                          .withSubmenu(StrId::STR_TILT_PAGE_TURN)

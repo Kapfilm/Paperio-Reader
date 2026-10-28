@@ -2,10 +2,10 @@
 
 #include <Epub.h>
 #include <Epub/Section.h>
-#include <Fb2.h>
 #include <Epub/converters/DirectPixelWriter.h>
 #include <Epub/converters/PixelCache.h>
 #include <Epub/converters/PngToFramebufferConverter.h>
+#include <Fb2.h>
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
@@ -59,8 +59,7 @@ uint16_t readOverlayLE16(FsFile& file) {
   const int c0 = file.read();
   const int c1 = file.read();
   if (c0 < 0 || c1 < 0) return 0;
-  return static_cast<uint16_t>(static_cast<uint8_t>(c0)) |
-         (static_cast<uint16_t>(static_cast<uint8_t>(c1)) << 8);
+  return static_cast<uint16_t>(static_cast<uint8_t>(c0)) | (static_cast<uint16_t>(static_cast<uint8_t>(c1)) << 8);
 }
 
 uint32_t readOverlayLE32(FsFile& file) {
@@ -69,8 +68,7 @@ uint32_t readOverlayLE32(FsFile& file) {
   const int c2 = file.read();
   const int c3 = file.read();
   if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) return 0;
-  return static_cast<uint32_t>(static_cast<uint8_t>(c0)) |
-         (static_cast<uint32_t>(static_cast<uint8_t>(c1)) << 8) |
+  return static_cast<uint32_t>(static_cast<uint8_t>(c0)) | (static_cast<uint32_t>(static_cast<uint8_t>(c1)) << 8) |
          (static_cast<uint32_t>(static_cast<uint8_t>(c2)) << 16) |
          (static_cast<uint32_t>(static_cast<uint8_t>(c3)) << 24);
 }
@@ -107,15 +105,14 @@ bool parseTransparentOverlayBmp(FsFile& file, OverlayBmpInfo& info) {
 }
 
 uint8_t overlayAlphaThreshold(const int x, const int y) {
-  static constexpr uint8_t BAYER_4X4[16] = {0, 128, 32, 160, 192, 64, 224, 96,
-                                            48, 176, 16, 144, 240, 112, 208, 80};
+  static constexpr uint8_t BAYER_4X4[16] = {0, 128, 32, 160, 192, 64, 224, 96, 48, 176, 16, 144, 240, 112, 208, 80};
   return BAYER_4X4[((y & 0x03) << 2) | (x & 0x03)];
 }
 
 enum class TransparentBmpResult : uint8_t { Rendered, NotTransparent, Error };
 
 TransparentBmpResult renderTransparentOverlayBmp(FsFile& file, const OverlayBmpInfo& info,
-                                                  const GfxRenderer& renderer) {
+                                                 const GfxRenderer& renderer) {
   auto row = makeUniqueNoThrow<uint8_t[]>(info.rowBytes);
   if (!row) {
     LOG_ERR("SLP", "Not enough heap for transparent BMP row (%u bytes)", static_cast<unsigned>(info.rowBytes));
@@ -143,8 +140,8 @@ TransparentBmpResult renderTransparentOverlayBmp(FsFile& file, const OverlayBmpI
 
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
-  const float scale = std::min(1.0f, std::min(static_cast<float>(pageWidth) / info.width,
-                                             static_cast<float>(pageHeight) / info.height));
+  const float scale = std::min(
+      1.0f, std::min(static_cast<float>(pageWidth) / info.width, static_cast<float>(pageHeight) / info.height));
   const int destinationWidth = std::max(1, static_cast<int>(std::floor(info.width * scale)));
   const int destinationHeight = std::max(1, static_cast<int>(std::floor(info.height * scale)));
   const int destinationX = (pageWidth - destinationWidth) / 2;
@@ -546,8 +543,9 @@ void SleepActivity::onEnter() {
   // Resume is the exception: it must retain the dark reader page already shown
   // on the panel rather than flashing it back to light before sleep.
   RenderLock lock(*this);
-  renderer.setDarkMode(!renderer.isX3() && renderQuickResume &&
-                       SETTINGS.darkMode != CrossPointSettings::DARK_MODE_OFF);
+  renderer.setDarkMode(renderQuickResume && (SETTINGS.darkMode == CrossPointSettings::DARK_MODE_EVERYWHERE ||
+                                             (SETTINGS.darkMode == CrossPointSettings::DARK_MODE_READER_ONLY &&
+                                              APP_STATE.lastSleepFromReader)));
   if (renderQuickResume) {
     return renderLastScreenSleepScreen();
   }
@@ -1082,8 +1080,7 @@ void SleepActivity::renderOverlaySleepScreen() const {
       rendered = TxtReaderActivity::drawCurrentPageToBuffer(path, renderer);
     } else if (FsHelpers::checkFileExtension(path, ".epub")) {
       rendered = EpubReaderActivity::drawCurrentPageToBuffer(path, renderer);
-    } else if (isFb2BookPath(path) ||
-               (isBookZipPath(path) && detectBookArchiveType(path) == BookArchiveType::Fb2)) {
+    } else if (isFb2BookPath(path) || (isBookZipPath(path) && detectBookArchiveType(path) == BookArchiveType::Fb2)) {
       Fb2 fb2(path, "/.crosspoint");
       rendered = fb2.load() && EpubReaderActivity::drawCurrentPageToBuffer(fb2.getPackagePath(), renderer);
     }

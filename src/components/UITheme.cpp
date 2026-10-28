@@ -133,6 +133,13 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentMetrics = &BaseMetrics::values;
       break;
   }
+  if (SETTINGS.uiTextSize != 0 && gpio.deviceIsX3()) {
+    enlargedMetrics = *currentMetrics;
+    enlargedMetrics.listRowHeight = std::max(enlargedMetrics.listRowHeight, 40);
+    enlargedMetrics.listWithSubtitleRowHeight = std::max(enlargedMetrics.listWithSubtitleRowHeight, 100);
+    enlargedMetrics.statusBarVerticalMargin = std::max(enlargedMetrics.statusBarVerticalMargin, 25);
+    currentMetrics = &enlargedMetrics;
+  }
 }
 
 int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
@@ -395,8 +402,7 @@ UIIcon UITheme::getFileIcon(const std::string& filename) {
   if (filename.back() == '/') {
     return Folder;
   }
-  if (FsHelpers::hasEpubExtension(filename) || isFb2OrZipBookPath(filename) ||
-      FsHelpers::hasXtcExtension(filename)) {
+  if (FsHelpers::hasEpubExtension(filename) || isFb2OrZipBookPath(filename) || FsHelpers::hasXtcExtension(filename)) {
     return Book;
   }
   if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {

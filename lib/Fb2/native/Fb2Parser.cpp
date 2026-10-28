@@ -874,6 +874,11 @@ bool Fb2Parser::renderSection(IByteReader& reader,
         return s;
     };
 
+    // The reader starts immediately inside the original section. Track source
+    // depth independently of rendering/skipping so title and nested-section
+    // content never change the direct <p> sibling coordinate used by KOReader.
+    int sourceDepth = 0;
+    uint32_t sourceParagraphOrdinal = 0;
     bool inSubtitle = false;
     bool inTextAuthor = false;
     const bool streamingCells = sink.streamsTableCells();
@@ -893,6 +898,12 @@ bool Fb2Parser::renderSection(IByteReader& reader,
         if (tok == Fb2Token::Eof) return true;
         if (tok == Fb2Token::Error) return false;
         const std::string& name = xml.name();
+        const int tokenDepth = tok == Fb2Token::EndTag ? --sourceDepth : sourceDepth;
+        const bool opening = tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing;
+        if (opening) ++sourceDepth;
+        // Count before consuming a fallback heading: it is still p[1] in the
+        // source even though its rendered form is a heading instead of <p>.
+        if (opening && name == "p" && tokenDepth == 0) ++sourceParagraphOrdinal;
 
         if (skipping) {
             if ((tok == Fb2Token::StartTag) && name == "section") skipDepth++;
@@ -960,7 +971,12 @@ bool Fb2Parser::renderSection(IByteReader& reader,
                 }
                 continue;
             }
-            if (name == "p") sink.onParagraphBegin();
+            if (name == "p") {
+                const uint16_t ordinal = tokenDepth == 0 && sourceParagraphOrdinal <= UINT16_MAX
+                                             ? static_cast<uint16_t>(sourceParagraphOrdinal) : 0;
+                sink.onSourceParagraph(ordinal);
+                sink.onParagraphBegin();
+            }
             else if (name == "empty-line") sink.onEmptyLine();
             else if (name == "poem") sink.onPoemBegin();
             else if (name == "stanza") sink.onStanzaBegin();

@@ -4,6 +4,7 @@
 #include <Wire.h>
 
 #include "HalGPIO.h"
+#include "TiltGesture.h"
 
 namespace CrossPointOrientation {
 enum Value : uint8_t { PORTRAIT = 0, LANDSCAPE_CW = 1, INVERTED = 2, LANDSCAPE_CCW = 3 };
@@ -23,7 +24,9 @@ class HalTiltSensor {
   bool _tiltForwardEvent = false;
   bool _tiltBackEvent = false;
   bool _hadActivity = false;
-  bool _inTilt = false;
+  tilt_gesture::Detector _gesture;
+  uint8_t _lastDirection = 255;
+  uint8_t _lastOrientation = 255;
   bool _isAwake = false;
   unsigned long _initMs = 0;
   unsigned long _sleepMs = 0;
@@ -66,7 +69,8 @@ class HalTiltSensor {
 
   bool isAvailable() const { return _available; }
 
-  void update(CrossPointTiltPageTurn::Value mode, CrossPointOrientation::Value orientation, bool inReader);
+  void update(CrossPointTiltPageTurn::Value mode, CrossPointOrientation::Value orientation, bool inReader,
+              uint8_t direction = 0);
 
   bool wasTiltedForward();
   bool wasTiltedBack();

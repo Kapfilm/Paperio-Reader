@@ -17,10 +17,10 @@
 #include <Epub/FootnotePreviews.h>
 #include <Epub/Page.h>
 #include <Epub/blocks/TextBlock.h>
-#include <FontCacheManager.h>
-#include <FontDecompressor.h>
 #include <Fb2.h>
 #include <Fb2StateMigration.h>
+#include <FontCacheManager.h>
+#include <FontDecompressor.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
@@ -53,7 +53,6 @@
 #include "MappedInputManager.h"
 #include "QrDisplayActivity.h"
 #include "QuickOverridesActivity.h"
-#include "util/ReaderFontSizeOptions.h"
 #include "ReaderActivity.h"
 #include "ReaderUtils.h"
 #include "ReadingProfilesActivity.h"
@@ -70,6 +69,7 @@
 #include "clippings/ClippingsManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/ReaderFontSizeOptions.h"
 #include "util/ScreenshotUtil.h"
 
 // Defined further down (near the other font helpers); declared here because
@@ -321,8 +321,7 @@ bool epubBookPageEstimate(const Epub& epub, const int spineIndex, const int curr
       (static_cast<uint64_t>(bookSize) * static_cast<uint64_t>(pageCount) + spineSize / 2) / spineSize;
   if (estimated == 0 || estimated > UINT16_MAX) return false;
 
-  const float chapterProgress =
-      std::min(1.0f, static_cast<float>(currentPage + 1) / static_cast<float>(pageCount));
+  const float chapterProgress = std::min(1.0f, static_cast<float>(currentPage + 1) / static_cast<float>(pageCount));
   const float bookProgress = epub.calculateProgress(spineIndex, chapterProgress);
   bookTotalPages = static_cast<int>(estimated);
   bookCurrentPage = std::clamp(static_cast<int>(bookProgress * bookTotalPages + 0.5f), 1, bookTotalPages);
@@ -605,7 +604,7 @@ void EpubReaderActivity::onExit() {
   // controller's retained RED RAM instead of its host baseline (ghosting). No-op on X3.
   renderer.setSingleBufferFastDiff(false);
   UITheme::getInstance().getMutableTheme().onBookWillClose(epub ? sourceBookPath(*epub) : "", epub.get(), nullptr,
-                                                            nullptr);
+                                                           nullptr);
   epub.reset();
   currentPageFootnotes.clear();
   currentPageFootnotes.shrink_to_fit();
@@ -1789,10 +1788,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       // exit. For a brand-new book that's never been finished a session yet
       // the screen will show "no data"; that's accurate.
       if (!epub) break;
-      startActivityForResult(std::make_unique<ReadingStatsBookDetailActivity>(
-                                 renderer, mappedInput,
-                                 KOReaderDocumentId::calculateFromFilename(sourceBookPath(*epub))),
-                             [this](const ActivityResult&) { requestUpdate(); });
+      startActivityForResult(
+          std::make_unique<ReadingStatsBookDetailActivity>(
+              renderer, mappedInput, KOReaderDocumentId::calculateFromFilename(sourceBookPath(*epub))),
+          [this](const ActivityResult&) { requestUpdate(); });
       break;
     }
     case EpubReaderMenuActivity::MenuAction::BOOK_INFO: {
@@ -1995,7 +1994,8 @@ void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOver
                                                   const int8_t imageRenderingOverride, const int8_t fontFamilyOverride,
                                                   const std::string& sdFontFamilyOverride,
                                                   const int8_t fontSizeOverride, const bool bionicReadingOverride,
-                                                  const int8_t paragraphAlignmentOverride, const uint8_t fontPointSizeOverride) {
+                                                  const int8_t paragraphAlignmentOverride,
+                                                  const uint8_t fontPointSizeOverride) {
   applyBookReaderOverrides(embeddedStyleOverride, imageRenderingOverride, fontFamilyOverride, sdFontFamilyOverride,
                            fontSizeOverride, static_cast<int8_t>(bionicReadingOverride ? 1 : 0),
                            paragraphAlignmentOverride, bookTextAntiAliasingOverride, bookHyphenationOverride,
@@ -2030,8 +2030,7 @@ void EpubReaderActivity::applyBookReaderOverrides(
       bookEmbeddedStyleOverride == embeddedStyleOverride && bookImageRenderingOverride == imageRenderingOverride &&
       bookFontFamilyOverride == normalizedFontFamilyOverride &&
       bookSdFontFamilyOverride == normalizedSdFontFamilyOverride && bookFontSizeOverride == fontSizeOverride &&
-      bookFontPointSizeOverride == fontPointSizeOverride &&
-      bookBionicReadingOverride == bionicReadingOverride &&
+      bookFontPointSizeOverride == fontPointSizeOverride && bookBionicReadingOverride == bionicReadingOverride &&
       bookParagraphAlignmentOverride == paragraphAlignmentOverride &&
       bookTextAntiAliasingOverride == textAntiAliasingOverride && bookHyphenationOverride == hyphenationOverride &&
       bookFontSizeNormalizationOverride == fontSizeNormalizationOverride &&
@@ -2183,9 +2182,11 @@ int EpubReaderActivity::getEffectiveReaderFontId() const {
   // ("override forces back to a known built-in") and avoids surprising users
   // who set the override before they had any SD fonts.
   const uint8_t point = bookFontPointSizeOverride ? bookFontPointSizeOverride
-      : (bookFontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize);
-  const uint8_t fontSize = bookFontPointSizeOverride ? reader_font_size::nearestNamedSize(bookFontPointSizeOverride)
-      : (bookFontSizeOverride >= 0 ? static_cast<uint8_t>(bookFontSizeOverride) : SETTINGS.fontSize);
+                                                  : (bookFontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize);
+  const uint8_t fontSize =
+      bookFontPointSizeOverride
+          ? reader_font_size::nearestNamedSize(bookFontPointSizeOverride)
+          : (bookFontSizeOverride >= 0 ? static_cast<uint8_t>(bookFontSizeOverride) : SETTINGS.fontSize);
   if (bookFontFamilyOverride >= 0) {
     return CrossPointSettings::getBuiltinReaderFontId(static_cast<uint8_t>(bookFontFamilyOverride), fontSize);
   }
@@ -3056,10 +3057,15 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
     GUI.drawPopup(renderer, tr(STR_INDEXING));
   }
 
-  // Reset cumulative SD font metadata cache so this section starts fresh.
+  // Layout needs SD font interval tables even after its page cache is cleared.
+  // Dropping them here made a new note glyph dereference null fullIntervals on X3;
+  // mmap fonts on X4 kept their tables, hiding the invalid lifecycle there.
   renderer.clearFontAccumulation();
+  if (!renderer.restoreFontMetadata()) {
+    LOG_ERR("ERS", "Could not restore font metadata for section layout");
+    return BuildOutcome::Failed;
+  }
   readerPhase_ = ReaderPhase::PRECOMPILING;
-  renderer.dropFontMetadata();
 
   // Build params from the current reader state. embeddedStyle and imageRendering come from
   // the caller (may differ from lastRenderStats on the CSS-retry path); viewport comes from
@@ -3431,7 +3437,6 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
       if (outcome == BuildOutcome::Restarting) {
         return false;  // fragmented-heap recovery reboot in progress
       }
-      renderer.restoreFontMetadata();
       readerPhase_ = ReaderPhase::READING;
       if (outcome == BuildOutcome::Failed) {
         if (buildingFootnotePreview && !footnoteHistory.empty()) {
@@ -3676,13 +3681,12 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   if (fb2MigrationNotice || fb2MigrationFailed) {
     renderer.clearScreen();
-    const char* lines[] = {
-        fb2MigrationFailed ? "Ошибка переноса отметок FB2" : "FB2: цельные главы",
-        fb2MigrationFailed ? "Данные сохранены, книга закрыта." : "Проверьте позицию: начало главы.",
-        "Старые закладки и выделения —",
-        "в резервной папке на SD",
-        "с окончанием .before-native-chapters.",
-        fb2MigrationFailed ? "Назад: закрыть книгу" : "OK: читать     Назад: закрыть книгу"};
+    const char* lines[] = {fb2MigrationFailed ? "Ошибка переноса отметок FB2" : "FB2: цельные главы",
+                           fb2MigrationFailed ? "Данные сохранены, книга закрыта." : "Проверьте позицию: начало главы.",
+                           "Старые закладки и выделения —",
+                           "в резервной папке на SD",
+                           "с окончанием .before-native-chapters.",
+                           fb2MigrationFailed ? "Назад: закрыть книгу" : "OK: читать     Назад: закрыть книгу"};
     int y = (renderer.getScreenHeight() - 6 * 34) / 2;
     for (const char* line : lines) {
       renderer.drawCenteredText(UI_10_FONT_ID, y, line, true);
@@ -3921,9 +3925,8 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   const int viewportHeight = std::max(0, renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom);
   const int contentTop = orientedMarginTop + getImageOnlyPageYOffset(*page, viewportHeight);
 
-  const bool aaEnabledForThisRender =
-      !renderer.isDarkMode() && getEffectiveTextAntiAliasing() && renderer.hasSecondaryBuffer() &&
-      !secondaryBufferDegraded_;
+  const bool aaEnabledForThisRender = !renderer.isDarkMode() && getEffectiveTextAntiAliasing() &&
+                                      renderer.hasSecondaryBuffer() && !secondaryBufferDegraded_;
   if (getEffectiveTextAntiAliasing() && !aaEnabledForThisRender) {
     LOG_DBG("ERS", "AA skipped: secondary display buffer unavailable/degraded");
   }
@@ -4375,9 +4378,8 @@ void EpubReaderActivity::restoreCurrentPageToBufferIfPreRendered() {
     // current page before returning that buffer (which seeds it from write).
     // An active section has no final on-disk page table yet.
     const RenderLayout layout = computeRenderLayout();
-    auto p = section->hasActiveBuild()
-                 ? section->loadPageFromActiveBuild(static_cast<uint16_t>(section->currentPage))
-                 : section->loadPageFromSectionFile();
+    auto p = section->hasActiveBuild() ? section->loadPageFromActiveBuild(static_cast<uint16_t>(section->currentPage))
+                                       : section->loadPageFromSectionFile();
     if (!p) return;
     renderPageContentOnly(*p, layout.marginTop, layout.marginRight, layout.marginBottom, layout.marginLeft);
     renderStatusBar();
@@ -4849,14 +4851,17 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
   const uint8_t effectiveFontFamily =
       currentBook.fontFamilyOverride >= 0 ? static_cast<uint8_t>(currentBook.fontFamilyOverride) : SETTINGS.fontFamily;
   const uint8_t effectiveFontSize =
-      currentBook.fontPointSizeOverride ? reader_font_size::nearestNamedSize(currentBook.fontPointSizeOverride)
-      : (currentBook.fontSizeOverride >= 0 ? static_cast<uint8_t>(currentBook.fontSizeOverride) : SETTINGS.fontSize);
-  const uint8_t effectivePointSize = currentBook.fontPointSizeOverride ? currentBook.fontPointSizeOverride
-      : (currentBook.fontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize);
+      currentBook.fontPointSizeOverride
+          ? reader_font_size::nearestNamedSize(currentBook.fontPointSizeOverride)
+          : (currentBook.fontSizeOverride >= 0 ? static_cast<uint8_t>(currentBook.fontSizeOverride)
+                                               : SETTINGS.fontSize);
+  const uint8_t effectivePointSize = currentBook.fontPointSizeOverride
+                                         ? currentBook.fontPointSizeOverride
+                                         : (currentBook.fontSizeOverride >= 0 ? 0 : SETTINGS.readerFontPointSize);
   int effectiveFontId = 0;
   if (hasLocalSdOverride && currentBook.fontFamilyOverride < 0) {
-    effectiveFontId = resolveSdCardFontId(currentBook.sdFontFamilyOverride.c_str(), effectiveFontSize,
-                                          effectivePointSize);
+    effectiveFontId =
+        resolveSdCardFontId(currentBook.sdFontFamilyOverride.c_str(), effectiveFontSize, effectivePointSize);
   }
   if (effectiveFontId == 0 && currentBook.fontFamilyOverride >= 0) {
     effectiveFontId = CrossPointSettings::getBuiltinReaderFontId(effectiveFontFamily, effectiveFontSize);
@@ -5386,6 +5391,10 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
       case BA::BTN_PREV_SECTION:
         switchFootnote(-1);
         return;
+      case BA::BTN_KOREADER_PULL:
+      case BA::BTN_KOREADER_PUSH:
+        // Explicit sync uses the root main-text position, not the note being viewed.
+        break;
       default:
         openFootnoteMenu();
         return;
@@ -5540,6 +5549,12 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
       break;
     case BA::BTN_KOREADER_SYNC:
       launchKOReaderSync(SyncLaunchMode::COMPARE);
+      break;
+    case BA::BTN_KOREADER_PULL:
+      if (KOREADER_STORE.hasCredentials()) launchKOReaderSync(SyncLaunchMode::PULL_REMOTE);
+      break;
+    case BA::BTN_KOREADER_PUSH:
+      if (KOREADER_STORE.hasCredentials()) launchKOReaderSync(SyncLaunchMode::PUSH_LOCAL);
       break;
     case BA::BTN_QUICK_OVERRIDES:
       if (epub) {

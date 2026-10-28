@@ -13,14 +13,9 @@ namespace ReaderUtils {
 
 constexpr unsigned long GO_HOME_MS = 1000;
 
-// X3's fast differential waveform is intentionally very short and can retain
-// traces when many text pages are turned in succession. Keep the user's chosen
-// cadence on other panels, but never let X3 go more than five pages without a
-// ghost-clearing refresh.
-inline int effectiveRefreshFrequency(const GfxRenderer& renderer) {
-  const int configured = SETTINGS.getRefreshFrequency();
-  return renderer.isX3() && configured > 5 ? 5 : configured;
-}
+// The displayed refresh setting is the cadence on every supported panel.
+// Do not silently clamp X3: users may choose a longer interval in dark mode.
+inline int effectiveRefreshFrequency(const GfxRenderer&) { return SETTINGS.getRefreshFrequency(); }
 
 // Round-half-up integer division clamped to [0, 100], used as the percent byte appended to
 // progress.bin so the home screen can render a per-book badge without re-loading the document.

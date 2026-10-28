@@ -462,3 +462,80 @@ TEST(NativeFb2Parser, DiskIndexActualRegressionBook) {
 }
 
 }  // namespace
+
+namespace {
+class SourceParagraphSink final : public Fb2ContentSink {
+ public:
+  void onSourceParagraph(uint16_t value) override { pending = value; }
+  void onParagraphBegin() override {
+    ordinals.push_back(pending);
+    pending = 0;
+    paragraphs.emplace_back();
+  }
+  void onText(const std::string& text, Fb2InlineStyle) override {
+    if (!paragraphs.empty()) paragraphs.back() += text;
+  }
+  std::vector<uint16_t> ordinals;
+  std::vector<std::string> paragraphs;
+  uint16_t pending = 0;
+};
+}
+
+TEST(NativeFb2Parser, SourceParagraphCoordinatesExcludeTitleEmptyLinesAndNestedBlocks) {
+  const std::string book = "<FictionBook><body><section>"
+      "<title><p>Heading</p></title><p>First</p><empty-line/>"
+      "<cite><p>Quote</p></cite><epigraph><p>Epigraph</p></epigraph>"
+      "<poem><stanza><v>Verse</v></stanza></poem><p>Second</p>"
+      "</section></body></FictionBook>";
+  CoreMemoryReader reader(book);
+  Fb2Parser parser;
+  Fb2ScanResult scan;
+  ASSERT_TRUE(parser.scan(reader, scan));
+  ASSERT_EQ(scan.sections.size(), 1u);
+  SourceParagraphSink sink;
+  ASSERT_TRUE(parser.renderSection(reader, scan.sections[0], sink));
+  EXPECT_EQ(sink.ordinals, (std::vector<uint16_t>{1, 0, 0, 2}));
+}
+
+TEST(NativeFb2Parser, SourceParagraphCoordinatesPreserveConsumedFallbackHeadingOrdinal) {
+  const std::string book = "<FictionBook><body><section>"
+      "<p><strong>Fallback heading</strong></p><p>First prose</p><p>Second prose</p>"
+      "</section></body></FictionBook>";
+  CoreMemoryReader reader(book);
+  Fb2Parser parser;
+  Fb2ScanResult scan;
+  ASSERT_TRUE(parser.scan(reader, scan));
+  ASSERT_EQ(scan.sections.size(), 1u);
+  ASSERT_TRUE(scan.sections[0].fallbackTitle);
+  SourceParagraphSink sink;
+  ASSERT_TRUE(parser.renderSection(reader, scan.sections[0], sink));
+  EXPECT_EQ(sink.ordinals, (std::vector<uint16_t>{2, 3}));
+}
+
+TEST(NativeFb2Parser, SourceParagraphCoordinatesRemainLocalToEachOriginalSection) {
+  const std::string book = "<FictionBook><body><section><p>Parent first</p>"
+      "<section><p>Nested first</p><p>Nested second</p></section><p>Parent second</p>"
+      "</section></body></FictionBook>";
+  CoreMemoryReader reader(book);
+  Fb2Parser parser;
+  Fb2ScanResult scan;
+  ASSERT_TRUE(parser.scan(reader, scan));
+  ASSERT_EQ(scan.sections.size(), 2u);
+  SourceParagraphSink parent, nested;
+  ASSERT_TRUE(parser.renderSection(reader, scan.sections[0], parent));
+  ASSERT_TRUE(parser.renderSection(reader, scan.sections[1], nested));
+  EXPECT_EQ(parent.ordinals, (std::vector<uint16_t>{1, 2}));
+  EXPECT_EQ(nested.ordinals, (std::vector<uint16_t>{1, 2}));
+}
+
+TEST(NativeFb2Parser, SourceParagraphCoordinatesIncludeEmptySourceParagraphs) {
+  const std::string book = "<FictionBook><body><section><p/><p>Prose</p>"
+      "</section></body></FictionBook>";
+  CoreMemoryReader reader(book);
+  Fb2Parser parser;
+  Fb2ScanResult scan;
+  ASSERT_TRUE(parser.scan(reader, scan));
+  SourceParagraphSink sink;
+  ASSERT_TRUE(parser.renderSection(reader, scan.sections[0], sink));
+  EXPECT_EQ(sink.ordinals, (std::vector<uint16_t>{1, 2}));
+}

@@ -97,6 +97,7 @@ class UITheme {
 
  private:
   const ThemeMetrics* currentMetrics;
+  ThemeMetrics enlargedMetrics{};
   std::unique_ptr<BaseTheme> currentTheme;
 };
 

@@ -34,6 +34,7 @@
 #include "components/icons/weather32.h"
 #include "components/icons/wifi.h"
 #include "fontIds.h"
+#include "util/TabBarLayout.h"
 
 namespace {
 // Cover layout — centre cover dominates, sides slide kOverlap px behind it
@@ -606,8 +607,8 @@ void LyraCarouselTheme::drawList(const GfxRenderer& renderer, Rect rect, int ite
   constexpr int maxValWidth = 200;
   constexpr int cornerRadius = 6;
 
-  int rowHeight = (rowSubtitle != nullptr) ? LyraCarouselMetrics::values.listWithSubtitleRowHeight
-                                           : LyraCarouselMetrics::values.listRowHeight;
+  int rowHeight = (rowSubtitle != nullptr) ? UITheme::getInstance().getMetrics().listWithSubtitleRowHeight
+                                           : UITheme::getInstance().getMetrics().listRowHeight;
   if (rowHeightOverride > 0 && rowSubtitle == nullptr) rowHeight = rowHeightOverride;
   const int pageItems = rect.height / rowHeight;
   if (pageItems <= 0 || itemCount <= 0) return;
@@ -697,7 +698,10 @@ void LyraCarouselTheme::drawList(const GfxRenderer& renderer, Rect rect, int ite
     if (rowSubtitle != nullptr) {
       std::string subtitleText = rowSubtitle(i);
       auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
-      renderer.drawText(SMALL_FONT_ID, textX, itemY + 30, subtitle.c_str(), !sel);
+      renderer.drawText(
+          SMALL_FONT_ID, textX,
+          itemY + ((renderer.isX3() && SETTINGS.uiTextSize != 0) ? 7 + renderer.getLineHeight(UI_10_FONT_ID) + 4 : 30),
+          subtitle.c_str(), !sel);
     }
 
     if (!valueText.empty()) {
@@ -723,26 +727,56 @@ void LyraCarouselTheme::drawList(const GfxRenderer& renderer, Rect rect, int ite
 // Tab bar — solid black background + solid black active tab, inverted text
 // ---------------------------------------------------------------------------
 void LyraCarouselTheme::drawTabBar(const GfxRenderer& renderer, Rect rect, const std::vector<TabInfo>& tabs,
-                                   bool selected) const {
+                                   bool selected, bool fullWidth) const {
   constexpr int hPad = 8;
   int currentX = rect.x + LyraCarouselMetrics::values.contentSidePadding;
 
-  for (const auto& tab : tabs) {
-    const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR);
+  std::vector<int> widths;
+  if (fullWidth) {
+    widths.reserve(tabs.size());
+    for (const auto& tab : tabs) {
+      widths.push_back(renderer.getTextWidth(UI_10_FONT_ID, tab.label, EpdFontFamily::REGULAR) + 2 * hPad);
+    }
+  }
+
+  for (size_t index = 0; index < tabs.size(); ++index) {
+    const auto& tab = tabs[index];
+    int horizontalPadding = hPad;
+    const char* label = tab.label;
+    std::string clippedLabel;
+    int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label, EpdFontFamily::REGULAR);
+    if (fullWidth) {
+      const auto cell = TabBarLayout::cell(widths, static_cast<int>(index), rect.x, rect.width,
+                                           LyraCarouselMetrics::values.contentSidePadding);
+      if (cell.width <= 0) continue;
+      horizontalPadding = std::min(horizontalPadding, cell.width / 2);
+      const int textSpace = std::max(0, cell.width - 2 * horizontalPadding);
+      if (textWidth > textSpace) {
+        clippedLabel = renderer.truncatedText(UI_10_FONT_ID, label, textSpace);
+        textWidth = renderer.getTextWidth(UI_10_FONT_ID, clippedLabel.c_str(), EpdFontFamily::REGULAR);
+        if (textWidth > textSpace) {
+          clippedLabel.clear();
+          textWidth = 0;
+        }
+        label = clippedLabel.c_str();
+      }
+      currentX = cell.x + (cell.width - textWidth - 2 * horizontalPadding) / 2;
+    }
 
     if (tab.selected) {
       if (selected) {
-        renderer.fillRoundedRect(currentX, rect.y + 1, textWidth + 2 * hPad, rect.height - 4, kCornerRadius,
-                                 Color::Black);
+        renderer.fillRoundedRect(currentX, rect.y + 1, textWidth + 2 * horizontalPadding, rect.height - 4,
+                                 kCornerRadius, Color::Black);
       } else {
-        renderer.drawRoundedRect(currentX, rect.y, textWidth + 2 * hPad, rect.height - 3, 1, kCornerRadius, true);
+        renderer.drawRoundedRect(currentX, rect.y, textWidth + 2 * horizontalPadding, rect.height - 3, 1, kCornerRadius,
+                                 true);
       }
     }
 
-    renderer.drawText(UI_10_FONT_ID, currentX + hPad, rect.y + 6, tab.label, !(tab.selected && selected),
+    renderer.drawText(UI_10_FONT_ID, currentX + horizontalPadding, rect.y + 6, label, !(tab.selected && selected),
                       EpdFontFamily::REGULAR);
 
-    currentX += textWidth + LyraCarouselMetrics::values.tabSpacing + 2 * hPad;
+    currentX += textWidth + LyraCarouselMetrics::values.tabSpacing + 2 * horizontalPadding;
   }
 
   renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1, true);

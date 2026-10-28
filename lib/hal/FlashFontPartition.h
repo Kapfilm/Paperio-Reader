@@ -85,6 +85,10 @@ void unmap();
 
 // --- Query API ---
 
+// Size of the optional cache partition on this device; zero when it is absent.
+// OTA updates keep the installed partition table, which may differ from ours.
+size_t capacityBytes();
+
 // Returns true if the partition contains a valid index with at least one entry.
 bool hasValidIndex();
 

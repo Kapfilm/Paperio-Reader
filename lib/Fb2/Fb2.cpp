@@ -302,7 +302,7 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 33;  // compact FB2 heading scale; rebuild generated CSS/package cache
+constexpr uint8_t PACKAGE_VERSION = 34;  // source paragraph sync markers; rebuild FB2 package and page LUTs
 // A spine is a real source section. Memory limits belong to the streaming
 // renderer and its SD-backed page indexes, not to visible chapter boundaries.
 // Splitting every 24 KiB (or two images) used to flush a partly filled page and
@@ -1034,10 +1034,18 @@ class StreamSink : public Fb2ContentSink {
     writeBytes(out_, "\"></span>");
   }
   bool streamsTableCells() const override { return true; }
+  void onSourceParagraph(uint16_t ordinal) override { sourceParagraph_ = ordinal; }
   void onParagraphBegin() override {
-    if (epigraphDepth_ > 0) writeBytes(out_, "<p class=\"epigraph-text\">");
-    else if (citeDepth_ > 0) writeBytes(out_, "<p class=\"cite-text\">");
-    else writeBytes(out_, "<p>");
+    if (epigraphDepth_ > 0) writeBytes(out_, "<p class=\"epigraph-text\"");
+    else if (citeDepth_ > 0) writeBytes(out_, "<p class=\"cite-text\"");
+    else writeBytes(out_, "<p");
+    if (sourceParagraph_ > 0) {
+      writeBytes(out_, " data-fb2-p=\"");
+      writeDecimal(out_, sourceParagraph_);
+      writeBytes(out_, "\"");
+    }
+    writeBytes(out_, ">");
+    sourceParagraph_ = 0;
   }
   void onParagraphEnd() override { writeBytes(out_, "</p>"); }
 
@@ -1181,6 +1189,7 @@ class StreamSink : public Fb2ContentSink {
   }
 
  private:
+  uint16_t sourceParagraph_ = 0;
   bool cellIsHeader_ = false;
   Print& out_;
   // Own this path. renderChapterOnDemand() passes a concatenated temporary;
@@ -1210,6 +1219,7 @@ class RangeFilterSink : public Fb2ContentSink {
     cellAttrs_ = attrs; beginScope(Scope::TableCell);
   }
   void onTableCellEnd() override { endScope(Scope::TableCell); }
+  void onSourceParagraph(uint16_t ordinal) override { if (ensureEmitting()) inner_.onSourceParagraph(ordinal); }
   void onParagraphBegin() override { beginScope(Scope::Paragraph); }
   void onParagraphEnd() override { endScope(Scope::Paragraph); }
   void onSubtitleBegin() override { if (ensureEmitting()) inner_.onSubtitleBegin(); }
@@ -1383,6 +1393,7 @@ class TextRangeFilterSink : public Fb2ContentSink {
     cellAttrs_ = attrs; beginScope(Scope::TableCell);
   }
   void onTableCellEnd() override { endScope(Scope::TableCell); }
+  void onSourceParagraph(uint16_t ordinal) override { if (ensureEmitting()) inner_.onSourceParagraph(ordinal); }
   void onParagraphBegin() override { beginScope(Scope::Paragraph); }
   void onParagraphEnd() override { endScope(Scope::Paragraph); }
   void onSubtitleBegin() override { if (ensureEmitting()) inner_.onSubtitleBegin(); }
@@ -1595,6 +1606,7 @@ bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourc
       bool streamsTableCells() const override { return true; }
       Fb2ContentSink* sinks[batchSize]{};
       size_t count = 0;
+      void onSourceParagraph(uint16_t ordinal) override { for (size_t i = 0; i < count; ++i) sinks[i]->onSourceParagraph(ordinal); }
       void onParagraphBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onParagraphBegin(); }
       void onParagraphEnd() override { for (size_t i = 0; i < count; ++i) sinks[i]->onParagraphEnd(); }
       void onSubtitleBegin() override { for (size_t i = 0; i < count; ++i) sinks[i]->onSubtitleBegin(); }

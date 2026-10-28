@@ -19,7 +19,7 @@
 
 Firmware for **XTEINK X3 and X4** e-readers.
 
-Current version: **Paperio Reader 2.2.3**.
+Current version: **Paperio Reader 2.2.4**.
 
 - EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H, and Markdown.
 - Replace an EPUB or FB2 book cover from the SD card with a JPG, JPEG, PNG, or BMP image, and restore the embedded cover at any time.
@@ -28,19 +28,20 @@ Current version: **Paperio Reader 2.2.3**.
 - EPUB CSS and tables, floating images, hyphenation, superscript, and subscript.
 - Custom fonts and a unified text settings screen with live preview. Font sizes can be selected by name or numerically; numeric mode is also available in per-book settings.
 - Line spacing from 70% to 200% in 1% increments: a global option in “Text Settings” and a per-book option in “Quick Overrides” and “Book-specific overrides.”
-- Dark theme on X4: while reading only or throughout the entire interface; covers and illustrations retain their original polarity.
+- Dark theme on X3 and X4: while reading only or throughout the entire interface; covers and illustrations retain their original polarity.
 - Continuous layout of original FB2 chapters: long chapters are not split into technical fragments that leave unused space at the bottom of a page, and the page counter covers the entire chapter.
 - Mini and Lyra themes; recent books and library views with a 2×2 cover grid.
 - Bookmarks, named pages, highlights, and a unified bookmark list for all books.
 - Reading statistics, clock, weather, and KOReader synchronization.
 - Offline games: Sudoku, Sokoban, Kakuro, Hangman, and 15 Puzzle, with saved progress and game-specific statistics.
-- Configurable short, double, and long button presses.
+- Configurable short, double, and long button presses, including separate KOReader progress download and upload actions.
+- Larger interface text and configurable tilt page turning on X3.
 - Transparent sleep screens, an information overlay, and a white background for both quick and full sleep.
 - Wi-Fi, web-based file access, USB Serial transfer, firmware installation from an SD card, and over-the-air updates.
 - Switching between Paperio and inkMOD in the second slot, with emergency recovery. Installation requirements and limitations are described below.
 
 OTA updates are available under `Settings → System → System Update → Check for updates`.
-For manual installation, use [firmware.bin version 2.2.3](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.3/firmware.bin).
+For manual installation, use [firmware.bin version 2.2.4](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.4/firmware.bin).
 
 The changelog is available on the [Releases page](https://github.com/Kapfilm/Paperio-Reader/releases).
 
@@ -529,8 +530,8 @@ Replace `yourname` with your account name. The `help` command displays help, and
 pio run -e gh_release
 ```
 
-A release is created by pushing a version-number tag, such as `2.2.3`. GitHub Actions attaches
-`firmware-Paperio-Reader-2.2.3.bin` and an OTA-compatible copy named `firmware.bin`.
+A release is created by pushing a version-number tag, such as `2.2.4`. GitHub Actions attaches
+`firmware-Paperio-Reader-2.2.4.bin` and an OTA-compatible copy named `firmware.bin`.
 
 
 </details>

@@ -550,6 +550,7 @@ void setupDisplayAndFonts(bool seamless = false, bool skipSdFontDiscovery = fals
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
   registerUiFonts(renderer);
+  applyUiTextSize(renderer, gpio.deviceIsX3() && SETTINGS.uiTextSize != 0);
 
   // Discover SD card fonts (under /.crosspoint/fonts/) and load the family
   // currently selected in settings (if any). Safe to call without an SD card.
@@ -875,10 +876,9 @@ void setup() {
   logStartupMemory("after_storage_begin");
 
   SETTINGS.loadFromFile();
-  // Dark mode is currently enabled only on X4. Apply
-  // the global scope before display initialization so the very first frame has
+  // Apply the global scope before display initialization so the first frame has
   // the correct polarity; reader-only mode is selected per activity later.
-  display.setDarkMode(!gpio.deviceIsX3() && SETTINGS.darkMode == CrossPointSettings::DARK_MODE_EVERYWHERE);
+  display.setDarkMode(SETTINGS.darkMode == CrossPointSettings::DARK_MODE_EVERYWHERE);
   // APP_STATE is needed before display init so Quick Resume can skip the on-wake resync
   // and so the seamless-wake path can paint the LoadingIcon over the restored framebuffer.
   APP_STATE.loadFromFile();
@@ -910,6 +910,10 @@ void setup() {
   const BootResume resume = isSilentReboot              ? BootResume::Silent
                             : !APP_STATE.showBootScreen ? BootResume::QuickResume
                                                         : BootResume::Splash;
+  if (resume == BootResume::QuickResume && SETTINGS.darkMode == CrossPointSettings::DARK_MODE_READER_ONLY) {
+    // The saved framebuffer is logical; restore its previous page polarity before painting it.
+    display.setDarkMode(APP_STATE.lastSleepFromReader);
+  }
 
   // Booting straight into the USB serial-transfer activity? Skip SD-font
   // discovery (only built-in UI fonts are used there) to shorten the reboot the
@@ -1059,7 +1063,7 @@ void loop() {
   HalClock::updatePeriodic(SETTINGS.ntpServer);
   halTiltSensor.update(static_cast<CrossPointTiltPageTurn::Value>(SETTINGS.tiltPageTurn),
                        static_cast<CrossPointOrientation::Value>(SETTINGS.orientation),
-                       activityManager.isReaderActivity());
+                       activityManager.isReaderActivity(), SETTINGS.tiltDirection);
 
   // X3 only: the BQ27220 can return to TI's 3000 mAh default after gauge
   // power loss. Correct DesignCapacity and Learned FCC to the real 650 mAh in
@@ -1368,6 +1372,8 @@ void loop() {
         case BA::BTN_READER_MENU:
         case BA::BTN_TOGGLE_BIONIC_READING:
         case BA::BTN_KOREADER_SYNC:
+        case BA::BTN_KOREADER_PULL:
+        case BA::BTN_KOREADER_PUSH:
         case BA::BTN_CYCLE_FONT_SIZE:
         case BA::BTN_CYCLE_ORIENTATION:
         case BA::BTN_QUICK_OVERRIDES:
@@ -1457,6 +1463,12 @@ void loop() {
           break;
         case BA::BTN_KOREADER_SYNC:
           activityManager.dispatchButtonAction(BA::BTN_KOREADER_SYNC);
+          break;
+        case BA::BTN_KOREADER_PULL:
+          activityManager.dispatchButtonAction(BA::BTN_KOREADER_PULL);
+          break;
+        case BA::BTN_KOREADER_PUSH:
+          activityManager.dispatchButtonAction(BA::BTN_KOREADER_PUSH);
           break;
         case BA::BTN_TOGGLE_BIONIC_READING:
           activityManager.dispatchButtonAction(BA::BTN_TOGGLE_BIONIC_READING);

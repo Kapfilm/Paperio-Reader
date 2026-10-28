@@ -221,17 +221,20 @@ std::string KOReaderDocumentId::calculate(const std::string& filePath) {
     // Seek to offset
     if (!file.seekSet(offset)) {
       LOG_DBG("KODoc", "Failed to seek to offset %zu", offset);
-      continue;
+      file.close();
+      return "";
     }
 
     // Read up to CHUNK_SIZE bytes
     const size_t bytesToRead = std::min(CHUNK_SIZE, fileSize - offset);
-    const size_t bytesRead = file.read(buffer, bytesToRead);
-
-    if (bytesRead > 0) {
-      md5.add(buffer, bytesRead);
-      totalBytesRead += bytesRead;
+    const int bytesRead = file.read(buffer, bytesToRead);
+    if (bytesRead < 0 || static_cast<size_t>(bytesRead) != bytesToRead) {
+      LOG_DBG("KODoc", "Failed to read %zu bytes at offset %zu (got %d)", bytesToRead, offset, bytesRead);
+      file.close();
+      return "";
     }
+    md5.add(buffer, static_cast<size_t>(bytesRead));
+    totalBytesRead += static_cast<size_t>(bytesRead);
   }
 
   file.close();

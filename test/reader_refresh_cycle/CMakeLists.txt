@@ -1,0 +1,4 @@
+add_executable(ReaderRefreshCycleTest ReaderRefreshCycleTest.cpp)
+target_include_directories(ReaderRefreshCycleTest BEFORE PRIVATE shims)
+target_link_libraries(ReaderRefreshCycleTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(ReaderRefreshCycleTest)

@@ -27,10 +27,10 @@ class SdCardFont {
   bool load(const char* path);
 
   // Load from a flash partition mmap pointer (e.g. from FlashFontPartition::mmap()).
-  // fullIntervals and kern/lig tables are read directly from the mmap region — no
-  // heap allocation for metadata.  The mmap pointer must remain valid for the
-  // lifetime of this SdCardFont.  unloadMetadata() and reloadMetadata() are no-ops
-  // for mmap-loaded fonts (metadata is always present in the flash mapping).
+  // Intervals and ligatures are copied into aligned heap arrays; packed kern
+  // tables and glyph data may refer directly to the mapping. The mmap pointer
+  // must remain valid for this font's lifetime. unloadMetadata()/reloadMetadata()
+  // are no-ops for mmap-loaded fonts, so their aligned metadata stays available.
   // sdPath must be the SD path of the same .cpfont — it is used by the bitmap
   // overflow handler to load glyph bitmaps from SD at draw time.
   // Returns true on success.
@@ -55,16 +55,15 @@ class SdCardFont {
   // cumulative cp set growth across pagination.
   void clearAccumulation();
 
-  // Phase lifecycle: drop all layout-phase metadata (fullIntervals + kern/lig tables)
-  // to free ~40–50 KB before createSectionFile(). File offsets are preserved so
-  // reloadMetadata() can restore everything without re-reading the file header.
-  // Mini buffers are NOT affected — those are already managed per-section.
-  // No-op if not loaded.
+  // Release SD-backed layout metadata only while the font is not being queried.
+  // Layout/prewarm needs fullIntervals, so never call this before section parsing
+  // without a successful reloadMetadata() before the parser starts.
+  // File offsets and mini buffers are preserved. No-op for mmap-backed fonts.
   void unloadMetadata();
 
-  // Restore layout-phase metadata after createSectionFile() completes.
-  // Re-reads fullIntervals and kern/lig tables from SD using stored file offsets.
-  // Returns true on success; false leaves the font in a degraded (stub-only) state.
+  // Restore SD-backed intervals before layout/prewarm uses the font again.
+  // Kern/ligature data is reloaded lazily by prewarm. Returns false on failure;
+  // callers must stop layout instead of querying the incomplete metadata.
   bool reloadMetadata();
 
   // Returns pointer to the managed EpdFont for a given style.
@@ -230,14 +229,12 @@ class SdCardFont {
   uint32_t contentHash_ = 0;
   bool loaded_ = false;
 
-  // True when persistent metadata (fullIntervals, kernLeft/RightClasses,
-  // ligaturePairs) is heap-allocated and must be delete[]'d on free.
-  // False when loaded via loadFromMmap() — those pointers alias the flash
-  // partition mmap region and must never be freed.
+  // Ownership of interval/ligature arrays. Mmap loads also copy these arrays
+  // for alignment; their packed kern-class tables may still alias flash.
   bool metadataOwned_ = true;
 
   // Base pointer of the mmap'd .cpfont data (the value passed to loadFromMmap).
-  // Non-null only when metadataOwned_ == false. Used to read sections (e.g. the
+  // Non-null for mmap-backed fonts. Used to read sections (e.g. the
   // kern matrix) directly from flash without SD I/O.
   const uint8_t* mmapDataBase_ = nullptr;
 

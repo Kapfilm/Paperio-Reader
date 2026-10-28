@@ -17,7 +17,7 @@ for size in ${NOTOSANS_FONT_SIZES[@]}; do
   done
 done
 
-UI_FONT_SIZES=(10 12)
+UI_FONT_SIZES=(10 12 14)
 UI_FONT_STYLES=("Regular" "Bold")
 UI_LANG_INTERVALS=(
   "0x0000,0x007F"

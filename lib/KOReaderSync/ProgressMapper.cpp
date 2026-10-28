@@ -138,7 +138,9 @@ KOReaderPosition ProgressMapper::toKOReader(const std::shared_ptr<Epub>& epub, c
 }
 
 CrossPointPosition ProgressMapper::toCrossPoint(const std::shared_ptr<Epub>& epub, const KOReaderPosition& koPos,
-                                                int currentSpineIndex, int totalPagesInCurrentSpine) {
+                                                int currentSpineIndex, int totalPagesInCurrentSpine,
+                                                bool* resolvedExactAnchor) {
+  if (resolvedExactAnchor) *resolvedExactAnchor = false;
   CrossPointPosition result;
   result.spineIndex = 0;
   result.pageNumber = 0;
@@ -176,9 +178,10 @@ CrossPointPosition ProgressMapper::toCrossPoint(const std::shared_ptr<Epub>& epu
       }
 
       // KOReader's text-node indexing can differ across renderers/parsers in some
-      // XHTML shapes. When an XPath-resolved position disagrees materially with
-      // KOReader's percentage but points to the same spine, use percentage-derived
-      // intra-spine progress as a safer tie-breaker.
+      // XHTML shapes. An exact element match may still denote only the start of
+      // a multi-page block: our forward mapper emits bare paths for nested text.
+      // Preserve the established percentage reconciliation even for exact paths
+      // when both positions belong to the same spine.
       if (std::isfinite(koPos.percentage) && resolvedIntraSpineProgress >= 0.0f) {
         const float sanitizedPercentage = std::clamp(koPos.percentage, 0.0f, 1.0f);
         const float mappedPercentage = epub->calculateProgress(result.spineIndex, resolvedIntraSpineProgress);
@@ -246,6 +249,8 @@ CrossPointPosition ProgressMapper::toCrossPoint(const std::shared_ptr<Epub>& epu
       resolvedIntraSpineProgress = percentageIntraSpine;
     }
   }
+
+  if (resolvedExactAnchor) *resolvedExactAnchor = usedXPathMapping && xpathExactMatch;
 
   // Estimate page number within the selected spine item
   if (result.spineIndex < epub->getSpineItemsCount()) {

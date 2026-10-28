@@ -279,6 +279,9 @@ class Fb2ContentSink {
 public:
     virtual ~Fb2ContentSink() = default;
 
+    // Source-section <p> sibling ordinal, or zero for a nested paragraph.
+    // Emitted immediately before onParagraphBegin; synthetic paragraphs have no ordinal.
+    virtual void onSourceParagraph(uint16_t /*ordinal*/) {}
     virtual void onParagraphBegin() {}
     virtual void onParagraphEnd() {}
     virtual void onSubtitle(const std::string& /*text*/) {}

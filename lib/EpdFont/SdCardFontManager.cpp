@@ -39,7 +39,7 @@ int SdCardFontManager::computeFontId(uint32_t contentHash, const char* familyNam
 // If the total size exceeds the available space, falls back to writing only
 // the single requested file. Returns true if at least the requested size
 // was written successfully.
-static bool writeFamily(const SdCardFontFamilyInfo& family, uint8_t requestedPointSize) {
+static bool writeFamily(const SdCardFontFamilyInfo& family, uint8_t requestedPointSize, size_t partitionBytes) {
   // Collect available sizes and sort ascending so we write small→large.
   std::vector<uint8_t> sizes = family.availableSizes();
   std::sort(sizes.begin(), sizes.end());
@@ -51,17 +51,17 @@ static bool writeFamily(const SdCardFontFamilyInfo& family, uint8_t requestedPoi
     // Rough total: sum all file sizes + HEADER_BYTES overhead.
     size_t total = FlashFontPartition::HEADER_BYTES;
     bool allFit = true;
-    // We can't read partition size here directly, but 3.47 MB is the known
-    // value. Use a conservative 3.3 MB cap to leave room for alignment padding.
-    static constexpr size_t PARTITION_CAP = 3300 * 1024;
     for (uint8_t sz : sizes) {
       const SdCardFontFileInfo* fi = family.findFile(sz);
       if (!fi) continue;
       HalFile f;
-      if (!Storage.openFileForRead("FFP", fi->path.c_str(), f) || !f) continue;
+      if (!Storage.openFileForRead("FFP", fi->path.c_str(), f) || !f) {
+        allFit = false;
+        break;
+      }
       total += (f.fileSize() + 3) & ~static_cast<size_t>(3);  // 4-byte align
       f.close();
-      if (total > PARTITION_CAP || static_cast<uint8_t>(sizes.size()) > FlashFontPartition::MAX_ENTRIES) {
+      if (total > partitionBytes || sizes.size() > FlashFontPartition::MAX_ENTRIES) {
         allFit = false;
         break;
       }
@@ -126,19 +126,35 @@ bool SdCardFontManager::loadFamily(const SdCardFontFamilyInfo& family, GfxRender
   {
     if (FlashFontPartition::isMapped()) FlashFontPartition::unmap();
 
-    const bool alreadyCached = FlashFontPartition::hasEntry(family.name.c_str(), selected->pointSize);
+    const size_t partitionBytes = FlashFontPartition::capacityBytes();
+    const bool alreadyCached =
+        partitionBytes > 0 && FlashFontPartition::hasEntry(family.name.c_str(), selected->pointSize);
+    bool canCacheSelected = false;
+    if (!alreadyCached && partitionBytes > FlashFontPartition::HEADER_BYTES) {
+      HalFile source;
+      if (Storage.openFileForRead("FFP", selected->path.c_str(), source) && source) {
+        const size_t bytes = source.fileSize();
+        canCacheSelected = bytes > 0 && bytes <= partitionBytes - FlashFontPartition::HEADER_BYTES;
+        source.close();
+      }
+    }
 
     bool readyToMmap = alreadyCached;
-    if (!alreadyCached) {
+    if (!alreadyCached && canCacheSelected) {
       // Genuine first load: writing the family into the flash partition takes
       // a noticeable moment — let the caller advertise it before we start.
       if (onColdLoad) onColdLoad();
-      readyToMmap = writeFamily(family, selected->pointSize);
+      readyToMmap = writeFamily(family, selected->pointSize, partitionBytes);
       if (!readyToMmap) {
         LOG_ERR("SDMGR", "Flash write failed for %s, falling back to SD load", family.name.c_str());
       }
-    } else {
+    } else if (alreadyCached) {
       LOG_DBG("SDMGR", "Flash cache hit for %s@%u", family.name.c_str(), selected->pointSize);
+    }
+
+    if (!alreadyCached && !canCacheSelected) {
+      LOG_INF("SDMGR", "Loading %s@%u directly from SD (flash cache capacity=%u bytes)", family.name.c_str(),
+              selected->pointSize, static_cast<unsigned>(partitionBytes));
     }
 
     if (readyToMmap) {
