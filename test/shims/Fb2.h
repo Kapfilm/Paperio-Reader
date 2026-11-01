@@ -16,9 +16,9 @@ class ReaderCancellationToken;
 class Fb2 {
  public:
   static constexpr char SOURCE_MARKER_FILE[] = "/.fb2_source";
+  static std::string resolveOriginalPath(const std::string& packagePath) { return packagePath; }
 
-  static bool renderChapterOnDemand(const std::string&, int, Print&,
-                                    const reader::ReaderCancellationToken* = nullptr) {
+  static bool renderChapterOnDemand(const std::string&, int, Print&, const reader::ReaderCancellationToken* = nullptr) {
     return false;
   }
   static bool decodeImageOnDemand(const std::string&, const reader::ReaderCancellationToken* = nullptr) {

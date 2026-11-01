@@ -2,9 +2,12 @@
 
 #include <I18n.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
 
 uint16_t EnumSelectionActivity::optionCount() const {
   return overrideCount > 0 ? overrideCount : setting.getEnumOptionCount();
@@ -53,10 +56,10 @@ void EnumSelectionActivity::render(RenderLock&&) {
   const int panelTop = overlayPanel ? renderer.getScreenHeight() / 4 : 0;
   if (overlayPanel) {
     renderer.syncWriteBufferFromDisplayed();
-    renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12,
-                             true, true, false, false, Color::White);
-    renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12,
-                             true, true, false, false, true);
+    renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12, true,
+                             true, false, false, Color::White);
+    renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12, true,
+                             true, false, false, true);
   } else {
     renderer.clearScreen();
   }
@@ -69,11 +72,30 @@ void EnumSelectionActivity::render(RenderLock&&) {
     contentRect.height = std::max(0, contentBottom - contentRect.y);
   }
 
-  GUI.drawHeader(renderer, Rect{contentRect.x, contentRect.y + metrics.topPadding, contentRect.width, metrics.headerHeight},
+  GUI.drawHeader(renderer,
+                 Rect{contentRect.x, contentRect.y + metrics.topPadding, contentRect.width, metrics.headerHeight},
                  I18N.get(setting.nameId));
 
   const int contentTop = contentRect.y + metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = contentRect.height - (contentTop - contentRect.y) - metrics.verticalSpacing;
+  int contentHeight = contentRect.height - (contentTop - contentRect.y) - metrics.verticalSpacing;
+
+  // Keep the warning on the same screen as the candidate action. It is advisory:
+  // no assignment is blocked and selecting the action still needs one Confirm.
+  const bool warnSleepRemap =
+      setting.valuePtr == &CrossPointSettings::btnLongPower &&
+      CrossPointSettings::resolvedPowerAction(static_cast<uint8_t>(selectedIndex)) != CrossPointSettings::BTN_SLEEP;
+  if (warnSleepRemap) {
+    const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID) + 4;
+    const auto warning = renderer.wrappedText(SMALL_FONT_ID, tr(STR_POWER_SLEEP_REMAP_WARNING),
+                                              contentRect.width - 2 * metrics.contentSidePadding, 4);
+    const int warningHeight = static_cast<int>(warning.size()) * lineHeight + metrics.verticalSpacing;
+    contentHeight = std::max(0, contentHeight - warningHeight);
+    int y = contentTop + contentHeight + metrics.verticalSpacing;
+    for (const auto& line : warning) {
+      renderer.drawText(SMALL_FONT_ID, contentRect.x + metrics.contentSidePadding, y, line.c_str());
+      y += lineHeight;
+    }
+  }
 
   const int count = static_cast<int>(optionCount());
   const uint8_t activeIndex = setting.getEnumSelectedIndex();

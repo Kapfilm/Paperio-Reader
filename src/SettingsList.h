@@ -105,8 +105,10 @@ inline std::vector<SettingInfo> buildSettingsList() {
   // --- Display ---
   settings.push_back(SettingInfo::Enum(StrId::STR_UI_TEXT_SIZE, &CrossPointSettings::uiTextSize,
                                        {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_TEXT_LARGE}, "uiTextSize",
-                                       StrId::STR_CAT_DISPLAY)
-                         .withDeviceTarget(SettingDeviceTarget::X3));
+                                       StrId::STR_CAT_DISPLAY));
+  settings.push_back(SettingInfo::Enum(StrId::STR_UI_FONT_STYLE, &CrossPointSettings::uiFontStyle,
+                                       {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_FONT_DARK}, "uiFontStyle",
+                                       StrId::STR_CAT_DISPLAY));
   settings.push_back(SettingInfo::Enum(StrId::STR_DARK_MODE, &CrossPointSettings::darkMode,
                                        {StrId::STR_STATE_OFF, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "darkMode",
                                        StrId::STR_CAT_DISPLAY)
@@ -114,13 +116,13 @@ inline std::vector<SettingInfo> buildSettingsList() {
   settings.push_back(SettingInfo::Action(StrId::STR_TIME_TO_SLEEP, SettingAction::SleepTimeoutPicker)
                          .withDisplayGetter(getSleepTimeoutDisplay)
                          .withCategory(StrId::STR_CAT_DISPLAY));
-  settings.push_back(
-      SettingInfo::Enum(StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen,
-                        {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER, StrId::STR_NONE_OPT,
-                         StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY, StrId::STR_QUICK_RESUME},
-                        "sleepScreen", StrId::STR_CAT_DISPLAY)
-          .withSubcategory(StrId::STR_MENU_DISP_SLEEP)
-          .withSelectorActivity());
+  settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen,
+                                       {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER,
+                                        StrId::STR_NONE_OPT, StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY,
+                                        StrId::STR_QUICK_RESUME, StrId::STR_RANDOM_HIGHLIGHT},
+                                       "sleepScreen", StrId::STR_CAT_DISPLAY)
+                         .withSubcategory(StrId::STR_MENU_DISP_SLEEP)
+                         .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
                                        {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode",
                                        StrId::STR_CAT_DISPLAY));
@@ -363,9 +365,9 @@ inline std::vector<SettingInfo> buildSettingsList() {
                                        StrId::STR_CAT_CONTROLS)
                          .withSubmenu(StrId::STR_BTN_DOWN)
                          .withSelectorActivity());
-  // Power button: short=ignore, double=ignore, long=sleep (via hold timer, not event system)
+  // Power button: short and long default to sleep; all gestures are remappable.
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPower,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnShortPower",
+                                       makeBtnActionOptions(StrId::STR_BTN_DEF_SLEEP), "btnShortPower",
                                        StrId::STR_CAT_CONTROLS)
                          .withSubmenu(StrId::STR_BTN_POWER)
                          .withSelectorActivity());
@@ -375,8 +377,15 @@ inline std::vector<SettingInfo> buildSettingsList() {
                          .withSubmenu(StrId::STR_BTN_POWER)
                          .withSelectorActivity());
   settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPower,
-                                       {StrId::STR_BTN_DEF_SLEEP}, "btnLongPower", StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_POWER));
+                                       makeBtnActionOptions(StrId::STR_BTN_DEF_SLEEP), "btnLongPower",
+                                       StrId::STR_CAT_CONTROLS)
+                         .withSubmenu(StrId::STR_BTN_POWER)
+                         .withSelectorActivity());
+  settings.push_back(SettingInfo::Enum(StrId::STR_POWER_WAKE_MODE, &CrossPointSettings::powerWakeMode,
+                                       {StrId::STR_BTN_SHORT_PRESS, StrId::STR_BTN_LONG_PRESS}, "powerWakeMode",
+                                       StrId::STR_CAT_CONTROLS)
+                         .withSubmenu(StrId::STR_BTN_POWER)
+                         .withSelectorActivity());
   // Tilt page turn (X3-only)
   settings.push_back(SettingInfo::Toggle(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn, "tiltPageTurn",
                                          StrId::STR_CAT_CONTROLS)

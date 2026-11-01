@@ -8,6 +8,7 @@ enum Color : uint8_t { Clear = 0x00, White = 0x01, LightGray = 0x05, DarkGray = 
 
 class GfxRenderer {
  public:
+  bool isDarkMode() const { return false; }
   enum RenderMode { BW, GRAYSCALE_LSB, GRAYSCALE_MSB };
   enum Orientation { Portrait, LandscapeClockwise, PortraitInverted, LandscapeCounterClockwise };
 

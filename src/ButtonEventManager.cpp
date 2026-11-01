@@ -113,7 +113,7 @@ void ButtonEventManager::applyEdge(const int idx, const Button btn, const bool p
     case State::Pressed:
       if (!pressed) {
         const unsigned long heldMs = t - s.pressDownTime;
-        if (heldMs >= LONG_PRESS_MS) {
+        if (heldMs >= longPressDuration(btn)) {
           pushEvent(btn, PressType::Long);
           s.state = State::Idle;
         } else if (hasDoubleAction(btn)) {
@@ -157,7 +157,7 @@ void ButtonEventManager::applyTimeout(const int idx, const Button btn, const uns
   PerButton& s = buttons[idx];
   switch (s.state) {
     case State::Pressed:
-      if (heldNow && now - s.pressDownTime >= LONG_PRESS_MS) {
+      if (heldNow && now - s.pressDownTime >= longPressDuration(btn)) {
         // Fire Long as soon as the hold threshold passes, without waiting for
         // release. The eventual release edge lands in Idle and is ignored.
         pushEvent(btn, PressType::Long);

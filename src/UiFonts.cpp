@@ -14,6 +14,7 @@
 
 namespace {
 bool applied = false;
+bool appliedBold = false;
 
 EpdFont smallRegular(&notosans_8_regular);
 EpdFont smallBold(&notosans_8_bold);
@@ -27,22 +28,31 @@ EpdFont ui14Bold(&inter_ui_14_bold);
 EpdFontFamily ui14Default(&ui14Regular, &ui14Bold);
 
 EpdFontFamily smallDefault(&smallRegular, &smallBold);
+EpdFontFamily smallDark(&smallBold, &smallBold);
+EpdFontFamily ui10Dark(&ui10Bold, &ui10Bold);
+EpdFontFamily ui12Dark(&ui12Bold, &ui12Bold);
+EpdFontFamily ui14Dark(&ui14Bold, &ui14Bold);
 EpdFontFamily ui10Default(&ui10Regular, &ui10Bold);
 EpdFontFamily ui12Default(&ui12Regular, &ui12Bold);
 }  // namespace
 
 void registerUiFonts(GfxRenderer& renderer) {
   renderer.insertFont(SMALL_FONT_ID, smallDefault);
+  renderer.insertFont(UI_HINT_FONT_ID, smallDefault);
   renderer.insertFont(UI_10_FONT_ID, ui10Default);
   renderer.insertFont(UI_12_FONT_ID, ui12Default);
   applied = false;
+  appliedBold = false;
 }
 
-bool applyUiTextSize(GfxRenderer& renderer, bool enlarged) {
-  if (applied == enlarged) return false;
-  renderer.replaceFont(SMALL_FONT_ID, enlarged ? ui10Default : smallDefault);
-  renderer.replaceFont(UI_10_FONT_ID, enlarged ? ui12Default : ui10Default);
-  renderer.replaceFont(UI_12_FONT_ID, enlarged ? ui14Default : ui12Default);
+bool applyUiTextSize(GfxRenderer& renderer, bool enlarged, bool bold) {
+  if (applied == enlarged && appliedBold == bold) return false;
+  // Map both regular and explicit bold calls to real bold faces. Width measuring,
+  // wrapping and drawing then agree for every size without synthetic thickening.
+  renderer.replaceFont(SMALL_FONT_ID, enlarged ? (bold ? ui10Dark : ui10Default) : (bold ? smallDark : smallDefault));
+  renderer.replaceFont(UI_10_FONT_ID, enlarged ? (bold ? ui12Dark : ui12Default) : (bold ? ui10Dark : ui10Default));
+  renderer.replaceFont(UI_12_FONT_ID, enlarged ? (bold ? ui14Dark : ui14Default) : (bold ? ui12Dark : ui12Default));
   applied = enlarged;
+  appliedBold = bold;
   return true;
 }

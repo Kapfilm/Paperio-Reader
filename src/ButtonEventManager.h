@@ -20,7 +20,8 @@ ButtonEventManager& globalButtonEvents();
 //     on release (zero extra wait).
 //   - If a double-click action IS configured, Short is delayed by DOUBLE_WINDOW_MS
 //     to allow disambiguation.
-//   - Long fires as soon as hold time >= LONG_PRESS_MS; release is not required.
+//   - Long fires as soon as hold time >= longPressDuration(button); release
+//     is not required. Power keeps its 400 ms hold; other buttons use 1000 ms.
 //   - Double fires on the second release within DOUBLE_WINDOW_MS.
 //
 // Activities query consumeEvent() each loop tick to receive pending events.
@@ -47,6 +48,12 @@ class ButtonEventManager {
   // Timing constants (milliseconds)
   static constexpr unsigned long LONG_PRESS_MS = 1000;
   static constexpr unsigned long DOUBLE_WINDOW_MS = 300;
+  // Keep the established power-button hold duration, but classify it through
+  // the same queued-edge FSM as every remappable action.
+  static constexpr unsigned long POWER_LONG_PRESS_MS = 400;
+  static constexpr unsigned long longPressDuration(Button button) {
+    return button == Button::Power ? POWER_LONG_PRESS_MS : LONG_PRESS_MS;
+  }
 
   explicit ButtonEventManager(MappedInputManager& input) : input(input) {}
 

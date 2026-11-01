@@ -22,6 +22,7 @@ class SleepActivity final : public Activity {
 
  private:
   void renderDefaultSleepScreen() const;
+  bool renderQuoteSleepScreen() const;
   void renderCustomSleepScreen() const;
   void renderCoverSleepScreen() const;
   void renderBitmapSleepScreen(const Bitmap& bitmap, const BookOverlayInfo& overlayInfo) const;

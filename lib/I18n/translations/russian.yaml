@@ -959,3 +959,13 @@ STR_TILT_FIRST_ACTION: "Первое направление"
 STR_TILT_REVERSE_ACTION: "Обратное направление"
 
 STR_PAGE_WITHOUT_PERCENT_FORMAT: "Страница %d, общий прогресс —"
+STR_RANDOM_HIGHLIGHT: "Цитата"
+STR_UI_FONT_STYLE: "Шрифт интерфейса"
+STR_UI_FONT_DARK: "Жирный"
+STR_RECENT_VIEW_HINT: "Удерживайте «Вверх» для смены вида"
+
+STR_POWER_WAKE_MODE: "Пробуждение"
+STR_POWER_SLEEP_REMAP_WARNING: "Для сна назначьте другую кнопку или тип нажатия."
+STR_RECENT_HOME_SHORT: "Глав."
+STR_RECENT_OPEN_SHORT: "Откр."
+STR_RECENT_REMOVE_SHORT: "Удал."

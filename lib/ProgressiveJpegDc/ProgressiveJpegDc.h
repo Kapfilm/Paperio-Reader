@@ -35,9 +35,11 @@ struct ImageInfo {
 // Returns Unsupported for baseline and other JPEG coding modes.
 Result probe(FsFile& file, ImageInfo& info);
 
-// Decodes the initial DC scan of an SOF2 JPEG into resized grayscale rows.
-// The input file is rewound before decoding. No full-image coefficient or pixel
-// buffer is allocated; unsupported scan scripts fail without consuming output.
+// Decodes SOF2 JPEG luminance into resized grayscale rows. Small covers up to
+// 512x768 (4096 padded blocks) use all DC/AC scans, with one coefficient row
+// plus a nonzero-bit mask per block; scans are reread for each block row.
+// Larger covers or initial allocation failure use the bounded DC-only preview.
+// The input is rewound; no full-image coefficient/pixel buffer is allocated.
 Result decode(FsFile& file, const DecodeOptions& options, RowCallback rowCallback, void* rowUser);
 
 const char* resultName(Result result);

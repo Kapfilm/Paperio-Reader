@@ -36,7 +36,9 @@ void enforceFixedShortActions(CrossPointSettings& settings) {
 }  // namespace
 
 void CrossPointSettings::normalizeDependentSettings(CrossPointSettings& settings) {
+  if (settings.powerWakeMode >= POWER_WAKE_MODE_COUNT) settings.powerWakeMode = POWER_WAKE_SHORT;
   if (settings.uiTextSize > 1) settings.uiTextSize = 0;
+  if (settings.uiFontStyle > 1) settings.uiFontStyle = 0;
   if (settings.tiltPageTurn == 2) {
     settings.tiltPageTurn = 1;
     settings.tiltDirection = 1;
@@ -71,6 +73,9 @@ void CrossPointSettings::loadStartupFromNvs() {
   nvs.begin("Crosspoint", true);  // read-only
   btnShortPower = nvs.getUChar("bSPwr", BTN_DEFAULT);
   btnDoublePower = nvs.getUChar("bDPwr", BTN_DEFAULT);
+  btnLongPower = nvs.getUChar("bLPwr", BTN_DEFAULT);
+  powerWakeMode = nvs.getUChar("pWake", POWER_WAKE_SHORT);
+  if (powerWakeMode >= POWER_WAKE_MODE_COUNT) powerWakeMode = POWER_WAKE_SHORT;
   useClock = nvs.getUChar("useClk", 0);
   nvs.end();
 }
@@ -80,6 +85,8 @@ void CrossPointSettings::saveStartupToNvs() const {
   nvs.begin("Crosspoint", false);  // read-write
   nvs.putUChar("bSPwr", btnShortPower);
   nvs.putUChar("bDPwr", btnDoublePower);
+  nvs.putUChar("bLPwr", btnLongPower);
+  nvs.putUChar("pWake", powerWakeMode);
   nvs.putUChar("useClk", useClock);
   nvs.end();
 }

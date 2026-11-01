@@ -42,6 +42,7 @@ class GfxRenderer {
   uint16_t getDisplayWidthBytes() const { return 60; }
   Orientation getOrientation() const { return Portrait; }
   RenderMode getRenderMode() const { return BW; }
+  bool isDarkMode() const { return false; }
   uint8_t* getWriteTarget() const { return frameBuffer_; }
   int getWriteOriginY() const { return 0; }
   int getWriteRows() const { return 800; }

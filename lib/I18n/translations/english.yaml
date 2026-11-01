@@ -961,3 +961,13 @@ STR_TILT_FIRST_ACTION: "First direction"
 STR_TILT_REVERSE_ACTION: "Reverse direction"
 
 STR_PAGE_WITHOUT_PERCENT_FORMAT: "Page %d, overall —"
+STR_RANDOM_HIGHLIGHT: "Quote"
+STR_UI_FONT_STYLE: "Interface font"
+STR_UI_FONT_DARK: "Bold"
+STR_RECENT_VIEW_HINT: "Hold Up to change view"
+
+STR_POWER_WAKE_MODE: "Wake up"
+STR_POWER_SLEEP_REMAP_WARNING: "Assign another button or press type to Sleep."
+STR_RECENT_HOME_SHORT: "Home"
+STR_RECENT_OPEN_SHORT: "Open"
+STR_RECENT_REMOVE_SHORT: "Del."

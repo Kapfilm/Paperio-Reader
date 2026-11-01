@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <string>
+#include <utility>
 
 #include "../ActivityManager.h"
 #include "../util/ConfirmationActivity.h"
@@ -22,6 +23,7 @@
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "UiFonts.h"
 #include "activities/reader/ReaderActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -42,7 +44,29 @@ bool isLyraTheme() {
 // Mini and every Lyra variant share the same cover-only 2x2 recent-books grid.
 bool usesCompactCoverGrid() { return isMinimalTheme() || isLyraTheme(); }
 
-int gridColumns() { return usesCompactCoverGrid() ? 2 : RecentBooksActivity::GRID_COLS; }
+// Reserve a separate footer for the view gesture on every device and theme.
+// The instructional label always uses a separate fixed-size small font.
+struct RecentControlsLayout {
+  std::vector<std::string> hintLines;
+  int lineHeight;
+  int reservedHeight;
+};
+
+RecentControlsLayout recentControlsLayout(const GfxRenderer& renderer) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect contentRect = UITheme::getContentRect(renderer, true, true);
+  const int lineHeight = renderer.getLineHeight(UI_HINT_FONT_ID) + 3;
+  auto lines = renderer.wrappedText(UI_HINT_FONT_ID, tr(STR_RECENT_VIEW_HINT),
+                                    contentRect.width - 2 * metrics.contentSidePadding, 2);
+  const int reservedHeight = static_cast<int>(lines.size()) * lineHeight + 12;
+  return {std::move(lines), lineHeight, reservedHeight};
+}
+
+Rect recentBooksContentRect(const GfxRenderer& renderer) {
+  Rect rect = UITheme::getContentRect(renderer, true, true);
+  rect.height = std::max(0, rect.height - recentControlsLayout(renderer).reservedHeight);
+  return rect;
+}
 
 int gridThumbWidth(int contentWidth) {
   const int margin = RecentBooksActivity::GRID_THUMB_MARGIN;
@@ -66,7 +90,7 @@ struct GridGeometry {
 
 GridGeometry gridGeometry(const GfxRenderer& renderer) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect contentRect = UITheme::getContentRect(renderer, true, true);
+  const Rect contentRect = recentBooksContentRect(renderer);
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
   const int margin = RecentBooksActivity::GRID_THUMB_MARGIN;
@@ -400,27 +424,20 @@ void RecentBooksActivity::loop() {
       return;
     }
 
-    // Up short: navigate (row up in grid, previous in list)
+    // The side buttons visit every book in either view. The front buttons
+    // are reserved for the visible Remove / Info actions below.
     if (ev.button == MappedInputManager::Button::Up && ev.type == ButtonEventManager::PressType::Short) {
       if (!recentBooks.empty()) {
-        if (gridView) {
-          selectorIndex = std::max(0, selectorIndex - gridColumns());
-        } else {
-          selectorIndex = ButtonNavigator::previousIndex(selectorIndex, listSize);
-        }
+        selectorIndex = ButtonNavigator::previousIndex(selectorIndex, listSize);
         requestUpdate();
       }
       continue;
     }
 
-    // Down short: navigate (row down in grid, next in list)
+    // Down short: next book, including the next column in grid view.
     if (ev.button == MappedInputManager::Button::Down && ev.type == ButtonEventManager::PressType::Short) {
       if (!recentBooks.empty()) {
-        if (gridView) {
-          selectorIndex = std::min(listSize - 1, selectorIndex + gridColumns());
-        } else {
-          selectorIndex = ButtonNavigator::nextIndex(selectorIndex, listSize);
-        }
+        selectorIndex = ButtonNavigator::nextIndex(selectorIndex, listSize);
         requestUpdate();
       }
       continue;
@@ -432,32 +449,15 @@ void RecentBooksActivity::loop() {
       return;
     }
 
-    // Left short: column left in grid, previous in list
-    if (ev.button == MappedInputManager::Button::Left && ev.type == ButtonEventManager::PressType::Short) {
-      if (!recentBooks.empty()) {
-        selectorIndex = ButtonNavigator::previousIndex(selectorIndex, listSize);
-        requestUpdate();
-      }
-      continue;
-    }
-
-    // Right short: column right in grid, next in list
-    if (ev.button == MappedInputManager::Button::Right && ev.type == ButtonEventManager::PressType::Short) {
-      if (!recentBooks.empty()) {
-        selectorIndex = ButtonNavigator::nextIndex(selectorIndex, listSize);
-        requestUpdate();
-      }
-      continue;
-    }
-
-    // Left long: remove selected book (both views)
-    if (ev.button == MappedInputManager::Button::Left && ev.type == ButtonEventManager::PressType::Long) {
+    // Front Left / Right act on the selected book. Keep long presses as
+    // compatible aliases, but a normal press now matches the visible labels.
+    if (ev.button == MappedInputManager::Button::Left &&
+        (ev.type == ButtonEventManager::PressType::Short || ev.type == ButtonEventManager::PressType::Long)) {
       removeSelectedBook();
       return;
     }
-
-    // Right long: show book info (both views)
-    if (ev.button == MappedInputManager::Button::Right && ev.type == ButtonEventManager::PressType::Long) {
+    if (ev.button == MappedInputManager::Button::Right &&
+        (ev.type == ButtonEventManager::PressType::Short || ev.type == ButtonEventManager::PressType::Long)) {
       showSelectedBookInfo();
       return;
     }
@@ -525,11 +525,38 @@ void RecentBooksActivity::render(RenderLock&& lock) {
   }
 }
 
+void RecentBooksActivity::drawControls() {
+  const Rect contentRect = UITheme::getContentRect(renderer, true, true);
+  const auto layout = recentControlsLayout(renderer);
+  int y = contentRect.y + contentRect.height - layout.reservedHeight + 6;
+  for (const auto& line : layout.hintLines) {
+    const int textWidth = renderer.getTextWidth(UI_HINT_FONT_ID, line.c_str());
+    renderer.drawText(UI_HINT_FONT_ID, contentRect.x + (contentRect.width - textWidth) / 2, y, line.c_str());
+    y += layout.lineHeight;
+  }
+
+  const bool hasBooks = !recentBooks.empty();
+  // Keep every caption at the same native font size as Info. Abbreviating a
+  // wide word is more legible than shrinking just that button's lettering.
+  const int captionFont = usesCompactCoverGrid() ? SMALL_FONT_ID : UI_10_FONT_ID;
+  const int captionWidth = (usesCompactCoverGrid() ? 80 : 106) - 8;
+  const auto caption = [&](StrId full, StrId shortLabel) {
+    const char* label = I18N.get(full);
+    return renderer.getTextWidth(captionFont, label) <= captionWidth ? label : I18N.get(shortLabel);
+  };
+  const auto labels = mappedInput.mapLabels(caption(StrId::STR_HOME, StrId::STR_RECENT_HOME_SHORT),
+                                            hasBooks ? caption(StrId::STR_OPEN, StrId::STR_RECENT_OPEN_SHORT) : "",
+                                            hasBooks ? caption(StrId::STR_REMOVE, StrId::STR_RECENT_REMOVE_SHORT) : "",
+                                            hasBooks ? tr(STR_INFO) : "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawSideButtonHints(renderer, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+}
+
 void RecentBooksActivity::renderListView(RenderLock&&) {
   renderer.clearScreen();
 
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect contentRect = UITheme::getContentRect(renderer, true, true);
+  const Rect contentRect = recentBooksContentRect(renderer);
 
   GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.headerHeight},
                  tr(STR_MENU_RECENT_BOOKS));
@@ -553,18 +580,7 @@ void RecentBooksActivity::renderListView(RenderLock&&) {
         [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); });
   }
 
-  if (!gpio.deviceIsX3()) {
-    const int hintY = contentRect.y + contentRect.height - metrics.verticalSpacing - 14;
-    const std::string hint = std::string(tr(STR_DIR_UP)) + "+L: " + tr(STR_VIEW_GRID) + "/" + tr(STR_VIEW_LIST) +
-                             "   " + tr(STR_DIR_LEFT) + "+L: " + tr(STR_REMOVE) + "   " + tr(STR_DIR_RIGHT) +
-                             "+L: " + tr(STR_INFO);
-    renderer.drawText(SMALL_FONT_ID, contentRect.x + metrics.contentSidePadding, hintY, hint.c_str());
-  }
-
-  const bool hasBooks = !recentBooks.empty();
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), hasBooks ? tr(STR_OPEN) : "", "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  GUI.drawSideButtonHints(renderer, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  drawControls();
 
   renderer.displayBuffer();
 }
@@ -680,7 +696,7 @@ void RecentBooksActivity::renderGridCell(const int index, const bool selected, c
 
 void RecentBooksActivity::renderGridView(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect contentRect = UITheme::getContentRect(renderer, true, true);
+  const Rect contentRect = recentBooksContentRect(renderer);
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = contentRect.height - contentTop - metrics.verticalSpacing;
   const GridGeometry geometry = gridGeometry(renderer);
@@ -734,8 +750,7 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
   if (recentBooks.empty()) {
     renderer.drawText(UI_10_FONT_ID, contentRect.x + metrics.contentSidePadding, contentTop + 20,
                       tr(STR_NO_RECENT_BOOKS));
-    const auto labels = mappedInput.mapLabels(tr(STR_HOME), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    drawControls();
     renderer.displayBuffer();
     return;
   }
@@ -768,18 +783,7 @@ void RecentBooksActivity::renderGridView(RenderLock&&) {
     }
   }
 
-  // On X4 (taller screen) there is room for a one-line gesture hint below the grid.
-  if (!gpio.deviceIsX3() && !usesCompactCoverGrid()) {
-    const int hintY = contentRect.y + contentRect.height - metrics.verticalSpacing - 14;
-    const std::string hint = std::string(tr(STR_DIR_UP)) + "+L: " + tr(STR_VIEW_GRID) + "/" + tr(STR_VIEW_LIST) +
-                             "   " + tr(STR_DIR_LEFT) + "+L: " + tr(STR_REMOVE) + "   " + tr(STR_DIR_RIGHT) +
-                             "+L: " + tr(STR_INFO);
-    renderer.drawText(SMALL_FONT_ID, contentRect.x + metrics.contentSidePadding, hintY, hint.c_str());
-  }
-
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  GUI.drawSideButtonHints(renderer, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  drawControls();
 
   renderer.displayBuffer();
 }

@@ -156,8 +156,21 @@ void BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const si
   renderer.drawCenteredText(UI_10_FONT_ID, rect.y + rect.height + 15, percentText.c_str());
 }
 
+void BaseTheme::drawButtonHintLabel(const GfxRenderer& renderer, const int fontId, const char* label, const int x,
+                                    const int y, const int buttonWidth, const bool fitLabel) const {
+  const int availableWidth = buttonWidth - 8;
+  const std::string text = fitLabel ? label : renderer.truncatedText(fontId, label, availableWidth);
+  const int textWidth = renderer.getTextWidth(fontId, text.c_str());
+  if (fitLabel && textWidth > availableWidth) {
+    const float scale = static_cast<float>(availableWidth) / textWidth;
+    renderer.drawTextScaled(fontId, x + 4, y, text.c_str(), true, EpdFontFamily::REGULAR, scale);
+    return;
+  }
+  renderer.drawText(fontId, x + (buttonWidth - 1 - textWidth) / 2, y, text.c_str());
+}
+
 void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
-                                const char* btn4) const {
+                                const char* btn4, const bool fitLabels) const {
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
@@ -178,10 +191,8 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
       const int x = buttonPositions[i];
       renderer.fillRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, false);
       renderer.drawRect(x, pageHeight - buttonY, buttonWidth, buttonHeight);
-      const std::string label = renderer.truncatedText(UI_10_FONT_ID, labels[i], buttonWidth - 8);
-      const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label.c_str());
-      const int textX = x + (buttonWidth - 1 - textWidth) / 2;
-      renderer.drawText(UI_10_FONT_ID, textX, pageHeight - buttonY + textYOffset, label.c_str());
+      drawButtonHintLabel(renderer, UI_10_FONT_ID, labels[i], x, pageHeight - buttonY + textYOffset, buttonWidth,
+                          fitLabels);
     }
   }
 
@@ -363,10 +374,9 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
         subtitleText.replace(nl, 1, " \u2022 ");
       }
       auto subtitle = renderer.truncatedText(UI_10_FONT_ID, subtitleText.c_str(), textWidth);
-      renderer.drawText(
-          UI_10_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding,
-          itemY + ((renderer.isX3() && SETTINGS.uiTextSize != 0) ? renderer.getLineHeight(UI_12_FONT_ID) + 4 : 30),
-          subtitle.c_str(), i != selectedIndex);
+      renderer.drawText(UI_10_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding,
+                        itemY + ((SETTINGS.uiTextSize != 0) ? renderer.getLineHeight(UI_12_FONT_ID) + 4 : 30),
+                        subtitle.c_str(), i != selectedIndex);
     }
 
     if (rowValue != nullptr) {

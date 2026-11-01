@@ -698,10 +698,9 @@ void LyraCarouselTheme::drawList(const GfxRenderer& renderer, Rect rect, int ite
     if (rowSubtitle != nullptr) {
       std::string subtitleText = rowSubtitle(i);
       auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
-      renderer.drawText(
-          SMALL_FONT_ID, textX,
-          itemY + ((renderer.isX3() && SETTINGS.uiTextSize != 0) ? 7 + renderer.getLineHeight(UI_10_FONT_ID) + 4 : 30),
-          subtitle.c_str(), !sel);
+      renderer.drawText(SMALL_FONT_ID, textX,
+                        itemY + ((SETTINGS.uiTextSize != 0) ? 7 + renderer.getLineHeight(UI_10_FONT_ID) + 4 : 30),
+                        subtitle.c_str(), !sel);
     }
 
     if (!valueText.empty()) {

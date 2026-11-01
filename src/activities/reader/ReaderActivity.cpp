@@ -17,6 +17,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "Epub.h"
+#include "Epub/CoverCacheVersion.h"
 #include "EpubReaderActivity.h"
 #include "KOReaderCredentialStore.h"
 #include "MdReaderActivity.h"
@@ -272,15 +273,19 @@ std::string ReaderActivity::sidecarCoverPath(const std::string& bookPath) {
 }
 
 std::string ReaderActivity::bookCacheDir(const std::string& bookPath) {
-  if (isFb2BookPath(bookPath)) return Fb2(bookPath, "/.crosspoint").getCachePath();
+  auto current = [](const std::string& path) {
+    CoverCacheVersion::ensureCurrent(path);
+    return path;
+  };
+  if (isFb2BookPath(bookPath)) return current(Fb2(bookPath, "/.crosspoint").getCachePath());
   if (isBookZipPath(bookPath)) {
     const BookArchiveType type = detectBookArchiveType(bookPath);
-    if (type == BookArchiveType::Fb2) return Fb2(bookPath, "/.crosspoint").getCachePath();
-    if (type == BookArchiveType::Epub) return Epub(bookPath, "/.crosspoint").getCachePath();
+    if (type == BookArchiveType::Fb2) return current(Fb2(bookPath, "/.crosspoint").getCachePath());
+    if (type == BookArchiveType::Epub) return current(Epub(bookPath, "/.crosspoint").getCachePath());
   }
-  if (FsHelpers::hasEpubExtension(bookPath)) return Epub(bookPath, "/.crosspoint").getCachePath();
-  if (FsHelpers::hasXtcExtension(bookPath)) return Xtc(bookPath, "/.crosspoint").getCachePath();
-  return Txt(bookPath, "/.crosspoint").getCachePath();
+  if (FsHelpers::hasEpubExtension(bookPath)) return current(Epub(bookPath, "/.crosspoint").getCachePath());
+  if (FsHelpers::hasXtcExtension(bookPath)) return current(Xtc(bookPath, "/.crosspoint").getCachePath());
+  return current(Txt(bookPath, "/.crosspoint").getCachePath());
 }
 
 namespace {

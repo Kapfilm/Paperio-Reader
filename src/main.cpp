@@ -15,6 +15,7 @@
 #include <HalTiltSensor.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <PowerButtonPolicy.h>
 #include <Preferences.h>
 #include <QuickWakePolicy.h>
 #include <SPI.h>
@@ -243,7 +244,8 @@ void disarmSerialTransferReboot() {
 // The buffer is persisted to SD only when the user actually enabled the feature.
 constexpr char SLEEP_FRAME_FILE[] = "/.crosspoint/sleep_frame.bin";
 
-// Survives X4's latch cutting MCU/RTC power, and can be read before SD init.
+// Gesture provenance survives X4's latch cutting MCU/RTC power and is read
+// before SD init. It is independent of the selected sleep artwork.
 // This records the actual previous sleep transition, not the selected setting.
 constexpr char QUICK_WAKE_NAMESPACE[] = "cpwake";
 constexpr char QUICK_WAKE_KEY[] = "quick";
@@ -448,6 +450,10 @@ static void serviceBootPowerRelease() {
 // Enter deep sleep mode. fromTimeout=true marks an auto-sleep (gates "Quick Resume on Timeout").
 void enterDeepSleep(bool fromTimeout = false) {
   if (!gaugeSleepRetryDue()) return;
+  // Restore idle downclocking before waiting for rendering. Acquire a scoped
+  // clock lock only after RenderLock below: PowerManager allows one owner, so
+  // taking it while the render task still owns it would silently fail.
+  powerManager.setPowerSaving(false);
   LOG_DBG("MAIN", "enterDeepSleep called at millis=%lu, powerBtn isPressed=%d, rawPin=%d", millis(),
           gpio.isPressed(HalGPIO::BTN_POWER), digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
   // The web server activity releases BOTH framebuffers for WiFi heap
@@ -464,6 +470,7 @@ void enterDeepSleep(bool fromTimeout = false) {
     bool gaugeReady = false;
     {
       RenderLock lock;
+      HalPowerManager::Lock gaugePowerLock;
       gaugeReady = powerManager.abandonGaugeCapacityLoad();
     }
     if (!gaugeReady) {
@@ -480,7 +487,7 @@ void enterDeepSleep(bool fromTimeout = false) {
   // ADC read races with that teardown. From here sleep prep reads the power pin
   // directly (HalGPIO::startDeepSleep / waitForStablePowerRelease).
   gpio.stopInputSampler();
-  HalPowerManager::Lock powerLock;  // Ensure we are at normal CPU frequency for sleep preparation
+  HalPowerManager::Lock powerLock;  // Normal CPU frequency for the remaining sleep preparation.
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
   // On X3 the DS3231 keeps time independently, so there's no need to keep the MCU
   // powered during deep sleep for LP timer preservation.
@@ -525,10 +532,11 @@ void enterDeepSleep(bool fromTimeout = false) {
   LOG_DBG("MAIN", "Entering deep sleep (powerBtn isPressed=%d, rawPin=%d)", gpio.isPressed(HalGPIO::BTN_POWER),
           digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
 
-  // Arm only after sleep preparation has committed. Ordinary sleep replaces
-  // any older quick marker; a failed boot cannot turn all future wakes short.
-  if (!writeQuickWakeMarker(quick_wake::markerForSleep(isQuickResumeSleep, gpio.deviceIsX4()))) {
-    LOG_ERR("SLP", "Could not save quick-wake state; next wake may require a long press");
+  // Commit a one-shot gesture marker for every intentional short-wake sleep,
+  // independently of whether the selected artwork preserves a framebuffer.
+  // Long-wake sleep removes an older marker instead of borrowing its fast gate.
+  if (!writeQuickWakeMarker(power_button::markerForSleep(SETTINGS.powerWakeMode, gpio.deviceIsX4()))) {
+    LOG_ERR("SLP", "Could not save short-wake provenance; an already-released tap may be rejected");
   }
   powerManager.startDeepSleep(gpio, keepLpAlive);
 }
@@ -550,7 +558,7 @@ void setupDisplayAndFonts(bool seamless = false, bool skipSdFontDiscovery = fals
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
   registerUiFonts(renderer);
-  applyUiTextSize(renderer, gpio.deviceIsX3() && SETTINGS.uiTextSize != 0);
+  applyUiTextSize(renderer, SETTINGS.uiTextSize != 0, SETTINGS.uiFontStyle == 1);
 
   // Discover SD card fonts (under /.crosspoint/fonts/) and load the family
   // currently selected in settings (if any). Safe to call without an SD card.
@@ -639,38 +647,31 @@ extern "C" __attribute__((constructor(101))) void heapProbePreCppCtors() {
 static BootHeapProbe s_probeMainLast(5);
 #endif
 
-// Maps the user's configured power-button sleep gesture(s) to the matching wake
-// gesture(s), so waking mirrors however the device was put to sleep: a long hold
-// wakes from a long-hold sleep, a double click wakes from a double-click sleep, and
-// so on. Several can be configured at once (e.g. short AND long both power off), in
-// which case any one of them wakes it. Relies on SETTINGS already having been loaded
-// via loadStartupFromNvs() — btnShortPower/btnDoublePower/btnLongPower are NVS-backed
-// specifically so this decision doesn't need the full settings file loaded from SD.
+// Wake is independent of both sleep artwork and the actions assigned to Power.
+// Read from NVS before SD init; an explicit long wake must never be bypassed by
+// a framebuffer/quick-sleep marker from an earlier session.
 static HalGPIO::WakeGestures wakeGestureFromSettings() {
-  using BA = CrossPointSettings::BUTTON_ACTION;
-  HalGPIO::WakeGestures gestures;
-  gestures.shortAllowed = SETTINGS.btnShortPower == BA::BTN_SLEEP;
-  gestures.doubleClick = SETTINGS.btnDoublePower == BA::BTN_SLEEP;
-  // Long-press-to-sleep is not user-remappable (loop()'s power-hold timer always owns
-  // it, independent of btnLongPower's value — see the "not user-remappable" comment at
-  // its call site), so long-hold-to-wake is unconditionally enabled to match.
-  gestures.longHold = true;
-  return gestures;
+  const bool shortWake = power_button::shortWakeSelected(SETTINGS.powerWakeMode);
+  return {.shortAllowed = shortWake, .doubleClick = false, .longHold = !shortWake};
 }
 
 void setup() {
+  // Capture a real press before NVS/boot-health work can outlast a short tap.
+  // GPIO3 is the same active-low power input on both supported C3 boards.
+  pinMode(InputManager::POWER_BUTTON_PIN, INPUT_PULLUP);
+  const bool earlyPowerWasPressed = digitalRead(InputManager::POWER_BUTTON_PIN) == LOW;
   boot_health::begin();
   markBootPhase(BootPhase::SetupEntry);
-  // Load just the settings we need before any other init, so the wake gesture mirrors
-  // whichever press type(s) the user configured to put the device to sleep.
+  // Load wake preference before any other init; this decision cannot require SD.
   SETTINGS.loadStartupFromNvs();
   markBootPhase(BootPhase::NvsSettings);
   const auto quickWakeMode = readQuickWakeMarker();
   const bool quickWakeArmed = quick_wake::armed(quickWakeMode);
   const auto wakeCause = earlyWakeCause();
-  const bool trustedReleasedQuickWake = quick_wake::allowReleasedWake(quickWakeMode, wakeCause);
+  const bool trustedReleasedQuickWake =
+      power_button::allowReleasedWake(SETTINGS.powerWakeMode, quickWakeMode, wakeCause) ||
+      power_button::allowEarlyObservedWake(SETTINGS.powerWakeMode, quickWakeMode, wakeCause, earlyPowerWasPressed);
   HalGPIO::WakeGestures bootWakeGestures = wakeGestureFromSettings();
-  if (quick_wake::allowShortWake(quickWakeMode, wakeCause)) bootWakeGestures.shortAllowed = true;
   bootWakeCheck = gpio.verifyPowerButtonWakeup(bootWakeGestures, CrossPointSettings::getPowerWakeHoldDuration(),
                                                trustedReleasedQuickWake);
   markBootPhase(BootPhase::WakeGate);
@@ -740,7 +741,11 @@ void setup() {
   gpio_deep_sleep_hold_dis();  // Release deep sleep GPIO hold state from previous sleep cycle
   markBootPhase(BootPhase::HwInit);
 
-  const auto wakeupReason = gpio.getWakeupReason();
+  auto wakeupReason = gpio.getWakeupReason();
+  if (wakeupReason == HalGPIO::WakeupReason::AfterUSBPower &&
+      power_button::observedPowerWake(gpio.deviceIsX3(), wakeCause, bootWakeCheck.accepted())) {
+    wakeupReason = HalGPIO::WakeupReason::PowerButton;
+  }
 
   if (wakeupReason == HalGPIO::WakeupReason::AfterUSBPower) {
     // If USB power caused a cold boot, go back to sleep immediately without initializing subsystems
@@ -1038,9 +1043,8 @@ void setup() {
   mappedInputManager.update();
   buttonEventManager.drain();
 
-  // Block held-power sleep for the first 2 seconds. On Quick Resume the user often releases
-  // the wake-press a fraction late; without this guard the loop() power-hold check would
-  // immediately fire enterDeepSleep().
+  // Additional startup hold guard; stable-release draining above is the primary
+  // protection against reusing the wake press as a remapped awake action.
   allowSleepAt = millis() + 2000;
   logBootSummary();
   logStartupMemory("setup_complete");
@@ -1064,14 +1068,6 @@ void loop() {
   halTiltSensor.update(static_cast<CrossPointTiltPageTurn::Value>(SETTINGS.tiltPageTurn),
                        static_cast<CrossPointOrientation::Value>(SETTINGS.orientation),
                        activityManager.isReaderActivity(), SETTINGS.tiltDirection);
-
-  // X3 only: the BQ27220 can return to TI's 3000 mAh default after gauge
-  // power loss. Correct DesignCapacity and Learned FCC to the real 650 mAh in
-  // short, non-blocking steps. Serialize the shared I2C work with rendering.
-  if (gpio.deviceIsX3() && powerManager.isGaugeCapacityLoadPending() && !RenderLock::peek()) {
-    RenderLock lock;
-    powerManager.loadGaugeCapacity();
-  }
 
   renderer.setFadingFix(SETTINGS.fadingFix);
   renderer.setTextDarkness(SETTINGS.textDarkness);
@@ -1184,11 +1180,6 @@ void loop() {
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
 
-  // Power-hold timer for sleep. Hoisted above the screenshot block so the
-  // screenshot path can clear it and avoid a stale POWER press triggering sleep
-  // after the screenshot completes.
-  static unsigned long powerHoldStart = 0;
-
   static bool screenshotButtonsReleased = true;
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
     if (screenshotButtonsReleased) {
@@ -1203,7 +1194,6 @@ void loop() {
       // Discard the POWER+DOWN presses so they don't fire Short/Long events
       // (e.g. page turn, sleep) once the user releases the combo.
       buttonEventManager.drain();
-      powerHoldStart = 0;
     }
     return;
   } else {
@@ -1216,34 +1206,6 @@ void loop() {
     enterDeepSleep(/*fromTimeout=*/true);
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
     return;
-  }
-
-  // Track power button hold for sleep.  We require a fresh press edge (wasPressed)
-  // before starting to measure hold time, so that a hold carried over from boot
-  // (wake-up press) is never misinterpreted as a "go to sleep" press.
-  // The power button long-press is not user-remappable, so this path always owns it.
-  // Sleep mapped to other buttons is handled by the dispatcher's BTN_SLEEP case below.
-  if (gpio.wasPressed(HalGPIO::BTN_POWER)) {
-    powerHoldStart = millis();
-    LOG_DBG("MAIN", "loop: power button press detected (fresh edge)");
-  }
-  if (millis() >= allowSleepAt && gpio.isPressed(HalGPIO::BTN_POWER) && powerHoldStart > 0) {
-    const unsigned long heldTime = millis() - powerHoldStart;
-    if (heldTime > SETTINGS.getPowerButtonDuration()) {
-      // If the screenshot combination is potentially being pressed, don't sleep
-      if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
-        return;
-      }
-      LOG_DBG("MAIN", "loop: power button held for %lu ms (> %u ms), entering deep sleep", heldTime,
-              SETTINGS.getPowerButtonDuration());
-      enterDeepSleep();
-      // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
-      return;
-    }
-  }
-
-  if (!gpio.isPressed(HalGPIO::BTN_POWER)) {
-    powerHoldStart = 0;
   }
 
   // Refresh the battery icon when USB is plugged or unplugged.
@@ -1333,13 +1295,11 @@ void loop() {
         case B::Power:
           switch (ev.type) {
             case ButtonEventManager::PressType::Short:
-              return SETTINGS.btnShortPower;
+              return CrossPointSettings::resolvedPowerAction(SETTINGS.btnShortPower);
             case ButtonEventManager::PressType::Double:
               return SETTINGS.btnDoublePower;
             case ButtonEventManager::PressType::Long:
-              // The dedicated 400 ms hold-to-sleep timer consumes this press
-              // before the generic 1000 ms long-press event can be dispatched.
-              break;
+              return CrossPointSettings::resolvedPowerAction(SETTINGS.btnLongPower);
           }
           break;
         default:
@@ -1389,6 +1349,9 @@ void loop() {
     std::vector<ButtonEventManager::ButtonEvent> defaultEvents;
     defaultEvents.reserve(8);
     while (buttonEventManager.consumeEvent(ev)) {
+      // The wake press is drained until stable release. Retain the startup
+      // hold guard as well, including when a custom action replaces Sleep.
+      if (ev.button == B::Power && ev.type == ButtonEventManager::PressType::Long && millis() < allowSleepAt) continue;
       const uint8_t action = actionFor(ev);
       // Fall through to the activity when the event has no global effect here: either an
       // explicit Default mapping, or a reader-scoped action while not in the reader.
@@ -1505,6 +1468,16 @@ void loop() {
     for (auto it = defaultEvents.rbegin(); it != defaultEvents.rend(); ++it) {
       buttonEventManager.pushEventFront(it->button, it->type);
     }
+  }
+
+  // Optional X3 gauge work follows global commands. In particular a queued
+  // sleep must not start a fresh configuration step only to cancel it below.
+  // Already-started gauge changes still go through enterDeepSleep's verified
+  // cleanup before the device can sleep.
+  if (gpio.deviceIsX3() && powerManager.isGaugeCapacityLoadPending() && !RenderLock::peek() &&
+      !gpio.isPressed(HalGPIO::BTN_POWER) && !buttonEventManager.isShortPending(MappedInputManager::Button::Power)) {
+    RenderLock lock;
+    powerManager.loadGaugeCapacity();
   }
 
   const unsigned long activityStartTime = millis();

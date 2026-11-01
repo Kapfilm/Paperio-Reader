@@ -16,12 +16,15 @@
 #include <gtest/gtest.h>
 #include <tjpgd.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "BitmapHelpers.h"
+#include "Epub/Epub/CoverCacheVersion.h"
 #include "HalStorage.h"  // FsFile (stdio-backed shim)
 #include "JpegToBmpConverter.h"
 #include "Print.h"
@@ -421,4 +424,141 @@ TEST(JpegToBmpConverter, CropModeEmitsExactTargetHeightOverfill) {
   ASSERT_GE(out.buf.size(), 62u);
   EXPECT_EQ(le32(out.buf, 18), 30);
   EXPECT_EQ(le32(out.buf, 22), -10);
+}
+
+TEST(ProgressiveJpegDc, ReconstructsAcDetailAndRestartScans) {
+  for (const char* stem : {"progressive_detail", "progressive_restart"}) {
+    const std::string name(stem);
+    FsFile file;
+    ASSERT_TRUE(file.openForRead(fixture((name + ".jpg").c_str())));
+    const auto golden = loadPgm(fixture((name + ".gray.pgm").c_str()));
+    ASSERT_GT(golden.w, 0);
+    ProgressiveJpegDc::DecodeOptions options;
+    options.outputWidth = golden.w;
+    options.outputHeight = golden.h;
+    ProgressiveRows capture;
+    ASSERT_EQ(ProgressiveJpegDc::decode(file, options, ProgressiveRows::accept, &capture),
+              ProgressiveJpegDc::Result::Ok);
+    ASSERT_EQ(capture.pixels.size(), golden.px.size());
+    int maxDifference = 0;
+    double sum = 0;
+    for (size_t k = 0; k < golden.px.size(); ++k) {
+      const int difference = std::abs(int(capture.pixels[k]) - golden.px[k]);
+      maxDifference = std::max(maxDifference, difference);
+      sum += difference;
+    }
+    EXPECT_LE(maxDifference, 3) << name;
+    EXPECT_LT(sum / golden.px.size(), 0.6) << name;
+  }
+}
+
+TEST(ProgressiveJpegDc, CancelAndCallbackStopDoNotRestartPreview) {
+  FsFile file;
+  ASSERT_TRUE(file.openForRead(fixture("progressive_detail.jpg")));
+  ProgressiveJpegDc::DecodeOptions options;
+  options.outputWidth = 96;
+  options.outputHeight = 64;
+  options.shouldAbort = [](void*) { return true; };
+  ProgressiveRows capture;
+  EXPECT_EQ(ProgressiveJpegDc::decode(file, options, ProgressiveRows::accept, &capture),
+            ProgressiveJpegDc::Result::Aborted);
+  EXPECT_TRUE(capture.pixels.empty());
+  options.shouldAbort = nullptr;
+  int rows = 0;
+  const auto stop = [](void* context, uint16_t, const uint8_t*, uint16_t) { return ++*static_cast<int*>(context) < 3; };
+  EXPECT_EQ(ProgressiveJpegDc::decode(file, options, stop, &rows), ProgressiveJpegDc::Result::Stopped);
+  EXPECT_EQ(rows, 3);
+}
+
+TEST(ProgressiveJpegDc, TruncatedScansFailBeforeOutput) {
+  const auto bytes = [&] {
+    FILE* in = fopen(fixture("progressive_detail.jpg").c_str(), "rb");
+    std::vector<uint8_t> data;
+    for (int c; (c = fgetc(in)) != EOF;) data.push_back(c);
+    fclose(in);
+    return data;
+  }();
+  const std::string path = (std::filesystem::temp_directory_path() /
+                            ("paperio-truncated-progressive-" +
+                             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".jpg"))
+                               .string();
+  for (size_t length = 0; length < bytes.size(); length += 29) {
+    FILE* out = fopen(path.c_str(), "wb");
+    ASSERT_NE(out, nullptr);
+    fwrite(bytes.data(), 1, length, out);
+    fclose(out);
+    FsFile file;
+    ASSERT_TRUE(file.openForRead(path));
+    ProgressiveRows capture;
+    ProgressiveJpegDc::DecodeOptions options;
+    options.outputWidth = 96;
+    options.outputHeight = 64;
+    EXPECT_NE(ProgressiveJpegDc::decode(file, options, ProgressiveRows::accept, &capture),
+              ProgressiveJpegDc::Result::Ok)
+        << length;
+    EXPECT_TRUE(capture.pixels.empty()) << length;
+  }
+  std::remove(path.c_str());
+}
+
+TEST(CoverCacheVersion, InvalidatesDerivedBmpOnceAndPreservesUserState) {
+  const auto directory =
+      std::filesystem::temp_directory_path() /
+      ("paperio-cover-cache-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(directory);
+  const auto write = [&](const char* name) {
+    FILE* file = fopen((directory / name).string().c_str(), "wb");
+    ASSERT_NE(file, nullptr);
+    fputc(42, file);
+    fclose(file);
+  };
+  for (const char* name : {"cover.bmp", "cover_crop.bmp", "thumb_340x540.bmp", "thumb_custom_2_540.bmp", "cover.img",
+                           "progress.bin", "bookmarks.bin", "stats.bin", "book.bin"})
+    write(name);
+  CoverCacheVersion::ensureCurrent(directory.string());
+  for (const char* name : {"cover.bmp", "cover_crop.bmp", "thumb_340x540.bmp", "thumb_custom_2_540.bmp"})
+    EXPECT_FALSE(std::filesystem::exists(directory / name));
+  for (const char* name : {"cover.img", "progress.bin", "bookmarks.bin", "stats.bin", "book.bin"})
+    EXPECT_TRUE(std::filesystem::exists(directory / name));
+  EXPECT_TRUE(std::filesystem::exists(directory / ".cover-render-v2"));
+  write("cover.bmp");
+  write("thumb_340x540.bmp");
+  CoverCacheVersion::ensureCurrent(directory.string());
+  EXPECT_TRUE(std::filesystem::exists(directory / "cover.bmp"));
+  EXPECT_TRUE(std::filesystem::exists(directory / "thumb_340x540.bmp"));
+  std::filesystem::remove_all(directory);
+}
+
+TEST(ProgressiveJpegDc, ReadFailureIsReportedWithoutPreviewFallback) {
+  FsFile file;
+  ASSERT_TRUE(file.openForRead(fixture("progressive_detail.jpg")));
+  file.failReadsAt(550);  // inside the progressive entropy/scan stream
+  ProgressiveRows capture;
+  ProgressiveJpegDc::DecodeOptions options;
+  options.outputWidth = 96;
+  options.outputHeight = 64;
+  EXPECT_EQ(ProgressiveJpegDc::decode(file, options, ProgressiveRows::accept, &capture),
+            ProgressiveJpegDc::Result::IoError);
+  EXPECT_TRUE(capture.pixels.empty());
+}
+
+TEST(ProgressiveJpegDc, IoFailureAfterOutputDoesNotRestartAtRowZero) {
+  FsFile file;
+  ASSERT_TRUE(file.openForRead(fixture("progressive_detail.jpg")));
+  struct Capture {
+    FsFile* file;
+    unsigned rows = 0;
+  } capture{&file};
+  const auto accept = [](void* context, uint16_t y, const uint8_t*, uint16_t) {
+    auto& capture = *static_cast<Capture*>(context);
+    EXPECT_EQ(y, capture.rows++);
+    capture.file->failReadsAt(0);  // next strip re-read fails, after some valid rows
+    return true;
+  };
+  ProgressiveJpegDc::DecodeOptions options;
+  options.outputWidth = 96;
+  options.outputHeight = 64;
+  EXPECT_EQ(ProgressiveJpegDc::decode(file, options, accept, &capture), ProgressiveJpegDc::Result::IoError);
+  EXPECT_GT(capture.rows, 0u);
+  EXPECT_LT(capture.rows, 64u);
 }

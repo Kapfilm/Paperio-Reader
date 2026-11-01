@@ -71,6 +71,7 @@ class RecentBooksActivity final : public Activity {
   void renderGridCell(int index, bool selected, int cellX, int cellY, int tw, int th, int storedThumbWidth,
                       int storedThumbHeight, int labelHeight);
 
+  void drawControls();
   void renderListView(RenderLock&&);
   void renderGridView(RenderLock&&);
 

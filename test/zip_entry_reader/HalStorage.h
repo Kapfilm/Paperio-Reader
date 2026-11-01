@@ -3,12 +3,14 @@
 // Implements FsFile on top of stdio so tests can read actual .epub files
 // and write real cache files under /tmp.
 
+#include <dirent.h>
 #include <fcntl.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -24,12 +26,18 @@ class HalFile : public Print {
   HalFile() = default;
   ~HalFile() { close(); }
 
-  HalFile(HalFile&& o) noexcept : fp_(o.fp_) { o.fp_ = nullptr; }
+  HalFile(HalFile&& o) noexcept : fp_(o.fp_), dir_(o.dir_), path_(std::move(o.path_)) {
+    o.fp_ = nullptr;
+    o.dir_ = nullptr;
+  }
   HalFile& operator=(HalFile&& o) noexcept {
     if (this != &o) {
       close();
       fp_ = o.fp_;
       o.fp_ = nullptr;
+      dir_ = o.dir_;
+      o.dir_ = nullptr;
+      path_ = std::move(o.path_);
     }
     return *this;
   }
@@ -38,6 +46,11 @@ class HalFile : public Print {
 
   bool openForRead(const std::string& path) {
     close();
+    path_ = path;
+    if (std::filesystem::is_directory(path)) {
+      dir_ = opendir(path.c_str());
+      return dir_ != nullptr;
+    }
     fp_ = fopen(path.c_str(), "rb");
     return fp_ != nullptr;
   }
@@ -55,6 +68,10 @@ class HalFile : public Print {
   }
 
   bool close() {
+    if (dir_) {
+      closedir(dir_);
+      dir_ = nullptr;
+    }
     if (fp_) {
       fclose(fp_);
       fp_ = nullptr;
@@ -62,11 +79,17 @@ class HalFile : public Print {
     return true;
   }
 
-  bool isOpen() const { return fp_ != nullptr; }
-  explicit operator bool() const { return fp_ != nullptr; }
+  bool isOpen() const { return fp_ != nullptr || dir_ != nullptr; }
+  explicit operator bool() const { return fp_ != nullptr || dir_ != nullptr; }
 
+  // Test-only fault injection; defaults to normal stdio operation.
+  void failReadsAt(size_t offset) { readFailureOffset_ = offset; }
   int read(void* buf, size_t n) {
     if (!fp_) return -1;
+    if (readFailureOffset_ != static_cast<size_t>(-1)) {
+      if (position() >= readFailureOffset_) return -1;
+      n = std::min(n, readFailureOffset_ - position());
+    }
     return static_cast<int>(fread(buf, 1, n, fp_));
   }
   // Single-byte read, SdFat-style: returns the byte or -1 (used by Bitmap.cpp).
@@ -113,15 +136,38 @@ class HalFile : public Print {
   void flush() {
     if (fp_) fflush(fp_);
   }
-  size_t getName(char*, size_t) { return 0; }
+  size_t getName(char* out, size_t capacity) {
+    const auto name = std::filesystem::path(path_).filename().string();
+    if (capacity) {
+      const size_t n = std::min(capacity - 1, name.size());
+      std::memcpy(out, name.data(), n);
+      out[n] = 0;
+      return n;
+    }
+    return 0;
+  }
   bool rename(const char*) { return false; }
   bool getModifyDateTime(uint16_t*, uint16_t*) { return false; }
-  bool isDirectory() const { return false; }
-  void rewindDirectory() {}
-  HalFile openNextFile() { return HalFile{}; }
+  bool isDirectory() const { return dir_ != nullptr; }
+  void rewindDirectory() {
+    if (dir_) rewinddir(dir_);
+  }
+  HalFile openNextFile() {
+    if (dir_)
+      while (auto* entry = readdir(dir_)) {
+        if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0) continue;
+        HalFile child;
+        child.openForRead(path_ + "/" + entry->d_name);
+        return child;
+      }
+    return HalFile{};
+  }
 
  private:
+  size_t readFailureOffset_ = static_cast<size_t>(-1);
   FILE* fp_ = nullptr;
+  DIR* dir_ = nullptr;
+  std::string path_;
 };
 
 using FsFile = HalFile;

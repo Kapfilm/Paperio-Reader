@@ -117,6 +117,20 @@ void testUnmodifiedSleep() {
   CHECK(gauge.calls == before);
 }
 
+void testSleepBeforeFirstModificationNeedsNoGaugeWait() {
+  Gauge gauge;
+  Bq27220Capacity load(650);
+  // Discovery finds the default capacity but has not sent an unseal key yet.
+  load.tick(gauge, 0);
+  CHECK(load.result() == Bq27220Capacity::Result::Pending);
+  CHECK(gauge.commands.empty());
+  const int before = gauge.calls;
+  CHECK(load.abandon(gauge));
+  CHECK(gauge.calls == before);
+  CHECK(gauge.pauses == 0);
+  CHECK(gauge.status == SEALED);
+}
+
 void testNormalAndTransientReads() {
   for (int failures : {0, 1, 3, 6}) {
     Gauge gauge;
@@ -237,6 +251,7 @@ void testChargeCurrentCache() {
 
 int main() {
   testUnmodifiedSleep();
+  testSleepBeforeFirstModificationNeedsNoGaugeWait();
   testNormalAndTransientReads();
   testCustomAndDisabled();
   testKeySequenceRetry();
@@ -245,5 +260,5 @@ int main() {
   testStuckConfigBlocksSleep();
   testSealMustBeVerified();
   testChargeCurrentCache();
-  std::cout << "X3 battery: 9 scenarios passed\n";
+  std::cout << "X3 battery: 10 scenarios passed\n";
 }

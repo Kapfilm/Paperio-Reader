@@ -105,7 +105,7 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
-      if (applyUiTextSize(renderer, gpio.deviceIsX3() && SETTINGS.uiTextSize != 0)) {
+      if (applyUiTextSize(renderer, SETTINGS.uiTextSize != 0, SETTINGS.uiFontStyle == 1)) {
         UITheme::getInstance().reload();
         UITheme::getInstance().getMutableTheme().invalidateFrameCache();
         renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);

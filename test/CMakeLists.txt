@@ -118,3 +118,4 @@ add_subdirectory(koreader_progress_mapper)
 add_subdirectory(kosync_progress_reply)
 
 add_subdirectory(fb2_sync_position)
+add_subdirectory(power_buttons)

@@ -47,7 +47,97 @@ bool writeStringChecked(FsFile& file, const std::string& value) {
   return writePodChecked(file, length) && (length == 0 || file.write(reinterpret_cast<const uint8_t*>(value.data()),
                                                                      length) == static_cast<size_t>(length));
 }
+
+bool readClipping(FsFile& file, const uint8_t version, Clipping& clipping,
+                  const size_t textLimit = serialization::MAX_STRING_LENGTH) {
+  if (!readPodChecked(file, clipping.spineIndex) || !readPodChecked(file, clipping.startPage) ||
+      !readPodChecked(file, clipping.endPage) || !readPodChecked(file, clipping.pageCount) ||
+      !readPodChecked(file, clipping.startWordIndex) || !readPodChecked(file, clipping.endWordIndex) ||
+      !readPodChecked(file, clipping.wordCount) || !readPodChecked(file, clipping.paragraphIndex) ||
+      !readPodChecked(file, clipping.timestamp)) {
+    return false;
+  }
+  if (version >= 3) {
+    uint8_t highlightStyle = 0;
+    if (!readPodChecked(file, highlightStyle) ||
+        highlightStyle > static_cast<uint8_t>(ClippingHighlightStyle::BlackMarker)) {
+      return false;
+    }
+    clipping.highlightStyle = static_cast<ClippingHighlightStyle>(highlightStyle);
+  }
+  if (version == 1) {
+    char legacyTitle[LEGACY_CHAPTER_TITLE_MAX] = {};
+    if (file.read(reinterpret_cast<uint8_t*>(legacyTitle), sizeof(legacyTitle)) != sizeof(legacyTitle)) {
+      return false;
+    }
+    legacyTitle[sizeof(legacyTitle) - 1] = '\0';
+    clipping.chapterTitle = legacyTitle;
+  } else if (!readStringChecked(file, clipping.chapterTitle, CLIPPING_CHAPTER_TITLE_MAX) ||
+             clipping.chapterTitle.size() > CLIPPING_CHAPTER_TITLE_MAX) {
+    return false;
+  }
+  if (!readStringChecked(file, clipping.text, textLimit)) {
+    return false;
+  }
+  if (version >= 4 && !readStringChecked(file, clipping.previewAnchor, CLIPPING_PREVIEW_ANCHOR_MAX)) {
+    return false;
+  }
+  if (version >= 4) {
+    uint8_t fullNote = 0;
+    if (!readPodChecked(file, fullNote) || fullNote > 1) {
+      return false;
+    }
+    clipping.fullNote = fullNote != 0;
+  }
+  if (clipping.text.size() > CLIPPING_TEXT_MAX) clipping.text.resize(CLIPPING_TEXT_MAX);
+  return true;
+}
 }  // namespace
+
+bool ClippingStore::randomHighlight(ClippingQuote& quote, uint32_t (*randomBelow)(uint32_t)) {
+  quote = {};
+  if (!randomBelow) return false;
+  auto dir = Storage.open(CLIPPINGS_DIR, O_RDONLY);
+  if (!dir || !dir.isDirectory()) return false;
+  uint32_t total = 0;
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    if (file.isDirectory()) continue;
+    char name[64] = {};
+    file.getName(name, sizeof(name));
+    const std::string filename(name);
+    if (filename.size() < 10 || filename.compare(0, 5, "epub_") != 0 ||
+        filename.compare(filename.size() - 4, 4, ".bin") != 0)
+      continue;
+    uint8_t version = 0;
+    uint16_t count = 0;
+    ClippingQuote candidate;
+    std::string path;
+    // Match the writer's metadata bound, never allocate from an unchecked length.
+    if (!readPodChecked(file, version) || version < 1 || version > FILE_VERSION || !readPodChecked(file, count) ||
+        count > CLIPPING_MAX_PER_BOOK || !readStringChecked(file, candidate.title) ||
+        !readStringChecked(file, candidate.author) || !readStringChecked(file, path) ||
+        filename != pathForBook(path).substr(sizeof(CLIPPINGS_DIR)))
+      continue;
+    uint32_t validCount = 0;
+    bool validFile = true;
+    for (uint16_t i = 0; i < count; ++i) {
+      Clipping clipping;
+      if (!readClipping(file, version, clipping, CLIPPING_TEXT_MAX)) {
+        validFile = false;
+        break;
+      }
+      if (clipping.text.find_first_not_of(" \t\r\n") == std::string::npos) continue;
+      ++validCount;
+      if (randomBelow(validCount) == 0) candidate.text = std::move(clipping.text);
+    }
+    // Commit only after the entire file passed validation: a corrupt suffix must
+    // not expose a partially read book. Weight books by highlight count.
+    if (!validFile || validCount == 0 || validCount > UINT32_MAX - total) continue;
+    total += validCount;
+    if (randomBelow(total) < validCount) quote = std::move(candidate);
+  }
+  return total != 0;
+}
 
 bool ClippingStore::archiveForBook(const std::string& filePath, const std::string& backupDirectory) {
   const std::string original = pathForBook(filePath);
@@ -153,67 +243,11 @@ bool ClippingStore::readFromFile() {
   clippings.reserve(count);
   for (uint16_t i = 0; i < count; ++i) {
     Clipping clipping;
-    if (!readPodChecked(file, clipping.spineIndex) || !readPodChecked(file, clipping.startPage) ||
-        !readPodChecked(file, clipping.endPage) || !readPodChecked(file, clipping.pageCount) ||
-        !readPodChecked(file, clipping.startWordIndex) || !readPodChecked(file, clipping.endWordIndex) ||
-        !readPodChecked(file, clipping.wordCount) || !readPodChecked(file, clipping.paragraphIndex) ||
-        !readPodChecked(file, clipping.timestamp)) {
-      LOG_ERR("CLIP", "Truncated clipping file at record %u", i);
+    if (!readClipping(file, version, clipping)) {
+      LOG_ERR("CLIP", "Invalid clipping record %u", i);
       clippings.clear();
-      file.close();
       return false;
     }
-    if (version >= 3) {
-      uint8_t highlightStyle = 0;
-      if (!readPodChecked(file, highlightStyle) ||
-          highlightStyle > static_cast<uint8_t>(ClippingHighlightStyle::BlackMarker)) {
-        LOG_ERR("CLIP", "Invalid clipping highlight style at record %u", i);
-        clippings.clear();
-        file.close();
-        return false;
-      }
-      clipping.highlightStyle = static_cast<ClippingHighlightStyle>(highlightStyle);
-    }
-    if (version == 1) {
-      char legacyTitle[LEGACY_CHAPTER_TITLE_MAX] = {};
-      if (file.read(reinterpret_cast<uint8_t*>(legacyTitle), sizeof(legacyTitle)) != sizeof(legacyTitle)) {
-        LOG_ERR("CLIP", "Truncated clipping title at record %u", i);
-        clippings.clear();
-        file.close();
-        return false;
-      }
-      legacyTitle[sizeof(legacyTitle) - 1] = '\0';
-      clipping.chapterTitle = legacyTitle;
-    } else if (!readStringChecked(file, clipping.chapterTitle) ||
-               clipping.chapterTitle.size() > CLIPPING_CHAPTER_TITLE_MAX) {
-      LOG_ERR("CLIP", "Invalid clipping title at record %u", i);
-      clippings.clear();
-      file.close();
-      return false;
-    }
-    if (!readStringChecked(file, clipping.text)) {
-      LOG_ERR("CLIP", "Truncated clipping text at record %u", i);
-      clippings.clear();
-      file.close();
-      return false;
-    }
-    if (version >= 4 && !readStringChecked(file, clipping.previewAnchor, CLIPPING_PREVIEW_ANCHOR_MAX)) {
-      LOG_ERR("CLIP", "Invalid clipping preview anchor at record %u", i);
-      clippings.clear();
-      file.close();
-      return false;
-    }
-    if (version >= 4) {
-      uint8_t fullNote = 0;
-      if (!readPodChecked(file, fullNote) || fullNote > 1) {
-        LOG_ERR("CLIP", "Invalid clipping note context at record %u", i);
-        clippings.clear();
-        file.close();
-        return false;
-      }
-      clipping.fullNote = fullNote != 0;
-    }
-    if (clipping.text.size() > CLIPPING_TEXT_MAX) clipping.text.resize(CLIPPING_TEXT_MAX);
     clippings.push_back(std::move(clipping));
   }
   file.close();

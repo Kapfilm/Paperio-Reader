@@ -34,9 +34,19 @@ struct Clipping {
   bool fullNote = false;
 };
 
+struct ClippingQuote {
+  std::string text;
+  std::string title;
+  std::string author;
+};
+
 class ClippingStore {
  public:
   enum class AddResult : uint8_t { Added, LimitReached, SaveFailed };
+
+  // Streams one record at a time; deleted highlights and export copies are excluded.
+  // randomBelow(n) must return an unbiased value in [0, n).
+  static bool randomHighlight(ClippingQuote& quote, uint32_t (*randomBelow)(uint32_t));
 
   // Preserve old page/word coordinates before an FB2 pagination migration.
   static bool archiveForBook(const std::string& filePath, const std::string& backupDirectory);

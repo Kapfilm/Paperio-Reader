@@ -26,6 +26,7 @@ class CrossPointSettings {
     COVER_CUSTOM = 5,
     OVERLAY = 6,
     QUICK_RESUME = 7,
+    QUOTE = 8,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -231,7 +232,8 @@ class CrossPointSettings {
   // X4-only output inversion. X3 remains forced to the light theme until the
   // panel behavior can be validated on physical hardware.
   uint8_t darkMode = DARK_MODE_OFF;
-  uint8_t uiTextSize = 0;  // X3 only: 0 normal, 1 enlarged.
+  uint8_t uiTextSize = 0;   // X3/X4: 0 normal, 1 enlarged.
+  uint8_t uiFontStyle = 0;  // 0 regular, 1 bold; independent of interface text size.
   // Status bar settings (statusBar, statusBarProgressBar, statusBarProgressBarThickness retained for migration only)
   uint8_t statusBar = FULL;
   uint8_t statusBarChapterPageCount = 1;
@@ -452,6 +454,14 @@ class CrossPointSettings {
   uint8_t btnLongPageBack = BTN_DEFAULT;
   uint8_t btnLongPageForward = BTN_DEFAULT;
   uint8_t btnLongPower = BTN_DEFAULT;
+
+  // Independent of sleep artwork and button assignments; loaded before SD init.
+  enum POWER_WAKE_MODE { POWER_WAKE_SHORT = 0, POWER_WAKE_LONG = 1, POWER_WAKE_MODE_COUNT };
+  uint8_t powerWakeMode = POWER_WAKE_SHORT;
+
+  static constexpr uint8_t resolvedPowerAction(uint8_t configured) {
+    return configured == BTN_DEFAULT ? BTN_SLEEP : configured;
+  }
 
   ~CrossPointSettings() = default;
 

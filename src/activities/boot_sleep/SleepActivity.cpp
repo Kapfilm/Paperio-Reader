@@ -28,6 +28,7 @@
 #include "../reader/EpubReaderActivity.h"
 #include "../reader/TxtReaderActivity.h"
 #include "../reader/XtcReaderActivity.h"
+#include "ClippingStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "fontIds.h"
@@ -561,6 +562,9 @@ void SleepActivity::onEnter() {
     renderer.setOrientation(GfxRenderer::Portrait);
   }
   switch (SETTINGS.sleepScreen) {
+    case CrossPointSettings::SLEEP_SCREEN_MODE::QUOTE:
+      if (renderQuoteSleepScreen()) return;
+      return renderDefaultSleepScreen();
     case (CrossPointSettings::SLEEP_SCREEN_MODE::BLANK):
       return renderBlankSleepScreen();
     case (CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM):
@@ -650,6 +654,50 @@ void SleepActivity::renderCustomSleepScreen() const {
   }
 
   renderDefaultSleepScreen();
+}
+
+bool SleepActivity::renderQuoteSleepScreen() const {
+  ClippingQuote quote;
+  const auto randomBelow = [](uint32_t bound) -> uint32_t {
+    // Rejection sampling avoids modulo bias for arbitrary library sizes.
+    const uint32_t threshold = static_cast<uint32_t>(-bound) % bound;
+    uint32_t value;
+    do {
+      value = esp_random();
+    } while (value < threshold);
+    return value % bound;
+  };
+  if (!ClippingStore::randomHighlight(quote, randomBelow)) return false;
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  const int margin = 40;
+  const int font = NOTOSANS_16_FONT_ID;
+  // Use the font's native advance without the extra leading of the first
+  // quote screen. This keeps ascenders/descenders clear while packing lines.
+  const int lineHeight = renderer.getLineHeight(font);
+  const int captionHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  const int maxLines = std::max(1, (height - 2 * margin - 3 * captionHeight - 70) / lineHeight);
+  const auto lines = renderer.wrappedText(font, quote.text.c_str(), width - 2 * margin, maxLines);
+  const auto captionLines = renderer.wrappedText(UI_10_FONT_ID, quote.author.c_str(), width - 2 * margin, 3);
+  const int blockHeight =
+      static_cast<int>(lines.size()) * lineHeight + 20 + static_cast<int>(captionLines.size()) * captionHeight;
+  int y = std::max(margin + 24, (height - blockHeight) / 2);
+  renderer.clearScreen();
+  renderer.drawText(NOTOSANS_18_FONT_ID, margin - 8, y - 32, "«", true, EpdFontFamily::BOLD);
+  for (const auto& line : lines) {
+    renderer.drawText(font, margin, y, line.c_str());
+    y += lineHeight;
+  }
+  y += 8;
+  renderer.drawLine(width - margin - 100, y, width - margin, y, 2, true);
+  y += 12;
+  for (const auto& line : captionLines) {
+    const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, line.c_str());
+    renderer.drawText(UI_10_FONT_ID, width - margin - textWidth, y, line.c_str());
+    y += captionHeight;
+  }
+  renderer.displayBuffer(finalSleepRefreshMode(renderer));
+  return true;
 }
 
 void SleepActivity::renderDefaultSleepScreen() const {

@@ -45,6 +45,7 @@ set(PIPELINE_SOURCES
   ${REPO_ROOT}/lib/Utf8/Utf8.cpp
   ${REPO_ROOT}/lib/GfxRenderer/Bitmap.cpp
   ${REPO_ROOT}/lib/GfxRenderer/BitmapHelpers.cpp
+  ${REPO_ROOT}/lib/BmpToBmpConverter/BmpToBmpConverter.cpp
   ${REPO_ROOT}/lib/JpegToBmpConverter/JpegToBmpConverter.cpp
   ${REPO_ROOT}/lib/ProgressiveJpegDc/ProgressiveJpegDc.cpp
   ${REPO_ROOT}/lib/PngToBmpConverter/PngToBmpConverter.cpp
@@ -76,6 +77,7 @@ set(PIPELINE_INCLUDES
   ${REPO_ROOT}/lib/uzlib/src
   ${REPO_ROOT}/lib/FsHelpers
   ${REPO_ROOT}/lib/CooperativeAbort
+  ${REPO_ROOT}/lib/BmpToBmpConverter
   ${REPO_ROOT}/lib/JpegToBmpConverter
   ${REPO_ROOT}/lib/PngToBmpConverter
   ${REPO_ROOT}/lib/PngDecoder

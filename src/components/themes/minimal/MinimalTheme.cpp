@@ -175,7 +175,7 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, cons
 }
 
 void MinimalTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
-                                   const char* btn4) const {
+                                   const char* btn4, const bool fitLabels) const {
   const auto originalOrientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
@@ -196,9 +196,7 @@ void MinimalTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, cons
     renderer.fillRoundedRect(positions[i], y, buttonWidth, height, kButtonCornerRadius, Color::White);
     renderer.drawRoundedRect(positions[i], y, buttonWidth, height, 1, kButtonCornerRadius, true);
     if (hasLabel) {
-      const std::string label = renderer.truncatedText(SMALL_FONT_ID, labels[i], buttonWidth - 8);
-      const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, label.c_str());
-      renderer.drawText(SMALL_FONT_ID, positions[i] + (buttonWidth - textWidth) / 2, y + textYOffset, label.c_str());
+      drawButtonHintLabel(renderer, SMALL_FONT_ID, labels[i], positions[i], y + textYOffset, buttonWidth, fitLabels);
     }
   }
   renderer.setOrientation(originalOrientation);
@@ -252,7 +250,7 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
   (void)rect;
   if (buttonCount <= 0) return;
 
-  const bool enlarged = renderer.isX3() && SETTINGS.uiTextSize != 0;
+  const bool enlarged = SETTINGS.uiTextSize != 0;
   const int panelWidth =
       enlarged ? renderer.getScreenWidth() - 64 : std::min(kMenuPanelWidth, renderer.getScreenWidth() - 80);
   const int panelHeight = buttonCount * kMenuRowHeight + kMenuPanelPadding * 2 + 2;
@@ -306,7 +304,7 @@ void MinimalTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCoun
                             const std::function<UIIcon(int index)>& rowIcon,
                             const std::function<std::string(int index)>& rowValue, bool highlightValue,
                             int rowHeightOverride) const {
-  const bool enlargedUi = renderer.isX3() && SETTINGS.uiTextSize != 0;
+  const bool enlargedUi = SETTINGS.uiTextSize != 0;
   const int subtitleY = enlargedUi ? 7 + renderer.getLineHeight(UI_10_FONT_ID) + 4 : 24;
   const int subtitleStep = enlargedUi ? renderer.getLineHeight(SMALL_FONT_ID) + 3 : 16;
   int rowHeight = rowSubtitle != nullptr ? UITheme::getInstance().getMetrics().listWithSubtitleRowHeight

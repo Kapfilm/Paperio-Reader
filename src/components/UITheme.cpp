@@ -133,7 +133,7 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
       currentMetrics = &BaseMetrics::values;
       break;
   }
-  if (SETTINGS.uiTextSize != 0 && gpio.deviceIsX3()) {
+  if (SETTINGS.uiTextSize != 0) {
     enlargedMetrics = *currentMetrics;
     enlargedMetrics.listRowHeight = std::max(enlargedMetrics.listRowHeight, 40);
     enlargedMetrics.listWithSubtitleRowHeight = std::max(enlargedMetrics.listWithSubtitleRowHeight, 100);

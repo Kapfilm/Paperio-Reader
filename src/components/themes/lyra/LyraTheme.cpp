@@ -304,7 +304,7 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<UIIcon(int index)>& rowIcon,
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
                          int rowHeightOverride) const {
-  const bool enlargedUi = renderer.isX3() && SETTINGS.uiTextSize != 0;
+  const bool enlargedUi = SETTINGS.uiTextSize != 0;
   const int subtitleY = enlargedUi ? 7 + renderer.getLineHeight(UI_10_FONT_ID) + 4 : 24;
   const int subtitleStep = enlargedUi ? renderer.getLineHeight(SMALL_FONT_ID) + 3 : 16;
   int rowHeight = (rowSubtitle != nullptr) ? UITheme::getInstance().getMetrics().listWithSubtitleRowHeight
@@ -441,7 +441,7 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 }
 
 void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
-                                const char* btn4) const {
+                                const char* btn4, const bool fitLabels) const {
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
@@ -464,10 +464,8 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
       renderer.fillRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, cornerRadius, Color::White);
       renderer.drawRoundedRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, 1, cornerRadius, true, true, false,
                                false, true);
-      const std::string label = renderer.truncatedText(SMALL_FONT_ID, labels[i], buttonWidth - 8);
-      const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, label.c_str());
-      const int textX = x + (buttonWidth - 1 - textWidth) / 2;
-      renderer.drawText(SMALL_FONT_ID, textX, pageHeight - buttonY + textYOffset, label.c_str());
+      drawButtonHintLabel(renderer, SMALL_FONT_ID, labels[i], x, pageHeight - buttonY + textYOffset, buttonWidth,
+                          fitLabels);
     } else {
       // Draw the filled background and border for a SMALL-sized button
       renderer.fillRoundedRect(x, pageHeight - smallButtonHeight, buttonWidth, smallButtonHeight, cornerRadius,

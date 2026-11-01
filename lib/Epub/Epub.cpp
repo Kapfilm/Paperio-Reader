@@ -22,6 +22,7 @@
 #include <limits>
 #include <optional>
 
+#include "Epub/CoverCacheVersion.h"
 #include "Epub/HashUtils.h"
 #include "Epub/ImageFormatDetector.h"
 #include "Epub/parsers/ContainerParser.h"
@@ -939,7 +940,7 @@ bool Epub::clearCache(const bool preserveThumbs) const {
     const std::string name(nameBuf);
     // Keep thumbnail and cover BMPs, and the cached raw cover image — all are
     // expensive to regenerate (require ZIP decompression or format conversion).
-    if (FsHelpers::hasBmpExtension(name) || name == "cover.img") continue;
+    if (FsHelpers::hasBmpExtension(name) || name == "cover.img" || "/" + name == CoverCacheVersion::MARKER) continue;
 
     const std::string fullPath = cachePath + "/" + name;
     if (!Storage.remove(fullPath.c_str())) {
@@ -1017,6 +1018,7 @@ const std::string& Epub::getDescription() const {
 }
 
 std::string Epub::getCoverBmpPath(bool cropped) const {
+  CoverCacheVersion::ensureCurrent(cachePath);
   const auto coverFileName = std::string("cover") + (cropped ? "_crop" : "");
   return cachePath + "/" + coverFileName + ".bmp";
 }
@@ -1226,9 +1228,16 @@ bool Epub::generateCoverBmp(bool cropped) const {
   return success;
 }
 
-std::string Epub::getThumbBmpPath() const { return cachePath + "/thumb_[HEIGHT].bmp"; }
-std::string Epub::getThumbBmpPath(int height) const { return cachePath + "/thumb_" + std::to_string(height) + ".bmp"; }
+std::string Epub::getThumbBmpPath() const {
+  CoverCacheVersion::ensureCurrent(cachePath);
+  return cachePath + "/thumb_[HEIGHT].bmp";
+}
+std::string Epub::getThumbBmpPath(int height) const {
+  CoverCacheVersion::ensureCurrent(cachePath);
+  return cachePath + "/thumb_" + std::to_string(height) + ".bmp";
+}
 std::string Epub::getThumbBmpPath(int width, int height) const {
+  CoverCacheVersion::ensureCurrent(cachePath);
   return cachePath + "/thumb_" + std::to_string(width) + "x" + std::to_string(height) + ".bmp";
 }
 

@@ -1,0 +1,119 @@
+name: Build Paperio test firmware
+
+on:
+  push:
+    branches: ["codex/2.2.4-ui-quotes-cover-github"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paperio-test-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev
+          python -m pip install zopfli https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: paperio-test-${{ runner.os }}-${{ hashFiles('platformio.ini', '.gitmodules') }}
+          restore-keys: paperio-test-${{ runner.os }}-
+
+      - name: Prepare version and translations
+        run: |
+          python - <<'PY'
+          import configparser
+          import os
+          import re
+
+          config = configparser.ConfigParser()
+          config.read("platformio.ini")
+          version = config["crosspoint"]["version"].strip()
+          label = config["crosspoint"].get("build_label", "").strip()
+          if label:
+              version += "-" + label
+          if not re.fullmatch(r"[0-9A-Za-z.+-]+", version):
+              raise SystemExit("Invalid firmware version")
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write("CROSSPOINT_RELEASE_VERSION=" + version + "\n")
+          PY
+          python scripts/gen_i18n.py --strip-unused
+
+      - name: Compile X3 and X4 firmware
+        run: pio run -e gh_release 2>&1 | tee firmware-build.log
+
+      - name: Prepare final firmware image
+        run: python scripts/patch_min_chip_rev.py .pio/build/gh_release/firmware.bin
+
+      - name: Build host tests
+        run: |
+          cmake -S test -B build/test -G Ninja -DCMAKE_BUILD_TYPE=Release 2>&1 | tee host-configure.log
+          cmake --build build/test -j 2 2>&1 | tee host-build.log
+
+      - name: Test code and final BIN integrity
+        env:
+          FIRMWARE_IMAGE_TEST_PATH: ${{ github.workspace }}/.pio/build/gh_release/firmware.bin
+        run: |
+          ctest --test-dir build/test --output-on-failure -j 2 2>&1 | tee host-tests.log
+          bash tools/check_recent_books_ui.sh 2>&1 | tee recent-books-ui.log
+
+      - name: Package test firmware
+        run: |
+          mkdir -p dist
+          cp .pio/build/gh_release/{firmware.bin,bootloader.bin,partitions.bin} dist/
+          cp .pio/build/gh_release/firmware.bin "dist/firmware-Paperio-Reader-${CROSSPOINT_RELEASE_VERSION}.bin"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          Path("dist/README.txt").write_text(
+              "Paperio Reader " + os.environ["CROSSPOINT_RELEASE_VERSION"] + "\n"
+              "Test firmware for XTEINK X3 and X4. One firmware.bin supports both.\n"
+              "Install firmware.bin using the SD-card firmware updater.\n"
+              "The boot loading label always uses the fixed small regular font.\n"
+              "Three optional host tests need a local real-world book and are skipped in CI.\n"
+              "No stable release or OTA asset is replaced by this build.\n",
+              encoding="utf-8",
+          )
+          PY
+          (cd dist && sha256sum *.bin > SHA256SUMS && sha256sum -c SHA256SUMS)
+
+      - name: Collect build logs
+        if: always()
+        run: |
+          mkdir -p dist/logs
+          find . -maxdepth 1 -name '*.log' -type f -exec cp {} dist/logs/ \;
+          if [ -f build/test/Testing/Temporary/LastTest.log ]; then
+            cp build/test/Testing/Temporary/LastTest.log dist/logs/host-test-details.log
+          fi
+
+      - name: Upload firmware and verification logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: paperio-x3-x4-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30

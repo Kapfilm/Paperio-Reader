@@ -2,9 +2,10 @@
 
 #include <cstdint>
 
-// The early wake gate runs before SD is mounted. Its quick-sleep evidence is
-// a one-shot NVS marker written only when entering that actual sleep mode;
-// merely having Quick Resume selected in settings must not bypass the gate.
+// The early wake gate runs before SD is mounted. Its released-tap evidence is
+// a one-shot NVS marker written when entering an intentional short-wake sleep.
+// The independent wake preference controls the gesture; selecting Quick Resume
+// artwork alone must not bypass a configured long-hold gate.
 namespace quick_wake {
 enum class BootCause : uint8_t { PowerOn, ButtonDeepSleep, Other };
 // Value 1 is compatible with the earlier bool marker, but deliberately does

@@ -56,6 +56,10 @@
 #include <windows.h>
 #else
 #include <dlfcn.h>
+#if defined(__GLIBC__)
+extern "C" void* __libc_malloc(size_t) __attribute__((weak));
+extern "C" void __libc_free(void*) __attribute__((weak));
+#endif
 #endif
 
 static std::atomic<size_t> g_liveBytes{0};
@@ -101,10 +105,9 @@ static void* rawAlloc(size_t bytes) {
   static malloc_fn_t realMalloc = nullptr;
   if (!realMalloc) {
     realMalloc = reinterpret_cast<malloc_fn_t>(dlsym(RTLD_NEXT, "malloc"));
-    if (!realMalloc) {
-      extern void* __libc_malloc(size_t) __attribute__((weak));
-      realMalloc = __libc_malloc;
-    }
+#if defined(__GLIBC__)
+    if (!realMalloc) realMalloc = __libc_malloc;
+#endif
   }
   return realMalloc ? realMalloc(bytes) : nullptr;
 #endif
@@ -117,10 +120,9 @@ static void rawFree(void* p) {
   static free_fn_t realFree = nullptr;
   if (!realFree) {
     realFree = reinterpret_cast<free_fn_t>(dlsym(RTLD_NEXT, "free"));
-    if (!realFree) {
-      extern void __libc_free(void*) __attribute__((weak));
-      realFree = __libc_free;
-    }
+#if defined(__GLIBC__)
+    if (!realFree) realFree = __libc_free;
+#endif
   }
   if (realFree) realFree(p);
 #endif
