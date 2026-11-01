@@ -91,12 +91,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/generate_release_notes.py \
-            --output "${RELEASE_NOTES_PATH}" \
-            --target-sha "${GITHUB_SHA}" \
-            --current-label "${RC_TAG}" \
-            --release-scope any \
-            --exclude-tag "${RC_TAG}"
+          if [ -f "docs/releases/${RC_TAG}.md" ]; then
+            cp "docs/releases/${RC_TAG}.md" "${RELEASE_NOTES_PATH}"
+          else
+            python3 scripts/generate_release_notes.py \
+              --output "${RELEASE_NOTES_PATH}" \
+              --target-sha "${GITHUB_SHA}" \
+              --current-label "${RC_TAG}" \
+              --release-scope any \
+              --exclude-tag "${RC_TAG}"
+          fi
 
       - name: Publish prerelease assets
         if: ${{ env.ACT != 'true' }}
