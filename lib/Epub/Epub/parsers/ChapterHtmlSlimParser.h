@@ -38,6 +38,7 @@ class ChapterHtmlSlimParser final : public Print {
   int skipUntilDepth = INT_MAX;
   int skipTextUntilDepth = INT_MAX;  // skip character data inside synthetic zero-height spacer <p>
   int boldUntilDepth = INT_MAX;
+  int headingUntilDepth = INT_MAX;
   int italicUntilDepth = INT_MAX;
   int underlineUntilDepth = INT_MAX;
   int strikethroughUntilDepth = INT_MAX;
@@ -107,9 +108,9 @@ class ChapterHtmlSlimParser final : public Print {
   int16_t activeFloatWidth_ = 0;  // image width + gap
   bool activeFloatIsRight_ = false;
   int fontId;
-  // Default heading multipliers (index 0=h1, 1=h2, 2=h3) applied when a heading has no
-  // explicit CSS font-size; resolveBlockFont() then snaps them to the size ladder.
-  static constexpr float kHeadingMultiplier[3] = {1.6f, 1.4f, 1.2f};
+  // Compact heading sizes shared by EPUB and generated FB2 XHTML, independent of
+  // publisher font-size. resolveBlockFont() still selects the nearest real font.
+  static constexpr float kHeadingMultiplier[6] = {1.15f, 1.08f, 1.0f, 1.0f, 1.0f, 1.0f};
   // Sibling-size ladder of the body font (see FontSizeLadder). resolveBlockFont() snaps a
   // block's effective font size to the nearest real font on it; empty = scale-only fallback.
   FontSizeLadder fontSizeLadder_;

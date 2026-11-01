@@ -17,6 +17,7 @@ defaults:
 
 jobs:
   build-release:
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:

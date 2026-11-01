@@ -302,7 +302,7 @@ void fb2ZipScanTask(void* arg) {
 }
 
 
-constexpr uint8_t PACKAGE_VERSION = 34;  // source paragraph sync markers; rebuild FB2 package and page LUTs
+constexpr uint8_t PACKAGE_VERSION = 35;  // compact heading stylesheet; preserve state while rebuilding package
 // A spine is a real source section. Memory limits belong to the streaming
 // renderer and its SD-backed page indexes, not to visible chapter boundaries.
 // Splitting every 24 KiB (or two images) used to flush a partly filled page and
@@ -3469,11 +3469,11 @@ bool Fb2::writeStyleFile() const {
       packagePath + "/OEBPS/style.css",
       "body { text-align: justify; }\n"
       "h1, h2, h3, h4, h5, h6 { text-align: center; font-weight: bold; margin: 1em 0 0.7em 0; }\n"
-      "h1 { font-size: 1.25em; }\n"
-      "h2 { font-size: 1.15em; }\n"
-      "h3 { font-size: 1.08em; }\n"
+      "h1 { font-size: 1.15em; }\n"
+      "h2 { font-size: 1.08em; }\n"
+      "h3 { font-size: 1em; }\n"
       "h4, h5, h6 { font-size: 1em; }\n"
-      ".subtitle { text-align: center; font-size: 1.1em; font-weight: bold; margin: 0.7em 0 0.45em 0; }\n"
+      ".subtitle { text-align: center; font-size: 1em; font-weight: bold; margin: 0.7em 0 0.45em 0; }\n"
       "p { margin: 0.25em 0; }\n"
       ".epigraph, .cite { margin: 0.7em 1.5em; text-indent: 0; }\n"
       ".epigraph-text, .cite-text { margin-left: 1.5em; margin-right: 1.5em; text-indent: 0; }\n"

@@ -2,7 +2,7 @@ name: Build Paperio test firmware
 
 on:
   push:
-    branches: ["codex/2.2.4-ui-quotes-cover-github"]
+    branches: ["codex/2.2.4-ui-quotes-cover-github", "codex/2.2.5-compact-headings-test"]
   workflow_dispatch:
 
 permissions:
@@ -93,20 +93,34 @@ jobs:
           cp .pio/build/gh_release/{firmware.bin,bootloader.bin,partitions.bin} dist/
           cp .pio/build/gh_release/firmware.bin "dist/firmware-Paperio-Reader-${CROSSPOINT_RELEASE_VERSION}.bin"
           python - <<'PY'
+          import hashlib
+          import json
           import os
           from pathlib import Path
 
+          firmware = Path("dist/firmware.bin").read_bytes()
+          version = os.environ["CROSSPOINT_RELEASE_VERSION"]
+          assert b"CrossPoint version: " + version.encode() + b"\0" in firmware
+          Path("dist/firmware-manifest.json").write_text(json.dumps({
+              "version": version,
+              "source_commit": os.environ["GITHUB_SHA"],
+              "file": "firmware.bin",
+              "bytes": len(firmware),
+              "sha256": hashlib.sha256(firmware).hexdigest(),
+              "devices": ["X3", "X4"],
+              "hardware_tested": False,
+          }, indent=2) + "\n")
           Path("dist/README.txt").write_text(
               "Paperio Reader " + os.environ["CROSSPOINT_RELEASE_VERSION"] + "\n"
               "Test firmware for XTEINK X3 and X4. One firmware.bin supports both.\n"
               "Install firmware.bin using the SD-card firmware updater.\n"
-              "The boot loading label always uses the fixed small regular font.\n"
+              "Compact FB2/EPUB headings: H1 115%, H2 108%, H3-H6 100%.\n"
               "Three optional host tests need a local real-world book and are skipped in CI.\n"
               "No stable release or OTA asset is replaced by this build.\n",
               encoding="utf-8",
           )
           PY
-          (cd dist && sha256sum *.bin > SHA256SUMS && sha256sum -c SHA256SUMS)
+          (cd dist && sha256sum *.bin firmware-manifest.json > SHA256SUMS && sha256sum -c SHA256SUMS)
 
       - name: Collect build logs
         if: always()

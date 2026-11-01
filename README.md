@@ -21,6 +21,8 @@ Firmware for **XTEINK X3 and X4** e-readers.
 
 Current version: **Paperio Reader 2.2.5**.
 
+Test build **2.2.6-rc.1** uses smaller, matching FB2 and EPUB headings: H1 is 115% of body size, H2 is 108%, and H3–H6 use body size. EPUB publisher font sizes no longer enlarge these headings or their inline wrappers. Bold styling is retained. Cached pages are rebuilt automatically; reading state is preserved. The stable OTA channel remains at 2.2.5.
+
 - EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H, and Markdown.
 - Replace an EPUB or FB2 book cover from the SD card with a JPG, JPEG, PNG, or BMP image, and restore the embedded cover at any time.
 - Fast rendering, background indexing, and cautious preloading of the next image.

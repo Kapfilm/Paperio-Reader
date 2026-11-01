@@ -378,6 +378,9 @@ void ChapterHtmlSlimParser::updateEffectiveInlineStyle() {
   if (sizePct >= 100 - deadZone && sizePct <= 100 + deadZone) {
     sizePct = 100;
   }
+  // Publisher span/big sizes (including inherited wrappers) must not enlarge a
+  // compact heading again. Preserve smaller text and superscript/subscript sizes.
+  if (headingUntilDepth != INT_MAX) sizePct = std::min(sizePct, 100);
   effectiveSizePct = static_cast<uint8_t>(
       std::min<int>(std::max<int>(sizePct, ParsedText::MIN_WORD_SIZE_PCT), ParsedText::MAX_WORD_SIZE_PCT));
 }
@@ -890,6 +893,7 @@ bool ChapterHtmlSlimParser::tryStartDropCapCapture(const CssStyle& cssStyle) {
   // Positional gates first: they are cheap member reads and reject nearly every
   // inline element in the book, so only an element opening a still-empty paragraph
   // reaches the style checks below.
+  if (headingUntilDepth != INT_MAX) return false;
   if (pendingDropCap_.active || deferredDropCapLine_) return false;
   if (currentTable || currentTableCell) return false;
   if (!currentTextBlock || !currentTextBlock->isEmpty() || partWordBufferIndex > 0) return false;
@@ -1997,18 +2001,13 @@ void ChapterHtmlSlimParser::startElement(void* userData, const char* name, const
         self->paragraphAlignment == static_cast<uint8_t>(CssTextAlign::None)) {
       headerBlockStyle.alignment = cssStyle.textAlign;
     }
-    // Apply default heading sizing when no explicit CSS font-size is set.
-    // Concept inspired by CidVonHighwind/microreader. h1-h3 get default multipliers;
-    // h4-h6 stay at 1.0. The multiplier (default or CSS) is snapped to the size ladder
-    // by resolveBlockFont() once the block is complete, so headings render with a real
-    // taller font when one exists and only the residual is glyph-scaled.
-    if (!cssStyle.hasFontSizeMultiplier()) {
-      const int level = name[1] - '0';  // 'h1'->1, 'h2'->2, …
-      if (level >= 1 && level <= 3) {
-        headerBlockStyle.fontSizeMultiplier = kHeadingMultiplier[level - 1];
-      }
-    }
+    // Match FB2's compact heading hierarchy even when EPUB CSS requests an
+    // oversized title. This also applies with embedded styles disabled. Layout
+    // and rendering resolve the same multiplier through the real-font ladder.
+    const int level = name[1] - '0';  // HEADER_TAGS contains only h1..h6.
+    headerBlockStyle.fontSizeMultiplier = kHeadingMultiplier[level - 1];
     self->startNewTextBlock(headerBlockStyle);
+    self->headingUntilDepth = self->depth;
     self->boldUntilDepth = std::min(self->boldUntilDepth, self->depth);
     self->updateEffectiveInlineStyle();
   } else if (matches(name, BLOCK_TAGS, NUM_BLOCK_TAGS)) {
@@ -2746,6 +2745,10 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
     self->emitBufferedTable();
     self->currentTable.reset();
     self->nextWordContinues = false;
+  }
+
+  if (self->headingUntilDepth == self->depth) {
+    self->headingUntilDepth = INT_MAX;
   }
 
   // Leaving bold tag
