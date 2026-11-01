@@ -460,7 +460,7 @@ class CrossPointSettings {
   uint8_t powerWakeMode = POWER_WAKE_SHORT;
 
   static constexpr uint8_t resolvedPowerAction(uint8_t configured) {
-    return configured == BTN_DEFAULT ? BTN_SLEEP : configured;
+    return configured == BTN_DEFAULT ? static_cast<uint8_t>(BTN_SLEEP) : configured;
   }
 
   ~CrossPointSettings() = default;

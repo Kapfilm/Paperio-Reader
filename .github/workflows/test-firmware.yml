@@ -35,7 +35,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev
           python -m pip install zopfli https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
 
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: platformio-cache
         with:
           path: ~/.platformio
           key: paperio-test-${{ runner.os }}-${{ hashFiles('platformio.ini', '.gitmodules') }}
@@ -63,6 +64,13 @@ jobs:
 
       - name: Compile X3 and X4 firmware
         run: pio run -e gh_release 2>&1 | tee firmware-build.log
+
+      - name: Save completed toolchain cache
+        if: steps.platformio-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.platformio
+          key: paperio-test-${{ runner.os }}-${{ hashFiles('platformio.ini', '.gitmodules') }}
 
       - name: Prepare final firmware image
         run: python scripts/patch_min_chip_rev.py .pio/build/gh_release/firmware.bin
