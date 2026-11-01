@@ -1,72 +1,108 @@
 name: Compile Release
+
 on:
   push:
-    tags:
-      - "[0-9]*"
+    tags: ["[0-9]*"]
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CROSSPOINT_RELEASE_VERSION: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-          ref: ${{ github.ref_name }}
 
       - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: "latest"
-          enable-cache: false
+      - name: Check release version
+        run: |
+          python - <<'PY'
+          import configparser
+          import os
+          import re
+          config = configparser.ConfigParser()
+          config.read("platformio.ini")
+          version = os.environ["CROSSPOINT_RELEASE_VERSION"]
+          assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version), "Stable version required"
+          assert config["crosspoint"]["version"].strip() == version, "Tag/config mismatch"
+          assert not config["crosspoint"].get("build_label", "").strip(), "Test label in stable build"
+          PY
 
-      - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ libssl-dev
+          python -m pip install zopfli https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
 
-      - name: Cache PlatformIO packages
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
-          restore-keys: pio-${{ runner.os }}-
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini', '.gitmodules') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+            paperio-test-${{ runner.os }}-
 
       - name: Generate translations
-        run: python3 scripts/gen_i18n.py --strip-unused
+        run: python scripts/gen_i18n.py --strip-unused
 
       - name: Build Paperio Reader
+        run: pio run -e gh_release 2>&1 | tee firmware-build.log
+
+      - name: Prepare final firmware image
+        run: python scripts/patch_min_chip_rev.py .pio/build/gh_release/firmware.bin
+
+      - name: Build host tests
+        run: |
+          cmake -S test -B build/test -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/test -j 2
+
+      - name: Test code and final BIN integrity
         env:
-          CROSSPOINT_RELEASE_VERSION: ${{ github.ref_name }}
-        run: pio run -e gh_release
+          FIRMWARE_IMAGE_TEST_PATH: ${{ github.workspace }}/.pio/build/gh_release/firmware.bin
+        run: |
+          ctest --test-dir build/test --output-on-failure -j 2 2>&1 | tee host-tests.log
+          bash tools/check_recent_books_ui.sh 2>&1 | tee recent-books-ui.log
 
-      - name: Patch min_chip_rev_full to 0
-        run: python3 scripts/patch_min_chip_rev.py .pio/build/gh_release/firmware.bin
+      - name: Package release
+        run: python scripts/package_stable_release.py
 
-      - name: Create branded firmware asset
-        run: cp .pio/build/gh_release/firmware.bin ".pio/build/gh_release/firmware-Paperio-Reader-${{ github.ref_name }}.bin"
-
-      - name: Upload release assets
-        if: ${{ env.ACT != 'true' }}
-        uses: softprops/action-gh-release@v2
+      - name: Save release and verification logs
+        uses: actions/upload-artifact@v6
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Paperio Reader ${{ github.ref_name }}
-          generate_release_notes: true
-          make_latest: true
-          # A hardware-tested firmware.bin may already be attached manually.
-          # Keep it byte-for-byte intact instead of replacing it with the CI
-          # build, whose release flags can change e-ink sleep timing.
-          overwrite_files: false
-          files: |
-            .pio/build/gh_release/bootloader.bin
-            .pio/build/gh_release/firmware.bin
-            .pio/build/gh_release/firmware-Paperio-Reader-${{ github.ref_name }}.bin
-            .pio/build/gh_release/firmware.elf
-            .pio/build/gh_release/firmware.map
-            .pio/build/gh_release/partitions.bin
-          fail_on_unmatched_files: true
+          name: paperio-release-${{ github.ref_name }}
+          path: |
+            dist/
+            firmware-build.log
+            host-tests.log
+            recent-books-ui.log
+
+      # Published releases are never overwritten. OTA sees only verified assets.
+      - name: Upload, verify, and publish stable OTA release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$CROSSPOINT_RELEASE_VERSION" dist/* \
+            --verify-tag --target "$GITHUB_SHA" --draft \
+            --title "Paperio Reader $CROSSPOINT_RELEASE_VERSION" \
+            --notes-file "docs/releases/$CROSSPOINT_RELEASE_VERSION.md"
+          gh release download "$CROSSPOINT_RELEASE_VERSION" --dir verified-release
+          (cd verified-release && sha256sum -c SHA256SUMS)
+          cmp dist/firmware.bin verified-release/firmware.bin
+          gh release edit "$CROSSPOINT_RELEASE_VERSION" --draft=false --prerelease=false --latest

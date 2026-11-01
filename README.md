@@ -19,7 +19,7 @@
 
 Firmware for **XTEINK X3 and X4** e-readers.
 
-Current version: **Paperio Reader 2.2.4**.
+Current version: **Paperio Reader 2.2.5**.
 
 - EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H, and Markdown.
 - Replace an EPUB or FB2 book cover from the SD card with a JPG, JPEG, PNG, or BMP image, and restore the embedded cover at any time.
@@ -35,15 +35,34 @@ Current version: **Paperio Reader 2.2.4**.
 - Reading statistics, clock, weather, and KOReader synchronization.
 - Offline games: Sudoku, Sokoban, Kakuro, Hangman, and 15 Puzzle, with saved progress and game-specific statistics.
 - Configurable short, double, and long button presses, including separate KOReader progress download and upload actions.
-- Larger interface text and configurable tilt page turning on X3.
-- Transparent sleep screens, an information overlay, and a white background for both quick and full sleep.
+- Normal or bold interface text and independently selectable normal or larger interface size on X3 and X4. Configurable tilt page turning on X3.
+- Transparent sleep screens, an information overlay, a random saved-quote screen with author attribution, and a white background for both quick and full sleep.
 - Wi-Fi, web-based file access, USB Serial transfer, firmware installation from an SD card, and over-the-air updates.
 - Switching between Paperio and inkMOD in the second slot, with emergency recovery. Installation requirements and limitations are described below.
 
 OTA updates are available under `Settings → System → System Update → Check for updates`.
-For manual installation, use [firmware.bin version 2.2.4](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.4/firmware.bin).
+For manual installation, use [firmware.bin version 2.2.5](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.5/firmware.bin).
 
 The changelog is available on the [Releases page](https://github.com/Kapfilm/Paperio-Reader/releases).
+
+
+</details>
+
+<details open>
+<summary><strong>What’s new in 2.2.5</strong></summary>
+
+
+- **Interface on X3 and X4:** restored the choice of normal or bold interface text. The larger interface size is now available on X4 as well as X3; size and weight can be selected independently. Menu spacing follows the selected size. The startup “Loading” label always stays at the normal small regular size, even with an enlarged bold interface.
+- **Recent books:** the two lower action buttons are visible and work with a normal press: **Remove** opens confirmation before removing the entry from the recent list, while **Info** opens book information. Removing an entry does not delete the book file from the SD card. All four lower captions use the same native font size within the theme; long labels are abbreviated instead of shrinking individual captions.
+- **Recent-book navigation:** the side **Up/Down** buttons visit every book in sequence in both list and grid views, including every grid column. **Hold Up** switches between list and grid. The centered reminder replaces the old `+L` hints and always remains small on both devices, regardless of interface size or weight.
+- **Quote sleep screen:** `Settings → Display → Sleep Screen → Quote` selects a random saved highlight from all books. The text uses closer line spacing and is attributed only to the author, without the book title. Deleted highlights, backup/export files, and damaged highlight files are excluded. If no usable highlights remain, the standard sleep screen is shown. Quick Resume on timeout, when enabled, keeps its existing priority.
+- **Power-button assignments:** long Power can now be assigned to the same functions as other buttons. Choosing a function other than Sleep shows a reminder to assign Sleep to another button or press type; it does not block the choice. Short Power defaults to Sleep, and long Power also retains Sleep as its default. Explicit custom assignments and Ignore are preserved.
+- **Independent wake gesture:** `Settings → Controls → Power Button → Wake up` selects a short or long press, with short press as the default. This is separate from sleep artwork and button actions; Quick Resume does not bypass a selected long wake. Startup settings are available before the SD card is mounted. Held wake presses are still suppressed so they do not immediately execute another command; screenshot and recovery combinations remain available, and connecting USB alone is not treated as a confirmed power-button wake.
+- **X3 sleep and wake handling:** a real wake press is captured before loading startup settings, so it need not remain held through those reads. Sleep commands take priority over optional battery setup, and that setup is deferred while a Power press is being classified. Required cleanup of an already-started battery setup is retained and runs at normal CPU speed. These changes remove avoidable software delays; the bootloader and the slower X3 screen-refresh waveform still take time. An X3 cold-start tap released before the application can observe it cannot safely be distinguished from USB power-on. Actual timings were not measured on hardware.
+- **Progressive JPEG covers:** small progressive JPEGs now reconstruct full luminance detail instead of displaying only a coarse block preview. This fixes covers that looked blurred despite containing readable source details. Full-detail decoding is bounded to images up to **512×768** and **4,096 padded blocks**; larger or unsupported cases, or insufficient initial memory, retain the earlier preview path. The firmware cannot recover detail absent from the original image.
+- **Cover-cache update:** old rendered covers and thumbnails are regenerated automatically when accessed. Original images, reading progress, bookmarks, highlights, statistics, and book indexes are preserved; no manual cache deletion or settings reset is required when upgrading from 2.2.4 or the `2.2.4-ui-quotes-cover-test` builds.
+
+The GitHub-built test base passed **668 checks**, with **3 optional external-book checks skipped**, and **32 real-font interface-layout combinations**. The completed firmware image was checked for ESP32-C3 format, checksum, and SHA-256 integrity. The progressive JPEG implementation also passed 18 decoder/cache tests under AddressSanitizer and UndefinedBehaviorSanitizer. These software checks do not replace physical testing of display appearance and sleep/wake timings.
 
 
 </details>
@@ -282,6 +301,12 @@ or long press of any button in the control settings.
 <details>
 <summary><strong>Installation and updates</strong></summary>
 
+
+On an existing Paperio installation, connect to Wi-Fi and select
+`Settings → System → System Update → Check for updates`. Version **2.2.5** is a
+stable OTA update; enabling beta updates is not required. It can be installed
+over 2.2.4 and the `2.2.4-ui-quotes-cover-test` builds without a settings reset.
+For an SD-card update, use the release’s `firmware.bin` application image.
 
 <details>
 <summary>Devices with USB lock (Xteink Unlocker)</summary>
@@ -527,11 +552,13 @@ Replace `yourname` with your account name. The `help` command displays help, and
 
 
 ```sh
+python3 scripts/gen_i18n.py --strip-unused
 pio run -e gh_release
 ```
 
-A release is created by pushing a version-number tag, such as `2.2.4`. GitHub Actions attaches
-`firmware-Paperio-Reader-2.2.4.bin` and an OTA-compatible copy named `firmware.bin`.
+A release is created by pushing a version-number tag, such as `2.2.5`. GitHub Actions attaches
+`firmware-Paperio-Reader-2.2.5.bin` and an OTA-compatible copy named `firmware.bin`.
+The stable release is published as the latest release so the built-in OTA checker can find it.
 
 
 </details>
