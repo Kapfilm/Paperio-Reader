@@ -100,8 +100,14 @@ TEST_P(NativeFootnotePreviewTest, SectionCacheMissThenBuildRendersNativePreviews
         if (element->getTag() != TAG_PageLine) continue;
         const auto& block = *static_cast<const PageLine&>(*element).getBlock();
         for (uint16_t word = 0; word < block.wordCount(); ++word) {
-          text += block.wordText(word);
+          const std::string token = block.wordText(word);
+          text += token;
           text += ' ';
+          if (token.find("NATIVE_FB2_") != std::string::npos) {
+            EXPECT_EQ(block.wordSizePct(word), 85);
+          } else if (token == "BEFORE" || token == "AFTER" || token == "SECOND" || token == "END") {
+            EXPECT_EQ(block.wordSizePct(word), 100);
+          }
         }
       }
     }

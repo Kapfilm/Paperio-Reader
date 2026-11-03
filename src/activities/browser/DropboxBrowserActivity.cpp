@@ -5,7 +5,7 @@
 #include <WiFi.h>
 
 #include <algorithm>
-#include <cstdio>
+#include <cctype>
 #include <utility>
 
 #include "CrossPointSettings.h"
@@ -19,14 +19,14 @@
 #include "fontIds.h"
 
 namespace {
-std::string fileSizeLabel(const uint64_t bytes) {
-  char buffer[40];
-  if (bytes >= 1024 * 1024) {
-    snprintf(buffer, sizeof(buffer), "%.1f MiB", static_cast<double>(bytes) / (1024 * 1024));
-  } else {
-    snprintf(buffer, sizeof(buffer), "%.1f KiB", static_cast<double>(bytes) / 1024);
-  }
-  return buffer;
+// Keep the format in a separate right-aligned column even for short titles.
+std::string bookFormat(const std::string& name) {
+  std::string lower = name;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (lower.size() >= 8 && lower.compare(lower.size() - 8, 8, ".fb2.zip") == 0) return "fb2.zip";
+  const auto dot = lower.find_last_of('.');
+  return dot == std::string::npos ? "" : lower.substr(dot + 1);
 }
 }  // namespace
 
@@ -57,11 +57,7 @@ void DropboxBrowserActivity::onExit() {
 
 int DropboxBrowserActivity::nextRow() const { return page_.hasMore ? static_cast<int>(page_.books.size()) : -1; }
 
-int DropboxBrowserActivity::refreshRow() const {
-  return static_cast<int>(page_.books.size()) + (page_.hasMore ? 1 : 0);
-}
-
-int DropboxBrowserActivity::rowCount() const { return refreshRow() + 2; }
+int DropboxBrowserActivity::rowCount() const { return static_cast<int>(page_.books.size()) + (page_.hasMore ? 1 : 0); }
 
 void DropboxBrowserActivity::queueFetch(const std::string& cursor, const int restoreSelection) {
   {
@@ -314,10 +310,6 @@ void DropboxBrowserActivity::selectRow() {
     requestUpdate();
   } else if (selectedIndex_ == nextRow()) {
     queueFetch(page_.cursor);
-  } else if (selectedIndex_ == refreshRow()) {
-    queueFetch("");
-  } else {
-    openWebSetup();
   }
 }
 
@@ -349,10 +341,6 @@ void DropboxBrowserActivity::loop() {
       queueFetch(pendingCursor_, restoreSelection_);
     return;
   }
-  if (state_ == State::Error && mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-    openWebSetup();
-    return;
-  }
   if (state_ == State::Browsing) {
     navigator_.onNextList(selectedIndex_, rowCount(), [this] { requestUpdate(); });
     navigator_.onPreviousList(selectedIndex_, rowCount(), [this] { requestUpdate(); });
@@ -377,6 +365,56 @@ void DropboxBrowserActivity::drawMessage(const Rect& content, const char* text, 
   }
 }
 
+void DropboxBrowserActivity::drawEntries(const Rect& body) {
+  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  const int rowHeight = lineHeight + 12;
+  const int visibleRows = body.height / rowHeight;
+  if (visibleRows < 1 || rowCount() < 1) return;
+  const int first = selectedIndex_ / visibleRows * visibleRows;
+  const int left = body.x + 16;
+  // The same fixed column is used on every row, independent of title length.
+  const int right = body.x + body.width - 24;
+  int formatWidth = 0;
+  for (const auto& entry : page_.books) {
+    if (!entry.isFolder)
+      formatWidth = std::max(formatWidth, renderer.getTextWidth(UI_10_FONT_ID, bookFormat(entry.name).c_str()));
+  }
+  for (int index = first; index < rowCount() && index < first + visibleRows; ++index) {
+    const int y = body.y + (index - first) * rowHeight;
+    const bool ink = index != selectedIndex_;
+    if (!ink) renderer.fillRect(body.x, y, body.width, rowHeight);
+    const int textY = y + 6;
+    if (index == nextRow()) {
+      renderer.drawText(UI_10_FONT_ID, left, textY, tr(STR_NEXT_PAGE), ink);
+      continue;
+    }
+    const auto& entry = page_.books[index];
+    int textLeft = left;
+    std::string title = entry.name;
+    if (entry.isFolder) {
+      // An outlined folder has no opaque background and follows row polarity.
+      const int iconY = y + (rowHeight - 16) / 2;
+      renderer.drawLine(left, iconY + 4, left, iconY + 15, ink);
+      renderer.drawLine(left, iconY + 15, left + 20, iconY + 15, ink);
+      renderer.drawLine(left + 20, iconY + 15, left + 20, iconY + 4, ink);
+      renderer.drawLine(left, iconY + 4, left + 20, iconY + 4, ink);
+      renderer.drawLine(left, iconY + 4, left, iconY, ink);
+      renderer.drawLine(left, iconY, left + 8, iconY, ink);
+      renderer.drawLine(left + 8, iconY, left + 11, iconY + 4, ink);
+      textLeft += 30;
+    } else {
+      const std::string format = bookFormat(entry.name);
+      const size_t suffixLength = format.size() + 1;
+      if (title.size() > suffixLength) title.resize(title.size() - suffixLength);
+      renderer.drawText(UI_10_FONT_ID, right - renderer.getTextWidth(UI_10_FONT_ID, format.c_str()), textY,
+                        format.c_str(), ink);
+    }
+    const int titleRight = entry.isFolder ? right : right - formatWidth - 16;
+    title = renderer.truncatedText(UI_10_FONT_ID, title.c_str(), std::max(1, titleRight - textLeft));
+    renderer.drawText(UI_10_FONT_ID, textLeft, textY, title.c_str(), ink);
+  }
+}
+
 void DropboxBrowserActivity::render(RenderLock&&) {
   renderer.clearScreen();
   const auto& metrics = UITheme::getInstance().getMetrics();
@@ -395,7 +433,6 @@ void DropboxBrowserActivity::render(RenderLock&&) {
   } else if (state_ == State::Error) {
     drawMessage(body, errorText());
     confirm = tr(STR_RETRY);
-    previous = tr(STR_DROPBOX_SETUP);
   } else if (state_ == State::Message) {
     drawMessage(body, status_.c_str(), detail_);
     confirm = tr(STR_DONE);
@@ -421,26 +458,10 @@ void DropboxBrowserActivity::render(RenderLock&&) {
       renderer.drawCenteredText(UI_10_FONT_ID, listTop, tr(STR_DROPBOX_NO_BOOKS));
       listTop += renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing;
     }
-    GUI.drawList(
-        renderer, Rect{body.x, listTop, body.width, std::max(20, body.y + body.height - listTop)}, rowCount(),
-        selectedIndex_,
-        [this](int index) -> std::string {
-          if (index < static_cast<int>(page_.books.size())) {
-            const auto& entry = page_.books[index];
-            return entry.isFolder ? "[" + std::string(tr(STR_DROPBOX_FOLDER)) + "] " + entry.name : entry.name;
-          }
-          if (index == nextRow()) return tr(STR_NEXT_PAGE);
-          if (index == refreshRow()) return tr(STR_DROPBOX_REFRESH);
-          return tr(STR_DROPBOX_SETUP);
-        },
-        [this](int index) -> std::string {
-          return index < static_cast<int>(page_.books.size()) && !page_.books[index].isFolder
-                     ? fileSizeLabel(page_.books[index].size)
-                     : "";
-        });
+    drawEntries(Rect{body.x, listTop, body.width, std::max(0, body.y + body.height - listTop)});
     confirm = selectedIndex_ < static_cast<int>(page_.books.size())
                   ? (page_.books[selectedIndex_].isFolder ? tr(STR_OPEN) : tr(STR_DOWNLOAD))
-                  : tr(STR_SELECT);
+                  : (page_.hasMore ? tr(STR_SELECT) : "");
     previous = tr(STR_DIR_UP);
     next = tr(STR_DIR_DOWN);
   }

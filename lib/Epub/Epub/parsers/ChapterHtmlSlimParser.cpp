@@ -2789,14 +2789,20 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
     preview += ")";
     self->pendingInlineFootnotePreview.clear();
 
+    // Finish the reference under its own style before inserting a smaller note.
+    // A plain <a> need not have triggered a style-stack flush above.
+    if (self->partWordBufferIndex > 0 && !self->flushPartWordBuffer()) return;
     const bool surroundingItalic = self->effectiveItalic;
+    const uint8_t surroundingSize = self->effectiveSizePct;
     self->effectiveItalic = true;
+    // About one reading-size step below the paragraph. Assign the size directly:
+    // publisher span sizes and normalization must not erase this distinction.
+    self->effectiveSizePct = 85;
     characterData(self, preview.c_str(), static_cast<int>(preview.size()));
-    if (self->partWordBufferIndex > 0 && !self->flushPartWordBuffer()) {
-      self->effectiveItalic = surroundingItalic;
-      return;
-    }
+    const bool flushed = self->partWordBufferIndex == 0 || self->flushPartWordBuffer();
     self->effectiveItalic = surroundingItalic;
+    self->effectiveSizePct = surroundingSize;
+    if (!flushed) return;
   }
 
   // Clear block style when leaving header or block elements

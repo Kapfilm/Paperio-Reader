@@ -10,6 +10,7 @@
 #include "Epub/FootnotePreviews.h"
 #include "Epub/Page.h"
 #include "Epub/Section.h"
+#include "Epub/parsers/ChapterHtmlSlimParser.h"
 #include "GfxRenderer.h"
 #include "PipelineRunner.h"
 #include "src/util/FootnoteHistory.h"
@@ -187,6 +188,58 @@ TEST_F(FootnoteNavigationTest, EnabledPreviewsRenderInZipBookButDisabledSettingD
     const std::string firstSpine = dump.str().substr(0, dump.str().find("SPINE 1"));
     EXPECT_EQ(firstSpine.find("LEGACY_NAMED_NOTE") != std::string::npos, enabled);
     EXPECT_EQ(firstSpine.find("ENCODED_NAMED_NOTE") != std::string::npos, enabled);
+  }
+}
+
+TEST_F(FootnoteNavigationTest, InlinePreviewIsSmallerAndDoesNotChangeReferenceOrFollowingText) {
+  Epub book(CORPUS_DIR "/../fixtures/footnote_legacy_name.epub", work.string());
+  ASSERT_TRUE(book.load(true));
+  ASSERT_TRUE(FootnotePreviews::gather(book));
+  for (const bool normalize : {false, true}) {
+    for (const bool sizedReference : {false, true}) {
+      GfxRenderer renderer;
+      CssParser css("");
+      FootnotePreviews::Lookup lookup;
+      ASSERT_TRUE(lookup.open(book.getCachePath(), &book, 0));
+      size_t noteWords = 0;
+      size_t referenceWords = 0;
+      size_t bodyWords = 0;
+      ChapterHtmlSlimParser parser(
+          nullptr, renderer, 1, 1.0f, false, 0, 460, 760, false, normalize, false,
+          [&](std::unique_ptr<Page> page) {
+            for (const auto& element : page->elements) {
+              if (element->getTag() != TAG_PageLine) continue;
+              const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+              for (uint16_t i = 0; i < block.wordCount(); ++i) {
+                const std::string token = block.wordText(i);
+                if (token.find("LEGACY_NAMED_NOTE") != std::string::npos) {
+                  ++noteWords;
+                  EXPECT_EQ(block.wordSizePct(i), 85);
+                } else if (token == "reference") {
+                  ++referenceWords;
+                  EXPECT_EQ(block.wordSizePct(i), sizedReference ? 120 : 100);
+                  EXPECT_EQ(static_cast<uint8_t>(block.wordStyle(i)) & EpdFontFamily::ITALIC, 0);
+                } else if (token == "BEFORE" || token == "AFTER") {
+                  ++bodyWords;
+                  EXPECT_EQ(block.wordSizePct(i), 100);
+                  EXPECT_EQ(static_cast<uint8_t>(block.wordStyle(i)) & EpdFontFamily::ITALIC, 0);
+                }
+              }
+            }
+          },
+          true, "", "", 0, {}, nullptr, &css);
+      parser.setInlineFootnotePreviews(&lookup);
+      ASSERT_TRUE(parser.setup(1024));
+      const std::string html =
+          "<html><body><p>BEFORE <a epub:type='noteref' href='../B/notes.xhtml#n'>" +
+          std::string(sizedReference ? "<span style='font-size:1.2em'>reference</span>" : "reference") +
+          "</a> AFTER</p></body></html>";
+      ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(html.data()), html.size()), html.size());
+      ASSERT_TRUE(parser.finalize());
+      EXPECT_EQ(noteWords, 1u);
+      EXPECT_EQ(referenceWords, 1u);
+      EXPECT_EQ(bodyWords, 2u);
+    }
   }
 }
 

@@ -276,19 +276,21 @@ DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor, 
   auto& store = DropboxStore::instance();
   auto result = ensureAccess(store.refreshToken_);
   if (!result.ok()) return result;
-  JsonDocument request;
   const bool continuation = !cursor.empty();
-  if (continuation)
-    request["cursor"] = cursor;
-  else {
-    request["path"] = folderId.empty() ? store.remoteFolder() : folderId;
-    request["recursive"] = false;
-    request["include_deleted"] = false;
-    request["limit"] = 25;
-  }
-  if (request.overflowed()) return {Error::TooLarge};
   std::string body;
-  if (!serializeJson(request, body)) return {Error::TooLarge};
+  {
+    // Release the request document before TLS allocates its handshake buffers.
+    JsonDocument request;
+    if (continuation)
+      request["cursor"] = cursor;
+    else {
+      request["path"] = folderId.empty() ? store.remoteFolder() : folderId;
+      request["recursive"] = false;
+      request["include_deleted"] = false;
+      request["limit"] = 25;
+    }
+    if (request.overflowed() || !serializeJson(request, body)) return {Error::TooLarge};
+  }
   std::string response;
   for (int attempt = 0; attempt < 2; ++attempt) {
     crosspoint::SecureHttpClient http;
@@ -311,7 +313,11 @@ DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor, 
   filter["cursor"] = true;
   filter["has_more"] = true;
   JsonDocument doc;
-  if (deserializeJson(doc, response, DeserializationOption::Filter(filter), DeserializationOption::NestingLimit(8)) ||
+  // The response outlives doc and every accepted field is copied into Page.
+  // Parsing its mutable buffer avoids a second heap copy of long folder names
+  // and cursors on the X3's constrained heap.
+  if (deserializeJson(doc, response.data(), response.size(), DeserializationOption::Filter(filter),
+                      DeserializationOption::NestingLimit(8)) ||
       !doc["entries"].is<JsonArray>() || !doc["has_more"].is<bool>() || !doc["cursor"].is<const char*>())
     return {Error::InvalidData};
   Page page;
@@ -321,6 +327,7 @@ DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor, 
     return {Error::InvalidData};
   const JsonArray array = doc["entries"].as<JsonArray>();
   if (array.size() > 100) return {Error::TooLarge};
+  page.books.reserve(array.size());
   size_t folderCount = 0;
   for (JsonObject object : array) {
     if (!object["name"].is<const char*>() || !object["id"].is<const char*>()) continue;

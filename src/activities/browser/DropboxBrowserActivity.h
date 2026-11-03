@@ -22,6 +22,7 @@ class DropboxBrowserActivity final : public Activity {
   void loop() override;
   void render(RenderLock&&) override;
   bool preventAutoSleep() override { return true; }
+  bool shouldSkipPeriodicUpdate() const override { return true; }
 
  private:
   enum class State { Setup, Loading, WifiSelection, Browsing, Downloading, Message, Error };
@@ -60,7 +61,6 @@ class DropboxBrowserActivity final : public Activity {
 
   int rowCount() const;
   int nextRow() const;
-  int refreshRow() const;
   void selectRow();
   void queueFetch(const std::string& cursor, int restoreSelection = 0);
   void openFolder(const DropboxClient::Entry& folder);
@@ -74,5 +74,6 @@ class DropboxBrowserActivity final : public Activity {
   void returnToBooks();
   void showError(DropboxClient::Error error);
   const char* errorText() const;
+  void drawEntries(const Rect& body);
   void drawMessage(const Rect& content, const char* text, const std::string& detail = {}) const;
 };

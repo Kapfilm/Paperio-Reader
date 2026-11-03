@@ -5,6 +5,7 @@
 #include <SecureHttpClient.h>
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -27,15 +28,21 @@ class DropboxTest : public ::testing::Test {
     dropboxTestStrictTls = true;
     dropboxTestWriteFail = false;
     dropboxTestFree = 1024 * 1024;
-    dropboxTestRoot = std::filesystem::temp_directory_path() / "paperio-dropbox-client-test";
-    std::filesystem::remove_all(dropboxTestRoot);
-    std::filesystem::create_directories(dropboxTestRoot);
+    // CTest launches each discovered test in its own process. A shared fixed
+    // directory lets one test's cleanup remove another test's downloaded book.
+    dropboxTestRoot.clear();
+    std::string rootTemplate = (std::filesystem::temp_directory_path() / "paperio-dropbox-client-XXXXXX").string();
+    const char* uniqueRoot = mkdtemp(rootTemplate.data());
+    ASSERT_NE(uniqueRoot, nullptr);
+    dropboxTestRoot = uniqueRoot;
     auto& store = DropboxStore::instance();
     ASSERT_TRUE(store.load());
     ASSERT_TRUE(store.saveConfig("paperiotestkey", "", "/Dropbox"));
     DropboxClient::cancelAuthorization();
   }
-  void TearDown() override { std::filesystem::remove_all(dropboxTestRoot); }
+  void TearDown() override {
+    if (!dropboxTestRoot.empty()) std::filesystem::remove_all(dropboxTestRoot);
+  }
   void link() {
     ASSERT_FALSE(DropboxClient::beginAuthorization().empty());
     dropboxTestReplies.push_back({200, kTokenReply});
@@ -190,6 +197,40 @@ TEST_F(DropboxTest, FolderEntriesNeedValidNamesAndIdsButNeverBookSizes) {
   EXPECT_TRUE(saved.empty());
   EXPECT_TRUE(dropboxTestRequests.empty());
   EXPECT_EQ(localFiles(), 0u);
+}
+
+TEST_F(DropboxTest, RepeatedFolderListsOwnTheirNamesAndCursorAfterResponseIsReleased) {
+  link();
+  DropboxClient client;
+  DropboxClient::Page retained;
+  const std::string longName = std::string(180, 'x') + " — Книги";
+  for (int pass = 0; pass < 80; ++pass) {
+    JsonDocument reply;
+    for (int index = 0; index < 25; ++index) {
+      auto entry = reply["entries"][index];
+      entry[".tag"] = index % 2 == 0 ? "folder" : "file";
+      entry["name"] = longName + std::to_string(pass) + "-" + std::to_string(index) + ".epub";
+      entry["id"] = "id:folder-" + std::to_string(pass) + "-" + std::to_string(index);
+      entry["size"] = 5;
+    }
+    const std::string cursor = "cursor-" + std::to_string(pass) + std::string(4096, 'c');
+    reply["cursor"] = cursor;
+    reply["has_more"] = true;
+    std::string body;
+    serializeJson(reply, body);
+    ASSERT_LT(body.size(), 32768u);
+    dropboxTestReplies.push_back({200, std::move(body)});
+    DropboxClient::Page page;
+    ASSERT_TRUE(client.list(page, "", "id:parent-" + std::to_string(pass)).ok());
+    ASSERT_EQ(page.books.size(), 25u);
+    EXPECT_EQ(page.books[0].name, longName + std::to_string(pass) + "-0.epub");
+    EXPECT_EQ(page.cursor, cursor);
+    EXPECT_TRUE(page.books[0].isFolder);
+    EXPECT_FALSE(page.books.back().isFolder);
+    if (pass == 0) retained = std::move(page);
+  }
+  EXPECT_EQ(retained.books[0].name, longName + "0-0.epub");
+  EXPECT_EQ(retained.cursor, "cursor-0" + std::string(4096, 'c'));
 }
 
 TEST_F(DropboxTest, JsonLimitAndNonAdvancingCursorFailSafely) {
