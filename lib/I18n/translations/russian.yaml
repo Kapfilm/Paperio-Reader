@@ -986,3 +986,5 @@ STR_DROPBOX_SD_ERROR: "Не удалось сохранить данные на 
 STR_DROPBOX_ALREADY_EXISTS: "Этот файл уже есть на SD-карте. Он не был перезаписан."
 STR_DROPBOX_BUSY: "Dropbox занят. Повторите попытку чуть позже."
 STR_DROPBOX_API_ERROR: "Не удалось открыть папку или скачать книгу. Проверьте настройки Dropbox."
+STR_DROPBOX_FOLDER: "Папка"
+STR_DROPBOX_DEPTH_LIMIT: "Достигнут предел вложенности папок. Вернитесь на уровень выше."

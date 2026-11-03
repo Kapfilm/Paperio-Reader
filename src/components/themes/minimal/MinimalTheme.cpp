@@ -251,22 +251,27 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
   if (buttonCount <= 0) return;
 
   const bool enlarged = SETTINGS.uiTextSize != 0;
-  const int panelWidth =
-      enlarged ? renderer.getScreenWidth() - 64 : std::min(kMenuPanelWidth, renderer.getScreenWidth() - 80);
-  const int panelHeight = buttonCount * kMenuRowHeight + kMenuPanelPadding * 2 + 2;
-  const int panelX = (renderer.getScreenWidth() - panelWidth) / 2;
-  const int panelY = std::max(MinimalMetrics::values.homeTopPadding, kMenuPanelTop - panelHeight / 4);
+  const Rect bounds = UITheme::getContentRect(renderer, true, false);
+  const int panelWidth = enlarged ? bounds.width - 64 : std::min(kMenuPanelWidth, bounds.width - 80);
+  const int panelTop = std::max(bounds.y, MinimalMetrics::values.homeTopPadding);
+  const int panelBottom = bounds.y + bounds.height - kMenuPanelPadding;
+  const int availableRowsHeight = panelBottom - panelTop - kMenuPanelPadding * 2 - 2;
+  const int rowHeight = std::min(kMenuRowHeight, std::max(1, availableRowsHeight / buttonCount));
+  const int panelHeight = buttonCount * rowHeight + kMenuPanelPadding * 2 + 2;
+  const int panelX = bounds.x + (bounds.width - panelWidth) / 2;
+  const int preferredY = std::max(panelTop, kMenuPanelTop - panelHeight / 4);
+  const int panelY = std::min(preferredY, std::max(panelTop, panelBottom - panelHeight));
   renderer.drawRoundedRect(panelX, panelY, panelWidth, panelHeight, 1, kMenuPanelRadius, true);
 
   for (int i = 0; i < buttonCount; ++i) {
     const int rowX = panelX + kMenuPanelPadding;
     const int rowWidth = panelWidth - kMenuPanelPadding * 2;
-    const int rowY = panelY + 1 + kMenuPanelPadding + i * kMenuRowHeight;
+    const int rowY = panelY + 1 + kMenuPanelPadding + i * rowHeight;
     const bool selected = i == selectedIndex;
     if (selected) {
-      renderer.fillRoundedRect(rowX, rowY, rowWidth, kMenuRowHeight, 3, Color::Black);
+      renderer.fillRoundedRect(rowX, rowY, rowWidth, rowHeight, 3, Color::Black);
       const int triangleX = rowX + rowWidth - kMenuSelectionTriangleRightInset - kMenuSelectionTriangleWidth;
-      const int centerY = rowY + kMenuRowHeight / 2;
+      const int centerY = rowY + rowHeight / 2;
       const int xPoints[3] = {triangleX, triangleX, triangleX + kMenuSelectionTriangleWidth};
       const int yPoints[3] = {centerY - kMenuSelectionTriangleHeight / 2, centerY + kMenuSelectionTriangleHeight / 2,
                               centerY};
@@ -277,9 +282,9 @@ void MinimalTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const 
       renderer.drawLine(rowX + separatorInset, rowY, rowX + rowWidth - separatorInset - 1, rowY, !selected);
     }
 
-    const int textY = rowY + (kMenuRowHeight - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
+    const int textY = rowY + (rowHeight - renderer.getLineHeight(UI_12_FONT_ID)) / 2;
     const int iconX = rowX + kMenuIconInset;
-    const int iconY = rowY + (kMenuRowHeight - kMenuIconSize) / 2;
+    const int iconY = rowY + (rowHeight - kMenuIconSize) / 2;
     if (rowIcon != nullptr) {
       if (const uint8_t* icon = iconForName(rowIcon(i), kMenuIconSize)) {
         if (selected) {

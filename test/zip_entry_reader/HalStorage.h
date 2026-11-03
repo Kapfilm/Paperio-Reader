@@ -106,7 +106,14 @@ class HalFile : public Print {
 
   size_t position() const { return fp_ ? static_cast<size_t>(ftell(fp_)) : 0; }
   uint64_t position64() const { return position(); }
-  int available() const { return fp_ ? 1 : 0; }
+  int available() const {
+    if (!fp_) return 0;
+    const long current = ftell(fp_);
+    fseek(fp_, 0, SEEK_END);
+    const long end = ftell(fp_);
+    fseek(fp_, current, SEEK_SET);
+    return static_cast<int>(end - current);
+  }
 
   size_t size() { return fileSize(); }
   size_t fileSize() {

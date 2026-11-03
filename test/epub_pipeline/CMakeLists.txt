@@ -142,3 +142,24 @@ target_link_libraries(epub_pipeline_dump_noheap PRIVATE
   crosspoint_test_common
   SaxParser
 )
+
+# The normal EPUB host target intentionally stubs FB2. This target exercises
+# the real lazy FB2 source together with the same preview and layout pipeline.
+add_executable(NativeFootnotePreviewTest
+  NativeFootnotePreviewTest.cpp
+  ${PIPELINE_SOURCES}
+  ${REPO_ROOT}/lib/Fb2/Fb2.cpp
+  ${REPO_ROOT}/lib/Fb2/Fb2StateMigration.cpp
+  ${REPO_ROOT}/lib/Fb2/Fb2NavigationIndex.cpp
+  ${REPO_ROOT}/lib/Fb2/Fb2AnchorIndex.cpp
+  ${REPO_ROOT}/lib/Fb2/Fb2Encoding.cpp
+  ${REPO_ROOT}/lib/Fb2/native/Fb2Parser.cpp
+  ${REPO_ROOT}/lib/Fb2/native/ZipReader.cpp
+  ${REPO_ROOT}/lib/Fb2/native/Inflate.cpp
+)
+target_include_directories(NativeFootnotePreviewTest BEFORE PRIVATE
+  ${REPO_ROOT}/test/fb2_pipeline ${REPO_ROOT}/lib/Fb2 ${PIPELINE_INCLUDES})
+target_compile_definitions(NativeFootnotePreviewTest PRIVATE
+  CORPUS_DIR="${REPO_ROOT}/test/fixtures" ENABLE_SERIAL_LOG=1 LOG_LEVEL=1)
+target_link_libraries(NativeFootnotePreviewTest PRIVATE crosspoint_test_common SaxParser GTest::gtest_main)
+gtest_discover_tests(NativeFootnotePreviewTest PROPERTIES TIMEOUT 120)

@@ -28,6 +28,7 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "activities/browser/DropboxBrowserActivity.h"
 #include "activities/reader/ReaderActivity.h"
 #include "components/UITheme.h"
 #include "components/themes/minimal/MinimalTheme.h"
@@ -120,7 +121,7 @@ int getHomeCoverRenderHeight(const HomeScreenLayout& layout) {
 // dispatches Confirm based on action) and render() (which draws labels/icons).
 void HomeActivity::rebuildMenuEntries() {
   menuEntries.clear();
-  menuEntries.reserve(8);
+  menuEntries.reserve(9);
 
   menuEntries.push_back({MenuAction::FileBrowser, StrId::STR_BROWSE_FILES, Folder});
   // In Minimal the recent-books grid is promoted to the second bottom button,
@@ -132,6 +133,7 @@ void HomeActivity::rebuildMenuEntries() {
   if (!GLOBAL_BOOKMARKS.isEmpty()) {
     menuEntries.push_back({MenuAction::GlobalBookmarks, StrId::STR_GLOBAL_BOOKMARKS, Book});
   }
+  menuEntries.push_back({MenuAction::DropboxBrowser, StrId::STR_DROPBOX, Dropbox});
   if (hasOpdsServers) {
     menuEntries.push_back({MenuAction::OpdsBrowser, StrId::STR_OPDS_BROWSER, Library});
   }
@@ -1051,6 +1053,9 @@ void HomeActivity::dispatchMenuAction(MenuAction action) {
       break;
     case MenuAction::GlobalBookmarks:
       activityManager.goToGlobalBookmarks();
+      break;
+    case MenuAction::DropboxBrowser:
+      activityManager.replaceActivity(std::make_unique<DropboxBrowserActivity>(renderer, mappedInput));
       break;
     case MenuAction::OpdsBrowser:
       activityManager.goToBrowser();

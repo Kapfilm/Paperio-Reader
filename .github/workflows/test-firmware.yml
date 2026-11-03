@@ -2,7 +2,7 @@ name: Build Paperio test firmware
 
 on:
   push:
-    branches: ["codex/2.2.4-ui-quotes-cover-github", "codex/2.2.5-compact-headings-test", "codex/dropbox-download"]
+    branches: ["codex/2.2.4-ui-quotes-cover-github", "codex/2.2.5-compact-headings-test", "codex/dropbox-download", "codex/dropbox-folders-footnotes"]
   workflow_dispatch:
 
 permissions:

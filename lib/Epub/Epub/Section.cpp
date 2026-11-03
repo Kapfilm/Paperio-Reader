@@ -136,7 +136,7 @@ constexpr size_t SCT_PARSE_ARENA_BYTES = 10 * 1024;
 
 // Bump when preview expansion semantics change. This is hashed only for preview-enabled
 // variants, leaving the much more common preview-off section caches untouched.
-constexpr uint8_t INLINE_FOOTNOTE_PREVIEW_LAYOUT_VERSION = 3;
+constexpr uint8_t INLINE_FOOTNOTE_PREVIEW_LAYOUT_VERSION = 4;
 
 bool isPreviewBlockTag(const char* name) {
   static constexpr const char* tags[] = {"h1", "h2", "h3",  "h4", "h5",         "h6",
@@ -347,7 +347,12 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
   serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for paragraph LUT offset (patched later)
 }
 
-bool Section::loadSectionFile(const BuildParams& p) {
+bool Section::loadSectionFile(const BuildParams& requested) {
+  BuildParams p = requested;
+  if (p.inlineFootnotePreviews) {
+    auto probe = makeUniqueNoThrow<FootnotePreviews::Lookup>();
+    if (!probe || !probe->open(epub->getCachePath(), epub.get(), spineIndex)) p.inlineFootnotePreviews = false;
+  }
   truncatedCache = false;
   embeddedStyleFallback = false;
   uint32_t propertyHash = calculatePropertyHash(p);
@@ -723,6 +728,18 @@ Section::Section(const std::shared_ptr<Epub>& epub, const int spineIndex, GfxRen
 Section::~Section() { abortSectionBuild(); }
 
 Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
+  // Gather may fail or be cancelled. Never publish plain pages under the
+  // preview-enabled cache key: once gather succeeds that would be a false hit.
+  // Open before selecting paths/creating files, and retain this exact lookup
+  // through parsing so a later allocation failure cannot silently change output.
+  if (st.params.inlineFootnotePreviews) {
+    st.footnotePreviewLookup = makeUniqueNoThrow<FootnotePreviews::Lookup>();
+    if (!st.footnotePreviewLookup || !st.footnotePreviewLookup->open(epub->getCachePath(), epub.get(), spineIndex)) {
+      st.params.inlineFootnotePreviews = false;
+      st.footnotePreviewLookup.reset();
+      LOG_DBG("SCT", "Footnote source unavailable; using preview-off cache variant");
+    }
+  }
   const BuildParams& p = st.params;
   st.propertyHash = calculatePropertyHash(p);
   filePath = getSectionFilePath(st.propertyHash, isTargetedPreview(p));
@@ -904,17 +921,10 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   st.visitor->setFontSizeLadder(p.fontSizeLadder);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
 
-  // Inline footnote previews come from the book-level footnotes.bin gathered up front
-  // (foreground, EpubReaderActivity). Missing/empty cache: build proceeds without
-  // previews — the reader guarantees the gather ran before any preview-enabled build.
-  if (p.inlineFootnotePreviews) {
-    st.footnotePreviewLookup = makeUniqueNoThrow<FootnotePreviews::Lookup>();
-    if (st.footnotePreviewLookup && st.footnotePreviewLookup->open(epub->getCachePath(), epub.get(), spineIndex)) {
-      st.visitor->setInlineFootnotePreviews(st.footnotePreviewLookup.get());
-    } else {
-      LOG_DBG("SCT", "Footnote preview cache unavailable for spine %d; building without previews", spineIndex);
-      st.footnotePreviewLookup.reset();
-    }
+  // A valid empty cache needs no per-link lookup; a failed lookup was already
+  // downgraded before the effective property hash and image paths were chosen.
+  if (st.footnotePreviewLookup && st.footnotePreviewLookup->isOpen()) {
+    st.visitor->setInlineFootnotePreviews(st.footnotePreviewLookup.get());
   }
 
   if (!st.visitor->setup(st.inflatedSize)) {

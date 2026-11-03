@@ -20,6 +20,7 @@
 #include "components/icons/book.h"
 #include "components/icons/book24.h"
 #include "components/icons/cover.h"
+#include "components/icons/dropbox32.h"
 #include "components/icons/file24.h"
 #include "components/icons/folder.h"
 #include "components/icons/folder24.h"
@@ -81,6 +82,8 @@ const uint8_t* iconBitmapFor(UIIcon icon) {
       return Weather32Icon;
     case UIIcon::Games:
       return Games32Icon;
+    case UIIcon::Dropbox:
+      return Dropbox32Icon;
     case UIIcon::Wifi:
       return WifiIcon;
     case UIIcon::Hotspot:

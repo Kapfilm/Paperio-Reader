@@ -27,7 +27,7 @@ class Epub;
 // Results are persisted to footnotes.bin; section builds then use Lookup, which keeps
 // only an 8-byte-per-entry hash index in RAM and reads preview text from SD on hit.
 //
-// File format v1 (little-endian):
+// File format v3 (little-endian):
 //   u32 magic 'FNP1' | u16 version | u16 count | u32 indexOffset
 //   blob:  count x { u16 textLen, char text[textLen] }   (gather order)
 //   index: count x { u32 keyHash, u32 blobOffset }        (sorted by keyHash)
@@ -45,7 +45,7 @@ constexpr size_t MIN_SUBTREE_BYTES = 8;  // below this, an id'd element is treat
 bool cacheExists(const std::string& bookCachePath);
 
 // Build footnotes.bin for the book. Blocking; run foreground with a popup. Returns
-// false only on I/O failure — a book with no detectable footnotes writes a valid
+// false on I/O, parser, or cancellation failure — a book with no detectable footnotes writes a valid
 // empty cache so the gather is never repeated. progressFn (optional) gets 0..100.
 bool gather(Epub& epub, const std::function<void(int)>& progressFn = {});
 
@@ -54,7 +54,8 @@ bool gather(Epub& epub, const std::function<void(int)>& progressFn = {});
 class Lookup {
  public:
   // Opens and validates footnotes.bin. currentSpineIndex anchors same-file ("#frag")
-  // references. Returns false when the file is missing or invalid (previews skipped).
+  // references. Returns false when the file is missing, invalid, or cannot be read.
+  // A valid empty cache returns true, with isOpen() false and no parser lookup needed.
   bool open(const std::string& bookCachePath, const Epub* epub, int currentSpineIndex);
 
   // Resolves an href from the chapter being parsed ("#frag", "notes.xhtml#frag",

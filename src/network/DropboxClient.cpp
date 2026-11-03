@@ -268,11 +268,11 @@ DropboxClient::Result DropboxClient::completeAuthorization(const std::string& co
   return {};
 }
 
-DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor) {
+DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor, const std::string& folderId) {
   Guard guard;
   out = {};
   if (!guard.held) return {Error::Busy};
-  if (cursor.size() > 8192) return {Error::InvalidData};
+  if (cursor.size() > 8192 || (!folderId.empty() && !safeId(folderId))) return {Error::InvalidData};
   auto& store = DropboxStore::instance();
   auto result = ensureAccess(store.refreshToken_);
   if (!result.ok()) return result;
@@ -281,7 +281,7 @@ DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor) 
   if (continuation)
     request["cursor"] = cursor;
   else {
-    request["path"] = store.remoteFolder();
+    request["path"] = folderId.empty() ? store.remoteFolder() : folderId;
     request["recursive"] = false;
     request["include_deleted"] = false;
     request["limit"] = 25;
@@ -321,14 +321,28 @@ DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor) 
     return {Error::InvalidData};
   const JsonArray array = doc["entries"].as<JsonArray>();
   if (array.size() > 100) return {Error::TooLarge};
+  size_t folderCount = 0;
   for (JsonObject object : array) {
-    if ((object[".tag"] | "") != std::string("file") || !object["name"].is<const char*>() ||
-        !object["id"].is<const char*>() || !object["size"].is<uint64_t>() ||
-        (object["is_downloadable"].is<bool>() && !object["is_downloadable"].as<bool>()))
-      continue;
-    Entry entry{object["name"].as<std::string>(), object["id"].as<std::string>(), object["size"].as<uint64_t>()};
-    if (bookName(entry.name) && safeId(entry.id) && !localName(entry.name).empty())
+    if (!object["name"].is<const char*>() || !object["id"].is<const char*>()) continue;
+    const std::string type = object[".tag"] | "";
+    Entry entry;
+    entry.name = object["name"].as<std::string>();
+    entry.id = object["id"].as<std::string>();
+    if (!safeId(entry.id)) continue;
+    if (type == "folder") {
+      // Folder names are only display labels: navigation always uses their ASCII
+      // IDs, never concatenated remote paths. Folder metadata has no size field.
+      if (entry.name.empty() || entry.name.size() > 240 ||
+          std::any_of(entry.name.begin(), entry.name.end(), [](unsigned char c) { return c < 32 || c == 127; }))
+        continue;
+      entry.isFolder = true;
+      page.books.insert(page.books.begin() + static_cast<std::ptrdiff_t>(folderCount++), std::move(entry));
+    } else if (type == "file" && object["size"].is<uint64_t>() &&
+               !(object["is_downloadable"].is<bool>() && !object["is_downloadable"].as<bool>()) &&
+               bookName(entry.name) && !localName(entry.name).empty()) {
+      entry.size = object["size"].as<uint64_t>();
       page.books.push_back(std::move(entry));
+    }
   }
   out = std::move(page);
   return {};
@@ -339,7 +353,7 @@ DropboxClient::Result DropboxClient::download(const Entry& entry, std::string& s
   savedPath.clear();
   if (!guard.held) return {Error::Busy};
   const std::string name = localName(entry.name);
-  if (!bookName(entry.name) || name.empty() || !safeId(entry.id)) return {Error::InvalidData};
+  if (entry.isFolder || !bookName(entry.name) || name.empty() || !safeId(entry.id)) return {Error::InvalidData};
   if (entry.size == 0 || entry.size > std::numeric_limits<uint32_t>::max()) return {Error::TooLarge};
   auto& store = DropboxStore::instance();
   const auto destination = store.downloadFolder() + (store.downloadFolder() == "/" ? "" : "/") + name;

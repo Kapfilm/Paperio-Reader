@@ -1,12 +1,12 @@
 #include "FootnotePreviews.h"
 
+#include <CooperativeAbort.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <SaxParser/SaxParser.h>
 #include <Serialization.h>
-#include <ZipFile.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -18,7 +18,7 @@
 namespace {
 
 constexpr uint32_t CACHE_MAGIC = 0x31504E46;  // "FNP1"
-constexpr uint16_t CACHE_VERSION = 2;
+constexpr uint16_t CACHE_VERSION = 3;
 constexpr size_t STREAM_CHUNK_BYTES = 1024;
 constexpr size_t MAX_HREF_BYTES = 191;
 constexpr size_t MAX_MARKER_BYTES = 15;
@@ -187,7 +187,7 @@ class LinkScanner {
   // Scans chapter XHTML (HTML-flavored): enable bare-void-tag repair.
   bool setup() { return parser_.init(this, startElement, endElement, characterData, nullptr, true); }
   bool feed(const uint8_t* data, const size_t size) { return parser_.feed(data, size); }
-  void finalize() { parser_.finalize(); }
+  bool finalize() { return parser_.finalize(); }
 };
 
 // Pass B: SAX scan of one target spine document capturing note text at wanted anchors.
@@ -242,9 +242,11 @@ class NoteCapturer {
     tailMode_ = false;
   }
 
-  static void startElement(void* ctx, const char*, const char** atts) {
+  static void startElement(void* ctx, const char* name, const char** atts) {
     auto* self = static_cast<NoteCapturer*>(ctx);
-    const int wantedIdx = self->findWanted(getAttribute(atts, "id"));
+    const char* anchor = getAttribute(atts, "id");
+    if ((!anchor || !*anchor) && strcmp(name, "a") == 0) anchor = getAttribute(atts, "name");
+    const int wantedIdx = self->findWanted(anchor);
     if (wantedIdx >= 0) {
       // A new wanted anchor always starts its own capture — in sequential rearnote
       // lists it is also what terminates the previous note's tail capture.
@@ -292,33 +294,42 @@ class NoteCapturer {
   // Scans chapter XHTML (HTML-flavored): enable bare-void-tag repair.
   bool setup() { return parser_.init(this, startElement, endElement, characterData, nullptr, true); }
   bool feed(const uint8_t* data, const size_t size) { return parser_.feed(data, size); }
-  void finalize() {
-    parser_.finalize();
-    if (captureDepth_ >= 0) finishCapture();  // note ran to end-of-document
+  bool finalize() {
+    if (!parser_.finalize()) return false;
+    if (captureDepth_ >= 0) finishCapture();
+    return true;
   }
 };
 
-// Streams one spine entry through a SAX consumer. Returns false on ZIP/read errors;
-// SAX-level errors are tolerated (consumer keeps whatever it saw — same policy as the
-// section parser, which survives loose real-world HTML).
+// Read through the same Epub abstraction as normal section rendering: an entry
+// may live in a ZIP, a directory, or be generated lazily from an FB2 source.
+// Print keeps the source streaming; a short write propagates parser/cancel errors
+// instead of publishing a permanently empty preview cache after an unreadable book.
 template <typename Consumer>
-bool streamSpineEntry(ZipFile& zip, const std::string& href, uint8_t* chunk, Consumer& consumer) {
-  ZipFile::EntryReader reader(zip, STREAM_CHUNK_BYTES);
-  if (!reader.open(FsHelpers::normalisePath(href).c_str())) {
-    return false;
-  }
-  bool done = false;
-  while (!done) {
-    size_t produced = 0;
-    if (!reader.step(chunk, STREAM_CHUNK_BYTES, &produced, &done)) {
-      return false;
+class ConsumerPrint final : public Print {
+  Consumer& consumer_;
+  bool failed_ = false;
+
+ public:
+  explicit ConsumerPrint(Consumer& consumer) : consumer_(consumer) {}
+  bool failed() const { return failed_; }
+  size_t write(uint8_t byte) override { return write(&byte, 1); }
+  size_t write(const uint8_t* data, size_t size) override {
+    if (failed_) return 0;
+    if (CooperativeAbort::shouldAbortLongTask()) {
+      CooperativeAbort::markAborted();
+      failed_ = true;
+      return 0;
     }
-    if (produced > 0 && !consumer.feed(chunk, produced)) {
-      break;  // malformed markup mid-stream: keep partial results
-    }
+    failed_ = !consumer_.feed(data, size);
+    return failed_ ? 0 : size;
   }
-  consumer.finalize();
-  return true;
+};
+
+template <typename Consumer>
+bool streamSpineEntry(const Epub& epub, const std::string& href, Consumer& consumer) {
+  ConsumerPrint<Consumer> sink(consumer);
+  return epub.readItemContentsToStream(href, sink, STREAM_CHUNK_BYTES, true) && !sink.failed() && consumer.finalize();
 }
 
 }  // namespace
@@ -345,14 +356,6 @@ bool gather(Epub& epub, const std::function<void(int)>& progressFn) {
   const int spineCount = epub.getSpineItemsCount();
   const uint32_t startMs = millis();
 
-  auto chunk = makeUniqueNoThrow<uint8_t[]>(STREAM_CHUNK_BYTES);
-  if (!chunk) {
-    LOG_ERR("FNP", "OOM: cannot allocate %u-byte stream chunk", static_cast<uint32_t>(STREAM_CHUNK_BYTES));
-    return false;
-  }
-
-  ZipFile zip(epub.getPath());
-
   // Pass A: collect footnote-shaped link targets from every spine document.
   std::vector<Target> targets;
   targets.reserve(64);  // typical books have dozens of notes; grows to MAX_ENTRIES worst case
@@ -362,9 +365,9 @@ bool gather(Epub& epub, const std::function<void(int)>& progressFn) {
       LOG_ERR("FNP", "Link scanner setup failed (spine=%d)", i);
       return false;
     }
-    if (!streamSpineEntry(zip, epub.getSpineItem(i).href, chunk.get(), scanner)) {
+    if (!streamSpineEntry(epub, epub.getSpineItem(i).href, scanner)) {
       LOG_ERR("FNP", "Failed to stream spine %d for link scan", i);
-      // Unreadable entry: skip it; other chapters' notes still gather.
+      return false;  // Do not mark an unreadable or cancelled book as gathered.
     }
     if (progressFn) progressFn((i + 1) * 60 / spineCount);
   }
@@ -376,10 +379,22 @@ bool gather(Epub& epub, const std::function<void(int)>& progressFn) {
     LOG_ERR("FNP", "Cannot open %s for write", cachePath.c_str());
     return false;
   }
-  serialization::writePod(out, CACHE_MAGIC);
-  serialization::writePod(out, CACHE_VERSION);
-  serialization::writePod(out, static_cast<uint16_t>(0));
-  serialization::writePod(out, static_cast<uint32_t>(0));
+  bool writeOk = true;
+  const auto writePod = [&](const auto& value) {
+    if (out.write(reinterpret_cast<const uint8_t*>(&value), sizeof(value)) != sizeof(value)) writeOk = false;
+  };
+  const auto discard = [&] {
+    out.close();
+    Storage.remove(cachePath.c_str());
+    return false;
+  };
+  // Until the final checked header rewrite even a power cut leaves an invalid
+  // cache, never a valid zero-entry file that suppresses the next gather.
+  writePod(static_cast<uint32_t>(0));
+  writePod(CACHE_VERSION);
+  writePod(static_cast<uint16_t>(0));
+  writePod(static_cast<uint32_t>(0));
+  if (!writeOk) return discard();
 
   std::vector<std::pair<uint32_t, uint32_t>> index;  // keyHash -> blobOffset
   index.reserve(targets.size());
@@ -398,37 +413,38 @@ bool gather(Epub& epub, const std::function<void(int)>& progressFn) {
     }
     NoteCapturer capturer(targets, wanted, [&](const size_t targetIdx, const char* text, const size_t len) {
       const uint32_t offset = static_cast<uint32_t>(out.position());
-      serialization::writePod(out, static_cast<uint16_t>(len));
-      out.write(reinterpret_cast<const uint8_t*>(text), len);
-      index.emplace_back(targets[targetIdx].keyHash, offset);
+      writePod(static_cast<uint16_t>(len));
+      if (out.write(reinterpret_cast<const uint8_t*>(text), len) != len) writeOk = false;
+      if (writeOk) index.emplace_back(targets[targetIdx].keyHash, offset);
     });
     if (!capturer.setup()) {
       LOG_ERR("FNP", "Note capturer setup failed (spine=%u)", spines[s]);
-      break;
+      return discard();
     }
-    if (!streamSpineEntry(zip, epub.getSpineItem(spines[s]).href, chunk.get(), capturer)) {
+    if (!streamSpineEntry(epub, epub.getSpineItem(spines[s]).href, capturer)) {
       LOG_ERR("FNP", "Failed to stream spine %u for note capture", spines[s]);
+      return discard();
     }
+    if (!writeOk) return discard();
     if (progressFn) progressFn(60 + static_cast<int>((s + 1) * 39 / spines.size()));
   }
 
   std::sort(index.begin(), index.end());
   const uint32_t indexOffset = static_cast<uint32_t>(out.position());
   for (const auto& [hash, offset] : index) {
-    serialization::writePod(out, hash);
-    serialization::writePod(out, offset);
+    writePod(hash);
+    writePod(offset);
   }
-  if (!out.seekSet(0)) {
-    out.close();
+  if (!writeOk || !out.seekSet(0)) return discard();
+  writePod(CACHE_MAGIC);
+  writePod(CACHE_VERSION);
+  writePod(static_cast<uint16_t>(index.size()));
+  writePod(indexOffset);
+  if (!writeOk) return discard();
+  if (!out.close()) {
     Storage.remove(cachePath.c_str());
-    LOG_ERR("FNP", "Header rewrite seek failed; cache discarded");
     return false;
   }
-  serialization::writePod(out, CACHE_MAGIC);
-  serialization::writePod(out, CACHE_VERSION);
-  serialization::writePod(out, static_cast<uint16_t>(index.size()));
-  serialization::writePod(out, indexOffset);
-  out.close();
 
   LOG_INF("FNP", "Gathered %u footnote previews (%u link targets, %u note files) in %lums",
           static_cast<uint32_t>(index.size()), static_cast<uint32_t>(targets.size()),
@@ -461,7 +477,7 @@ bool Lookup::open(const std::string& bookCachePath, const Epub* epub, const int 
   }
   if (count == 0) {
     file_.close();
-    return false;  // valid-but-empty: nothing to look up, keep the parser fast path off
+    return true;  // Valid empty cache: gathered successfully, but isOpen() stays false.
   }
   index_ = makeUniqueNoThrow<IndexEntry[]>(count);  // 8 B/entry, <= 4 KB at MAX_ENTRIES
   if (!index_) {

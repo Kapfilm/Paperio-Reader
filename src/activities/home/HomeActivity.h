@@ -31,6 +31,7 @@ class HomeActivity final : public Activity {
     Weather,
     Games,
     Settings,
+    DropboxBrowser,
   };
 
  private:

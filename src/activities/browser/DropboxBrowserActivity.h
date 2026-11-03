@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 #include "../Activity.h"
 #include "network/DropboxClient.h"
@@ -9,7 +10,7 @@
 
 struct Rect;
 
-// Read-only, single-folder Dropbox browser. Account setup lives in the reader's
+// Read-only Dropbox browser rooted at the configured folder. Account setup lives in the reader's
 // local web interface; this screen only lists and downloads supported books.
 class DropboxBrowserActivity final : public Activity {
  public:
@@ -33,6 +34,18 @@ class DropboxBrowserActivity final : public Activity {
   PendingAction pending_ = PendingAction::None;
   std::string pendingCursor_;
   std::string currentCursor_;
+  struct FolderFrame {
+    std::string id;
+    std::string name;
+    std::string cursor;
+    int selection = 0;
+  };
+  // No frame exists above the configured root. Store only metadata, not entire
+  // parent pages; the page is fetched again when returning up one level.
+  std::vector<FolderFrame> folderHistory_;
+  std::string currentFolderId_;
+  std::string currentFolderName_;
+  int restoreSelection_ = 0;
   std::string status_;
   std::string detail_;
   DropboxClient::Error lastError_ = DropboxClient::Error::Ok;
@@ -49,7 +62,9 @@ class DropboxBrowserActivity final : public Activity {
   int nextRow() const;
   int refreshRow() const;
   void selectRow();
-  void queueFetch(const std::string& cursor);
+  void queueFetch(const std::string& cursor, int restoreSelection = 0);
+  void openFolder(const DropboxClient::Entry& folder);
+  void goToParentFolder();
   void executePending();
   void launchWifiSelection();
   void trimNetworkMemory();

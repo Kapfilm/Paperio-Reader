@@ -103,7 +103,7 @@ TEST_F(DropboxTest, FolderValidationPreventsSdCacheAndTraversalDestinations) {
   EXPECT_EQ(store.downloadFolder(), "/Books");
 }
 
-TEST_F(DropboxTest, ListFiltersBooksAndPreservesCursorWhenPageContainsNoBooks) {
+TEST_F(DropboxTest, ListIncludesFoldersFiltersNonBooksAndPreservesCursorOnEmptyPage) {
   link();
   dropboxTestReplies.push_back(
       {200,
@@ -111,8 +111,11 @@ TEST_F(DropboxTest, ListFiltersBooksAndPreservesCursorWhenPageContainsNoBooks) {
   DropboxClient client;
   DropboxClient::Page page;
   ASSERT_TRUE(client.list(page).ok());
-  ASSERT_EQ(page.books.size(), 1u);
-  EXPECT_EQ(page.books[0].name, "Книга.FB2.ZIP");
+  ASSERT_EQ(page.books.size(), 2u);
+  EXPECT_TRUE(page.books[0].isFolder);
+  EXPECT_EQ(page.books[0].id, "id:folder");
+  EXPECT_FALSE(page.books[1].isFolder);
+  EXPECT_EQ(page.books[1].name, "Книга.FB2.ZIP");
   EXPECT_EQ(page.cursor, "first-page");
   EXPECT_TRUE(page.hasMore);
   JsonDocument request;
@@ -125,6 +128,68 @@ TEST_F(DropboxTest, ListFiltersBooksAndPreservesCursorWhenPageContainsNoBooks) {
   EXPECT_TRUE(page.hasMore);
   EXPECT_EQ(page.cursor, "second-page");
   EXPECT_NE(dropboxTestRequests.back().url.find("/continue"), std::string::npos);
+}
+
+TEST_F(DropboxTest, NestedFoldersUseAsciiIdsAndContinueTheirOwnCursor) {
+  link();
+  DropboxClient client;
+  DropboxClient::Page page;
+  dropboxTestReplies.push_back(
+      {200,
+       R"({"entries":[{".tag":"file","id":"id:book","name":"Книга.epub","size":5},{".tag":"folder","id":"id:child-2","name":"Другие книги"}],"cursor":"nested-first","has_more":true})"});
+  ASSERT_TRUE(client.list(page, "", "id:parent-1").ok());
+  ASSERT_EQ(page.books.size(), 2u);
+  EXPECT_TRUE(page.books[0].isFolder);
+  EXPECT_EQ(page.books[0].name, "Другие книги");
+  EXPECT_EQ(page.books[0].size, 0u);
+  EXPECT_FALSE(page.books[1].isFolder);
+  JsonDocument request;
+  ASSERT_FALSE(deserializeJson(request, dropboxTestRequests.back().body));
+  EXPECT_EQ(request["path"].as<std::string>(), "id:parent-1");
+  EXPECT_FALSE(request["recursive"].as<bool>());
+  dropboxTestReplies.push_back({200, R"({"entries":[],"cursor":"nested-last","has_more":false})"});
+  ASSERT_TRUE(client.list(page, "nested-first", "id:parent-1").ok());
+  ASSERT_FALSE(deserializeJson(request, dropboxTestRequests.back().body));
+  EXPECT_EQ(request["cursor"].as<std::string>(), "nested-first");
+  EXPECT_TRUE(request["path"].isNull());
+  EXPECT_NE(dropboxTestRequests.back().url.find("/continue"), std::string::npos);
+}
+
+TEST_F(DropboxTest, DefaultListingStillUsesConfiguredRootAndInvalidFolderIdsDoNotRequest) {
+  link();
+  ASSERT_TRUE(DropboxStore::instance().saveConfig("paperiotestkey", "/Мои книги", "/Dropbox"));
+  DropboxClient client;
+  DropboxClient::Page page;
+  dropboxTestReplies.push_back({200, R"({"entries":[],"cursor":"root-last","has_more":false})"});
+  ASSERT_TRUE(client.list(page).ok());
+  JsonDocument request;
+  ASSERT_FALSE(deserializeJson(request, dropboxTestRequests.back().body));
+  EXPECT_EQ(request["path"].as<std::string>(), "/Мои книги");
+  dropboxTestRequests.clear();
+  for (const auto* invalid : {"/outside", "../parent", "id:bad/child", "id:", "ns:123"}) {
+    EXPECT_EQ(client.list(page, "", invalid).error, DropboxClient::Error::InvalidData);
+  }
+  EXPECT_TRUE(dropboxTestRequests.empty());
+}
+
+TEST_F(DropboxTest, FolderEntriesNeedValidNamesAndIdsButNeverBookSizes) {
+  link();
+  DropboxClient client;
+  DropboxClient::Page page;
+  dropboxTestReplies.push_back(
+      {200,
+       R"({"entries":[{".tag":"folder","id":"id:valid","name":"Серия.fb2"},{".tag":"folder","id":"id:empty","name":""},{".tag":"folder","id":"id:control","name":"bad\nname"},{".tag":"folder","id":"../../escape","name":"Bad"},{".tag":"deleted","id":"id:deleted","name":"Gone"},{".tag":"file","id":"id:nondownloadable","name":"No.epub","size":5,"is_downloadable":false}],"cursor":"last","has_more":false})"});
+  ASSERT_TRUE(client.list(page).ok());
+  ASSERT_EQ(page.books.size(), 1u);
+  EXPECT_TRUE(page.books[0].isFolder);
+  EXPECT_EQ(page.books[0].id, "id:valid");
+  EXPECT_EQ(page.books[0].size, 0u);
+  dropboxTestRequests.clear();
+  std::string saved;
+  EXPECT_EQ(client.download(page.books[0], saved).error, DropboxClient::Error::InvalidData);
+  EXPECT_TRUE(saved.empty());
+  EXPECT_TRUE(dropboxTestRequests.empty());
+  EXPECT_EQ(localFiles(), 0u);
 }
 
 TEST_F(DropboxTest, JsonLimitAndNonAdvancingCursorFailSafely) {

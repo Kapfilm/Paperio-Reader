@@ -63,14 +63,71 @@ int DropboxBrowserActivity::refreshRow() const {
 
 int DropboxBrowserActivity::rowCount() const { return refreshRow() + 2; }
 
-void DropboxBrowserActivity::queueFetch(const std::string& cursor) {
+void DropboxBrowserActivity::queueFetch(const std::string& cursor, const int restoreSelection) {
   {
     RenderLock lock(*this);
     pendingCursor_ = cursor;
+    restoreSelection_ = restoreSelection;
     pending_ = PendingAction::Fetch;
     state_ = State::Loading;
   }
   requestUpdate();
+}
+
+void DropboxBrowserActivity::openFolder(const DropboxClient::Entry& folder) {
+  constexpr size_t maxDepth = 32;
+  constexpr size_t maxHistoryBytes = 16 * 1024;
+  size_t historyBytes = currentFolderId_.size() + currentFolderName_.size() + currentCursor_.size();
+  for (const auto& frame : folderHistory_) historyBytes += frame.id.size() + frame.name.size() + frame.cursor.size();
+  const size_t nextFolderBytes = folder.id.size() + folder.name.size();
+  if (folderHistory_.size() >= maxDepth || historyBytes > maxHistoryBytes ||
+      nextFolderBytes > maxHistoryBytes - historyBytes) {
+    {
+      RenderLock lock(*this);
+      state_ = State::Message;
+      status_ = tr(STR_DROPBOX_DEPTH_LIMIT);
+      detail_.clear();
+    }
+    requestUpdate();
+    return;
+  }
+  // Copy first: folder is a reference into the page that is discarded below.
+  std::string id = folder.id;
+  std::string name = folder.name;
+  {
+    RenderLock lock(*this);
+    folderHistory_.push_back({currentFolderId_, currentFolderName_, currentCursor_, selectedIndex_});
+    currentFolderId_ = std::move(id);
+    currentFolderName_ = std::move(name);
+    currentCursor_.clear();
+    page_ = {};
+    havePage_ = false;
+    selectedIndex_ = 0;
+  }
+  queueFetch("");
+}
+
+void DropboxBrowserActivity::goToParentFolder() {
+  if (folderHistory_.empty()) {
+    finish();
+    return;
+  }
+  FolderFrame parent;
+  {
+    RenderLock lock(*this);
+    parent = std::move(folderHistory_.back());
+    folderHistory_.pop_back();
+    currentFolderId_ = std::move(parent.id);
+    currentFolderName_ = std::move(parent.name);
+    currentCursor_.clear();
+    page_ = {};
+    havePage_ = false;
+    selectedIndex_ = 0;
+  }
+  // Commit the upward move before fetching. If the parent vanished or Wi-Fi
+  // fails, Back can still go farther up (and exit at root), rather than trap
+  // the user in a failed child request. Retry stays on this parent and cursor.
+  queueFetch(parent.cursor, parent.selection);
 }
 
 void DropboxBrowserActivity::trimNetworkMemory() {
@@ -116,7 +173,7 @@ void DropboxBrowserActivity::executePending() {
 
 void DropboxBrowserActivity::fetchPage() {
   DropboxClient::Page resultPage;
-  const auto result = client_.list(resultPage, pendingCursor_);
+  const auto result = client_.list(resultPage, pendingCursor_, currentFolderId_);
   if (!result.ok()) {
     showError(result.error);
     return;
@@ -126,7 +183,7 @@ void DropboxBrowserActivity::fetchPage() {
     page_ = std::move(resultPage);
     currentCursor_ = pendingCursor_;
     havePage_ = true;
-    selectedIndex_ = 0;
+    selectedIndex_ = std::max(0, std::min(restoreSelection_, rowCount() - 1));
     state_ = State::Browsing;
   }
   requestUpdate();
@@ -243,6 +300,10 @@ const char* DropboxBrowserActivity::errorText() const {
 
 void DropboxBrowserActivity::selectRow() {
   if (selectedIndex_ < static_cast<int>(page_.books.size())) {
+    if (page_.books[selectedIndex_].isFolder) {
+      openFolder(page_.books[selectedIndex_]);
+      return;
+    }
     pendingBook_ = selectedIndex_;
     pendingCursor_ = currentCursor_;
     pending_ = PendingAction::Download;
@@ -269,7 +330,7 @@ void DropboxBrowserActivity::loop() {
     if ((state_ == State::Message || state_ == State::Error) && havePage_)
       returnToBooks();
     else
-      finish();
+      goToParentFolder();
     return;
   }
   if (state_ == State::WifiSelection || state_ == State::Downloading) return;
@@ -285,7 +346,7 @@ void DropboxBrowserActivity::loop() {
     else if (state_ == State::Message)
       returnToBooks();
     else if (state_ == State::Error)
-      queueFetch(pendingCursor_);
+      queueFetch(pendingCursor_, restoreSelection_);
     return;
   }
   if (state_ == State::Error && mappedInput.wasPressed(MappedInputManager::Button::Left)) {
@@ -350,7 +411,9 @@ void DropboxBrowserActivity::render(RenderLock&&) {
     confirm = "";
   } else {
     auto& store = DropboxStore::instance();
-    const std::string folder = store.remoteFolder().empty() ? tr(STR_DROPBOX_APP_FOLDER) : store.remoteFolder();
+    const std::string folder = currentFolderId_.empty()
+                                   ? (store.remoteFolder().empty() ? tr(STR_DROPBOX_APP_FOLDER) : store.remoteFolder())
+                                   : currentFolderName_;
     const std::string safeFolder = renderer.truncatedText(UI_10_FONT_ID, folder.c_str(), body.width - 40);
     renderer.drawCenteredText(UI_10_FONT_ID, body.y, safeFolder.c_str());
     int listTop = body.y + renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing;
@@ -362,15 +425,22 @@ void DropboxBrowserActivity::render(RenderLock&&) {
         renderer, Rect{body.x, listTop, body.width, std::max(20, body.y + body.height - listTop)}, rowCount(),
         selectedIndex_,
         [this](int index) -> std::string {
-          if (index < static_cast<int>(page_.books.size())) return page_.books[index].name;
+          if (index < static_cast<int>(page_.books.size())) {
+            const auto& entry = page_.books[index];
+            return entry.isFolder ? "[" + std::string(tr(STR_DROPBOX_FOLDER)) + "] " + entry.name : entry.name;
+          }
           if (index == nextRow()) return tr(STR_NEXT_PAGE);
           if (index == refreshRow()) return tr(STR_DROPBOX_REFRESH);
           return tr(STR_DROPBOX_SETUP);
         },
         [this](int index) -> std::string {
-          return index < static_cast<int>(page_.books.size()) ? fileSizeLabel(page_.books[index].size) : "";
+          return index < static_cast<int>(page_.books.size()) && !page_.books[index].isFolder
+                     ? fileSizeLabel(page_.books[index].size)
+                     : "";
         });
-    confirm = selectedIndex_ < static_cast<int>(page_.books.size()) ? tr(STR_DOWNLOAD) : tr(STR_SELECT);
+    confirm = selectedIndex_ < static_cast<int>(page_.books.size())
+                  ? (page_.books[selectedIndex_].isFolder ? tr(STR_OPEN) : tr(STR_DOWNLOAD))
+                  : tr(STR_SELECT);
     previous = tr(STR_DIR_UP);
     next = tr(STR_DIR_DOWN);
   }

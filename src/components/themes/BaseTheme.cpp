@@ -14,6 +14,7 @@
 #include "I18n.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
+#include "components/icons/dropbox24.h"
 #include "fontIds.h"
 #include "util/TabBarLayout.h"
 
@@ -780,6 +781,7 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
+  if (buttonCount <= 0 || rect.height <= 0) return;
   int rowHeight = BaseMetrics::values.menuRowHeight;
   int rowSpacing = BaseMetrics::values.menuSpacing;
   if (buttonCount > 0 && rect.height > 0) {
@@ -796,8 +798,21 @@ void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
     }
   }
 
-  for (int i = 0; i < buttonCount; ++i) {
-    const int tileY = rect.y + static_cast<int>(i) * (rowHeight + rowSpacing);
+  // Keep menu entries readable on short/landscape screens: move a window
+  // around the selected item rather than shrinking text and icons into each other.
+  const int minimumRowHeight = std::max(32, renderer.getLineHeight(UI_10_FONT_ID) + 8);
+  int visibleCount = buttonCount;
+  int firstVisible = 0;
+  if (rowHeight < minimumRowHeight) {
+    rowHeight = std::min(rect.height, minimumRowHeight);
+    rowSpacing = 0;
+    visibleCount = std::max(1, std::min(buttonCount, rect.height / rowHeight));
+    firstVisible = std::max(0, std::min(selectedIndex - visibleCount / 2, buttonCount - visibleCount));
+  }
+
+  for (int slot = 0; slot < visibleCount; ++slot) {
+    const int i = firstVisible + slot;
+    const int tileY = rect.y + slot * (rowHeight + rowSpacing);
 
     const bool selected = selectedIndex == i;
 
@@ -812,7 +827,19 @@ void BaseTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
     std::string labelStr = buttonLabel(i);
     const char* label = labelStr.c_str();
     const int textWidth = renderer.getTextWidth(UI_10_FONT_ID, label);
-    const int textX = rect.x + (rect.width - textWidth) / 2;
+    const bool drawDropboxIcon = rowIcon && rowIcon(i) == UIIcon::Dropbox;
+    constexpr int iconSize = 24;
+    constexpr int iconGap = 8;
+    const int groupWidth = textWidth + (drawDropboxIcon ? iconSize + iconGap : 0);
+    const int groupX = rect.x + (rect.width - groupWidth) / 2;
+    const int textX = groupX + (drawDropboxIcon ? iconSize + iconGap : 0);
+    if (drawDropboxIcon) {
+      const int iconY = tileY + (rowHeight - iconSize) / 2;
+      if (selected)
+        renderer.drawIconInverted(Dropbox24Icon, groupX, iconY, iconSize, iconSize);
+      else
+        renderer.drawIcon(Dropbox24Icon, groupX, iconY, iconSize, iconSize);
+    }
     const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
     const int textY = tileY + (rowHeight - lineHeight) / 2;  // vertically centered assuming y is top of text
     // Invert text when the tile is selected, to contrast with the filled background

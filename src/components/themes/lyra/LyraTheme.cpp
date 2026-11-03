@@ -17,6 +17,8 @@
 #include "components/icons/book.h"
 #include "components/icons/book24.h"
 #include "components/icons/cover.h"
+#include "components/icons/dropbox24.h"
+#include "components/icons/dropbox32.h"
 #include "components/icons/file24.h"
 #include "components/icons/folder.h"
 #include "components/icons/folder24.h"
@@ -93,6 +95,8 @@ const uint8_t* LyraTheme::iconForName(UIIcon icon, int size) {
         return Weather24Icon;
       case UIIcon::Games:
         return Games24Icon;
+      case UIIcon::Dropbox:
+        return Dropbox24Icon;
       default:
         return nullptr;
     }
@@ -118,6 +122,8 @@ const uint8_t* LyraTheme::iconForName(UIIcon icon, int size) {
         return Weather32Icon;
       case UIIcon::Games:
         return Games32Icon;
+      case UIIcon::Dropbox:
+        return Dropbox32Icon;
       default:
         return nullptr;
     }
@@ -672,6 +678,7 @@ void LyraTheme::drawEmptyRecents(const GfxRenderer& renderer, const Rect rect) c
 void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                                const std::function<std::string(int index)>& buttonLabel,
                                const std::function<UIIcon(int index)>& rowIcon) const {
+  if (buttonCount <= 0 || rect.height <= 0) return;
   int rowHeight = LyraMetrics::values.menuRowHeight;
   int rowSpacing = LyraMetrics::values.menuSpacing;
   if (buttonCount > 0 && rect.height > 0) {
@@ -690,9 +697,22 @@ void LyraTheme::drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount
     }
   }
 
-  for (int i = 0; i < buttonCount; ++i) {
+  // Keep menu entries readable on short/landscape screens: move a window
+  // around the selected item rather than shrinking text and icons into each other.
+  const int minimumRowHeight = std::max(40, renderer.getLineHeight(UI_12_FONT_ID) + 8);
+  int visibleCount = buttonCount;
+  int firstVisible = 0;
+  if (rowHeight < minimumRowHeight) {
+    rowHeight = std::min(rect.height, minimumRowHeight);
+    rowSpacing = 0;
+    visibleCount = std::max(1, std::min(buttonCount, rect.height / rowHeight));
+    firstVisible = std::max(0, std::min(selectedIndex - visibleCount / 2, buttonCount - visibleCount));
+  }
+
+  for (int slot = 0; slot < visibleCount; ++slot) {
+    const int i = firstVisible + slot;
     int tileWidth = rect.width - LyraMetrics::values.contentSidePadding * 2;
-    Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding, rect.y + i * (rowHeight + rowSpacing),
+    Rect tileRect = Rect{rect.x + LyraMetrics::values.contentSidePadding, rect.y + slot * (rowHeight + rowSpacing),
                          tileWidth, rowHeight};
 
     const bool selected = selectedIndex == i;

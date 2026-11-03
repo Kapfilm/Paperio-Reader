@@ -31,6 +31,7 @@ class DropboxClient {
     std::string name;
     std::string id;
     uint64_t size = 0;
+    bool isFolder = false;
   };
   struct Page {
     std::vector<Entry> books;
@@ -45,6 +46,7 @@ class DropboxClient {
   static void cancelAuthorization();
   static Result completeAuthorization(const std::string& code);
 
-  Result list(Page& out, const std::string& cursor = "");
+  // Empty folderId addresses the configured root; child folders use Dropbox ASCII IDs.
+  Result list(Page& out, const std::string& cursor = "", const std::string& folderId = "");
   Result download(const Entry& entry, std::string& savedPath, Progress progress = nullptr);
 };
