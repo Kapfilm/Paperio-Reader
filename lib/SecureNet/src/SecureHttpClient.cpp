@@ -327,6 +327,24 @@ int SecureHttpClient::get(const std::string& url, const BodySink& sink, const Pr
   return ERR_TOO_MANY_REDIRECTS;
 }
 
+int SecureHttpClient::post(const std::string& url, const std::string& body, const BodySink& sink,
+                           const ProgressFn& progress) {
+  _status = 0;
+  Url parsed;
+  if (!parseUrl(url, parsed)) return ERR_BAD_URL;
+  ResponseMeta meta;
+  const int opened = transact("POST", parsed, reinterpret_cast<const uint8_t*>(body.data()), body.size(), meta);
+  if (opened < 0) return opened;
+  _status = meta.status;
+  const int received = readBody(sink, progress, meta.contentLength, meta.chunked, meta.keepAlive);
+  if (received < 0) {
+    close();
+    return received;
+  }
+  if (!meta.keepAlive || (meta.contentLength < 0 && !meta.chunked)) close();
+  return meta.status;
+}
+
 int SecureHttpClient::request(const char* method, const std::string& url, const std::string& body) {
   _body.clear();
   auto sink = [this](const uint8_t* d, size_t n) {

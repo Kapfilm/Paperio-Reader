@@ -2,7 +2,7 @@ name: Build Paperio test firmware
 
 on:
   push:
-    branches: ["codex/2.2.4-ui-quotes-cover-github", "codex/2.2.5-compact-headings-test"]
+    branches: ["codex/2.2.4-ui-quotes-cover-github", "codex/2.2.5-compact-headings-test", "codex/dropbox-download"]
   workflow_dispatch:
 
 permissions:
@@ -114,7 +114,7 @@ jobs:
               "Paperio Reader " + os.environ["CROSSPOINT_RELEASE_VERSION"] + "\n"
               "Test firmware for XTEINK X3 and X4. One firmware.bin supports both.\n"
               "Install firmware.bin using the SD-card firmware updater.\n"
-              "Compact FB2/EPUB headings: H1 115%, H2 108%, H3-H6 100%.\n"
+              "Dropbox folder book downloads; configure account through /dropbox on the reader web UI.\n"
               "Three optional host tests need a local real-world book and are skipped in CI.\n"
               "No stable release or OTA asset is replaced by this build.\n",
               encoding="utf-8",

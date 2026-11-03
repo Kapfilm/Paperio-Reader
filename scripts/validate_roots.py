@@ -36,6 +36,8 @@ BUILTIN_HOSTS = [
     "geocoding-api.open-meteo.com:443",
     "api.ipify.org:443",
     "timeapi.io:443",
+    "api.dropboxapi.com:443",
+    "content.dropboxapi.com:443",
     # Public OPDS catalogs commonly used with this reader (Let's Encrypt-served).
     "standardebooks.org:443",
     "catalog.feedbooks.com:443",

@@ -119,3 +119,5 @@ add_subdirectory(kosync_progress_reply)
 
 add_subdirectory(fb2_sync_position)
 add_subdirectory(power_buttons)
+
+add_subdirectory(dropbox)

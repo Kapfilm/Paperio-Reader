@@ -66,6 +66,12 @@ class SecureHttpClient {
   // status (after redirects), or a negative SecureHttpError on transport failure.
   int get(const std::string& url, const BodySink& sink, const ProgressFn& progress = nullptr);
 
+  // Streaming POST, deliberately without redirects. The sink can inspect
+  // lastStatus() before accepting bytes, and bound or reject response bodies.
+  // This is appropriate for authenticated API calls and large downloads.
+  int post(const std::string& url, const std::string& body, const BodySink& sink,
+           const ProgressFn& progress = nullptr);
+
   // Buffered request (GET/POST/PUT): full body accumulated into getBody(). Use
   // only for small responses (KOSync JSON). Returns HTTP status or negative error.
   int request(const char* method, const std::string& url, const std::string& body = "");

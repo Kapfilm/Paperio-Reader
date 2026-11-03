@@ -41,6 +41,7 @@ enum class SettingAction {
   SwitchFirmware,
   TextSettings,
   Submenu,
+  DropboxBrowser,
 };
 
 struct SettingInfo {

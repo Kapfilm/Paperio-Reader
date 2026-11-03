@@ -22,6 +22,7 @@
 #include "SyncTimeActivity.h"
 #include "SystemInformationActivity.h"
 #include "TextSettingsActivity.h"
+#include "activities/browser/DropboxBrowserActivity.h"
 #include "activities/games/GamesMenuActivity.h"
 #include "activities/network/SerialTransferActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -46,6 +47,8 @@ std::unique_ptr<Activity> createActivityForAction(SettingAction action, GfxRende
       return std::make_unique<KOReaderSettingsActivity>(renderer, mappedInput);
     case SettingAction::OPDSBrowser:
       return std::make_unique<OpdsServerListActivity>(renderer, mappedInput);
+    case SettingAction::DropboxBrowser:
+      return std::make_unique<DropboxBrowserActivity>(renderer, mappedInput);
     case SettingAction::Network:
       return std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false, true);
     case SettingAction::ClearCache:

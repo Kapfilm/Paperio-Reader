@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dropbox — %%CROSSPOINT%%</title>
+  <style>
+    :root { color-scheme: light dark; --bg:#f5f5f5; --card:#fff; --text:#263238; --muted:#57666c; --line:#d7dfda; --accent:#527d65; --danger:#a22b2b; }
+    @media(prefers-color-scheme:dark) { :root { --bg:#292d2a; --card:#373d38; --text:#f2f5f2; --muted:#c0cbc2; --line:#5d6b60; --accent:#7aa98b; --danger:#ffb4ab; } }
+    body { font:16px/1.5 system-ui,sans-serif; max-width:760px; margin:0 auto; padding:20px; background:var(--bg); color:var(--text); }
+    a { color:var(--accent); }
+    nav { display:flex; flex-wrap:wrap; gap:18px; margin-bottom:24px; }
+    h1 { font-size:1.8rem; margin:12px 0; }
+    h2 { font-size:1.2rem; margin-top:0; }
+    section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:20px; margin:18px 0; }
+    p { margin:10px 0; }
+    label { display:block; margin-top:16px; font-weight:600; }
+    input { box-sizing:border-box; width:100%; padding:10px; font:inherit; margin-top:6px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
+    button,.button-link { display:inline-block; padding:10px 16px; margin-top:16px; border:0; border-radius:6px; background:var(--accent); color:var(--card); font:inherit; cursor:pointer; text-decoration:none; }
+    button:disabled { opacity:.5; cursor:wait; }
+    .hint { color:var(--muted); font-size:.9rem; }
+    .error { color:var(--danger); }
+    #message { min-height:1.5em; overflow-wrap:anywhere; }
+    #connection { font-weight:600; }
+    [hidden] { display:none!important; }
+    code { overflow-wrap:anywhere; }
+    details { margin-top:14px; }
+    li { margin:8px 0; }
+    footer { color:var(--muted); font-size:.85rem; margin:24px 0; }
+  </style>
+</head>
+<body>
+  <nav aria-label="Разделы"><a href="/">Главная</a><a href="/files">Файлы</a><a href="/settings">Настройки</a></nav>
+  <h1>Dropbox</h1>
+  <p>Загрузка книг из одной папки на SD-карту. После скачивания книги доступны без интернета.</p>
+  <p id="connection" role="status">Проверяем подключение…</p>
+  <p id="wifiHint" class="hint" hidden>Для подключения Dropbox ридер должен быть подключён к домашней сети Wi-Fi с интернетом. Режим точки доступа ридера сам по себе не даёт доступ к Dropbox.</p>
+  <p id="message" role="status" aria-live="polite"></p>
+
+  <section>
+    <h2>1. Настройте папку</h2>
+    <form id="configForm">
+      <label for="appKey">App key приложения Dropbox</label>
+      <input id="appKey" name="appKey" maxlength="128" autocomplete="off" spellcheck="false" required />
+      <p class="hint">Публичный ключ приложения, не App secret и не пароль аккаунта.</p>
+      <label for="remoteFolder">Папка с книгами в Dropbox</label>
+      <input id="remoteFolder" name="remoteFolder" maxlength="1024" placeholder="Пусто — корень папки приложения" autocomplete="off" spellcheck="false" />
+      <p class="hint">Путь внутри папки приложения: например, <code>/Книги</code>. Для её корня оставьте поле пустым. Просматривается только эта папка, без вложенных папок.</p>
+      <label for="downloadFolder">Папка на SD-карте</label>
+      <input id="downloadFolder" name="downloadFolder" maxlength="255" value="/Dropbox" autocomplete="off" spellcheck="false" required />
+      <button type="submit">Сохранить настройки</button>
+    </form>
+    <details>
+      <summary>Где взять App key</summary>
+      <ol>
+        <li>Откройте <a href="https://www.dropbox.com/developers/apps" target="_blank" rel="noopener noreferrer">Dropbox App Console</a> в браузере телефона или компьютера и создайте приложение.</li>
+        <li>Выберите <strong>Scoped access</strong> и доступ <strong>App folder</strong>. Назовите приложение, например, <code>PaperioReader</code>; Dropbox может попросить выбрать другое свободное имя.</li>
+        <li>На вкладке <strong>Permissions</strong> включите <code>files.metadata.read</code> и <code>files.content.read</code>, затем сохраните кнопкой <strong>Submit</strong>. Разрешения записи не нужны.</li>
+        <li>На вкладке <strong>Settings</strong> скопируйте <strong>App key</strong> в поле выше. Для приложения должна быть разрешена авторизация публичного клиента с PKCE. Redirect URI оставьте пустым — Dropbox покажет код для копирования.</li>
+        <li>Книги положите в папку <code>Приложения / имя вашего приложения</code> в Dropbox (в английском интерфейсе — <code>Apps</code>). Эта папка появляется после подключения аккаунта. Не вписывайте её полный путь в поле папки выше.</li>
+      </ol>
+    </details>
+  </section>
+
+  <section>
+    <h2>2. Подключите аккаунт</h2>
+    <p>Откройте Dropbox в новой вкладке, разрешите чтение папки приложения, затем скопируйте показанный Dropbox код сюда. Пароль вводится только на сайте Dropbox.</p>
+    <button id="beginButton" type="button" disabled>Получить ссылку подключения</button>
+    <p><a id="authorizeLink" class="button-link" href="https://www.dropbox.com/" target="_blank" rel="noopener noreferrer" hidden>Открыть Dropbox в новой вкладке</a></p>
+    <form id="codeForm" hidden>
+      <label for="authCode">Код из Dropbox</label>
+      <input id="authCode" name="authCode" maxlength="2048" autocomplete="off" autocapitalize="none" spellcheck="false" required />
+      <button type="submit">Завершить подключение</button>
+    </form>
+    <p class="hint">Если код устарел или ридер перезапустился, получите новую ссылку. Менять папку с книгами можно без повторного входа. При смене App key аккаунт потребуется подключить заново.</p>
+    <button id="disconnectButton" type="button" hidden>Отключить аккаунт на этом ридере</button>
+  </section>
+  <section>
+    <h2>3. Скачивайте книги на ридере</h2>
+    <p>Закройте режим веб-сервера на устройстве. Откройте <strong>Настройки → Система → Dropbox</strong>, выберите книгу и подтвердите скачивание. Существующие файлы не перезаписываются.</p>
+    <p class="hint">Поддерживаются EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H и Markdown. Содержимое Dropbox не изменяется.</p>
+  </section>
+  <footer>%%CROSSPOINT%% %%VERSION%% · Данные подключения хранятся на ридере и не входят в экспорт настроек.</footer>
+  <script>
+    'use strict';
+    const $ = id => document.getElementById(id);
+    let nonce = '';
+    let busy = false;
+    let state = null;
+    const messages = {
+      invalid_request:'Запрос не распознан. Обновите страницу и повторите.',
+      csrf:'Сеанс веб-сервера изменился. Обновите страницу и повторите.',
+      too_large:'Слишком длинное значение. Сократите путь или код подключения.',
+      invalid_config:'Проверьте ключ приложения и пути папок.',
+      config_failed:'Не удалось сохранить настройки. Проверьте ключ приложения, пути папок и повторите.',
+      not_configured:'Сначала укажите App key и сохраните настройки.',
+      not_linked:'Аккаунт ещё не подключён.',
+      need_wifi:'Подключите ридер к домашней Wi-Fi сети с интернетом и снова откройте веб-интерфейс.',
+      invalid_code:'Введите код, который показан на сайте Dropbox.',
+      not_pending:'Ссылка подключения устарела. Получите новую ссылку и новый код.',
+      auth:'Dropbox не принял код или разрешение. Получите новую ссылку и повторите вход.',
+      network:'Не удалось связаться с Dropbox. Проверьте интернет на ридере и повторите.',
+      rate_limited:'Dropbox временно ограничил запросы. Повторите позже.',
+      invalid_data:'Ответ Dropbox не удалось обработать. Проверьте настройки приложения и повторите.',
+      save_failed:'Не удалось сохранить подключение на ридере. Повторите попытку.',
+      cancelled:'Подключение отменено.',
+      busy:'Ридер занят. Дождитесь завершения операции и повторите.',
+      api:'Dropbox вернул ошибку. Проверьте разрешения приложения и повторите.',
+      'low memory':'Ридеру не хватает памяти. Закройте веб-сервер, запустите его заново и повторите.'
+    };
+    function message(text, error=false) {
+      $('message').textContent = text;
+      $('message').classList.toggle('error', error);
+    }
+    function controls() {
+      document.querySelectorAll('button').forEach(button => { button.disabled = busy; });
+      $('beginButton').disabled = busy || !state || !state.configured || !state.staConnected;
+      $('disconnectButton').hidden = !state || !state.linked;
+    }
+    async function api(path, data) {
+      const options = {cache:'no-store',credentials:'same-origin'};
+      if (data !== undefined) {
+        options.method = 'POST';
+        options.headers = {'Content-Type':'application/json'};
+        options.body = JSON.stringify({...data,nonce});
+      }
+      let response;
+      try { response = await fetch(path, options); }
+      catch (_) { throw new Error('Ридер недоступен. Проверьте подключение к его веб-интерфейсу.'); }
+      let result;
+      try { result = await response.json(); }
+      catch (_) { throw new Error('Ответ ридера не распознан. Обновите страницу и повторите.'); }
+      if (!response.ok) throw new Error(messages[result.error] || 'Не удалось выполнить запрос. Повторите позже.');
+      return result;
+    }
+    async function refresh(fillFields=false) {
+      state = await api('/api/dropbox');
+      nonce = state.nonce;
+      if (fillFields) {
+        $('appKey').value = state.appKey || '';
+        $('remoteFolder').value = state.remoteFolder || '';
+        $('downloadFolder').value = state.downloadFolder || '/Dropbox';
+      }
+      $('connection').textContent = state.linked ? 'Аккаунт Dropbox подключён' : 'Аккаунт Dropbox не подключён';
+      $('wifiHint').hidden = !!state.staConnected;
+      $('codeForm').hidden = !state.pending;
+      controls();
+    }
+    async function run(operation) {
+      if (busy) return;
+      busy = true; controls(); message('Выполняется…');
+      try { await operation(); }
+      catch (error) { message(error.message, true); }
+      finally { busy = false; controls(); }
+    }
+    $('configForm').addEventListener('submit', event => {
+      event.preventDefault();
+      run(async () => {
+        await api('/api/dropbox', {appKey:$('appKey').value.trim(),remoteFolder:$('remoteFolder').value.trim(),downloadFolder:$('downloadFolder').value.trim()});
+        $('authorizeLink').hidden = true;
+        $('authCode').value = '';
+        await refresh(true);
+        message('Настройки сохранены.');
+      });
+    });
+    $('beginButton').addEventListener('click', () => run(async () => {
+      const result = await api('/api/dropbox/auth/begin', {});
+      if (typeof result.url !== 'string' || !result.url.startsWith('https://www.dropbox.com/oauth2/authorize?')) {
+        throw new Error('Ссылка Dropbox не распознана. Повторите попытку.');
+      }
+      $('authorizeLink').href = result.url;
+      $('authorizeLink').hidden = false;
+      $('authCode').value = '';
+      await refresh();
+      message('Откройте Dropbox по ссылке ниже и вернитесь с кодом подключения.');
+    }));
+    $('codeForm').addEventListener('submit', event => {
+      event.preventDefault();
+      run(async () => {
+        const code = $('authCode').value.trim();
+        await api('/api/dropbox/auth/complete', {code});
+        $('authCode').value = '';
+        $('authorizeLink').hidden = true;
+        await refresh();
+        message('Dropbox подключён. Теперь можно скачивать книги на ридере.');
+      });
+    });
+    $('disconnectButton').addEventListener('click', () => {
+      if (!confirm('Отключить Dropbox на этом ридере? Скачанные книги останутся на SD-карте.')) return;
+      run(async () => {
+        await api('/api/dropbox/disconnect', {});
+        $('authCode').value = '';
+        $('authorizeLink').hidden = true;
+        await refresh();
+        message('Аккаунт отключён на этом ридере.');
+      });
+    });
+    refresh(true).catch(error => { message(error.message, true); controls(); });
+  </script>
+</body>
+</html>

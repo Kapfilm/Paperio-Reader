@@ -10,6 +10,7 @@
 #include <Txt.h>
 #include <WiFi.h>
 #include <Xtc.h>
+#include <esp_random.h>
 #include <esp_task_wdt.h>
 
 #include <algorithm>
@@ -19,6 +20,8 @@
 
 #include "ChunkedResponse.h"
 #include "CrossPointSettings.h"
+#include "DropboxClient.h"
+#include "DropboxStore.h"
 #include "FontInstaller.h"
 #include "HttpFileStreamer.h"
 #include "OpdsServerStore.h"
@@ -28,9 +31,8 @@
 #include "SettingsList.h"
 #include "SystemStatus.h"
 #include "WebDAVHandler.h"
-#include "util/BookArchiveUtils.h"
-#include "util/BookCacheUtils.h"
 #include "WifiCredentialStore.h"
+#include "html/DropboxPageHtml.generated.h"
 #include "html/FilesPageHtml.generated.h"
 #include "html/FontsPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
@@ -39,6 +41,8 @@
 #include "html/WelcomePageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "network/HttpDownloader.h"
+#include "util/BookArchiveUtils.h"
+#include "util/BookCacheUtils.h"
 
 // Log free heap + max contiguous block at a named point.
 #define LOG_WEB_MEM(tag)                                                                             \
@@ -221,6 +225,18 @@ void CrossPointWebServer::begin() {
     return;
   }
 
+  // Fresh nonce per web-server session; no credentials are put in the page.
+  uint8_t nonceBytes[16];
+  esp_fill_random(nonceBytes, sizeof(nonceBytes));
+  constexpr char hex[] = "0123456789abcdef";
+  dropboxWebNonce.assign(32, '0');
+  for (size_t i = 0; i < sizeof(nonceBytes); ++i) {
+    dropboxWebNonce[2 * i] = hex[nonceBytes[i] >> 4];
+    dropboxWebNonce[2 * i + 1] = hex[nonceBytes[i] & 15];
+  }
+  DropboxClient::cancelAuthorization();
+  DropboxStore::instance().load();
+
   // Disable WiFi sleep to improve responsiveness and prevent 'unreachable' errors.
   // This is critical for reliable web server operation on ESP32.
   WiFi.setSleep(false);
@@ -278,6 +294,14 @@ void CrossPointWebServer::begin() {
   server->on("/api/opds", HTTP_GET, [this] { handleGetOpdsServers(); });
   server->on("/api/opds", HTTP_POST, [this] { handlePostOpdsServer(); });
   server->on("/api/opds/delete", HTTP_POST, [this] { handleDeleteOpdsServer(); });
+
+  // Dropbox setup is a local web UI. Every mutation requires the session nonce.
+  server->on("/dropbox", HTTP_GET, [this] { handleDropboxPage(); });
+  server->on("/api/dropbox", HTTP_GET, [this] { handleGetDropbox(); });
+  server->on("/api/dropbox", HTTP_POST, [this] { handleDropboxAction("config"); });
+  server->on("/api/dropbox/auth/begin", HTTP_POST, [this] { handleDropboxAction("begin"); });
+  server->on("/api/dropbox/auth/complete", HTTP_POST, [this] { handleDropboxAction("complete"); });
+  server->on("/api/dropbox/disconnect", HTTP_POST, [this] { handleDropboxAction("disconnect"); });
 
   // Wi-Fi credential endpoints
   server->on("/api/wifi", HTTP_GET, [this] { handleGetWifiNetworks(); });
@@ -344,6 +368,8 @@ void CrossPointWebServer::abortWsUpload(const char* tag) {
 }
 
 void CrossPointWebServer::stop() {
+  dropboxWebNonce.clear();
+  DropboxClient::cancelAuthorization();
   if (!running || !server) {
     LOG_DBG("WEB", "stop() called but already stopped (running=%d, server=%p)", running, server.get());
     return;
@@ -492,6 +518,174 @@ static void sendJson(WebServer* server, int code, const JsonDocument& doc) {
   server->sendContent(buf, payloadSize);
   free(buf);
   esp_task_wdt_reset();
+}
+
+namespace {
+const char* dropboxWebError(DropboxClient::Error error) {
+  switch (error) {
+    case DropboxClient::Error::Ok:
+      return "ok";
+    case DropboxClient::Error::NotConfigured:
+      return "not_configured";
+    case DropboxClient::Error::NotLinked:
+      return "not_linked";
+    case DropboxClient::Error::Auth:
+      return "auth";
+    case DropboxClient::Error::Network:
+      return "network";
+    case DropboxClient::Error::RateLimited:
+      return "rate_limited";
+    case DropboxClient::Error::TooLarge:
+      return "too_large";
+    case DropboxClient::Error::InvalidData:
+      return "invalid_data";
+    case DropboxClient::Error::File:
+      return "save_failed";
+    case DropboxClient::Error::Cancelled:
+      return "cancelled";
+    case DropboxClient::Error::AlreadyExists:
+      return "already_exists";
+    case DropboxClient::Error::Busy:
+      return "busy";
+    default:
+      return "api";
+  }
+}
+
+void dropboxResponseHeaders(WebServer* server) {
+  server->sendHeader("Cache-Control", "no-store");
+  server->sendHeader("X-Content-Type-Options", "nosniff");
+}
+
+void sendDropboxError(WebServer* server, int status, const char* error) {
+  JsonDocument doc;
+  doc["error"] = error;
+  dropboxResponseHeaders(server);
+  sendJson(server, status, doc);
+}
+}  // namespace
+
+void CrossPointWebServer::handleDropboxPage() const {
+  server->sendHeader("X-Frame-Options", "DENY");
+  server->sendHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  sendHtmlContent(server.get(), DropboxPageHtml, sizeof(DropboxPageHtml));
+}
+
+void CrossPointWebServer::handleGetDropbox() const {
+  if (rejectIfLowMemory(server.get())) return;
+  const auto& store = DropboxStore::instance();
+  JsonDocument doc;
+  doc["appKey"] = store.appKey();
+  doc["remoteFolder"] = store.remoteFolder();
+  doc["downloadFolder"] = store.downloadFolder();
+  doc["configured"] = store.configured();
+  doc["linked"] = store.linked();
+  doc["pending"] = DropboxClient::authorizationPending();
+  doc["staConnected"] = WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
+  doc["nonce"] = dropboxWebNonce;
+  dropboxResponseHeaders(server.get());
+  sendJson(server.get(), 200, doc);
+}
+
+void CrossPointWebServer::handleDropboxAction(const char* action) {
+  if (rejectIfLowMemory(server.get())) return;
+  if (!server->hasArg("plain")) {
+    sendDropboxError(server.get(), 400, "invalid_request");
+    return;
+  }
+  const String body = server->arg("plain");
+  if (body.length() > 4096) {
+    sendDropboxError(server.get(), 413, "too_large");
+    return;
+  }
+  JsonDocument doc;
+  if (deserializeJson(doc, body, DeserializationOption::NestingLimit(4)) || !doc.is<JsonObject>()) {
+    sendDropboxError(server.get(), 400, "invalid_request");
+    return;
+  }
+  const char* nonce = doc["nonce"] | "";
+  // Length is fixed; compare every byte so no prefix is accepted.
+  unsigned int difference = dropboxWebNonce.empty() || strlen(nonce) != dropboxWebNonce.size();
+  if (!difference) {
+    for (size_t i = 0; i < dropboxWebNonce.size(); ++i) difference |= nonce[i] ^ dropboxWebNonce[i];
+  }
+  if (difference) {
+    sendDropboxError(server.get(), 403, "csrf");
+    return;
+  }
+  auto& store = DropboxStore::instance();
+  if (strcmp(action, "config") == 0) {
+    if (!doc["appKey"].is<const char*>() || !doc["remoteFolder"].is<const char*>() ||
+        !doc["downloadFolder"].is<const char*>()) {
+      sendDropboxError(server.get(), 400, "invalid_request");
+      return;
+    }
+    const std::string appKey = doc["appKey"].as<std::string>();
+    const std::string remoteFolder = doc["remoteFolder"].as<std::string>();
+    const std::string downloadFolder = doc["downloadFolder"].as<std::string>();
+    if (appKey.size() > 128 || remoteFolder.size() > 1024 || downloadFolder.size() > 255) {
+      sendDropboxError(server.get(), 400, "invalid_config");
+      return;
+    }
+    if (!store.saveConfig(appKey, remoteFolder, downloadFolder)) {
+      sendDropboxError(server.get(), 400, "config_failed");
+      return;
+    }
+    DropboxClient::cancelAuthorization();
+  } else if (strcmp(action, "disconnect") == 0) {
+    if (!store.unlink()) {
+      sendDropboxError(server.get(), 500, "save_failed");
+      return;
+    }
+    DropboxClient::cancelAuthorization();
+  } else if (strcmp(action, "begin") == 0 || strcmp(action, "complete") == 0) {
+    if (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
+      sendDropboxError(server.get(), 409, "need_wifi");
+      return;
+    }
+    if (!store.configured()) {
+      sendDropboxError(server.get(), 409, "not_configured");
+      return;
+    }
+    if (strcmp(action, "begin") == 0) {
+      const std::string url = DropboxClient::beginAuthorization();
+      if (url.empty()) {
+        sendDropboxError(server.get(), 409, "busy");
+        return;
+      }
+      JsonDocument response;
+      response["url"] = url;
+      dropboxResponseHeaders(server.get());
+      sendJson(server.get(), 200, response);
+      return;
+    }
+    if (!doc["code"].is<const char*>()) {
+      sendDropboxError(server.get(), 400, "invalid_request");
+      return;
+    }
+    const std::string code = doc["code"].as<std::string>();
+    if (code.empty() || code.size() > 2048) {
+      sendDropboxError(server.get(), 400, "invalid_code");
+      return;
+    }
+    if (!DropboxClient::authorizationPending()) {
+      sendDropboxError(server.get(), 409, "not_pending");
+      return;
+    }
+    const auto result = DropboxClient::completeAuthorization(code);
+    if (!result.ok()) {
+      const int status = result.error == DropboxClient::Error::RateLimited ? 429 : 502;
+      sendDropboxError(server.get(), status, dropboxWebError(result.error));
+      return;
+    }
+  } else {
+    sendDropboxError(server.get(), 404, "invalid_request");
+    return;
+  }
+  JsonDocument response;
+  response["ok"] = true;
+  dropboxResponseHeaders(server.get());
+  sendJson(server.get(), 200, response);
 }
 
 void CrossPointWebServer::handleRoot() const {

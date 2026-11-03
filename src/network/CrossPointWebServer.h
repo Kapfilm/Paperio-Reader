@@ -77,7 +77,8 @@ class CrossPointWebServer {
   std::unique_ptr<WebServer> server = nullptr;
   std::unique_ptr<WebSocketsServer> wsServer = nullptr;
   bool running = false;
-  bool apMode = false;  // true when running in AP mode, false for STA mode
+  std::string dropboxWebNonce;  // Per-session CSRF token; never an OAuth credential.
+  bool apMode = false;          // true when running in AP mode, false for STA mode
   uint16_t port = 80;
   uint16_t wsPort = 81;  // WebSocket port
   NetworkUDP udp;
@@ -117,6 +118,10 @@ class CrossPointWebServer {
   void handleSettingsPage() const;
   void handleGetSettings() const;
   void handlePostSettings();
+
+  void handleDropboxPage() const;
+  void handleGetDropbox() const;
+  void handleDropboxAction(const char* action);
 
   // Font management handlers
   void handleFontsPage() const;

@@ -191,6 +191,9 @@ void SettingsActivity::onEnter() {
              std::move(SettingInfo::Action(StrId::STR_OPDS_BROWSER, SettingAction::OPDSBrowser)
                            .withSubcategory(StrId::STR_MENU_SYS_NETWORK)));
   addToMoved(systemSettings, lastSystemSub,
+             std::move(SettingInfo::Action(StrId::STR_DROPBOX, SettingAction::DropboxBrowser)
+                           .withSubcategory(StrId::STR_MENU_SYS_NETWORK)));
+  addToMoved(systemSettings, lastSystemSub,
              std::move(SettingInfo::Action(StrId::STR_CLOCK_SETTINGS, SettingAction::ClockSettings)
                            .withSubcategory(StrId::STR_MENU_SYS_TOOLS)));
   addToMoved(systemSettings, lastSystemSub,
