@@ -7,157 +7,154 @@
 </div>
 
 <p align="center">
-  <img src="assets/screenshots/home.jpg" width="23%" alt="Paperio Reader home screen">
-  <img src="assets/screenshots/recent-books.jpg" width="23%" alt="Recent books in a 2×2 grid">
-  <img src="assets/screenshots/highlights.jpg" width="23%" alt="Three text highlighting styles">
-  <img src="assets/screenshots/text-settings.jpg" width="23%" alt="Text settings with live preview">
+  <img src="assets/screenshots/home.jpg" width="23%" alt="Главный экран Paperio Reader">
+  <img src="assets/screenshots/recent-books.jpg" width="23%" alt="Недавние книги в сетке 2×2">
+  <img src="assets/screenshots/highlights.jpg" width="23%" alt="Три стиля выделения текста">
+  <img src="assets/screenshots/text-settings.jpg" width="23%" alt="Настройки текста с предварительным просмотром">
 </p>
 
 <details open>
-<summary><h2>Firmware Features</h2></summary>
+<summary><h2>Возможности прошивки</h2></summary>
 
 
-Firmware for **XTEINK X3 and X4** e-readers.
+Прошивка для электронных книг **XTEINK X3 и X4**.
 
-Current version: **Paperio Reader 2.2.5**.
+Текущая версия: **Paperio Reader 2.2.5**.
 
-Test build **2.2.6-rc.1** uses smaller, matching FB2 and EPUB headings: H1 is 115% of body size, H2 is 108%, and H3–H6 use body size. EPUB publisher font sizes no longer enlarge these headings or their inline wrappers. Bold styling is retained. Cached pages are rebuilt automatically; reading state is preserved. The stable OTA channel remains at 2.2.5.
+В тестовой **2.2.6-rc.1** заголовки FB2 уменьшены ещё на одну ступень, а EPUB использует такую же компактную шкалу: H1 — 115%, H2 — 108%, H3–H6 — 100% основного текста. Крупный размер из стилей EPUB не увеличивает эти заголовки. Страницы перестраиваются автоматически с сохранением прогресса.
 
-- EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H, and Markdown.
-- Replace an EPUB or FB2 book cover from the SD card with a JPG, JPEG, PNG, or BMP image, and restore the embedded cover at any time.
-- Fast rendering, background indexing, and cautious preloading of the next image.
-- Footnotes, table of contents, link navigation, and return to the previous reading position.
-- EPUB CSS and tables, floating images, hyphenation, superscript, and subscript.
-- Custom fonts and a unified text settings screen with live preview. Font sizes can be selected by name or numerically; numeric mode is also available in per-book settings.
-- Line spacing from 70% to 200% in 1% increments: a global option in “Text Settings” and a per-book option in “Quick Overrides” and “Book-specific overrides.”
-- Dark theme on X3 and X4: while reading only or throughout the entire interface; covers and illustrations retain their original polarity.
-- Continuous layout of original FB2 chapters: long chapters are not split into technical fragments that leave unused space at the bottom of a page, and the page counter covers the entire chapter.
-- Mini and Lyra themes; recent books and library views with a 2×2 cover grid.
-- Bookmarks, named pages, highlights, and a unified bookmark list for all books.
-- Reading statistics, clock, weather, and KOReader synchronization.
-- Offline games: Sudoku, Sokoban, Kakuro, Hangman, and 15 Puzzle, with saved progress and game-specific statistics.
-- Configurable short, double, and long button presses, including separate KOReader progress download and upload actions.
-- Normal or bold interface text and independently selectable normal or larger interface size on X3 and X4. Configurable tilt page turning on X3.
-- Transparent sleep screens, an information overlay, a random saved-quote screen with author attribution, and a white background for both quick and full sleep.
-- Wi-Fi, web-based file access, USB Serial transfer, firmware installation from an SD card, and over-the-air updates.
-- Switching between Paperio and inkMOD in the second slot, with emergency recovery. Installation requirements and limitations are described below.
+- Поддержка EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H и Markdown.
+- Замена обложки книги EPUB или FB2 изображением JPG, JPEG, PNG или BMP с SD-карты и возврат к встроенной обложке в любой момент.
+- Быстрая отрисовка, фоновая индексация и бережная предзагрузка следующего изображения.
+- Сноски, оглавление, переходы по ссылкам и возврат к предыдущему месту чтения.
+- Поддержка CSS и таблиц EPUB, обтекания изображений, переносов слов, надстрочного и подстрочного текста.
+- Пользовательские шрифты и единый экран настроек текста с предварительным просмотром. Размер шрифта можно выбирать по названию или числом; числовой режим доступен и в настройках отдельной книги.
+- Межстрочный интервал от 70% до 200% с шагом 1%: общая настройка в «Настройках текста» и настройка для отдельной книги в «Быстрых настройках» и «Переопределениях для книги».
+- Тёмная тема на X3 и X4: только при чтении или во всём интерфейсе; обложки и иллюстрации сохраняют исходную полярность.
+- Непрерывная вёрстка исходных глав FB2: длинные главы не делятся на технические фрагменты, оставляющие пустое место внизу страницы, а счётчик страниц охватывает всю главу.
+- Темы Mini и Lyra; отображение недавних книг и библиотеки сеткой обложек 2×2.
+- Закладки, именованные страницы, выделения и общий список закладок всех книг.
+- Статистика чтения, часы, погода и синхронизация с KOReader.
+- Игры без интернета: судоку, сокобан, какуро, «Виселица» и «Пятнашки» с сохранением прогресса и отдельной статистикой.
+- Настраиваемые короткие, двойные и долгие нажатия кнопок, включая отдельные действия загрузки и отправки прогресса KOReader.
+- Обычный или жирный шрифт интерфейса и независимый выбор обычного или увеличенного размера на X3 и X4. Настраиваемое перелистывание наклоном на X3.
+- Прозрачные заставки сна, информационный слой, случайная сохранённая цитата с указанием автора и белый фон для быстрого и полного сна.
+- Wi-Fi, доступ к файлам через веб-интерфейс, передача по USB Serial, установка прошивки с SD-карты и обновления по воздуху.
+- Переключение между Paperio и inkMOD во втором слоте и аварийное восстановление. Требования к установке и ограничения описаны ниже.
 
-OTA updates are available under `Settings → System → System Update → Check for updates`.
-For manual installation, use [firmware.bin version 2.2.5](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.5/firmware.bin).
+Обновления OTA доступны в меню `Настройки → Система → Обновление системы → Проверить обновления`.
+Для ручной установки используйте [firmware.bin версии 2.2.5](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.5/firmware.bin).
 
-The changelog is available on the [Releases page](https://github.com/Kapfilm/Paperio-Reader/releases).
+История изменений доступна на [странице релизов](https://github.com/Kapfilm/Paperio-Reader/releases).
 
 
 </details>
 
 <details open>
-<summary><strong>What’s new in 2.2.5</strong></summary>
+<summary><strong>Что нового в 2.2.5</strong></summary>
 
 
-- **Interface on X3 and X4:** restored the choice of normal or bold interface text. The larger interface size is now available on X4 as well as X3; size and weight can be selected independently. Menu spacing follows the selected size. The startup “Loading” label always stays at the normal small regular size, even with an enlarged bold interface.
-- **Recent books:** the two lower action buttons are visible and work with a normal press: **Remove** opens confirmation before removing the entry from the recent list, while **Info** opens book information. Removing an entry does not delete the book file from the SD card. All four lower captions use the same native font size within the theme; long labels are abbreviated instead of shrinking individual captions.
-- **Recent-book navigation:** the side **Up/Down** buttons visit every book in sequence in both list and grid views, including every grid column. **Hold Up** switches between list and grid. The centered reminder replaces the old `+L` hints and always remains small on both devices, regardless of interface size or weight.
-- **Quote sleep screen:** `Settings → Display → Sleep Screen → Quote` selects a random saved highlight from all books. The text uses closer line spacing and is attributed only to the author, without the book title. Deleted highlights, backup/export files, and damaged highlight files are excluded. If no usable highlights remain, the standard sleep screen is shown. Quick Resume on timeout, when enabled, keeps its existing priority.
-- **Power-button assignments:** long Power can now be assigned to the same functions as other buttons. Choosing a function other than Sleep shows a reminder to assign Sleep to another button or press type; it does not block the choice. Short Power defaults to Sleep, and long Power also retains Sleep as its default. Explicit custom assignments and Ignore are preserved.
-- **Independent wake gesture:** `Settings → Controls → Power Button → Wake up` selects a short or long press, with short press as the default. This is separate from sleep artwork and button actions; Quick Resume does not bypass a selected long wake. Startup settings are available before the SD card is mounted. Held wake presses are still suppressed so they do not immediately execute another command; screenshot and recovery combinations remain available, and connecting USB alone is not treated as a confirmed power-button wake.
-- **X3 sleep and wake handling:** a real wake press is captured before loading startup settings, so it need not remain held through those reads. Sleep commands take priority over optional battery setup, and that setup is deferred while a Power press is being classified. Required cleanup of an already-started battery setup is retained and runs at normal CPU speed. These changes remove avoidable software delays; the bootloader and the slower X3 screen-refresh waveform still take time. An X3 cold-start tap released before the application can observe it cannot safely be distinguished from USB power-on. Actual timings were not measured on hardware.
-- **Progressive JPEG covers:** small progressive JPEGs now reconstruct full luminance detail instead of displaying only a coarse block preview. This fixes covers that looked blurred despite containing readable source details. Full-detail decoding is bounded to images up to **512×768** and **4,096 padded blocks**; larger or unsupported cases, or insufficient initial memory, retain the earlier preview path. The firmware cannot recover detail absent from the original image.
-- **Cover-cache update:** old rendered covers and thumbnails are regenerated automatically when accessed. Original images, reading progress, bookmarks, highlights, statistics, and book indexes are preserved; no manual cache deletion or settings reset is required when upgrading from 2.2.4 or the `2.2.4-ui-quotes-cover-test` builds.
+- **Интерфейс X3 и X4:** возвращён выбор обычного или жирного шрифта интерфейса. Увеличенный размер теперь доступен не только на X3, но и на X4; размер и жирность выбираются независимо. Отступы меню учитывают выбранный размер. Надпись «Загрузка» при запуске всегда остаётся маленькой и обычного начертания, даже при увеличенном жирном шрифте интерфейса.
+- **Недавние книги:** две нижние кнопки действий видимы и работают по обычному нажатию: **Удалить** запрашивает подтверждение перед удалением записи из списка недавних, а **Инфо** открывает сведения о книге. Удаление записи не удаляет файл книги с SD-карты. Все четыре нижние подписи используют одинаковый исходный размер шрифта выбранной темы; длинные слова сокращаются вместо уменьшения отдельных подписей.
+- **Навигация в недавних книгах:** боковые кнопки **Вверх/Вниз** последовательно перебирают все книги в списке и сетке, включая каждый столбец. **Удержание Вверх** переключает список и сетку. Центрированная подсказка заменяет старые обозначения `+L` и всегда остаётся маленькой на обоих устройствах независимо от размера и жирности интерфейса.
+- **Заставка «Цитата»:** `Настройки → Экран → Экран сна → Цитата` выбирает случайное сохранённое выделение из всех книг. Межстрочный интервал уменьшен; под текстом указан только автор без названия книги. Удалённые выделения, резервные копии, файлы экспорта и повреждённые файлы выделений не участвуют в выборе. Если подходящих выделений нет, показывается стандартная заставка сна. Быстрое возобновление при срабатывании таймера, если оно включено, сохраняет прежний приоритет.
+- **Назначения кнопки питания:** долгому нажатию питания теперь можно назначить те же функции, что и другим кнопкам. При выборе функции, отличной от сна, появляется напоминание назначить сон на другую кнопку или тип нажатия; выбор не блокируется. Короткое нажатие питания по умолчанию переводит устройство в сон; для долгого нажатия сон также остаётся действием по умолчанию. Явные пользовательские назначения и действие «Игнорировать» сохраняются.
+- **Независимый способ пробуждения:** `Настройки → Управление → Кнопка питания → Пробуждение` позволяет выбрать короткое или долгое нажатие; по умолчанию используется короткое. Настройка не зависит от заставки сна и назначений кнопок; быстрое возобновление не обходит выбранное долгое пробуждение. Настройки запуска доступны до подключения SD-карты. Удерживаемое нажатие пробуждения по-прежнему подавляется, чтобы сразу не выполнить другую команду; сочетания для снимка экрана и восстановления остаются доступны, а одно лишь подключение USB не считается подтверждённым пробуждением кнопкой питания.
+- **Обработка сна и пробуждения X3:** реальное нажатие для пробуждения фиксируется до загрузки настроек запуска, поэтому кнопку не требуется удерживать на протяжении их чтения. Команды сна имеют приоритет над необязательной настройкой измерителя заряда; эта настройка откладывается на время определения типа нажатия питания. Обязательное завершение уже начатой настройки измерителя сохраняется и выполняется на обычной частоте процессора. Изменения устраняют лишние программные задержки; загрузчик и более медленная форма обновления экрана X3 по-прежнему требуют времени. Короткое нажатие при холодном запуске X3, отпущенное до того, как приложение успело его увидеть, нельзя надёжно отличить от включения по USB. Фактическое время на устройствах не измерялось.
+- **Обложки progressive JPEG:** небольшие прогрессивные JPEG теперь восстанавливаются с полной детализацией яркости вместо грубого блочного предпросмотра. Исправлены обложки, которые выглядели размытыми, хотя исходное изображение содержало различимые детали. Полное декодирование ограничено изображениями до **512×768** и **4096 блоков с учётом дополнения краёв**; для более крупных или неподдерживаемых случаев либо при нехватке памяти в начале работы сохраняется прежний режим предпросмотра. Прошивка не может восстановить детали, отсутствующие в исходном изображении.
+- **Обновление кэша обложек:** старые отрисованные обложки и миниатюры автоматически создаются заново при обращении к ним. Исходные изображения, прогресс чтения, закладки, выделения, статистика и индексы книг сохраняются; при обновлении с 2.2.4 или сборок `2.2.4-ui-quotes-cover-test` вручную удалять кэш или сбрасывать настройки не требуется.
 
-The GitHub-built test base passed **668 checks**, with **3 optional external-book checks skipped**, and **32 real-font interface-layout combinations**. The completed firmware image was checked for ESP32-C3 format, checksum, and SHA-256 integrity. The progressive JPEG implementation also passed 18 decoder/cache tests under AddressSanitizer and UndefinedBehaviorSanitizer. These software checks do not replace physical testing of display appearance and sleep/wake timings.
-
-
-</details>
-
-<details>
-<summary><strong>Reading FB2</strong></summary>
-
-
-Copy an `.fb2` or `.fb2.zip` book to the SD card and open it from the library.
-A regular `.zip` containing an FB2 file is also recognized. If an archive
-contains multiple FB2 files, the first one found is opened; use separate
-archives for individual books.
-
-<details>
-<summary>Supported features</summary>
-
-
-- Title, author, annotation, headings, and nested sections. The table of contents uses chapter titles from the book; an untitled section may be shown with a system-generated label.
-- Embedded covers and illustrations. The cover is available on the home screen and in the library if it is present in the book and its image can be read.
-- Basic text formatting: paragraphs, bold and italic emphasis, quotations, epigraphs, poetry, superscript, and subscript.
-- Footnotes, links between sections, and links to individual text elements, including paragraphs and table cells. This makes it possible to read books containing numerous notes and cross-references.
-- Notes window, nested navigation, opening the full text, and returning to the reading position.
-- Global text settings, saved reading position, bookmarks, and highlights.
-- UTF-8, Windows-1251, and KOI8-R; for legacy encodings, the correct encoding declaration in the FB2 file itself is important.
+Тестовая основа, собранная на GitHub, прошла **668 проверок**; **3 необязательные проверки с внешней книгой пропущены**. Также проверены **32 сочетания настроек интерфейса с реальными шрифтами**. Готовый образ прошивки проверен на формат ESP32-C3, контрольную сумму и целостность SHA-256. Реализация progressive JPEG дополнительно прошла 18 тестов декодера и кэша с AddressSanitizer и UndefinedBehaviorSanitizer. Программные проверки не заменяют проверку внешнего вида экрана и времени сна и пробуждения на физических устройствах.
 
 
 </details>
 
 <details>
-<summary>First and subsequent opening</summary>
+<summary><strong>Чтение FB2</strong></summary>
 
 
-When a book is opened for the first time, the firmware prepares it and creates
-indexes on the SD card. A large book with thousands of sections, footnotes, or
-images requires more time than a short novel; an archive also has to be
-extracted. The card must have enough free space for the extracted book and
-support files.
+Скопируйте книгу `.fb2` или `.fb2.zip` на SD-карту и откройте её из библиотеки.
+Обычный `.zip` с файлом FB2 также распознаётся. Если в архиве несколько файлов
+FB2, открывается первый найденный; для отдельных книг используйте отдельные
+архивы.
 
-The preparation result is saved. When the book is opened again, a valid index
-is used immediately, without displaying the “Indexing” screen. Covers and
-indexes are not deleted merely because other books are opened. Clearing the
-cache, damaged support files, or an index format update in a newer firmware
-version may require the book to be prepared again. Whether the reading position
-and bookmarks are preserved when the index format changes depends on the
-firmware version; details of the transition from 2.1.6 are provided below.
+<details>
+<summary>Поддерживаемые возможности</summary>
+
+
+- Название, автор, аннотация, заголовки и вложенные разделы. Оглавление использует названия глав из книги; раздел без заголовка может отображаться с автоматически созданной подписью.
+- Встроенные обложки и иллюстрации. Обложка доступна на главном экране и в библиотеке, если она есть в книге и её изображение удаётся прочитать.
+- Основное оформление текста: абзацы, жирное и курсивное выделение, цитаты, эпиграфы, стихи, надстрочный и подстрочный текст.
+- Сноски, ссылки между разделами и ссылки на отдельные элементы текста, включая абзацы и ячейки таблиц. Это позволяет читать книги с большим количеством примечаний и перекрёстных ссылок.
+- Окно примечаний, вложенные переходы, открытие полного текста и возврат к месту чтения.
+- Общие настройки текста, сохранение позиции чтения, закладки и выделения.
+- UTF-8, Windows-1251 и KOI8-R; для устаревших кодировок важно правильное объявление кодировки в самом файле FB2.
 
 
 </details>
 
 <details>
-<summary>Upgrading from 2.1.6 to 2.1.7</summary>
+<summary>Первое и последующие открытия</summary>
 
 
-Previously opened FB2 books are prepared again once: technical fragments are
-replaced with the original chapters. The old position is moved to the
-**beginning of the original chapter** that contained the saved fragment, rather
-than to the previous page.
+При первом открытии прошивка подготавливает книгу и создаёт индексы на
+SD-карте. Большая книга с тысячами разделов, сносок или изображений требует
+больше времени, чем короткий роман; архив также нужно распаковать. На карте
+должно хватать свободного места для распакованной книги и служебных файлов.
 
-Old bookmarks and highlights are not automatically transferred to the new
-layout. Their data is preserved in a cache archive with the
-`.before-native-chapters` suffix on the SD card and is no longer displayed as
-active bookmarks or highlights. There is no automatic way to restore these
-entries from the archive through the interface. Make a note of important
-reading positions before updating. Book settings are preserved.
-
-No additional migration is required when upgrading from either the
-`2.1.7-fb2-chapters-test1` or `2.1.7-line-spacing-test1` test build.
+Результат подготовки сохраняется. При повторном открытии сразу используется
+действующий индекс без показа экрана «Индексация». Обложки и индексы не удаляются
+только из-за открытия других книг. Очистка кэша, повреждение служебных файлов
+или обновление формата индекса в новой версии прошивки могут потребовать
+повторной подготовки книги. Сохранение позиции чтения и закладок при смене
+формата индекса зависит от версии прошивки; ниже описан переход с 2.1.6.
 
 
 </details>
 
 <details>
-<summary>Line spacing</summary>
+<summary>Обновление с 2.1.6 до 2.1.7</summary>
 
 
-`Text Settings → Layout → Reader Line Spacing` sets the global line spacing.
-“Quick Overrides” and `Book-specific overrides → Reader Line Spacing` set the spacing for
-the current book; “Default” restores the global value. The setting is available
-for EPUB and FB2 reading, with a range of **70–200%**. The front buttons change
-the value by **1%**, and the side buttons by **10%**. OK saves the selection;
-“Back” cancels the change.
+Ранее открытые книги FB2 один раз подготавливаются заново: технические фрагменты
+заменяются исходными главами. Старая позиция переносится в **начало исходной
+главы**, содержавшей сохранённый фрагмент, а не на прежнюю страницу.
+
+Старые закладки и выделения автоматически в новую вёрстку не переносятся.
+Их данные сохраняются на SD-карте в архиве кэша с суффиксом
+`.before-native-chapters` и больше не отображаются как активные закладки или
+выделения. Автоматического восстановления этих записей из архива через
+интерфейс нет. Перед обновлением запишите важные позиции чтения. Настройки
+книги сохраняются.
+
+При обновлении с тестовых сборок `2.1.7-fb2-chapters-test1` или
+`2.1.7-line-spacing-test1` дополнительный перенос не требуется.
 
 
 </details>
 
 <details>
-<summary>Limitations</summary>
+<summary>Межстрочный интервал</summary>
 
 
-- FB2 tables are displayed sequentially, cell by cell, with their text and links preserved. The original column grid is not reproduced.
-- Book preparation and page layout are separate operations. Changing the font, font size, or spacing may require the pages to be laid out again; a pause may also occur when opening a fragment that has not yet been prepared. The absence of an additional indexing screen does not eliminate this work.
-- Opening a note for the first time may require its text to be laid out. The opening time depends on the size of the fragment, its images, and the speed of the SD card.
-- Navigation requires the link target to exist in the source FB2. The firmware cannot restore broken links or missing images in the book itself.
+`Настройки текста → Макет → Межстрочный интервал` задаёт общий интервал.
+«Быстрые настройки» и `Переопределения для книги → Межстрочный интервал` задают
+интервал для текущей книги; «По умолчанию» возвращает общее значение.
+Настройка доступна при чтении EPUB и FB2 в диапазоне **70–200%**. Передние
+кнопки меняют значение на **1%**, боковые — на **10%**. OK сохраняет выбор,
+«Назад» отменяет изменение.
+
+
+</details>
+
+<details>
+<summary>Ограничения</summary>
+
+
+- Таблицы FB2 отображаются последовательно, ячейка за ячейкой, с сохранением текста и ссылок. Исходная сетка столбцов не воспроизводится.
+- Подготовка книги и вёрстка страниц — разные операции. Смена шрифта, его размера или интервала может потребовать повторной вёрстки; пауза возможна и при открытии ещё не подготовленного фрагмента. Отсутствие дополнительного экрана индексации не отменяет эту работу.
+- Первое открытие примечания может потребовать вёрстки его текста. Время открытия зависит от размера фрагмента, изображений в нём и скорости SD-карты.
+- Для перехода цель ссылки должна существовать в исходном FB2. Прошивка не может восстановить повреждённые ссылки или отсутствующие изображения в самой книге.
 
 
 </details>
@@ -165,111 +162,111 @@ the value by **1%**, and the side buttons by **10%**. OK saves the selection;
 </details>
 
 <details>
-<summary><strong>Custom book covers</strong></summary>
+<summary><strong>Пользовательские обложки книг</strong></summary>
 
 
-Custom covers are available for EPUB, FB2, and FB2.ZIP books. Open a book's
-information screen, press **Cover**, and select an image from the SD card. JPG,
-JPEG, PNG, and BMP files are supported. The image is copied beside the book as
-a managed sidecar, so the original book file is never modified.
+Пользовательские обложки доступны для EPUB, FB2 и FB2.ZIP. Откройте сведения о
+книге, нажмите **Обложка** и выберите изображение на SD-карте. Поддерживаются
+JPG, JPEG, PNG и BMP. Изображение копируется рядом с книгой в служебный файл,
+поэтому исходный файл книги не изменяется.
 
-The home screen, recent-books view, book information screen, and finished-book
-screen regenerate their thumbnails immediately after a cover is changed. Open
-the same menu and choose **Restore embedded cover** to remove the custom image
-and return to the cover stored inside the book.
+Главный экран, список недавних книг, сведения о книге и экран завершённой
+книги пересоздают миниатюры сразу после смены обложки. Откройте то же меню и
+выберите **Вернуть оригинальную**, чтобы удалить пользовательское
+изображение и вернуться к обложке из книги.
 
 
 </details>
 
 <details>
-<summary><strong>Games</strong></summary>
+<summary><strong>Игры</strong></summary>
 
 
-Open **Games** from the home screen or from
-`Settings → System → Tools → Games`. All games work offline.
+Откройте **Игры** на главном экране или в меню
+`Настройки → Система → Инструменты → Игры`. Все игры работают без интернета.
 
-- **Sudoku** provides Easy, Medium, and Hard puzzles, pencil notes, hints,
-  error checking, a timer, automatic saving, and per-difficulty statistics.
-- **Sokoban** includes all 155 levels shipped by the integrated CrossMux game,
-  a level selector, move and push counters, undo, and saved level progress.
-- **Kakuro** provides Easy, Medium, and Hard cross-sum puzzles, hints, error
-  checking, a timer, saved progress, and statistics.
-- **Hangman** provides English and Russian word sets grouped by category,
-  Easy and Hard difficulty, hints, saved games, win/loss statistics, and a
-  two-player mode where one player enters a word for the other to guess.
-- **15 Puzzle** provides a solvable shuffled 4×4 board, move counter,
-  automatic progress saving, and switchable controls that follow either the
-  empty cell or the moving tile.
+- **Судоку:** лёгкие, средние и сложные задачи, заметки карандашом, подсказки,
+  проверка ошибок, таймер, автосохранение и статистика по уровням сложности.
+- **Сокобан:** все 155 уровней встроенной игры CrossMux, выбор уровня,
+  счётчики ходов и толчков, отмена хода и сохранение прогресса уровней.
+- **Какуро:** лёгкие, средние и сложные числовые кроссворды, подсказки,
+  проверка ошибок, таймер, сохранение прогресса и статистика.
+- **Виселица:** английские и русские наборы слов по категориям, лёгкая и сложная
+  игра, подсказки, сохранение, статистика побед и поражений и режим для двух
+  игроков, где один вводит слово, а другой его угадывает.
+- **Пятнашки:** перемешанное поле 4×4 с гарантированным решением, счётчик ходов,
+  автосохранение прогресса и переключаемое управление — по пустой ячейке или
+  перемещаемой плитке.
 
 <p align="center">
-  <img src="assets/screenshots/game-sudoku.png" alt="Sudoku" width="18%">
-  <img src="assets/screenshots/game-sokoban.png" alt="Sokoban" width="18%">
-  <img src="assets/screenshots/game-kakuro.png" alt="Kakuro" width="18%">
-  <img src="assets/screenshots/game-hangman.png" alt="Hangman" width="18%">
-  <img src="assets/screenshots/game-15-puzzle.png" alt="15 Puzzle" width="18%">
+  <img src="assets/screenshots/game-sudoku.png" alt="Судоку" width="18%">
+  <img src="assets/screenshots/game-sokoban.png" alt="Сокобан" width="18%">
+  <img src="assets/screenshots/game-kakuro.png" alt="Какуро" width="18%">
+  <img src="assets/screenshots/game-hangman.png" alt="Виселица" width="18%">
+  <img src="assets/screenshots/game-15-puzzle.png" alt="Пятнашки" width="18%">
 </p>
 
-In Sokoban, use the directional buttons to move, the confirm button to open the
-level selector, the power button to undo the last move, and Back to return to
-the Games screen.
+В сокобане кнопки направлений перемещают персонажа, кнопка подтверждения
+открывает выбор уровня, кнопка питания отменяет последний ход, а «Назад»
+возвращает на экран игр.
 
 
 </details>
 
 <details>
-<summary><strong>Sample books: footnotes and notes</strong></summary>
+<summary><strong>Примеры книг: сноски и примечания</strong></summary>
 
 
-**The Bible with commentaries by Blessed Theophylact of Bulgaria** is an example
-of a large EPUB containing parallel passages, cross-references, and **6,268
-commentaries**. The book is suitable for exploring the notes window, nested
-navigation, and returning to the original verse in Paperio Reader.
+**Библия с толкованиями блаженного Феофилакта Болгарского** — пример большого
+EPUB с параллельными местами, перекрёстными ссылками и **6268 толкованиями**.
+Книга подходит для знакомства с окном примечаний, вложенными переходами и
+возвратом к исходному стиху в Paperio Reader.
 
-**[Download the Bible with commentaries by Theophylact in EPUB format — 6.7 MB](https://github.com/Kapfilm/Paperio-Reader/raw/refs/heads/Paperio-Reader/examples/bible-theophylact.epub)**
+**[Скачать Библию с толкованиями Феофилакта в формате EPUB — 6,7 МБ](https://github.com/Kapfilm/Paperio-Reader/raw/refs/heads/Paperio-Reader/examples/bible-theophylact.epub)**
 
-The EPUB version preserves large centered headings, spacing between headings
-and text, italic quotations, and backlinks. Internal page grouping is optimized
-for navigation; faster opening of commentaries has been confirmed on the
-XTEINK X4 with Paperio. EPUBCheck: no errors or warnings.
+В EPUB сохранены крупные центрированные заголовки, отступы между заголовками
+и текстом, курсивные цитаты и обратные ссылки. Внутренняя группировка страниц
+оптимизирована для переходов; ускоренное открытие толкований подтверждено на
+XTEINK X4 с Paperio. EPUBCheck: ошибок и предупреждений нет.
 
-**The Bible with commentaries by John Chrysostom** is an especially demanding
-example containing numerous footnotes, notes, and cross-references, suitable
-for testing the processing speed of large books.
+**Библия с толкованиями Иоанна Златоуста** — особенно требовательный пример
+с многочисленными сносками, примечаниями и перекрёстными ссылками, подходящий
+для проверки скорости обработки больших книг.
 
-**[Download the Bible with commentaries by John Chrysostom in FB2.ZIP format — 7.8 MB](https://github.com/Kapfilm/Paperio-Reader/raw/refs/heads/Paperio-Reader/examples/bible-zlatoust.fb2.zip)**
+**[Скачать Библию с толкованиями Иоанна Златоуста в формате FB2.ZIP — 7,8 МБ](https://github.com/Kapfilm/Paperio-Reader/raw/refs/heads/Paperio-Reader/examples/bible-zlatoust.fb2.zip)**
 
-The archive contains a single 32.0 MB FB2 file.
+Архив содержит один файл FB2 размером 32,0 МБ.
 
-Copy the selected file to the SD card and open it in Paperio Reader. Select a
-parallel-passage link or commentary number to open the note; the “Back” button
-returns you to the reading position.
-
-
-</details>
-
-<details>
-<summary><strong>Text highlighting</strong></summary>
-
-
-Three highlighting styles are available in books:
-
-- **Marker (light gray)** — subtle highlighting without darkening the text.
-- **Black marker** — high-contrast highlighting with white text.
-- **Underline** — preserves the original page background.
-
-Select the desired style through `Book Menu → Highlight Text`; the default
-style can be selected in the reading settings. Highlighting can also be
-assigned to a short, double, or long press of a side button.
+Скопируйте выбранный файл на SD-карту и откройте в Paperio Reader. Выберите
+ссылку на параллельное место или номер толкования, чтобы открыть примечание;
+кнопка «Назад» возвращает к месту чтения.
 
 
 </details>
 
 <details>
-<summary><strong>Dictionaries</strong></summary>
+<summary><strong>Выделение текста</strong></summary>
 
 
-Paperio Reader supports **StarDict** dictionaries. Extract each dictionary into
-a separate folder on the SD card:
+В книгах доступны три стиля выделения:
+
+- **Маркер (светло-серый)** — ненавязчивое выделение без затемнения текста.
+- **Чёрный маркер** — контрастное выделение с белым текстом.
+- **Подчёркивание** — сохраняет исходный фон страницы.
+
+Выберите нужный стиль через `Меню книги → Выделить текст`; стиль по умолчанию
+задаётся в настройках чтения. Выделение также можно назначить короткому,
+двойному или долгому нажатию боковой кнопки.
+
+
+</details>
+
+<details>
+<summary><strong>Словари</strong></summary>
+
+
+Paperio Reader поддерживает словари **StarDict**. Распакуйте каждый словарь в
+отдельную папку на SD-карте:
 
 ```text
 /dictionaries/Dictionary name/
@@ -278,135 +275,53 @@ a separate folder on the SD card:
 └── dictionary.ifo        optional
 ```
 
-The `.idx` file and the selected `.dict` or `.dict.dz` file in the same folder
-must have the same base name. On the first lookup, the firmware automatically
-creates a fast `.qidx` index alongside them; this may take some time for a large
-dictionary. If a compressed `.dict.dz` file does not open, use an uncompressed
-`.dict` file.
+Файл `.idx` и выбранный файл `.dict` или `.dict.dz` в одной папке должны иметь
+одинаковое базовое имя. При первом поиске прошивка автоматически создаёт
+рядом быстрый индекс `.qidx`; для большого словаря это может занять время.
+Если сжатый файл `.dict.dz` не открывается, используйте несжатый `.dict`.
 
-You can select a dictionary through `Settings → Reading → Dictionary` or
-directly from the open book menu by choosing `Select dictionary`.
+Словарь можно выбрать через `Настройки → Чтение → Словарь` или прямо из меню
+открытой книги командой `Выбрать словарь`.
 
-If **“Automatic”** is selected, the firmware first searches the most suitable
-dictionaries based on the alphabet used in the query, then checks the remaining
-installed dictionaries if necessary. This is convenient if the card contains,
-for example, a Russian explanatory dictionary and an English–Russian
-dictionary.
+При выборе **«Автоматически»** прошивка сначала ищет в наиболее подходящих
+словарях с учётом алфавита запроса, а при необходимости проверяет остальные
+установленные словари. Это удобно, если на карте есть, например, русский
+толковый и англо-русский словари.
 
-To look up a word, open the book menu, select `Dictionary lookup`, and
-select the desired word. This action can also be assigned to a short, double,
-or long press of any button in the control settings.
+Чтобы найти слово, откройте меню книги, выберите `Найти в словаре`, затем
+нужное слово. Это действие также можно назначить короткому, двойному или
+долгому нажатию любой кнопки в настройках управления.
 
 
 </details>
 
 <details>
-<summary><strong>Installation and updates</strong></summary>
+<summary><strong>Установка и обновления</strong></summary>
 
 
-On an existing Paperio installation, connect to Wi-Fi and select
-`Settings → System → System Update → Check for updates`. Version **2.2.5** is a
-stable OTA update; enabling beta updates is not required. It can be installed
-over 2.2.4 and the `2.2.4-ui-quotes-cover-test` builds without a settings reset.
-For an SD-card update, use the release’s `firmware.bin` application image.
-
-<details>
-<summary>Devices with USB lock (Xteink Unlocker)</summary>
-
-
-Some Xteink devices purchased from third-party stores (for example, on
-AliExpress) come with a factory USB lock. If your device is locked, you will
-need to use the
-[Xteink Unlocker](https://crosspointreader.com/#unlock-tool) before you can
-flash Paperio Reader.
-
-Install the first version of Paperio Reader manually using the `firmware.bin`
-file. Subsequent versions can be installed on the device via:
-
-`Settings → System → System Update → Check for updates`
-
-- [Latest release](https://github.com/Kapfilm/Paperio-Reader/releases/latest)
-- [Download firmware.bin](https://github.com/Kapfilm/Paperio-Reader/releases/latest/download/firmware.bin)
-
-
-</details>
-
-</details>
+Если Paperio уже установлен, подключитесь к Wi-Fi и выберите
+`Настройки → Система → Обновление системы → Проверить обновления`. Версия
+**2.2.5** — стабильное обновление OTA, включать бета-обновления не требуется.
+Её можно установить поверх 2.2.4 и сборок `2.2.4-ui-quotes-cover-test` без
+сброса настроек. Для обновления с SD-карты используйте образ приложения
+`firmware.bin` из релиза.
 
 <details>
-<summary><strong>Switching between Paperio and inkMOD</strong></summary>
+<summary>Устройства с блокировкой USB (Xteink Unlocker)</summary>
 
 
-Starting with version 2.1.4, **Settings → System → System Update → Switch firmware slot** is available. It displays the name and version of the image in the second slot and checks the ESP32-C3 header, segment boundaries, checksum, and SHA-256 when present. After confirmation, the reader restarts into the other installed firmware. The firmware partitions are not overwritten. An empty or corrupted image cannot be selected.
+Некоторые устройства Xteink из сторонних магазинов, например с AliExpress,
+поставляются с заводской блокировкой USB. Если ваше устройство заблокировано,
+перед установкой Paperio Reader потребуется
+[Xteink Unlocker](https://crosspointreader.com/#unlock-tool).
 
-Before using this feature for the first time, both firmware images must be installed once in separate slots:
+Первую версию Paperio Reader установите вручную с помощью файла
+`firmware.bin`. Последующие версии можно устанавливать на устройстве через:
 
-1. Install [Paperio 2.2.0](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.0/firmware.bin) using the regular SD update and leave a normal operating screen open for at least one minute.
-2. Use the SD update in Paperio to install a compatible **inkMOD application image** for your reader. It will occupy the second slot, while Paperio remains in the first. Use an inkMOD version that supports slot switching. A full flash image containing the bootloader and partition table is not suitable for this operation.
-3. In inkMOD, select the option to switch to the other slot. Paperio will start. To return to inkMOD, use the new “Switch firmware slot” option in Paperio.
+`Настройки → Система → Обновление системы → Проверить обновления`
 
-If both firmware images are already installed, simply switch between them. Installing a new Paperio version from an older Paperio version will overwrite inkMOD in the occupied second slot; in that case, install inkMOD again as described in step 2.
-
-**Limitations:** two slots of 0x640000 bytes (6.25 MiB) are available. A regular update replaces the firmware in the second slot: there is no permanent third backup copy. Paperio and [inkMOD](https://github.com/alpzoloto-sudo/inkmod/tree/b327a0887fa02d0dcd6c38e0808341d2b4a1fc2a) have been verified to use the same `partitions.csv` layout; arbitrary alternative layouts are not supported. An integrity check does not guarantee compatibility of settings, the SD cache, or third-party firmware behavior.
-
-Manual switching and emergency recovery are separate operations. When a verified image is selected manually, it is marked as the chosen image without bootloader trial status, because third-party firmware may not support ESP-IDF confirmation. This does not confirm its stable operation and does not automatically add it as a trusted Paperio backup. Regular Paperio updates continue to use successful-boot confirmation and emergency recovery as described below. Automatic return from an inkMOD failure depends on inkMOD itself and the bootloader.
-
-A user confirmed that switching works on a physical reader with test build 2.1.3-dualboot-test1, on which this release is based. The switcher concept and compatible partition layout come from the [alpzoloto-sudo/inkmod](https://github.com/alpzoloto-sudo/inkmod) project.
-
-
-</details>
-
-<details>
-<summary><strong>Emergency recovery</strong></summary>
-
-
-<details>
-<summary>When a boot is considered successful</summary>
-
-
-After an update, leave a normal operating screen open for at least **60 seconds**. Confirmation occurs after a regular screen has been rendered and the main loop has operated steadily for one minute. The boot logo, sleep mode, and recovery screen do not count as a successful boot. A long main-loop pause or incomplete rendering delays confirmation. In the USB log, confirmation is indicated by `Firmware confirmed after healthy UI/main-loop interval`.
-
-Entering normal sleep or performing a regular restart before confirmation does not mark the firmware as healthy: trial status remains until a complete normal boot has succeeded.
-
-
-</details>
-
-<details>
-<summary>What happens after crashes</summary>
-
-
-The firmware stores information about the current image, the verified previous version, and the crash sequence in NVS service storage. After **three consecutive crash restarts without a successful operating interval**, it attempts to start the previous working version. Software crashes (PANIC), watchdog resets, and CPU lockups are counted. Sleep, regular restarts, power loss, and voltage drops do not increase this counter. A stable operating interval clears the crash sequence.
-
-Rollback is possible only to a known, verified copy: its identifier, boot records, and image integrity are checked. The mere presence of a second partition is not sufficient—it may contain different firmware, such as USB firmware. Before switching, protection against an endless loop between two faulty versions is saved.
-
-If no suitable copy exists, the copy is corrupted, or the rollback state cannot be saved safely, the **SD-card recovery screen** opens instead of switching. The user selects and confirms a firmware file. Books and bookmarks are not used as a firmware backup; this mechanism does not repair a corrupted card.
-
-
-</details>
-
-<details>
-<summary>How to recover manually from the SD card</summary>
-
-
-1. Download a compatible `firmware.bin` from the [required release](https://github.com/Kapfilm/Paperio-Reader/releases) and copy it to the SD card. Placing the file in the root directory is convenient, but the browser also lets you select a `.bin` file from a folder; the file does not have to be named `firmware.bin`.
-2. When powering on or waking the device with the **power button**, hold the **UP** side button (the left side button) until the firmware selection screen appears. Connecting USB alone does not activate this mode.
-3. Select the BIN file, wait for verification, and confirm installation. Do not disconnect power or remove the card while the image is being written.
-4. After the image has been written successfully, the device will restart automatically. Leave a regular operating screen open for at least one minute to confirm the version.
-
-If the application does not reach early initialization, or if the display or SD card is not working, this mode may be unavailable. Recovery via USB/the bootloader using a method suitable for the device will then be required. Software protection is not a substitute for a functioning bootloader and does not guarantee recovery from every failure.
-
-
-</details>
-
-<details>
-<summary>First upgrade from 2.1.0 and limitations</summary>
-
-
-**When installing 2.1.1 over 2.1.0 for the first time, automatic rollback to 2.1.0 using the new counter is not guaranteed.** Version 2.1.0 did not record the information needed to trust the backup image. After 2.1.1 has run successfully for one minute, the next update performed through it will be able to preserve this version as the verified previous version. Subsequent updates may overwrite the backup partition. Do not erase NVS or change the partition table during a regular update.
-
-An ESP-IDF bootloader with rollback support enabled may restore unconfirmed firmware after the first crash reset, before the application counter takes effect. This depends on the installed bootloader; a regular `firmware.bin` does not update it. Crashes that occur before the application starts are not counted by the application.
-
-The logic has been verified with desktop tests using models of flash memory, NVS, and boot records. Real crash rollback scenarios on X3/X4 hardware still require device testing. [Technical description](docs/boot-recovery.md).
+- [Последний релиз](https://github.com/Kapfilm/Paperio-Reader/releases/latest)
+- [Скачать firmware.bin](https://github.com/Kapfilm/Paperio-Reader/releases/latest/download/firmware.bin)
 
 
 </details>
@@ -414,49 +329,129 @@ The logic has been verified with desktop tests using models of flash memory, NVS
 </details>
 
 <details>
-<summary><strong>File transfer over USB</strong></summary>
+<summary><strong>Переключение между Paperio и inkMOD</strong></summary>
 
 
-Starting with version 2.1.2, select `Settings → System → System Update → USB Transfer`. The same mode is available from the connection menu. Leave this screen open and connect the reader using a data-capable cable.
+Начиная с версии 2.1.4 доступно меню **Настройки → Система → Обновление системы → Переключить прошивку**. Оно показывает название и версию образа во втором слоте и проверяет заголовок ESP32-C3, границы сегментов, контрольную сумму и SHA-256 при её наличии. После подтверждения ридер перезапускается с другой установленной прошивкой. Разделы прошивки не перезаписываются. Пустой или повреждённый образ выбрать нельзя.
 
-**This is USB Serial, not USB mass storage:** the reader does not appear as a regular drive in Finder or File Explorer. Transfers are performed through Calibre with a plugin or through the utility. Selecting this option no longer changes the boot partition. When software connects to the serial port, the ESP32-C3 may restart at the hardware level; the reader should return to the transfer screen in the current firmware. Close other programs using this port, including Serial Monitor. When the transfer is complete, you can exit using the “Back” button.
+Перед первым использованием обе прошивки нужно один раз установить в отдельные слоты:
 
-<details>
-<summary>Download the software</summary>
+1. Установите [Paperio 2.2.0](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.2.0/firmware.bin) обычным обновлением с SD-карты и оставьте обычный рабочий экран открытым хотя бы на минуту.
+2. Через обновление с SD-карты в Paperio установите совместимый с вашим ридером **образ приложения inkMOD**. Он займёт второй слот, а Paperio останется в первом. Используйте версию inkMOD с поддержкой переключения слотов. Полный образ флеш-памяти с загрузчиком и таблицей разделов для этой операции не подходит.
+3. В inkMOD выберите переключение в другой слот. Запустится Paperio. Для возврата в inkMOD используйте новую команду «Переключить прошивку» в Paperio.
 
+Если обе прошивки уже установлены, просто переключайтесь между ними. Установка новой версии Paperio из старой версии Paperio перезапишет inkMOD во втором занятом слоте; в таком случае установите inkMOD заново, как описано в шаге 2.
 
-- **[serial_transfer.py — download file](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.1.7/serial_transfer.py)** — upload and download files, list folders, create folders, rename, and delete. Suitable for FB2, FB2.ZIP, EPUB, and other files; [source code](tools/serial_transfer.py).
-- **[microreader-paperio.zip — Calibre plugin for Paperio](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.1.7/microreader-paperio.zip)** — a dedicated adaptation for transferring EPUB files. Do not extract the ZIP when installing it in Calibre.
-- [Original MicroReader ZIP](https://raw.githubusercontent.com/CidVonHighwind/microreader/a4adfdb9a37b83bcb724cac3dc8990f335b49e8a/tools/calibre-plugin/microreader.zip) and [the project by CidVonHighwind](https://github.com/CidVonHighwind/microreader). For Paperio, use the adapted file above: the original uses a different root path and connection handshake.
+**Ограничения:** доступны два слота по 0x640000 байт (6,25 МиБ). Обычное обновление заменяет прошивку во втором слоте: постоянной третьей резервной копии нет. Для Paperio и [inkMOD](https://github.com/alpzoloto-sudo/inkmod/tree/b327a0887fa02d0dcd6c38e0808341d2b4a1fc2a) подтверждено совпадение разметки `partitions.csv`; произвольные альтернативные разметки не поддерживаются. Проверка целостности не гарантирует совместимость настроек, кэша на SD-карте или поведения сторонней прошивки.
 
-The MicroReader firmware is **not required** to use the plugin: do not install it in place of Paperio. The plugin runs on the computer. Attribution and the tool’s separate license are provided in [tools/calibre-plugin](tools/calibre-plugin).
+Ручное переключение и аварийное восстановление — отдельные операции. При ручном выборе проверенного образа он отмечается выбранным без пробного статуса загрузчика, поскольку сторонняя прошивка может не поддерживать подтверждение ESP-IDF. Это не подтверждает стабильность её работы и не добавляет её автоматически в доверенную резервную копию Paperio. Обычные обновления Paperio по-прежнему используют подтверждение успешного запуска и аварийное восстановление, описанные ниже. Автоматический возврат после сбоя inkMOD зависит от самого inkMOD и загрузчика.
 
-
-</details>
-
-<details>
-<summary>Calibre: use without a terminal</summary>
-
-
-1. Install [Calibre](https://calibre-ebook.com/download) (the plugin requires version 5 or later).
-2. Download `microreader-paperio.zip` from the link above. If your browser extracted the ZIP automatically, save the original archive again.
-3. In Calibre, open `Preferences → Plugins → Load plugin from file`, select the ZIP, and confirm the installation. Restart Calibre. The plugin name remains **Microreader**; do not install the original and adapted versions at the same time.
-4. Open “USB Transfer” on the reader, connect the cable, and wait for Calibre to detect the device. It may appear as Microreader in the interface.
-5. Add an EPUB to your Calibre library, select the book, and choose **“Send to device”**. Wait for the job to complete. The book is saved to `/books` on the SD card.
-6. Use the **“Device”** button to view the list. After the transfer, eject the device in Calibre, then exit transfer mode on the reader.
-
-**Plugin limitation: EPUB.** For FB2 and FB2.ZIP, use the utility below or another method of copying files to the SD card. Do not rename an FB2 file to EPUB. If Calibre offers to convert a book, that is a separate Calibre operation, not a transfer of the original FB2. The adaptation is verified by software tests; interaction between a specific Calibre version, macOS, and the reader still requires testing on a device.
+Пользователь подтвердил работу переключения на физическом ридере с тестовой сборкой 2.1.3-dualboot-test1, на которой основан этот релиз. Идея переключателя и совместимая разметка разделов взяты из проекта [alpzoloto-sudo/inkmod](https://github.com/alpzoloto-sudo/inkmod).
 
 
 </details>
 
 <details>
-<summary>serial_transfer.py on macOS</summary>
+<summary><strong>Аварийное восстановление</strong></summary>
 
 
-Download the script from the link above and keep it in the **Downloads** folder. Python 3 is required; you can check whether it is installed with `python3 --version`. If Python is not installed, download it from [python.org](https://www.python.org/downloads/macos/).
+<details>
+<summary>Когда запуск считается успешным</summary>
 
-Open the **Terminal** application. Create a dedicated environment and install `pyserial` once:
+
+После обновления оставьте обычный рабочий экран открытым хотя бы на **60 секунд**. Подтверждение происходит после отрисовки обычного экрана и минуты стабильной работы главного цикла. Загрузочный логотип, сон и экран восстановления не считаются успешным запуском. Долгая пауза главного цикла или незавершённая отрисовка откладывают подтверждение. В USB-журнале ему соответствует запись `Firmware confirmed after healthy UI/main-loop interval`.
+
+Обычный сон или штатная перезагрузка до подтверждения не помечают прошивку исправной: пробный статус сохраняется до полноценного успешного запуска.
+
+
+</details>
+
+<details>
+<summary>Что происходит после сбоев</summary>
+
+
+Прошивка сохраняет сведения о текущем образе, проверенной предыдущей версии и последовательности сбоев в служебном хранилище NVS. После **трёх последовательных аварийных перезапусков без успешного рабочего интервала** она пытается запустить предыдущую рабочую версию. Учитываются программные сбои (PANIC), срабатывания сторожевого таймера и зависания процессора. Сон, штатные перезапуски, потеря питания и падение напряжения не увеличивают счётчик. Стабильный рабочий интервал сбрасывает последовательность сбоев.
+
+Откат возможен только к известной проверенной копии: проверяются её идентификатор, загрузочные записи и целостность образа. Одного наличия второго раздела недостаточно — в нём может находиться другая прошивка, например USB-прошивка. Перед переключением сохраняется защита от бесконечного цикла между двумя неисправными версиями.
+
+Если подходящей копии нет, она повреждена или состояние отката нельзя безопасно сохранить, вместо переключения открывается **экран восстановления с SD-карты**. Пользователь выбирает и подтверждает файл прошивки. Книги и закладки не используются как резервная копия прошивки; этот механизм не восстанавливает повреждённую карту.
+
+
+</details>
+
+<details>
+<summary>Ручное восстановление с SD-карты</summary>
+
+
+1. Скачайте совместимый `firmware.bin` из [нужного релиза](https://github.com/Kapfilm/Paperio-Reader/releases) и скопируйте на SD-карту. Удобно положить файл в корень, но обозреватель также позволяет выбрать `.bin` в папке; имя `firmware.bin` необязательно.
+2. При включении или пробуждении устройства **кнопкой питания** удерживайте боковую кнопку **ВВЕРХ** (левую боковую кнопку) до появления экрана выбора прошивки. Одно лишь подключение USB не включает этот режим.
+3. Выберите BIN-файл, дождитесь проверки и подтвердите установку. Не отключайте питание и не извлекайте карту во время записи образа.
+4. После успешной записи устройство автоматически перезапустится. Оставьте обычный рабочий экран открытым хотя бы на минуту для подтверждения версии.
+
+Если приложение не доходит до ранней инициализации либо не работает экран или SD-карта, этот режим может быть недоступен. Тогда потребуется восстановление через USB/загрузчик подходящим для устройства способом. Программная защита не заменяет исправный загрузчик и не гарантирует восстановление после любого сбоя.
+
+
+</details>
+
+<details>
+<summary>Первое обновление с 2.1.0 и ограничения</summary>
+
+
+**При первой установке 2.1.1 поверх 2.1.0 автоматический откат к 2.1.0 новым счётчиком не гарантируется.** Версия 2.1.0 не сохраняла сведения, необходимые для доверия резервному образу. После минуты успешной работы 2.1.1 следующее обновление через неё сможет сохранить эту версию как проверенную предыдущую. Последующие обновления могут перезаписать резервный раздел. Не стирайте NVS и не меняйте таблицу разделов при обычном обновлении.
+
+Загрузчик ESP-IDF с включённой поддержкой отката может восстановить неподтверждённую прошивку после первого аварийного сброса, раньше срабатывания счётчика приложения. Это зависит от установленного загрузчика; обычный `firmware.bin` его не обновляет. Сбои до запуска приложения не учитываются приложением.
+
+Логика проверена настольными тестами с моделями флеш-памяти, NVS и загрузочных записей. Реальные сценарии аварийного отката на X3/X4 ещё требуют проверки на устройствах. [Техническое описание](docs/boot-recovery.md).
+
+
+</details>
+
+</details>
+
+<details>
+<summary><strong>Передача файлов по USB</strong></summary>
+
+
+Начиная с версии 2.1.2 выберите `Настройки → Система → Обновление системы → Передача по USB`. Тот же режим доступен из меню подключения. Оставьте этот экран открытым и подключите ридер кабелем с поддержкой передачи данных.
+
+**Используется USB Serial, а не режим USB-накопителя:** ридер не появляется как обычный диск в Finder или Проводнике. Передача выполняется через Calibre с плагином или утилиту. Выбор этого пункта больше не меняет загрузочный раздел. При подключении программы к последовательному порту ESP32-C3 может аппаратно перезапуститься; ридер должен вернуться к экрану передачи в текущей прошивке. Закройте другие программы, использующие этот порт, включая Serial Monitor. По завершении передачи выйдите кнопкой «Назад».
+
+<details>
+<summary>Скачать программы</summary>
+
+
+- **[serial_transfer.py — скачать файл](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.1.7/serial_transfer.py)** — загрузка и скачивание файлов, просмотр и создание папок, переименование и удаление. Подходит для FB2, FB2.ZIP, EPUB и других файлов; [исходный код](tools/serial_transfer.py).
+- **[microreader-paperio.zip — плагин Calibre для Paperio](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.1.7/microreader-paperio.zip)** — специальная адаптация для передачи EPUB. Не распаковывайте ZIP при установке в Calibre.
+- [Исходный ZIP MicroReader](https://raw.githubusercontent.com/CidVonHighwind/microreader/a4adfdb9a37b83bcb724cac3dc8990f335b49e8a/tools/calibre-plugin/microreader.zip) и [проект CidVonHighwind](https://github.com/CidVonHighwind/microreader). Для Paperio используйте адаптированный файл выше: в оригинале другие корневой путь и процедура установления соединения.
+
+Прошивка MicroReader для работы плагина **не требуется**: не устанавливайте её вместо Paperio. Плагин работает на компьютере. Сведения об авторстве и отдельная лицензия инструмента приведены в [tools/calibre-plugin](tools/calibre-plugin).
+
+
+</details>
+
+<details>
+<summary>Calibre: работа без терминала</summary>
+
+
+1. Установите [Calibre](https://calibre-ebook.com/download) (плагину требуется версия 5 или новее).
+2. Скачайте `microreader-paperio.zip` по ссылке выше. Если браузер автоматически распаковал ZIP, сохраните исходный архив заново.
+3. В Calibre откройте `Настройки → Плагины → Загрузить плагин из файла`, выберите ZIP и подтвердите установку. Перезапустите Calibre. Имя плагина остаётся **Microreader**; не устанавливайте одновременно исходную и адаптированную версии.
+4. Откройте «Передача по USB» на ридере, подключите кабель и дождитесь обнаружения устройства в Calibre. В интерфейсе оно может называться Microreader.
+5. Добавьте EPUB в библиотеку Calibre, выберите книгу и нажмите **«Отправить на устройство»**. Дождитесь завершения задания. Книга сохраняется в `/books` на SD-карте.
+6. Нажмите **«Устройство»** для просмотра списка. После передачи извлеките устройство в Calibre, затем выйдите из режима передачи на ридере.
+
+**Ограничение плагина: EPUB.** Для FB2 и FB2.ZIP используйте утилиту ниже или другой способ копирования на SD-карту. Не переименовывайте FB2 в EPUB. Если Calibre предлагает преобразовать книгу, это отдельная операция Calibre, а не передача исходного FB2. Адаптация проверена программными тестами; взаимодействие конкретной версии Calibre, macOS и ридера ещё требует проверки на устройстве.
+
+
+</details>
+
+<details>
+<summary>serial_transfer.py на macOS</summary>
+
+
+Скачайте скрипт по ссылке выше и оставьте его в папке **«Загрузки»**. Требуется Python 3; проверить его наличие можно командой `python3 --version`. Если Python не установлен, скачайте его с [python.org](https://www.python.org/downloads/macos/).
+
+Откройте приложение **«Терминал»**. Один раз создайте отдельное окружение и установите `pyserial`:
 
 ```bash
 mkdir -p "$HOME/Paperio-USB"
@@ -467,21 +462,21 @@ source .venv/bin/activate
 python -m pip install pyserial
 ```
 
-For subsequent launches, the following is sufficient:
+При последующих запусках достаточно:
 
 ```bash
 cd "$HOME/Paperio-USB"
 source .venv/bin/activate
 ```
 
-Open “USB Transfer” on the reader, connect the cable, and check the connection:
+Откройте «Передача по USB» на ридере, подключите кабель и проверьте соединение:
 
 ```bash
 python serial_transfer.py status
 python serial_transfer.py ls /
 ```
 
-`status` prints the device response, while `ls /` lists the contents of the SD card root. Transfer examples (replace the book names with your own):
+`status` выводит ответ устройства, а `ls /` — содержимое корня SD-карты. Примеры передачи (замените имена книг своими):
 
 ```bash
 # Upload an FB2 file from the desktop to the SD card root:
@@ -497,42 +492,42 @@ python serial_transfer.py get "/Book.fb2" "$HOME/Desktop/Book-from-reader.fb2"
 python serial_transfer.py ls /books
 ```
 
-Paths such as `/books` refer to the SD card; `$HOME/Desktop` refers to the Mac. An existing file at the same destination path may be overwritten; specify a different name to keep both copies.
+Пути вроде `/books` относятся к SD-карте, а `$HOME/Desktop` — к Mac. Существующий файл по тому же пути назначения может быть перезаписан; задайте другое имя, чтобы сохранить обе копии.
 
 
 </details>
 
 <details>
-<summary>If the port is not found</summary>
+<summary>Если порт не найден</summary>
 
 
 ```bash
 python -m serial.tools.list_ports
 ```
 
-Find the connected reader’s port, for example `/dev/cu.usbmodem101`, and pass **your port** with the `--port` option:
+Найдите порт подключённого ридера, например `/dev/cu.usbmodem101`, и укажите **свой порт** параметром `--port`:
 
 ```bash
 python serial_transfer.py --port /dev/cu.usbmodem101 status
 python serial_transfer.py --port /dev/cu.usbmodem101 ls /
 ```
 
-If several serial devices are connected, specify the port explicitly. If you receive an access error, close Calibre, Serial Monitor, and any other programs communicating with the reader. If no port is present, check the cable, USB connector, and whether the transfer screen is open. If there is no response after the reader restarts, wait for it to return to this screen and run the command again.
+Если подключено несколько последовательных устройств, задайте порт явно. При ошибке доступа закройте Calibre, Serial Monitor и другие программы, работающие с ридером. Если порта нет, проверьте кабель, разъём USB и открытый экран передачи. Если после перезапуска ридер не отвечает, дождитесь его возврата на этот экран и повторите команду.
 
 
 </details>
 
 <details>
-<summary>Multiple operations over one connection</summary>
+<summary>Несколько операций через одно соединение</summary>
 
 
-Interactive mode keeps the connection open between commands:
+Интерактивный режим сохраняет соединение между командами:
 
 ```bash
 python serial_transfer.py shell
 ```
 
-At the `crosspoint>` prompt, you can enter:
+В приглашении `crosspoint>` можно вводить:
 
 ```text
 ls /
@@ -542,7 +537,7 @@ ls /books
 quit
 ```
 
-Replace `yourname` with your account name. The `help` command displays help, and `quit` ends the session. The `rm` and `mv` commands delete and rename files—use them only when necessary. To view **all** files, use `ls`: the `books` command lists EPUB files for plugin compatibility.
+Замените `yourname` именем своей учётной записи. Команда `help` показывает справку, `quit` завершает сеанс. Команды `rm` и `mv` удаляют и переименовывают файлы — используйте их по необходимости. Для просмотра **всех** файлов используйте `ls`: команда `books` выводит только EPUB для совместимости с плагином.
 
 
 </details>
@@ -550,7 +545,7 @@ Replace `yourname` with your account name. The `help` command displays help, and
 </details>
 
 <details>
-<summary><strong>Build</strong></summary>
+<summary><strong>Сборка</strong></summary>
 
 
 ```sh
@@ -558,48 +553,49 @@ python3 scripts/gen_i18n.py --strip-unused
 pio run -e gh_release
 ```
 
-A release is created by pushing a version-number tag, such as `2.2.5`. GitHub Actions attaches
-`firmware-Paperio-Reader-2.2.5.bin` and an OTA-compatible copy named `firmware.bin`.
-The stable release is published as the latest release so the built-in OTA checker can find it.
+Релиз создаётся отправкой тега с номером версии, например `2.2.5`. GitHub Actions
+прикрепляет `firmware-Paperio-Reader-2.2.5.bin` и совместимую с OTA копию с именем
+`firmware.bin`. Стабильный релиз публикуется как последний, чтобы встроенный
+механизм OTA мог его обнаружить.
 
 
 </details>
 
 <details>
-<summary><strong>Paperio Reader Authors</strong></summary>
+<summary><strong>Авторы Paperio Reader</strong></summary>
 
 
-- **[Vladimir (@Kapfilm)](https://github.com/Kapfilm)** — author and maintainer of Paperio Reader: project development, feature selection, on-device testing, and releasing updates.
-- **Codex (OpenAI)** — AI development assistant: code analysis and preparation of fixes, new features, and documentation in collaboration with the project author.
-
-
-</details>
-
-<details>
-<summary><strong>Acknowledgments</strong></summary>
-
-
-Special thanks to the developer of **[inkMOD — @alpzoloto-sudo](https://github.com/alpzoloto-sudo/inkmod)** for the open-source FB2 implementation. Paperio Reader uses parts of the inkMOD source code: the FB2 parser, XML tokenizer, ZIP/DEFLATE reader, Base64 decoder, reader adapters, and encoding tables. This foundation was adapted for Paperio Reader and further improved with fixes for indexing, covers, and footnotes.
-
-The upstream version and commit are listed in the [FB2 code provenance document](lib/Fb2/UPSTREAM.md). The MIT license terms and copyright notices have been preserved. Thank you for creating work that can be studied and built upon.
-
-Sudoku, Sokoban, and the four-square Games icon are adapted from
-**[CrossMux](https://github.com/0x1abin/crossmux)**. Its MIT license and source
-revision are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- **[Владимир (@Kapfilm)](https://github.com/Kapfilm)** — автор и сопровождающий Paperio Reader: развитие проекта, выбор функций, проверка на устройствах и выпуск обновлений.
+- **Codex (OpenAI)** — ИИ-помощник в разработке: анализ кода, подготовка исправлений, новых функций и документации совместно с автором проекта.
 
 
 </details>
 
 <details>
-<summary><strong>Project Foundation</strong></summary>
+<summary><strong>Благодарности</strong></summary>
 
 
-Paperio Reader continues the proven codebase of
-[Witch Reader](https://github.com/jpirnay/witchhunt-reader), which is based on
-[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader), and
-uses the [FreeInk SDK](https://github.com/Free-Ink/freeink-sdk).
+Отдельная благодарность разработчику **[inkMOD — @alpzoloto-sudo](https://github.com/alpzoloto-sudo/inkmod)** за открытую реализацию FB2. Paperio Reader использует части исходного кода inkMOD: парсер FB2, токенизатор XML, чтение ZIP/DEFLATE, декодер Base64, адаптеры чтения и таблицы кодировок. Эта основа адаптирована для Paperio Reader и дополнена исправлениями индексации, обложек и сносок.
 
-The project is distributed under the [MIT License](LICENSE). Copyright notices and
-licenses for the components used by the project are preserved in the source code.
+Исходная версия и коммит указаны в [документе о происхождении кода FB2](lib/Fb2/UPSTREAM.md). Условия лицензии MIT и уведомления об авторских правах сохранены. Спасибо за работу, которую можно изучать и развивать.
+
+Судоку, сокобан и значок игр из четырёх квадратов адаптированы из
+**[CrossMux](https://github.com/0x1abin/crossmux)**. Лицензия MIT и версия
+исходного кода указаны в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+
+</details>
+
+<details>
+<summary><strong>Основа проекта</strong></summary>
+
+
+Paperio Reader продолжает проверенную кодовую базу
+[Witch Reader](https://github.com/jpirnay/witchhunt-reader), основанную на
+[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader),
+и использует [FreeInk SDK](https://github.com/Free-Ink/freeink-sdk).
+
+Проект распространяется по [лицензии MIT](LICENSE). Уведомления об авторских
+правах и лицензии используемых компонентов сохранены в исходном коде.
 
 </details>

@@ -131,7 +131,7 @@ def categorize_commit(subject: str) -> tuple[str, str]:
     commit_type = match.group("type").lower()
     description = f'{commit_type}: {match.group("description")}'
     if match.group("breaking"):
-        description = f"BREAKING: {description}"
+        description = f"Несовместимое изменение: {description}"
 
     if commit_type in USER_FACING_TYPES:
         return "user", description
@@ -145,7 +145,7 @@ def render_section(title: str, items: list[str]) -> list[str]:
     if items:
         lines.extend(items)
     else:
-        lines.append("- None.")
+        lines.append("- Изменений нет.")
     lines.append("")
     return lines
 
@@ -157,17 +157,17 @@ def build_release_notes(
     commits: list[tuple[str, str]],
     fallback_limit: int,
 ) -> str:
-    lines = [f"# CrossPoint {current_label}", ""]
+    lines = [f"# Paperio Reader {current_label}", ""]
 
     if previous_release:
         prev_tag = previous_release["tag_name"]
         prev_sha = previous_release.get("resolved_sha")
         lines.append(
-            f"Changes since `{prev_tag}` (`{prev_sha[:7]}`) through `{target_sha[:7]}`."
+            f"Изменения после `{prev_tag}` (`{prev_sha[:7]}`) до `{target_sha[:7]}`."
         )
     else:
         lines.append(
-            f"No qualifying previous release was found; showing up to the last {fallback_limit} commits through `{target_sha[:7]}`."
+            f"Предыдущий подходящий релиз не найден; показаны последние изменения (не более {fallback_limit} коммитов) до `{target_sha[:7]}`."
         )
     lines.append("")
 
@@ -185,9 +185,9 @@ def build_release_notes(
         else:
             other_items.append(item)
 
-    lines.extend(render_section("User-Facing Changes", user_items))
-    lines.extend(render_section("Backend Changes", backend_items))
-    lines.extend(render_section("Other Changes", other_items))
+    lines.extend(render_section("Изменения для пользователя", user_items))
+    lines.extend(render_section("Внутренние изменения", backend_items))
+    lines.extend(render_section("Другие изменения", other_items))
     return "\n".join(lines).rstrip() + "\n"
 
 
