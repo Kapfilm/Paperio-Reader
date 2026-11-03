@@ -304,7 +304,8 @@ class ChapterHtmlSlimParser final : public Print {
   // Membership in the book-level preview cache is the sole expansion gate: it already
   // encodes "this link points at a real note", so no epub:type/same-file checks here.
   FootnotePreviews::Lookup* inlineFootnotePreviews = nullptr;
-  std::string pendingInlineFootnotePreview;
+  std::string pendingInlineFootnoteHref;
+  bool inlineFootnoteFailed = false;
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
   int wordsExtractedInBlock = 0;
   bool bionicReadingEnabled = false;
@@ -381,7 +382,6 @@ class ChapterHtmlSlimParser final : public Print {
   static void characterData(void* userData, const char* s, int len);
   static void defaultHandlerExpand(void* userData, const char* s, int len);
   static void endElement(void* userData, const char* name);
-  std::string abbreviateInlineFootnote(const char* text) const;
 
  public:
   explicit ChapterHtmlSlimParser(
@@ -428,6 +428,7 @@ class ChapterHtmlSlimParser final : public Print {
   bool setup(size_t totalInflatedSize);
   bool finalize();
   [[nodiscard]] bool streamSucceeded() const { return !streamFailed; }
+  [[nodiscard]] bool inlineFootnotesSucceeded() const { return !inlineFootnoteFailed; }
   [[nodiscard]] bool previewComplete() const { return previewStopRequested; }
   void setPreviewStartOrdinal(const uint32_t ordinal) { previewStartOrdinal = ordinal; }
   void setInlineFootnotePreviews(FootnotePreviews::Lookup* lookup) { inlineFootnotePreviews = lookup; }

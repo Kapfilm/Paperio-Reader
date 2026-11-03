@@ -1,6 +1,7 @@
 #include <CooperativeAbort.h>
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -20,10 +21,11 @@ class FootnoteNavigationTest : public testing::Test {
  protected:
   std::filesystem::path work;
   void SetUp() override {
-    work = std::filesystem::temp_directory_path() /
-           (std::string("paperio_note_") + testing::UnitTest::GetInstance()->current_test_info()->name());
-    std::filesystem::remove_all(work);
-    std::filesystem::create_directories(work);
+    // Independent CTest / sanitizer processes may run the same test name together.
+    std::string pattern = (std::filesystem::temp_directory_path() / "paperio_note_XXXXXX").string();
+    const char* uniqueRoot = mkdtemp(pattern.data());
+    ASSERT_NE(uniqueRoot, nullptr);
+    work = uniqueRoot;
   }
   void TearDown() override { std::filesystem::remove_all(work); }
 };
@@ -191,7 +193,7 @@ TEST_F(FootnoteNavigationTest, EnabledPreviewsRenderInZipBookButDisabledSettingD
   }
 }
 
-TEST_F(FootnoteNavigationTest, InlinePreviewIsSmallerAndDoesNotChangeReferenceOrFollowingText) {
+TEST_F(FootnoteNavigationTest, InlinePreviewUsesBodySizeAndDoesNotChangeReferenceOrFollowingText) {
   Epub book(CORPUS_DIR "/../fixtures/footnote_legacy_name.epub", work.string());
   ASSERT_TRUE(book.load(true));
   ASSERT_TRUE(FootnotePreviews::gather(book));
@@ -214,7 +216,7 @@ TEST_F(FootnoteNavigationTest, InlinePreviewIsSmallerAndDoesNotChangeReferenceOr
                 const std::string token = block.wordText(i);
                 if (token.find("LEGACY_NAMED_NOTE") != std::string::npos) {
                   ++noteWords;
-                  EXPECT_EQ(block.wordSizePct(i), 85);
+                  EXPECT_EQ(block.wordSizePct(i), 100);
                 } else if (token == "reference") {
                   ++referenceWords;
                   EXPECT_EQ(block.wordSizePct(i), sizedReference ? 120 : 100);
@@ -241,6 +243,309 @@ TEST_F(FootnoteNavigationTest, InlinePreviewIsSmallerAndDoesNotChangeReferenceOr
       EXPECT_EQ(bodyWords, 2u);
     }
   }
+}
+
+TEST_F(FootnoteNavigationTest, FullMultiParagraphNoteSurvivesGatherPaginationAndSerialization) {
+  auto book = std::make_shared<Epub>(CORPUS_DIR "/../fixtures/inline_footnote_full.epub", work.string());
+  ASSERT_TRUE(book->load(true));
+  ASSERT_TRUE(FootnotePreviews::gather(*book));
+  FootnotePreviews::Lookup lookup;
+  ASSERT_TRUE(lookup.open(book->getCachePath(), book.get(), 0));
+  std::string note;
+  ASSERT_TRUE(lookup.find("notes.xhtml#fn-long", note));
+  EXPECT_GT(note.size(), 6000u);
+  EXPECT_NE(note.find("FIRST_PARAGRAPH"), std::string::npos);
+  EXPECT_NE(note.find("MIDDLE_PARAGRAPH"), std::string::npos);
+  EXPECT_NE(note.find("LAST_PARAGRAPH"), std::string::npos);
+  EXPECT_NE(note.find("LONG_NOTE_END"), std::string::npos);
+  EXPECT_EQ(note.find("[7]"), std::string::npos);
+  ASSERT_TRUE(lookup.find("notes.xhtml#fn-year", note));
+  EXPECT_EQ(note, "1941 YEAR_START_RETAINED");
+  ASSERT_TRUE(lookup.find("notes.xhtml#fn-plain-number", note));
+  EXPECT_EQ(note, "1 из 10 PLAIN_NUMBER_RETAINED");
+  ASSERT_TRUE(lookup.find("notes.xhtml#fn-three-digit", note));
+  EXPECT_EQ(note, "THREE_DIGIT_LABEL_REMOVED");
+  ASSERT_TRUE(lookup.find("notes.xhtml#fn-grouped-number", note));
+  EXPECT_EQ(note, "1,234 человека GROUPED_NUMBER_RETAINED");
+  ASSERT_TRUE(lookup.find("notes.xhtml#fn-inline-label", note));
+  EXPECT_EQ(note, "NO_SPACE_MARKER_REMOVED");
+
+  GfxRenderer renderer;
+  Section::BuildParams params;
+  params.fontId = 1;
+  params.viewportWidth = 460;
+  params.viewportHeight = 760;
+  params.inlineFootnotePreviews = true;
+  Section section(book, 0, renderer);
+  ASSERT_FALSE(section.loadSectionFile(params));
+  ASSERT_TRUE(section.createSectionFile(params, {}, true));
+  ASSERT_TRUE(section.loadSectionFile(params));
+  EXPECT_GT(section.pageCount, 1u);
+  std::string text;
+  size_t references = 0;
+  size_t numberSeven = 0;
+  size_t numberOne = 0;
+  size_t number123 = 0;
+  size_t number1234 = 0;
+  size_t numberNine = 0;
+  for (uint16_t pageIndex = 0; pageIndex < section.pageCount; ++pageIndex) {
+    section.currentPage = pageIndex;
+    const auto page = section.loadPageFromSectionFile();
+    ASSERT_TRUE(page);
+    references += page->footnotes.size();
+    for (const auto& element : page->elements) {
+      if (element->getTag() != TAG_PageLine) continue;
+      const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+      for (uint16_t word = 0; word < block.wordCount(); ++word) {
+        const std::string token = block.wordText(word);
+        text += token + ' ';
+        EXPECT_EQ(block.wordSizePct(word), 100) << token;
+        std::string digits;
+        for (unsigned char c : token) {
+          if (c >= '0' && c <= '9') digits += static_cast<char>(c);
+        }
+        if (digits == "7") ++numberSeven;
+        if (digits == "1") ++numberOne;
+        if (digits == "123") ++number123;
+        if (digits == "1234") ++number1234;
+        if (digits == "9") ++numberNine;
+        if (token == "BEFORE" || token == "AFTER" || token == "SECOND" || token == "END")
+          EXPECT_EQ(static_cast<uint8_t>(block.wordStyle(word)) & EpdFontFamily::ITALIC, 0) << token;
+      }
+    }
+  }
+  EXPECT_EQ(numberSeven, 1u) << text;
+  EXPECT_EQ(references, 7u);
+  EXPECT_EQ(number1234, 2u) << text;
+  EXPECT_EQ(numberNine, 1u) << text;
+  EXPECT_EQ(number123, 1u) << text;
+  // A bare number in note prose is not a duplicate label, even when it matches the reference.
+  EXPECT_EQ(numberOne, 2u) << text;
+  // Every UTF-8 word must survive cache-write and read chunk boundaries.
+  for (const std::string word : {"пояснение", "подробность", "завершение"}) {
+    size_t count = 0;
+    for (size_t pos = text.find(word); pos != std::string::npos; pos = text.find(word, pos + word.size())) ++count;
+    EXPECT_EQ(count, 120u) << word;
+  }
+  EXPECT_NE(text.find("LONG_NOTE_END"), std::string::npos);
+  EXPECT_NE(text.find("1941"), std::string::npos);
+  EXPECT_NE(text.find("YEAR_START_RETAINED"), std::string::npos);
+  EXPECT_NE(text.find("PLAIN_NUMBER_RETAINED"), std::string::npos);
+  EXPECT_NE(text.find("THREE_DIGIT_LABEL_REMOVED"), std::string::npos);
+  EXPECT_NE(text.find("GROUPED_NUMBER_RETAINED"), std::string::npos);
+  EXPECT_NE(text.find("NO_SPACE_MARKER_REMOVED"), std::string::npos);
+  EXPECT_NE(text.find("AFTER"), std::string::npos);
+  EXPECT_NE(text.find("END"), std::string::npos);
+  EXPECT_LT(text.find("FIRST_PARAGRAPH"), text.find("MIDDLE_PARAGRAPH"));
+  EXPECT_LT(text.find("MIDDLE_PARAGRAPH"), text.find("LAST_PARAGRAPH"));
+  EXPECT_NE(text.find("пояснение MIDDLE_PARAGRAPH"), std::string::npos);
+  EXPECT_NE(text.find("подробность LAST_PARAGRAPH"), std::string::npos);
+  EXPECT_LT(text.find("LONG_NOTE_END"), text.find("AFTER"));
+}
+
+TEST_F(FootnoteNavigationTest, StreamingNotesRejectConsumerAbortAndCancellationWithoutPoisoningCache) {
+  Epub book(CORPUS_DIR "/../fixtures/inline_footnote_full.epub", work.string());
+  ASSERT_TRUE(book.load(true));
+  ASSERT_TRUE(FootnotePreviews::gather(book));
+  FootnotePreviews::Lookup lookup;
+  ASSERT_TRUE(lookup.open(book.getCachePath(), &book, 0));
+  size_t callbacks = 0;
+  EXPECT_FALSE(lookup.stream("notes.xhtml#fn-long", [&](const char*, size_t) {
+    ++callbacks;
+    return false;
+  }));
+  EXPECT_EQ(callbacks, 1u);
+
+  CooperativeAbort::clearAborted();
+  CooperativeAbort::setLongTaskAbortPredicate([] { return true; });
+  const bool completed = lookup.stream("notes.xhtml#fn-long", [&](const char*, size_t) {
+    ++callbacks;
+    return true;
+  });
+  CooperativeAbort::setLongTaskAbortPredicate(nullptr);
+  EXPECT_FALSE(completed);
+  EXPECT_EQ(callbacks, 1u);
+  EXPECT_TRUE(CooperativeAbort::consumeAborted());
+
+  std::string streamed;
+  EXPECT_TRUE(lookup.stream("notes.xhtml#fn-long", [&](const char* data, size_t size) {
+    ++callbacks;
+    EXPECT_LE(size, 512u);  // A long note must not need a whole-note heap allocation.
+    // Every callback must end at a UTF-8 boundary, including SD read boundaries.
+    for (size_t i = 0; i < size;) {
+      const auto lead = static_cast<unsigned char>(data[i]);
+      const size_t bytes = lead < 0x80 ? 1 : (lead & 0xe0) == 0xc0 ? 2 : (lead & 0xf0) == 0xe0 ? 3 : 4;
+      EXPECT_LE(i + bytes, size);
+      if (i + bytes > size) return false;
+      for (size_t j = 1; j < bytes; ++j) EXPECT_EQ(static_cast<unsigned char>(data[i + j]) & 0xc0, 0x80);
+      i += bytes;
+    }
+    streamed.append(data, size);
+    return true;
+  }));
+  EXPECT_GT(callbacks, 2u);
+  EXPECT_NE(streamed.find("LONG_NOTE_END"), std::string::npos);
+  std::string found;
+  ASSERT_TRUE(lookup.find("notes.xhtml#fn-long", found));
+  EXPECT_EQ(streamed, found);
+  EXPECT_TRUE(FootnotePreviews::cacheExists(book.getCachePath()));
+}
+
+TEST_F(FootnoteNavigationTest, BoundedPopupPreviewDoesNotLimitFullInlineStreaming) {
+  Epub book(CORPUS_DIR "/../fixtures/inline_footnote_full.epub", work.string());
+  ASSERT_TRUE(book.load(true));
+  ASSERT_TRUE(FootnotePreviews::gather(book));
+  FootnotePreviews::Lookup lookup;
+  ASSERT_TRUE(lookup.open(book.getCachePath(), &book, 0));
+  for (const size_t maxBytes : {1u, 239u, 240u, 241u, 255u, 256u, 257u}) {
+    std::string preview;
+    ASSERT_TRUE(lookup.preview("notes.xhtml#fn-long", preview, maxBytes));
+    EXPECT_LE(preview.size(), maxBytes + 3);
+    EXPECT_TRUE(preview.ends_with("..."));
+    const std::string prefix = preview.substr(0, preview.size() - 3);
+    for (size_t i = 0; i < prefix.size();) {
+      const auto lead = static_cast<unsigned char>(prefix[i]);
+      const size_t bytes = lead < 0x80 ? 1 : (lead & 0xe0) == 0xc0 ? 2 : (lead & 0xf0) == 0xe0 ? 3 : 4;
+      ASSERT_LE(i + bytes, prefix.size());
+      for (size_t j = 1; j < bytes; ++j) EXPECT_EQ(static_cast<unsigned char>(prefix[i + j]) & 0xc0, 0x80);
+      i += bytes;
+    }
+    std::string full;
+    ASSERT_TRUE(lookup.find("notes.xhtml#fn-long", full));
+    EXPECT_TRUE(full.starts_with(prefix));
+    EXPECT_NE(full.find("LONG_NOTE_END"), std::string::npos);
+    EXPECT_FALSE(lookup.failed());
+    EXPECT_TRUE(FootnotePreviews::cacheExists(book.getCachePath()));
+  }
+  for (const size_t maxBytes : {1u, 2u, 3u}) {
+    std::string preview;
+    ASSERT_TRUE(lookup.preview("notes.xhtml#fn-cyrillic", preview, maxBytes));
+    EXPECT_EQ(preview, maxBytes == 1 ? "..." : "Р...");
+  }
+  std::string shortNote;
+  ASSERT_TRUE(lookup.preview("notes.xhtml#fn-year", shortNote));
+  EXPECT_EQ(shortNote, "1941 YEAR_START_RETAINED");
+}
+
+TEST_F(FootnoteNavigationTest, InvalidNoteBlobLengthIsRejectedAndCanBeRegathered) {
+  Epub book(CORPUS_DIR "/../fixtures/inline_footnote_full.epub", work.string());
+  ASSERT_TRUE(book.load(true));
+  ASSERT_TRUE(FootnotePreviews::gather(book));
+  const auto path = book.getCachePath() + FootnotePreviews::CACHE_FILENAME;
+  {
+    std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+    ASSERT_TRUE(file);
+    file.seekp(12);  // The first blob's length, immediately after the cache header.
+    const char impossibleLength[4] = {static_cast<char>(0xff), static_cast<char>(0xff), static_cast<char>(0xff),
+                                      static_cast<char>(0xff)};
+    file.write(impossibleLength, sizeof(impossibleLength));
+    ASSERT_TRUE(file);
+  }
+  {
+    FootnotePreviews::Lookup broken;
+    ASSERT_TRUE(broken.open(book.getCachePath(), &book, 0));
+    bool called = false;
+    EXPECT_FALSE(broken.stream("notes.xhtml#fn-long", [&](const char*, size_t) {
+      called = true;
+      return true;
+    }));
+    EXPECT_FALSE(called);
+    EXPECT_TRUE(broken.failed());
+    EXPECT_FALSE(FootnotePreviews::cacheExists(book.getCachePath()));
+  }
+  ASSERT_TRUE(FootnotePreviews::gather(book));
+  FootnotePreviews::Lookup repaired;
+  ASSERT_TRUE(repaired.open(book.getCachePath(), &book, 0));
+  std::string note;
+  ASSERT_TRUE(repaired.find("notes.xhtml#fn-long", note));
+  EXPECT_NE(note.find("LONG_NOTE_END"), std::string::npos);
+}
+
+TEST_F(FootnoteNavigationTest, CorruptFullNoteCannotPublishPreviewEnabledSection) {
+  auto book = std::make_shared<Epub>(CORPUS_DIR "/../fixtures/inline_footnote_full_after_pages.epub", work.string());
+  ASSERT_TRUE(book->load(true));
+  ASSERT_TRUE(FootnotePreviews::gather(*book));
+  {
+    std::fstream file(book->getCachePath() + FootnotePreviews::CACHE_FILENAME,
+                      std::ios::binary | std::ios::in | std::ios::out);
+    ASSERT_TRUE(file);
+    file.seekp(12);
+    const uint32_t impossibleLength = UINT32_MAX;
+    file.write(reinterpret_cast<const char*>(&impossibleLength), sizeof(impossibleLength));
+    ASSERT_TRUE(file);
+  }
+  GfxRenderer renderer;
+  Section::BuildParams params;
+  params.fontId = 1;
+  params.viewportWidth = 460;
+  params.viewportHeight = 760;
+  params.inlineFootnotePreviews = true;
+  {
+    Section broken(book, 0, renderer);
+    ASSERT_FALSE(broken.loadSectionFile(params));
+    EXPECT_FALSE(broken.createSectionFile(params, {}, true));
+    EXPECT_GT(broken.pageCount, 0u);
+  }
+  EXPECT_FALSE(FootnotePreviews::cacheExists(book->getCachePath()));
+  ASSERT_TRUE(FootnotePreviews::gather(*book));
+  Section recovered(book, 0, renderer);
+  EXPECT_FALSE(recovered.loadSectionFile(params));
+  EXPECT_TRUE(recovered.createSectionFile(params, {}, true));
+  EXPECT_TRUE(recovered.loadSectionFile(params));
+}
+
+TEST_F(FootnoteNavigationTest, CancelledFullNoteAfterCompletedPagesCannotPublishPartialSection) {
+  auto book = std::make_shared<Epub>(CORPUS_DIR "/../fixtures/inline_footnote_full_after_pages.epub", work.string());
+  ASSERT_TRUE(book->load(true));
+  ASSERT_TRUE(FootnotePreviews::gather(*book));
+  GfxRenderer renderer;
+  Section::BuildParams params;
+  params.fontId = 1;
+  params.viewportWidth = 460;
+  params.viewportHeight = 760;
+  params.inlineFootnotePreviews = true;
+  {
+    Section broken(book, 0, renderer);
+    ASSERT_FALSE(broken.loadSectionFile(params));
+    static Section* activeSection = nullptr;
+    static size_t checksAfterCompletedPage = 0;
+    activeSection = &broken;
+    checksAfterCompletedPage = 0;
+    CooperativeAbort::clearAborted();
+    CooperativeAbort::setLongTaskAbortPredicate(
+        [] { return activeSection->pageCount > 0 && ++checksAfterCompletedPage == 4; });
+    const bool completed = broken.createSectionFile(params, {}, true);
+    CooperativeAbort::setLongTaskAbortPredicate(nullptr);
+    EXPECT_FALSE(completed);
+    EXPECT_GT(broken.pageCount, 0u);
+    EXPECT_EQ(checksAfterCompletedPage, 4u);
+    EXPECT_TRUE(CooperativeAbort::consumeAborted());
+  }
+  EXPECT_TRUE(FootnotePreviews::cacheExists(book->getCachePath()));
+  Section recovered(book, 0, renderer);
+  EXPECT_FALSE(recovered.loadSectionFile(params));
+  EXPECT_TRUE(recovered.createSectionFile(params, {}, true));
+  EXPECT_TRUE(recovered.loadSectionFile(params));
+}
+
+TEST_F(FootnoteNavigationTest, RepeatedTargetIdsKeepOneBoundedIndexEntryWithLastText) {
+  Epub book(CORPUS_DIR "/../fixtures/footnote_duplicate_id.epub", work.string());
+  ASSERT_TRUE(book.load(true));
+  ASSERT_TRUE(FootnotePreviews::gather(book));
+  {
+    std::ifstream file(book.getCachePath() + FootnotePreviews::CACHE_FILENAME, std::ios::binary);
+    ASSERT_TRUE(file);
+    file.seekg(6);  // Header count follows the four-byte magic and two-byte version.
+    unsigned char count[2] = {};
+    file.read(reinterpret_cast<char*>(count), sizeof(count));
+    ASSERT_TRUE(file);
+    EXPECT_EQ(static_cast<unsigned int>(count[0]) | (static_cast<unsigned int>(count[1]) << 8), 1u);
+  }
+  FootnotePreviews::Lookup lookup;
+  ASSERT_TRUE(lookup.open(book.getCachePath(), &book, 0));
+  std::string note;
+  ASSERT_TRUE(lookup.find("notes.xhtml#repeated", note));
+  EXPECT_EQ(note, "FINAL_DUPLICATE_NOTE");
 }
 
 TEST_F(FootnoteNavigationTest, PreviewUsesCorrectFileAndDecodedAnchor) {

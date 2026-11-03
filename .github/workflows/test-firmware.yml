@@ -90,7 +90,7 @@ jobs:
       - name: Package test firmware
         run: |
           mkdir -p dist
-          cp .pio/build/gh_release/{firmware.bin,bootloader.bin,partitions.bin} dist/
+          cp .pio/build/gh_release/{firmware.bin,bootloader.bin,partitions.bin,firmware.elf} dist/
           cp .pio/build/gh_release/firmware.bin "dist/firmware-Paperio-Reader-${CROSSPOINT_RELEASE_VERSION}.bin"
           python - <<'PY'
           import hashlib
@@ -112,11 +112,12 @@ jobs:
           }, indent=2) + "\n")
           Path("dist/README.txt").write_text(
               "Paperio Reader " + os.environ["CROSSPOINT_RELEASE_VERSION"] + "\n"
-              "Test firmware for XTEINK X3 and X4. One firmware.bin supports both.\n"
-              "Install firmware.bin using the SD-card firmware updater.\n"
-              "Dropbox folder book downloads; configure account through /dropbox on the reader web UI.\n"
-              "Three optional host tests need a local real-world book and are skipped in CI.\n"
-              "No stable release or OTA asset is replaced by this build.\n",
+              "Тестовая прошивка для XTEINK X3 и X4. Один firmware.bin подходит обоим устройствам.\n"
+              "Установите firmware.bin через обновление прошивки с SD-карты или бета-канал OTA.\n"
+              "Dropbox: загрузка книг из папок; подключение через /dropbox в веб-интерфейсе ридера.\n"
+              "Три необязательные проверки с внешней книгой пропускаются в CI.\n"
+              "Стабильная версия и её OTA-файл этой сборкой не заменяются.\n"
+              "firmware.elf содержит символы точной сборки для разбора отчётов об авариях.\n",
               encoding="utf-8",
           )
           PY

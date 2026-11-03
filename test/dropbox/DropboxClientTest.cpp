@@ -11,6 +11,7 @@
 #include <string>
 
 #include "DropboxClient.h"
+#include "DropboxReplyBuffer.h"
 #include "DropboxStore.h"
 
 using namespace crosspoint;
@@ -26,6 +27,7 @@ class DropboxTest : public ::testing::Test {
     dropboxTestReplies.clear();
     dropboxTestRequests.clear();
     dropboxTestStrictTls = true;
+    dropboxTestCloseCalls = 0;
     dropboxTestWriteFail = false;
     dropboxTestFree = 1024 * 1024;
     // CTest launches each discovered test in its own process. A shared fixed
@@ -360,5 +362,98 @@ TEST_F(DropboxTest, ReentrantClientCallsAreBusyDuringDownload) {
                             })
                   .ok());
   EXPECT_TRUE(checked);
+}
+
+TEST_F(DropboxTest, LargeMetadataReplyClosesTlsBeforeReturningParsedPage) {
+  link();
+  dropboxTestCloseCalls = 0;
+  const std::string response =
+      R"({"ignored":")" + std::string(28000, 'x') +
+      R"(","entries":[{".tag":"folder","id":"id:folder","name":"Папка"}],"cursor":"next","has_more":false})";
+  dropboxTestReplies.push_back({200, response});
+  DropboxClient client;
+  DropboxClient::Page page;
+  ASSERT_TRUE(client.list(page).ok());
+  EXPECT_GE(dropboxTestCloseCalls, 1u);
+  ASSERT_EQ(page.books.size(), 1u);
+  EXPECT_EQ(page.books[0].name, "Папка");
+  EXPECT_EQ(page.cursor, "next");
+}
+
+size_t replyAllocations = 0;
+size_t replyLiveBlocks = 0;
+size_t replyFailAfter = 0;
+size_t replyLargestAllocation = 0;
+void* replyAllocate(size_t bytes) {
+  replyLargestAllocation = std::max(replyLargestAllocation, bytes);
+  if (replyAllocations++ >= replyFailAfter) return nullptr;
+  void* block = std::malloc(bytes);
+  if (block) ++replyLiveBlocks;
+  return block;
+}
+void replyRelease(void* block) {
+  EXPECT_GT(replyLiveBlocks, 0u);
+  --replyLiveBlocks;
+  std::free(block);
+}
+void resetReplyAllocator(size_t failAfter) {
+  replyAllocations = 0;
+  replyLiveBlocks = 0;
+  replyLargestAllocation = 0;
+  replyFailAfter = failAfter;
+}
+
+TEST(DropboxReplyBufferTest, ReadsChunkedReplyExactlyAndFreesConsumedBlocks) {
+  resetReplyAllocator(100);
+  DropboxReplyBuffer reply(replyAllocate, replyRelease);
+  std::string expected;
+  for (int i = 0; i < 7000; ++i) expected += static_cast<char>(i % 251);
+  ASSERT_TRUE(reply.append(reinterpret_cast<const uint8_t*>(expected.data()), expected.size(), 8192));
+  EXPECT_EQ(reply.size(), expected.size());
+  EXPECT_LT(replyLargestAllocation, 1100u);
+  EXPECT_EQ(replyLiveBlocks, 7u);
+  std::string actual(expected.size(), '\0');
+  ASSERT_EQ(reply.readBytes(actual.data(), 2500), 2500u);
+  EXPECT_EQ(replyLiveBlocks, 5u);
+  ASSERT_EQ(reply.readBytes(actual.data() + 2500, actual.size() - 2500), expected.size() - 2500);
+  EXPECT_EQ(actual, expected);
+  EXPECT_EQ(reply.size(), 0u);
+  EXPECT_EQ(replyLiveBlocks, 0u);
+  EXPECT_EQ(reply.read(), -1);
+}
+
+TEST(DropboxReplyBufferTest, AllocationFailureReturnsFalseAndBufferCanBeClearedAndReused) {
+  resetReplyAllocator(2);
+  {
+    DropboxReplyBuffer reply(replyAllocate, replyRelease);
+    const std::string data(5000, 'x');
+    EXPECT_FALSE(reply.append(reinterpret_cast<const uint8_t*>(data.data()), data.size(), 8192));
+    EXPECT_EQ(reply.size(), 2048u);
+    EXPECT_EQ(replyLiveBlocks, 2u);
+    reply.clear();
+    EXPECT_EQ(replyLiveBlocks, 0u);
+    replyFailAfter = 100;
+    ASSERT_TRUE(reply.append(reinterpret_cast<const uint8_t*>("{}"), 2, 8192));
+    EXPECT_EQ(reply.read(), '{');
+    EXPECT_EQ(reply.read(), '}');
+    EXPECT_EQ(reply.read(), -1);
+  }
+  EXPECT_EQ(replyLiveBlocks, 0u);
+}
+
+TEST(DropboxReplyBufferTest, ReplyLimitRejectsAdditionalBytesWithoutAllocating) {
+  resetReplyAllocator(100);
+  {
+    DropboxReplyBuffer reply(replyAllocate, replyRelease);
+    ASSERT_TRUE(reply.append(reinterpret_cast<const uint8_t*>("12345"), 5, 5));
+    const size_t allocations = replyAllocations;
+    EXPECT_FALSE(reply.append(reinterpret_cast<const uint8_t*>("6"), 1, 5));
+    EXPECT_EQ(replyAllocations, allocations);
+    EXPECT_EQ(reply.size(), 5u);
+    char data[6] = {};
+    EXPECT_EQ(reply.readBytes(data, sizeof(data)), 5u);
+    EXPECT_STREQ(data, "12345");
+  }
+  EXPECT_EQ(replyLiveBlocks, 0u);
 }
 }  // namespace

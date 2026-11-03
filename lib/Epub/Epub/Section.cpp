@@ -136,7 +136,7 @@ constexpr size_t SCT_PARSE_ARENA_BYTES = 10 * 1024;
 
 // Bump when preview expansion semantics change. This is hashed only for preview-enabled
 // variants, leaving the much more common preview-off section caches untouched.
-constexpr uint8_t INLINE_FOOTNOTE_PREVIEW_LAYOUT_VERSION = 5;
+constexpr uint8_t INLINE_FOOTNOTE_PREVIEW_LAYOUT_VERSION = 6;
 
 bool isPreviewBlockTag(const char* name) {
   static constexpr const char* tags[] = {"h1", "h2", "h3",  "h4", "h5",         "h6",
@@ -1275,8 +1275,9 @@ Section::BuildPhaseResult Section::runBuildParse(BuildState& st, const uint32_t 
 Section::BuildPhaseResult Section::runBuildFinalize(BuildState& st) {
   ChapterHtmlSlimParser& visitor = *st.visitor;
   // A missing page/index record makes navigation unsafe; never publish it as a
-  // "readable partial" cache (the legacy parser-error fallback below).
-  if (!st.indexOk || !visitor.indexSucceeded()) {
+  // "readable partial" cache (the legacy parser-error fallback below). The same
+  // applies to a failed full-note read, even if earlier pages were serialized.
+  if (!st.indexOk || !visitor.indexSucceeded() || !visitor.inlineFootnotesSucceeded()) {
     file.close();
     Storage.remove(filePath.c_str());
     return BuildPhaseResult::Failed;

@@ -18,7 +18,7 @@
 namespace {
 
 constexpr uint32_t CACHE_MAGIC = 0x31504E46;  // "FNP1"
-constexpr uint16_t CACHE_VERSION = 3;
+constexpr uint16_t CACHE_VERSION = 4;
 constexpr size_t STREAM_CHUNK_BYTES = 1024;
 constexpr size_t MAX_HREF_BYTES = 191;
 constexpr size_t MAX_MARKER_BYTES = 15;
@@ -100,10 +100,48 @@ bool isMarkerText(const char* text, size_t len) {
   return codepoints >= 1 && codepoints <= 4;
 }
 
+// Number of complete, valid UTF-8 bytes in a prefix. Unlike a word-buffer
+// helper, an incomplete first codepoint yields zero, not its partial bytes.
+size_t completeUtf8Prefix(const char* data, const size_t length, bool* malformed = nullptr) {
+  size_t offset = 0;
+  while (offset < length) {
+    const auto lead = static_cast<unsigned char>(data[offset]);
+    size_t width = 0;
+    if (lead < 0x80)
+      width = 1;
+    else if (lead >= 0xC2 && lead <= 0xDF)
+      width = 2;
+    else if (lead >= 0xE0 && lead <= 0xEF)
+      width = 3;
+    else if (lead >= 0xF0 && lead <= 0xF4)
+      width = 4;
+    if (width == 0) {
+      if (malformed) *malformed = true;
+      return offset;
+    }
+    if (length - offset < width) return offset;
+    for (size_t i = 1; i < width; ++i) {
+      if ((static_cast<unsigned char>(data[offset + i]) & 0xC0) != 0x80) {
+        if (malformed) *malformed = true;
+        return offset;
+      }
+    }
+    const auto second = width > 1 ? static_cast<unsigned char>(data[offset + 1]) : 0;
+    if ((lead == 0xE0 && second < 0xA0) || (lead == 0xED && second >= 0xA0) || (lead == 0xF0 && second < 0x90) ||
+        (lead == 0xF4 && second >= 0x90)) {
+      if (malformed) *malformed = true;
+      return offset;
+    }
+    offset += width;
+  }
+  return offset;
+}
+
 struct Target {
   uint32_t keyHash;
   uint16_t spineIndex;
   std::string fragment;
+  std::string marker;
 };
 
 // Pass A: SAX scan of one spine document collecting footnote-shaped link targets.
@@ -173,7 +211,8 @@ class LinkScanner {
           const bool seen = std::any_of(self->targets_.begin(), self->targets_.end(),
                                         [&](const Target& t) { return t.keyHash == keyHash; });
           if (!seen) {
-            self->targets_.push_back({keyHash, static_cast<uint16_t>(targetSpine), std::string(fragment)});
+            self->targets_.push_back({keyHash, static_cast<uint16_t>(targetSpine), std::string(fragment),
+                                      self->textOverflow_ ? std::string{} : std::string(self->text_, self->textLen_)});
           }
         }
       }
@@ -196,22 +235,57 @@ class LinkScanner {
 //  - empty inline anchor (<a id="filepos123"/>text…</p>, Calibre/MOBI): the subtree
 //    yields nothing, so capture continues past the anchor until its parent block closes
 //    or the NEXT wanted anchor starts (sequential rearnote lists).
+// Strip only a separate leading label matching the reference. Keeping a bounded
+// prefix means a note beginning with an ordinary year ("1941 ...", reference 8)
+// is preserved, while "[8]", "8." and an FB2 title "8" are not repeated inline.
+std::string canonicalMarker(const std::string& text) {
+  size_t first = 0, last = text.size();
+  while (first < last && isSpaceChar(text[first])) ++first;
+  while (last > first && isSpaceChar(text[last - 1])) --last;
+  if (last > first && (text[last - 1] == '.' || text[last - 1] == ',')) --last;
+  if (last > first + 1 &&
+      ((text[first] == '[' && text[last - 1] == ']') || (text[first] == '(' && text[last - 1] == ')'))) {
+    ++first;
+    --last;
+  } else if (last > first && (text[last - 1] == ')' || text[last - 1] == ']')) {
+    --last;
+  }
+  while (first < last && isSpaceChar(text[first])) ++first;
+  while (last > first && isSpaceChar(text[last - 1])) --last;
+  const std::string result = text.substr(first, last - first);
+  // Do not turn real numbers such as "1,234" or "1.234" into label 1234.
+  if (result.find_first_of("[().,] \t\r\n") != std::string::npos) return {};
+  return isMarkerText(result.data(), result.size()) ? result : std::string{};
+}
+
 class NoteCapturer {
  public:
-  using EmitFn = std::function<void(size_t targetIdx, const char* text, size_t len)>;
+  using BeginFn = std::function<void(size_t)>;
+  using ChunkFn = std::function<bool(const char*, size_t)>;
+  using EndFn = std::function<void()>;
 
  private:
   SaxParser parser_;
   const std::vector<Target>& targets_;
-  const std::vector<size_t>& wanted_;  // indexes into targets_, all for this spine
-  EmitFn emit_;
+  const std::vector<size_t>& wanted_;
+  BeginFn begin_;
+  ChunkFn chunk_;
+  EndFn end_;
   int depth_ = 0;
-  int captureDepth_ = -1;  // depth of the id'd element while capturing, -1 = idle
-  bool tailMode_ = false;  // id element closed short; capturing following siblings
-  size_t activeIdx_ = 0;   // targets_ index being captured
-  char text_[FootnotePreviews::MAX_TEXT_BYTES + 1] = {};
-  size_t textLen_ = 0;
-  bool truncated_ = false;
+  int captureDepth_ = -1;
+  int skipDepth_ = -1;
+  bool tailMode_ = false;
+  size_t rawLength_ = 0;
+  bool pendingSpace_ = false;
+  bool prefixDecided_ = false;
+  bool prefixStructural_ = false;
+  int markerElementDepth_ = -1;
+  bool failed_ = false;
+  bool haveOutput_ = false;
+  std::string prefix_;
+  std::string marker_;
+  char buffer_[256] = {};
+  size_t buffered_ = 0;
 
   int findWanted(const char* id) const {
     if (!id || *id == '\0') return -1;
@@ -221,83 +295,158 @@ class NoteCapturer {
     return -1;
   }
 
+  void flush() {
+    if (buffered_ && !failed_) failed_ = !chunk_(buffer_, buffered_);
+    buffered_ = 0;
+  }
+
+  void put(const char c) {
+    if (failed_ || (c == ' ' && !haveOutput_)) return;
+    haveOutput_ = true;
+    buffer_[buffered_++] = c;
+    if (buffered_ == sizeof(buffer_)) flush();
+  }
+
+  void decidePrefix() {
+    if (prefixDecided_) return;
+    prefixDecided_ = true;
+    const std::string candidate = canonicalMarker(prefix_);
+    const bool punctuation = prefix_.find_first_of("[().,") != std::string::npos;
+    if (marker_.empty() || candidate.empty() || candidate != marker_ || (!prefixStructural_ && !punctuation)) {
+      for (const char c : prefix_) put(c);
+    }
+    prefix_.clear();
+  }
+
+  void append(const char c) {
+    if (!prefixDecided_) {
+      if (c == ' ') {
+        if (prefix_.empty()) return;
+        decidePrefix();
+        // A removed marker does not leave leading whitespace.
+        if (buffered_ > 0) put(c);
+      } else {
+        prefix_ += c;
+        // EPUB labels commonly use NBSP / narrow NBSP. Recognize these in
+        // the bounded prefix even when SAX delivers their UTF-8 bytes separately.
+        const size_t length = prefix_.size();
+        size_t spaceBytes = 0;
+        if (length >= 2 && prefix_.compare(length - 2, 2, "\xC2\xA0") == 0) spaceBytes = 2;
+        if (length >= 3 && prefix_.compare(length - 3, 3, "\xE2\x80\xAF") == 0) spaceBytes = 3;
+        if (spaceBytes) {
+          prefix_.resize(length - spaceBytes);
+          if (prefix_.empty()) return;
+          decidePrefix();
+          put(' ');
+        } else if (length > MAX_MARKER_BYTES + 3) {
+          decidePrefix();
+        }
+      }
+    } else {
+      put(c);
+    }
+  }
+
   void beginCapture(const size_t targetIdx, const int idDepth) {
-    activeIdx_ = targetIdx;
     captureDepth_ = idDepth;
     tailMode_ = false;
-    textLen_ = 0;
-    truncated_ = false;
+    rawLength_ = 0;
+    pendingSpace_ = false;
+    prefixDecided_ = false;
+    prefixStructural_ = false;
+    markerElementDepth_ = -1;
+    prefix_.clear();
+    marker_ = canonicalMarker(targets_[targetIdx].marker);
+    buffered_ = 0;
+    haveOutput_ = false;
+    begin_(targetIdx);
   }
 
   void finishCapture() {
-    while (textLen_ > 0 && text_[textLen_ - 1] == ' ') --textLen_;
-    if (truncated_ && textLen_ >= 3) {
-      text_[textLen_ - 3] = '.';
-      text_[textLen_ - 2] = '.';
-      text_[textLen_ - 1] = '.';
-    }
-    text_[textLen_] = '\0';
-    if (textLen_ > 0) emit_(activeIdx_, text_, textLen_);
+    decidePrefix();
+    flush();
+    end_();
     captureDepth_ = -1;
     tailMode_ = false;
+    pendingSpace_ = false;
+  }
+
+  static bool isBlock(const char* name) {
+    return strcmp(name, "p") == 0 || strcmp(name, "div") == 0 || strcmp(name, "li") == 0 || strcmp(name, "br") == 0 ||
+           strcmp(name, "section") == 0 || strcmp(name, "aside") == 0 ||
+           (name[0] == 'h' && name[1] >= '1' && name[1] <= '6' && name[2] == '\0');
   }
 
   static void startElement(void* ctx, const char* name, const char** atts) {
     auto* self = static_cast<NoteCapturer*>(ctx);
+    if (self->skipDepth_ < 0 && (hasAttributeToken(getAttribute(atts, "epub:type"), "backlink") ||
+                                 hasAttributeToken(getAttribute(atts, "role"), "doc-backlink")))
+      self->skipDepth_ = self->depth_;
     const char* anchor = getAttribute(atts, "id");
     if ((!anchor || !*anchor) && strcmp(name, "a") == 0) anchor = getAttribute(atts, "name");
-    const int wantedIdx = self->findWanted(anchor);
+    const int wantedIdx = self->skipDepth_ < 0 ? self->findWanted(anchor) : -1;
     if (wantedIdx >= 0) {
-      // A new wanted anchor always starts its own capture — in sequential rearnote
-      // lists it is also what terminates the previous note's tail capture.
       if (self->captureDepth_ >= 0) self->finishCapture();
       self->beginCapture(static_cast<size_t>(wantedIdx), self->depth_);
+    } else if (self->captureDepth_ >= 0 && isBlock(name) && self->rawLength_ > 0) {
+      self->pendingSpace_ = true;
     }
+    if (self->captureDepth_ >= 0 && !self->haveOutput_ && self->prefix_.empty() && self->skipDepth_ < 0 &&
+        (strcmp(name, "a") == 0 || strcmp(name, "sup") == 0 ||
+         (name[0] == 'h' && name[1] >= '1' && name[1] <= '6' && name[2] == '\0')))
+      self->markerElementDepth_ = self->depth_;
     ++self->depth_;
   }
 
   static void characterData(void* ctx, const char* text, const int length) {
     auto* self = static_cast<NoteCapturer*>(ctx);
-    if (self->captureDepth_ < 0) return;
+    if (self->captureDepth_ < 0 || self->skipDepth_ >= 0 || self->failed_) return;
     for (int i = 0; i < length; ++i) {
-      const bool space = isSpaceChar(text[i]);
-      if (space && (self->textLen_ == 0 || self->text_[self->textLen_ - 1] == ' ')) continue;
-      if (self->textLen_ >= FootnotePreviews::MAX_TEXT_BYTES) {
-        self->truncated_ = true;
-        return;
+      if (isSpaceChar(text[i])) {
+        if (self->rawLength_ > 0) self->pendingSpace_ = true;
+      } else {
+        if (self->pendingSpace_) self->append(' ');
+        self->pendingSpace_ = false;
+        self->append(text[i]);
+        ++self->rawLength_;
       }
-      self->text_[self->textLen_++] = space ? ' ' : text[i];
     }
   }
 
-  static void endElement(void* ctx, const char*) {
+  static void endElement(void* ctx, const char* name) {
     auto* self = static_cast<NoteCapturer*>(ctx);
     --self->depth_;
+    if (self->skipDepth_ == self->depth_) self->skipDepth_ = -1;
     if (self->captureDepth_ < 0) return;
-    if (!self->tailMode_ && self->depth_ == self->captureDepth_) {
-      // The id'd element itself closed. Enough subtree text = container pattern, done;
-      // near-empty = inline anchor pattern, keep capturing the following siblings.
-      if (self->textLen_ >= FootnotePreviews::MIN_SUBTREE_BYTES || self->truncated_) {
-        self->finishCapture();
-      } else {
-        self->tailMode_ = true;
+    if (self->markerElementDepth_ == self->depth_) {
+      if (self->rawLength_ > 0 && !self->prefix_.empty()) {
+        self->prefixStructural_ = !self->prefixDecided_;
+        self->decidePrefix();
       }
+      self->markerElementDepth_ = -1;
+    }
+    if (!self->tailMode_ && self->depth_ == self->captureDepth_) {
+      if (self->rawLength_ >= FootnotePreviews::MIN_SUBTREE_BYTES)
+        self->finishCapture();
+      else
+        self->tailMode_ = true;
     } else if (self->depth_ < self->captureDepth_) {
-      // Parent of the anchor closed — the enclosing block is over either way.
       self->finishCapture();
+    } else if (isBlock(name) && self->rawLength_ > 0) {
+      self->pendingSpace_ = true;
     }
   }
 
  public:
-  NoteCapturer(const std::vector<Target>& targets, const std::vector<size_t>& wanted, EmitFn emit)
-      : targets_(targets), wanted_(wanted), emit_(std::move(emit)) {}
-  // Scans chapter XHTML (HTML-flavored): enable bare-void-tag repair.
+  NoteCapturer(const std::vector<Target>& targets, const std::vector<size_t>& wanted, BeginFn begin, ChunkFn chunk,
+               EndFn end)
+      : targets_(targets), wanted_(wanted), begin_(std::move(begin)), chunk_(std::move(chunk)), end_(std::move(end)) {}
   bool setup() { return parser_.init(this, startElement, endElement, characterData, nullptr, true); }
-  bool feed(const uint8_t* data, const size_t size) { return parser_.feed(data, size); }
+  bool feed(const uint8_t* data, const size_t size) { return !failed_ && parser_.feed(data, size) && !failed_; }
   bool finalize() {
     if (!parser_.finalize()) return false;
     if (captureDepth_ >= 0) finishCapture();
-    return true;
+    return !failed_;
   }
 };
 
@@ -411,12 +560,49 @@ bool gather(Epub& epub, const std::function<void(int)>& progressFn) {
     for (size_t t = 0; t < targets.size(); ++t) {
       if (targets[t].spineIndex == spines[s]) wanted.push_back(t);
     }
-    NoteCapturer capturer(targets, wanted, [&](const size_t targetIdx, const char* text, const size_t len) {
-      const uint32_t offset = static_cast<uint32_t>(out.position());
-      writePod(static_cast<uint16_t>(len));
-      if (out.write(reinterpret_cast<const uint8_t*>(text), len) != len) writeOk = false;
-      if (writeOk) index.emplace_back(targets[targetIdx].keyHash, offset);
-    });
+    uint32_t noteOffset = 0;
+    uint32_t noteLength = 0;
+    size_t activeTarget = 0;
+    NoteCapturer capturer(
+        targets, wanted,
+        [&](const size_t targetIdx) {
+          if (out.position() > UINT32_MAX) {
+            writeOk = false;
+            return;
+          }
+          activeTarget = targetIdx;
+          noteOffset = static_cast<uint32_t>(out.position());
+          noteLength = 0;
+          writePod(static_cast<uint32_t>(0));
+        },
+        [&](const char* text, const size_t len) {
+          if (!writeOk || len > UINT32_MAX - noteLength || out.position() > UINT32_MAX - len) return false;
+          if (out.write(reinterpret_cast<const uint8_t*>(text), len) != len) return writeOk = false;
+          noteLength += static_cast<uint32_t>(len);
+          return true;
+        },
+        [&] {
+          if (!writeOk) return;
+          const auto end = out.position();
+          if (!out.seekSet(noteOffset)) {
+            writeOk = false;
+            return;
+          }
+          writePod(noteLength);
+          if (!out.seekSet(end)) {
+            writeOk = false;
+            return;
+          }
+          if (writeOk && noteLength > 0) {
+            const uint32_t hash = targets[activeTarget].keyHash;
+            const auto previous =
+                std::find_if(index.begin(), index.end(), [hash](const auto& entry) { return entry.first == hash; });
+            if (previous != index.end())
+              previous->second = noteOffset;
+            else
+              index.emplace_back(hash, noteOffset);
+          }
+        });
     if (!capturer.setup()) {
       LOG_ERR("FNP", "Note capturer setup failed (spine=%u)", spines[s]);
       return discard();
@@ -455,6 +641,10 @@ bool gather(Epub& epub, const std::function<void(int)>& progressFn) {
 
 bool Lookup::open(const std::string& bookCachePath, const Epub* epub, const int currentSpineIndex) {
   entryCount_ = 0;
+  index_.reset();
+  failed_ = false;
+  cachePath_ = bookCachePath + CACHE_FILENAME;
+  indexOffset_ = 0;
   epub_ = epub;
   currentSpineIndex_ = currentSpineIndex;
   if (!Storage.openFileForRead("FNP", bookCachePath + CACHE_FILENAME, file_)) {
@@ -468,8 +658,9 @@ bool Lookup::open(const std::string& bookCachePath, const Epub* epub, const int 
   serialization::readPod(file_, version);
   serialization::readPod(file_, count);
   serialization::readPod(file_, indexOffset);
-  const uint32_t expectedEnd = indexOffset + static_cast<uint32_t>(count) * sizeof(IndexEntry);
-  if (magic != CACHE_MAGIC || version != CACHE_VERSION || count > MAX_ENTRIES || expectedEnd != file_.size()) {
+  const uint64_t expectedEnd = static_cast<uint64_t>(indexOffset) + static_cast<uint32_t>(count) * sizeof(IndexEntry);
+  if (magic != CACHE_MAGIC || version != CACHE_VERSION || count > MAX_ENTRIES || indexOffset < 12 ||
+      expectedEnd != file_.size()) {
     LOG_ERR("FNP", "Invalid footnotes.bin (magic=%08lx version=%u count=%u); previews skipped",
             static_cast<unsigned long>(magic), version, count);
     file_.close();
@@ -493,10 +684,20 @@ bool Lookup::open(const std::string& bookCachePath, const Epub* epub, const int 
     return false;
   }
   entryCount_ = count;
+  indexOffset_ = indexOffset;
   return true;
 }
 
-bool Lookup::find(const char* href, std::string& outText) {
+bool Lookup::invalidate() {
+  failed_ = true;
+  entryCount_ = 0;
+  index_.reset();
+  file_.close();
+  Storage.remove(cachePath_.c_str());
+  return false;
+}
+
+bool Lookup::locate(const char* href, uint32_t& length) {
   if (entryCount_ == 0 || !href) return false;
   const char* hash = strchr(href, '#');
   if (!hash || hash[1] == '\0') return false;
@@ -526,12 +727,73 @@ bool Lookup::find(const char* href, std::string& outText) {
   }
   if (!found) return false;
 
-  uint16_t len = 0;
-  if (!file_.seekSet(blobOffset)) return false;
-  serialization::readPod(file_, len);
-  if (len == 0 || len > MAX_TEXT_BYTES) return false;
-  outText.resize(len);
-  return file_.read(reinterpret_cast<uint8_t*>(&outText[0]), len) == static_cast<int>(len);
+  if (blobOffset < 12 || blobOffset >= indexOffset_ || indexOffset_ - blobOffset < sizeof(uint32_t))
+    return invalidate();
+  if (!file_.seekSet(blobOffset) || file_.read(reinterpret_cast<uint8_t*>(&length), sizeof(length)) != sizeof(length))
+    return invalidate();
+  if (length == 0 || length > indexOffset_ - blobOffset - sizeof(length)) return invalidate();
+  return true;
+}
+
+bool Lookup::has(const char* href) {
+  uint32_t length = 0;
+  return locate(href, length);
+}
+
+bool Lookup::stream(const char* href, const std::function<bool(const char*, size_t)>& consume) {
+  uint32_t remaining = 0;
+  if (!locate(href, remaining)) return false;
+  char buffer[260];
+  size_t carry = 0;
+  while (remaining > 0) {
+    if (CooperativeAbort::shouldAbortLongTask()) {
+      CooperativeAbort::markAborted();
+      return false;
+    }
+    const size_t count = std::min(static_cast<size_t>(remaining), static_cast<size_t>(256));
+    if (file_.read(reinterpret_cast<uint8_t*>(buffer + carry), count) != static_cast<int>(count)) return invalidate();
+    const size_t available = carry + count;
+    bool malformed = false;
+    const size_t complete = completeUtf8Prefix(buffer, available, &malformed);
+    if (malformed) return invalidate();
+    if (complete > 0 && !consume(buffer, complete)) return false;
+    carry = available - complete;
+    if (carry > 3) return invalidate();
+    if (carry) memmove(buffer, buffer + complete, carry);
+    remaining -= static_cast<uint32_t>(count);
+  }
+  return carry == 0 ? true : invalidate();
+}
+
+bool Lookup::preview(const char* href, std::string& outText, const size_t maxBytes) {
+  outText.clear();
+  if (maxBytes == 0) return has(href);
+  bool shortened = false;
+  const bool complete = stream(href, [&](const char* data, size_t size) {
+    const size_t available = maxBytes - outText.size();
+    if (size <= available) {
+      outText.append(data, size);
+      return true;
+    }
+    const size_t safe = completeUtf8Prefix(data, available);
+    outText.append(data, safe);
+    shortened = true;
+    return false;
+  });
+  if (shortened) {
+    outText += "...";
+    return true;
+  }
+  if (!complete) outText.clear();
+  return complete;
+}
+
+bool Lookup::find(const char* href, std::string& outText) {
+  outText.clear();
+  return stream(href, [&](const char* data, size_t size) {
+    outText.append(data, size);
+    return true;
+  });
 }
 
 bool Lookup::containsTarget(const char* fragment) const {

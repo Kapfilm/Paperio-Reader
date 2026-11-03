@@ -27,9 +27,9 @@ class Epub;
 // Results are persisted to footnotes.bin; section builds then use Lookup, which keeps
 // only an 8-byte-per-entry hash index in RAM and reads preview text from SD on hit.
 //
-// File format v3 (little-endian):
+// File format v4 (little-endian):
 //   u32 magic 'FNP1' | u16 version | u16 count | u32 indexOffset
-//   blob:  count x { u16 textLen, char text[textLen] }   (gather order)
+//   blob:  count x { u32 textLen, char text[textLen] }   (gather order)
 //   index: count x { u32 keyHash, u32 blobOffset }        (sorted by keyHash)
 // Key string: "<targetSpineIndex>#<fragment>", FNV-1a 32-bit. A 32-bit collision
 // inside one book shows a wrong preview — cosmetically harmless, astronomically rare.
@@ -37,7 +37,6 @@ namespace FootnotePreviews {
 
 constexpr const char* CACHE_FILENAME = "/footnotes.bin";
 constexpr size_t MAX_ENTRIES = 512;      // gather cap; index cap in Lookup matches
-constexpr size_t MAX_TEXT_BYTES = 240;   // per-preview text cap (matches old table)
 constexpr size_t MIN_SUBTREE_BYTES = 8;  // below this, an id'd element is treated as an
                                          // empty anchor and capture continues past it
 
@@ -63,6 +62,16 @@ class Lookup {
   // returns true.
   bool find(const char* href, std::string& outText);
 
+  // A small menu snippet. Full inline text must use stream(), not this helper.
+  // Adds ASCII ellipsis when more text exists; never cuts inside UTF-8.
+  bool preview(const char* href, std::string& outText, size_t maxBytes = 240);
+
+  // Production rendering reads bounded chunks directly from SD. Returns false
+  // on a missing/invalid note, read failure, cancellation, or rejected chunk.
+  bool stream(const char* href, const std::function<bool(const char*, size_t)>& consume);
+  bool has(const char* href);
+  bool failed() const { return failed_; }
+
   // True when `fragment` is one of the gathered footnote destinations in the
   // spine this lookup was opened for. Lets the section parser retain otherwise
   // filtered inline IDs (notably <span id="...">) only when they are real links.
@@ -80,6 +89,11 @@ class Lookup {
   FsFile file_;
   const Epub* epub_ = nullptr;
   int currentSpineIndex_ = -1;
+  uint32_t indexOffset_ = 0;
+  std::string cachePath_;
+  bool failed_ = false;
+  bool invalidate();
+  bool locate(const char* href, uint32_t& length);
 };
 
 }  // namespace FootnotePreviews

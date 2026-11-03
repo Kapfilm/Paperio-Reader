@@ -170,32 +170,6 @@ const char* getAttribute(const char** atts, const char* attrName) {
   return nullptr;
 }
 
-std::string ChapterHtmlSlimParser::abbreviateInlineFootnote(const char* text) const {
-  if (!text || *text == '\0') return {};
-  const int maxAdvance = static_cast<int>(viewportWidth) * 2;
-  const int spaceAdvance = renderer.getSpaceWidth(fontId);
-  int usedAdvance = 0;
-  std::string result;
-  const char* cursor = text;
-  while (*cursor != '\0') {
-    while (*cursor == ' ') ++cursor;
-    if (*cursor == '\0') break;
-    const char* wordStart = cursor;
-    while (*cursor != '\0' && *cursor != ' ') ++cursor;
-    const std::string previewWord(wordStart, static_cast<size_t>(cursor - wordStart));
-    const int wordAdvance = renderer.getTextWidth(fontId, previewWord.c_str());
-    const int separatorAdvance = result.empty() ? 0 : spaceAdvance;
-    if (!result.empty() && usedAdvance + separatorAdvance + wordAdvance > maxAdvance) {
-      result += "...";
-      break;
-    }
-    if (!result.empty()) result += ' ';
-    result += previewWord;
-    usedAdvance += separatorAdvance + wordAdvance;
-  }
-  return result;
-}
-
 bool isInternalEpubLink(const char* href) {
   if (!href || href[0] == '\0') return false;
   if (strncmp(href, "http://", 7) == 0 || strncmp(href, "https://", 8) == 0) return false;
@@ -2691,13 +2665,12 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
       // Membership in the book-level preview cache is the gate: the gatherer only
       // stored targets of footnote-shaped links, so any resolving href — same-file or
       // cross-file ("../Text/notes.xhtml#n3", Calibre filepos anchors) — is a real note.
-      std::string preview;
-      if (self->inlineFootnotePreviews->find(self->currentFootnote.href, preview)) {
-        self->pendingInlineFootnotePreview = self->abbreviateInlineFootnote(preview.c_str());
-        if (!self->pendingInlineFootnotePreview.empty()) {
-          LOG_DBG("EHP", "Expanded inline footnote: href=%s previewBytes=%u", self->currentFootnote.href,
-                  static_cast<uint32_t>(self->pendingInlineFootnotePreview.size()));
-        }
+      if (self->inlineFootnotePreviews->has(self->currentFootnote.href)) {
+        self->pendingInlineFootnoteHref = self->currentFootnote.href;
+      } else if (self->inlineFootnotePreviews->failed()) {
+        self->inlineFootnoteFailed = true;
+        self->streamFailed = true;
+        return;
       }
     }
     self->insideFootnoteLink = false;
@@ -2783,26 +2756,31 @@ void ChapterHtmlSlimParser::endElement(void* userData, const char* name) {
     self->updateEffectiveInlineStyle();
   }
 
-  if (!self->pendingInlineFootnotePreview.empty()) {
-    std::string preview = " (";
-    preview += self->pendingInlineFootnotePreview;
-    preview += ")";
-    self->pendingInlineFootnotePreview.clear();
-
-    // Finish the reference under its own style before inserting a smaller note.
-    // A plain <a> need not have triggered a style-stack flush above.
-    if (self->partWordBufferIndex > 0 && !self->flushPartWordBuffer()) return;
+  if (!self->pendingInlineFootnoteHref.empty()) {
+    // Finish the reference under its own style; the entire note uses the ordinary
+    // surrounding size, with italic styling to distinguish it from the main text.
+    if (self->partWordBufferIndex > 0 && !self->flushPartWordBuffer()) {
+      self->inlineFootnoteFailed = true;
+      return;
+    }
     const bool surroundingItalic = self->effectiveItalic;
-    const uint8_t surroundingSize = self->effectiveSizePct;
     self->effectiveItalic = true;
-    // About one reading-size step below the paragraph. Assign the size directly:
-    // publisher span sizes and normalization must not erase this distinction.
-    self->effectiveSizePct = 85;
-    characterData(self, preview.c_str(), static_cast<int>(preview.size()));
+    characterData(self, " (", 2);
+    const bool complete = self->inlineFootnotePreviews->stream(
+        self->pendingInlineFootnoteHref.c_str(), [self](const char* data, size_t size) {
+          characterData(self, data, static_cast<int>(size));
+          return !self->streamFailed && !self->previewStopRequested;
+        });
+    self->pendingInlineFootnoteHref.clear();
+    if (complete) characterData(self, ")", 1);
     const bool flushed = self->partWordBufferIndex == 0 || self->flushPartWordBuffer();
     self->effectiveItalic = surroundingItalic;
-    self->effectiveSizePct = surroundingSize;
-    if (!flushed) return;
+    // A failed SD read/cancellation must not commit a silently truncated ON cache.
+    if ((!complete || !flushed) && !self->previewStopRequested) {
+      self->inlineFootnoteFailed = true;
+      self->streamFailed = true;
+    }
+    if (!flushed || self->streamFailed) return;
   }
 
   // Clear block style when leaving header or block elements

@@ -1,6 +1,7 @@
 #include <CooperativeAbort.h>
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <sstream>
 
@@ -17,10 +18,11 @@ class NativeFootnotePreviewTest : public testing::TestWithParam<const char*> {
  protected:
   std::filesystem::path work;
   void SetUp() override {
-    work = std::filesystem::temp_directory_path() /
-           (std::string("paperio_native_note_") + testing::UnitTest::GetInstance()->current_test_info()->name());
-    std::filesystem::remove_all(work);
-    std::filesystem::create_directories(work);
+    // Independent CTest / sanitizer processes may run the same test name together.
+    std::string pattern = (std::filesystem::temp_directory_path() / "paperio_native_note_XXXXXX").string();
+    const char* uniqueRoot = mkdtemp(pattern.data());
+    ASSERT_NE(uniqueRoot, nullptr);
+    work = uniqueRoot;
   }
   void TearDown() override { std::filesystem::remove_all(work); }
 };
@@ -104,7 +106,7 @@ TEST_P(NativeFootnotePreviewTest, SectionCacheMissThenBuildRendersNativePreviews
           text += token;
           text += ' ';
           if (token.find("NATIVE_FB2_") != std::string::npos) {
-            EXPECT_EQ(block.wordSizePct(word), 85);
+            EXPECT_EQ(block.wordSizePct(word), 100);
           } else if (token == "BEFORE" || token == "AFTER" || token == "SECOND" || token == "END") {
             EXPECT_EQ(block.wordSizePct(word), 100);
           }
@@ -117,6 +119,71 @@ TEST_P(NativeFootnotePreviewTest, SectionCacheMissThenBuildRendersNativePreviews
     EXPECT_NE(text.find("AFTER"), std::string::npos);
     EXPECT_EQ(references, 2u);
   }
+}
+
+TEST_P(NativeFootnotePreviewTest, FullMultiParagraphNoteSurvivesPaginationAndSerialization) {
+  const bool zipped = std::string(GetParam()).ends_with(".zip");
+  const auto cache = work / "cache";
+  std::filesystem::create_directories(cache);
+  Fb2 source(std::string(CORPUS_DIR) + "/inline_footnote_full.fb2" + (zipped ? ".zip" : ""), cache.string());
+  ASSERT_TRUE(source.load());
+  auto book = std::make_shared<Epub>(source.getPackagePath(), cache.string());
+  ASSERT_TRUE(book->load(true));
+  ASSERT_TRUE(FootnotePreviews::gather(*book));
+  GfxRenderer renderer;
+  Section::BuildParams params;
+  params.fontId = 1;
+  params.viewportWidth = 460;
+  params.viewportHeight = 760;
+  params.inlineFootnotePreviews = true;
+  Section section(book, 0, renderer);
+  ASSERT_FALSE(section.loadSectionFile(params));
+  ASSERT_TRUE(section.createSectionFile(params, {}, true));
+  ASSERT_TRUE(section.loadSectionFile(params));
+  EXPECT_GT(section.pageCount, 1u);
+  std::string text;
+  size_t references = 0;
+  size_t numberSeven = 0;
+  for (uint16_t pageIndex = 0; pageIndex < section.pageCount; ++pageIndex) {
+    section.currentPage = pageIndex;
+    const auto page = section.loadPageFromSectionFile();
+    ASSERT_TRUE(page);
+    references += page->footnotes.size();
+    for (const auto& element : page->elements) {
+      if (element->getTag() != TAG_PageLine) continue;
+      const auto& block = *static_cast<const PageLine&>(*element).getBlock();
+      for (uint16_t word = 0; word < block.wordCount(); ++word) {
+        const std::string token = block.wordText(word);
+        text += token + ' ';
+        EXPECT_EQ(block.wordSizePct(word), 100) << token;
+        std::string digits;
+        for (unsigned char c : token) {
+          if (c >= '0' && c <= '9') digits += static_cast<char>(c);
+        }
+        if (digits == "7") ++numberSeven;
+        if (token == "BEFORE" || token == "AFTER" || token == "SECOND" || token == "END")
+          EXPECT_EQ(static_cast<uint8_t>(block.wordStyle(word)) & EpdFontFamily::ITALIC, 0) << token;
+      }
+    }
+  }
+  EXPECT_EQ(numberSeven, 1u) << text;
+  EXPECT_EQ(references, 2u);
+  // Every UTF-8 word must survive cache-write and read chunk boundaries.
+  for (const std::string word : {"пояснение", "подробность", "завершение"}) {
+    size_t count = 0;
+    for (size_t pos = text.find(word); pos != std::string::npos; pos = text.find(word, pos + word.size())) ++count;
+    EXPECT_EQ(count, 120u) << word;
+  }
+  EXPECT_NE(text.find("LONG_NOTE_END"), std::string::npos);
+  EXPECT_NE(text.find("1941"), std::string::npos);
+  EXPECT_NE(text.find("YEAR_START_RETAINED"), std::string::npos);
+  EXPECT_NE(text.find("AFTER"), std::string::npos);
+  EXPECT_NE(text.find("END"), std::string::npos);
+  EXPECT_LT(text.find("FIRST_PARAGRAPH"), text.find("MIDDLE_PARAGRAPH"));
+  EXPECT_LT(text.find("MIDDLE_PARAGRAPH"), text.find("LAST_PARAGRAPH"));
+  EXPECT_NE(text.find("пояснение MIDDLE_PARAGRAPH"), std::string::npos);
+  EXPECT_NE(text.find("подробность LAST_PARAGRAPH"), std::string::npos);
+  EXPECT_LT(text.find("LONG_NOTE_END"), text.find("AFTER"));
 }
 
 TEST_P(NativeFootnotePreviewTest, OneShotAbortOfAGeneratedWriteCannotPublishACompletedCache) {

@@ -4586,7 +4586,9 @@ void EpubReaderActivity::openFootnotes() {
   std::vector<std::string> previews(currentPageFootnotes.size());
   FootnotePreviews::Lookup lookup;
   if (lookup.open(epub->getCachePath(), epub.get(), currentSpineIndex)) {
-    for (size_t i = 0; i < currentPageFootnotes.size(); ++i) lookup.find(currentPageFootnotes[i].href, previews[i]);
+    // This is only the selection-list excerpt. Full inline notes are streamed by
+    // the section parser; never load every long note into this menu's RAM vector.
+    for (size_t i = 0; i < currentPageFootnotes.size(); ++i) lookup.preview(currentPageFootnotes[i].href, previews[i]);
   }
   startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes,
                                                                        std::move(previews), rememberedFootnoteIndex()),

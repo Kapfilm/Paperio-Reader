@@ -19,6 +19,7 @@ struct DropboxTestRequest {
 inline std::deque<DropboxTestReply> dropboxTestReplies;
 inline std::vector<DropboxTestRequest> dropboxTestRequests;
 inline bool dropboxTestStrictTls = true;
+inline size_t dropboxTestCloseCalls = 0;
 class SecureHttpClient {
  public:
   using BodySink = std::function<bool(const uint8_t*, size_t)>;
@@ -31,7 +32,7 @@ class SecureHttpClient {
   void setTimeout(uint32_t) {}
   void setUserAgent(const std::string&) {}
   void addHeader(const std::string& k, const std::string& v) { headers[k] = v; }
-  void close() {}
+  void close() { ++dropboxTestCloseCalls; }
   int lastStatus() const { return status; }
   int post(const std::string& url, const std::string& body, const BodySink& sink, const ProgressFn& = nullptr) {
     dropboxTestRequests.push_back({url, body, headers});

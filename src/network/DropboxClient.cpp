@@ -16,6 +16,7 @@
 #include <ctime>
 #include <limits>
 
+#include "DropboxReplyBuffer.h"
 #include "DropboxStore.h"
 
 namespace {
@@ -127,17 +128,17 @@ bool configure(crosspoint::SecureHttpClient& http) {
 }
 
 Result smallPost(crosspoint::SecureHttpClient& http, const std::string& url, const std::string& body,
-                 std::string& response, size_t maximum = kMaxReply) {
+                 DropboxReplyBuffer& response, size_t maximum = kMaxReply) {
   response.clear();
   bool overflow = false;
   const int status = http.post(url, body, [&](const uint8_t* bytes, size_t length) {
-    if (length > maximum - response.size()) {
-      overflow = true;
-      return false;
-    }
-    response.append(reinterpret_cast<const char*>(bytes), length);
-    return true;
+    if (response.append(bytes, length, maximum)) return true;
+    overflow = true;
+    return false;
   });
+  // Do not retain TLS allocations while the JSON document/page is constructed.
+  // On a small heap this also keeps parser strings away from the handshake peak.
+  http.close();
   if (overflow) return {Error::TooLarge, http.lastStatus()};
   return statusResult(status);
 }
@@ -170,7 +171,7 @@ Result ensureAccess(const std::string& refresh, bool force = false) {
   crosspoint::SecureHttpClient http;
   if (!configure(http)) return {Error::Network};
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-  std::string response;
+  DropboxReplyBuffer response;
   const auto result =
       smallPost(http, "https://api.dropboxapi.com/oauth2/token",
                 "grant_type=refresh_token&client_id=" + encode(store.appKey()) + "&refresh_token=" + encode(refresh),
@@ -248,7 +249,7 @@ DropboxClient::Result DropboxClient::completeAuthorization(const std::string& co
   crosspoint::SecureHttpClient http;
   if (!configure(http)) return {Error::Network};
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
-  std::string response;
+  DropboxReplyBuffer response;
   auto result = smallPost(http, "https://api.dropboxapi.com/oauth2/token",
                           "grant_type=authorization_code&client_id=" + encode(pendingKey) + "&code=" + encode(code) +
                               "&code_verifier=" + encode(verifier),
@@ -291,7 +292,7 @@ DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor, 
     }
     if (request.overflowed() || !serializeJson(request, body)) return {Error::TooLarge};
   }
-  std::string response;
+  DropboxReplyBuffer response;
   for (int attempt = 0; attempt < 2; ++attempt) {
     crosspoint::SecureHttpClient http;
     if (!configure(http)) return {Error::Network};
@@ -304,6 +305,7 @@ DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor, 
     if (result.httpStatus != 401 || attempt != 0) break;
     // Release the TLS connection before refreshing on a constrained ESP32-C3.
     http.close();
+    response.clear();  // Discard the rejected reply before the refresh TLS handshake.
     result = ensureAccess(store.refreshToken_, true);
     if (!result.ok()) return result;
   }
@@ -313,11 +315,9 @@ DropboxClient::Result DropboxClient::list(Page& out, const std::string& cursor, 
   filter["cursor"] = true;
   filter["has_more"] = true;
   JsonDocument doc;
-  // The response outlives doc and every accepted field is copied into Page.
-  // Parsing its mutable buffer avoids a second heap copy of long folder names
-  // and cursors on the X3's constrained heap.
-  if (deserializeJson(doc, response.data(), response.size(), DeserializationOption::Filter(filter),
-                      DeserializationOption::NestingLimit(8)) ||
+  // TLS is closed before parsing; consumed response blocks are freed as the
+  // filtered JSON reader proceeds. No large contiguous reply string is needed.
+  if (deserializeJson(doc, response, DeserializationOption::Filter(filter), DeserializationOption::NestingLimit(8)) ||
       !doc["entries"].is<JsonArray>() || !doc["has_more"].is<bool>() || !doc["cursor"].is<const char*>())
     return {Error::InvalidData};
   Page page;
