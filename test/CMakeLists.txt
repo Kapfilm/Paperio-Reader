@@ -121,3 +121,6 @@ add_subdirectory(fb2_sync_position)
 add_subdirectory(power_buttons)
 
 add_subdirectory(dropbox)
+
+add_subdirectory(hal_file_lifecycle)
+add_subdirectory(panic_snapshot)

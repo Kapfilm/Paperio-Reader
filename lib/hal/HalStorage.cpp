@@ -26,7 +26,7 @@ bool HalStorage::begin() {
   // is a global, and its constructor runs before the FreeRTOS scheduler starts.
   // Calling xSemaphoreCreateMutex() that early corrupts the TLSF heap metadata.
   if (!storageMutex) {
-    storageMutex = xSemaphoreCreateMutex();
+    storageMutex = xSemaphoreCreateRecursiveMutex();
     assert(storageMutex != nullptr);
   }
   {
@@ -60,8 +60,11 @@ bool HalStorage::ready() const { return SDCard.ready(); }
 
 class HalStorage::StorageLock {
  public:
-  StorageLock() { xSemaphoreTake(HalStorage::getInstance().storageMutex, portMAX_DELAY); }
-  ~StorageLock() { xSemaphoreGive(HalStorage::getInstance().storageMutex); }
+  // Stream consumers may write another SD file, and replacing an already-open
+  // HalFile closes its old handle inside the outer open operation. Both are
+  // same-task re-entry; other tasks must still wait for the entire operation.
+  StorageLock() { xSemaphoreTakeRecursive(HalStorage::getInstance().storageMutex, portMAX_DELAY); }
+  ~StorageLock() { xSemaphoreGiveRecursive(HalStorage::getInstance().storageMutex); }
 
  private:
   // Declared first so it is acquired before storageMutex and released after it:
@@ -115,6 +118,15 @@ uint64_t HalStorage::sdFreeBytes() {
 class HalFile::Impl {
  public:
   Impl(FsFile&& fsFile) : file(std::move(fsFile)) {}
+  ~Impl() {
+    if (!file.isOpen()) return;
+    // SdFat's destructor closes open files and can perform real SPI I/O. Do
+    // that while both locks are held, including when unique_ptr destroys an
+    // old Impl during HalFile move assignment/reopen. SdFat close invalidates
+    // its handle even if sync fails, so the member destructor does no I/O.
+    HalStorage::StorageLock lock;
+    file.close();
+  }
   FsFile file;
 };
 

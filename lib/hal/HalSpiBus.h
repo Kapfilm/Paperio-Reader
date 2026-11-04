@@ -24,9 +24,10 @@
 // deadlock-free.
 //
 // The mutex is recursive so a storage path that re-enters the bus lock cannot
-// self-deadlock. Note this does NOT make HalStorage's own storageMutex
-// recursive - that one stays plain, because no storage path nests it today
-// (~FsFile calls SdFat's close() directly, not the locking HalFile::close()).
+// self-deadlock. HalStorage's own storageMutex is recursive too: a streaming
+// Print consumer can write another SD file, and a HalFile replacement closes
+// its previous handle while the outer open operation owns the storage lock.
+// Destruction of an open HalFile takes both locks before closing its SdFat file.
 class HalSpiBus {
  public:
   class Lock {

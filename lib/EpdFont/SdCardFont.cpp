@@ -1131,13 +1131,17 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // ---- Mmap metadata fast-path ----
   // For mmap fonts, fullIntervals and the glyph array are directly pointer-
   // accessible in flash. A metadata-only prewarm needs no heap copy and no SD
-  // reads — wire miniData to the flash-resident tables once and return. The full
-  // interval table covers every codepoint in the font, so allCpsCovered is
+  // reads — wire miniData to the flash-resident tables once and return. A v4
+  // file need not align its glyph table to alignof(EpdGlyph): those tables must
+  // use the ordinary SD metadata copy below, which owns aligned glyph objects.
+  // The full interval table covers every codepoint in the font, so allCpsCovered is
   // trivially always true for metadata queries.
   //
   // Full (bitmap) prewarms still go through the normal path: bitmaps are not in
   // the mmap region and must be read from SD.
-  if (mmapDataBase_ && metadataOnly) {
+  const bool mappedGlyphsAligned =
+      mmapDataBase_ && (reinterpret_cast<uintptr_t>(mmapDataBase_ + s.glyphsFileOffset) % alignof(EpdGlyph) == 0);
+  if (mappedGlyphsAligned && metadataOnly) {
     if (s.miniMode == PerStyle::MiniMode::NONE) {
       // First call: wire miniData directly to flash-resident data.
       // miniGlyphs/miniIntervals stay null — miniData.glyph and .intervals
@@ -1814,6 +1818,34 @@ const uint8_t* SdCardFont::getOverflowBitmap(const EpdGlyph* glyph) const {
     if (&overflow_[i].glyph == glyph) {
       return overflow_[i].bitmap;
     }
+  }
+  return nullptr;
+}
+
+const uint8_t* SdCardFont::getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) {
+  if (!fontData || !glyph || !fontData->glyphMissCtx) return nullptr;
+  auto* self = fromMissCtx(fontData->glyphMissCtx);
+  if (!self) return nullptr;
+  if (self->isOverflowGlyph(glyph)) return self->getOverflowBitmap(glyph);
+  if (fontData->bitmap) return fontData->bitmap + glyph->dataOffset;
+  if (!fontData->glyph || !fontData->intervals || !fontData->glyphMissHandler || glyph->width == 0 ||
+      glyph->height == 0)
+    return nullptr;
+
+  // Layout can replace a page's FULL cache with METADATA between renders. An
+  // interval hit then bypasses onGlyphMiss even though bitmap is nullptr. Recover
+  // the actual glyph's codepoint (including a replacement glyph returned for an
+  // unsupported character) and explicitly request its bitmap from the SD cache.
+  const auto index = glyph - fontData->glyph;
+  if (index < 0) return nullptr;
+  for (uint32_t i = 0; i < fontData->intervalCount; ++i) {
+    const auto& interval = fontData->intervals[i];
+    if (static_cast<size_t>(index) < interval.offset) continue;
+    const size_t relative = static_cast<size_t>(index) - interval.offset;
+    if (relative > static_cast<uint32_t>(interval.last - interval.first)) continue;
+    const uint32_t codepoint = interval.first + static_cast<uint32_t>(relative);
+    const EpdGlyph* loaded = fontData->glyphMissHandler(fontData->glyphMissCtx, codepoint);
+    return loaded ? self->getOverflowBitmap(loaded) : nullptr;
   }
   return nullptr;
 }

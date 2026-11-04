@@ -82,6 +82,12 @@ class SdCardFont {
   // Returns the bitmap for an on-demand-loaded (overflow) glyph.
   const uint8_t* getOverflowBitmap(const EpdGlyph* glyph) const;
 
+  // Resolve a rendered SD glyph, including metadata-only glyphs left by layout.
+  // Such glyphs retain file offsets but have no in-memory bitmap. Load the one
+  // glyph through the bounded on-demand cache instead of treating its file
+  // offset as a pointer offset from nullptr. Valid until the next glyph load.
+  static const uint8_t* getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph);
+
   // Extract SdCardFont* from an opaque glyphMissCtx pointer.
   // Used by GfxRenderer::getGlyphBitmap() to recover the SdCardFont from EpdFontData::glyphMissCtx.
   static SdCardFont* fromMissCtx(void* ctx);

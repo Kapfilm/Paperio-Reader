@@ -5,6 +5,7 @@
 #include "Arduino.h"
 #include "HalStorage.h"
 #include "Logging.h"
+#include "PanicStackSnapshot.h"
 #include "esp_debug_helpers.h"
 #include "esp_memory_utils.h"
 #include "esp_private/esp_cpu_internal.h"
@@ -43,10 +44,6 @@ void IRAM_ATTR __wrap_panic_print_backtrace(const void* frame, int core) {
     __real_panic_print_backtrace(frame, core);
     return;
   }
-  for (size_t i = 0; i < MAX_PANIC_STACK_DEPTH; i++) {
-    panicStack[i].sp = 0;
-  }
-
   const auto* registers = static_cast<const RvExcFrame*>(frame);
   panicRegistersMagic = 0;
   panicRegisters[0] = static_cast<uint32_t>(registers->mepc);
@@ -56,30 +53,21 @@ void IRAM_ATTR __wrap_panic_print_backtrace(const void* frame, int core) {
   panicRegisters[4] = static_cast<uint32_t>(registers->mtval);
   panicRegistersMagic = PANIC_REGISTERS_MAGIC;
 
-  // Snapshot only sane RAM addresses; a corrupted SP must not cause a
-  // second fault in the panic handler and lose the original register state.
-  const uint32_t sp = panicRegisters[2];
-  const int per_line = 8;
-  int depth = 0;
-  for (int x = 0; x < 1024; x += per_line * sizeof(uint32_t)) {
-    if ((sp & 3u) != 0 || !esp_stack_ptr_is_sane(sp + x) ||
-        !esp_stack_ptr_is_sane(sp + x + per_line * sizeof(uint32_t) - 4)) break;
-    uint32_t* spp = (uint32_t*)(sp + x);
-    // panic_print_hex(sp + x);
-    // panic_print_str(": ");
-    panicStack[depth].sp = sp + x;
-    for (int y = 0; y < per_line; y++) {
-      // panic_print_str("0x");
-      // panic_print_hex(spp[y]);
-      // panic_print_str(y == per_line - 1 ? "\r\n" : " ");
-      panicStack[depth].spp[y] = spp[y];
-    }
-
-    depth++;
-    if (depth >= MAX_PANIC_STACK_DEPTH) {
-      break;
-    }
-  }
+  // Stack-pointer alignment is checked only for the original SP. A line's
+  // end address need only be readable RAM; it is not a stack pointer itself.
+  panic_snapshot::capture(
+      panicRegisters[2], panicStack, MAX_PANIC_STACK_DEPTH, [](const uint32_t sp) { return esp_stack_ptr_is_sane(sp); },
+      [](const uint32_t address) {
+        const auto* byte = reinterpret_cast<const void*>(static_cast<uintptr_t>(address));
+        return esp_ptr_in_dram(byte)
+#if CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP
+               || esp_ptr_in_rtc_dram_fast(byte)
+#endif
+            ;
+      },
+      [](const uint32_t address) {
+        return *reinterpret_cast<const volatile uint32_t*>(static_cast<uintptr_t>(address));
+      });
 
   __real_panic_print_backtrace(frame, core);
 }
