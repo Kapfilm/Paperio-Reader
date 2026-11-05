@@ -15,15 +15,15 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .contentSidePadding = 20,
                                  .listRowHeight = 40,
                                  .listWithSubtitleRowHeight = 68,
-                                 .menuRowHeight = 64,
-                                 .menuSpacing = 8,
+                                 .menuRowHeight = 44,
+                                 .menuSpacing = 2,
                                  .tabSpacing = 8,
                                  .tabBarHeight = 40,
                                  .scrollBarWidth = 4,
                                  .scrollBarRightOffset = 5,
-                                 .homeTopPadding = 56,
-                                 .homeCoverHeight = 226,
-                                 .homeCoverTileHeight = 242,
+                                 .homeTopPadding = 40,
+                                 .homeCoverHeight = 304,
+                                 .homeCoverTileHeight = 320,
                                  .homeRecentBooksCount = 1,
                                  .buttonHintsHeight = 40,
                                  .sideButtonHintsWidth = 30,
@@ -79,6 +79,8 @@ class LyraTheme : public BaseTheme {
   bool showsFileIcons() const override { return true; }
 
  protected:
+  mutable Rect homeCoverArea_{};
+
   static int getRecentBookProgressPercent(const RecentBook& book);
   static const uint8_t* iconForName(UIIcon icon, int size);
 };
