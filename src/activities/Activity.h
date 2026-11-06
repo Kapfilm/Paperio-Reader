@@ -74,6 +74,10 @@ class Activity {
   // Non-reader activities can ignore this (default is no-op).
   virtual void onButtonAction(CrossPointSettings::BUTTON_ACTION) {}
 
+  // A screen can reserve a long Back press for its own navigation.
+  virtual bool hasFastBackExit() const { return false; }
+  virtual bool onLongBack() { return false; }
+
   // Start a new activity without destroying the current one
   // Note: requestUpdate() will be invoked automatically once resultHandler finishes
   //

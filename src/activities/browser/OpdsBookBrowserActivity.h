@@ -37,6 +37,8 @@ class OpdsBookBrowserActivity final : public Activity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
+  bool hasFastBackExit() const override { return true; }
+  bool onLongBack() override;
   void render(RenderLock&&) override;
 
  private:
@@ -49,6 +51,7 @@ class OpdsBookBrowserActivity final : public Activity {
   bool consumeConfirm = false;
   bool consumeBack = false;
   bool memoryTrimmed = false;
+  bool fastExit = false;
   bool coverAvailable = false;
   int selectorIndex = 0;
   int selectedBookIndex = -1;

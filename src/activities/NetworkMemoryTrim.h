@@ -27,11 +27,12 @@ class GfxRenderer;
 // against a valid baseline rather than stale controller content (X4; no-op on
 // X3).
 //
-// There is no reallocSecondaryBuffer() pairing. Every current caller
-// silentRestart()s on exit, and the reboot rebuilds clean state. If you add a
-// caller that keeps running afterwards, follow the full Scenario 1 procedure in
-// the doc instead of using this helper.
+// Shut down Wi-Fi and release session data before restoring the buffer.
 //
 // Idempotent: safe to call again before TLS to drop font cache that status
 // screens repopulated since the first call.
 void trimMemoryForNetworkSession(const GfxRenderer& renderer, const char* logTag);
+
+// Call under the render lock. A restart is the fallback if the heap cannot
+// provide a secondary buffer after network cleanup.
+void restoreDisplayAfterNetworkSession(const GfxRenderer& renderer);

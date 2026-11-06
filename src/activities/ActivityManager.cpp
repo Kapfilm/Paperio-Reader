@@ -554,6 +554,14 @@ void ActivityManager::dispatchButtonAction(const CrossPointSettings::BUTTON_ACTI
   }
 }
 
+bool ActivityManager::hasFastBackExit() const {
+  return currentActivity && !drainInput && pendingAction == PendingAction::None && currentActivity->hasFastBackExit();
+}
+
+bool ActivityManager::handleLongBack() {
+  return currentActivity && !drainInput && pendingAction == PendingAction::None && currentActivity->onLongBack();
+}
+
 void ActivityManager::requestUpdate(bool immediate) {
   if (immediate) {
     if (renderTaskHandle) {

@@ -41,6 +41,7 @@ constexpr int LYRA_MIN_RECENT_TILE_HEIGHT = 170;
 constexpr int LYRA_3_COVERS_MIN_RECENT_TILE_HEIGHT = 200;
 constexpr int CLASSIC_MIN_RECENT_TO_MENU_GAP = 2;
 constexpr int LYRA_MIN_RECENT_TO_MENU_GAP = 4;
+constexpr int LYRA_HOME_MENU_BOTTOM_GAP = 12;
 
 struct HomeScreenLayout {
   int recentTileHeight;
@@ -82,8 +83,10 @@ HomeScreenLayout computeHomeScreenLayout(const ThemeMetrics& metrics, int conten
   const int menuRequiredHeight = menuItemCount * std::max(metrics.menuRowHeight, minimumMenuRowHeight) +
                                  std::max(0, menuItemCount - 1) * metrics.menuSpacing;
 
+  // The content rectangle already excludes the buttons. Leave a visible gap above them.
+  const int bottomGap = isLyraFamilyTheme() && !isLyraExtendedTheme() ? LYRA_HOME_MENU_BOTTOM_GAP : 0;
   auto computeMenuHeight = [&]() {
-    return contentHeight - (metrics.homeTopPadding + layout.recentTileHeight + layout.recentToMenuGap);
+    return contentHeight - (metrics.homeTopPadding + layout.recentTileHeight + layout.recentToMenuGap + bottomGap);
   };
 
   layout.menuHeight = computeMenuHeight();
@@ -253,7 +256,14 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
     }
   }
 
-  const auto thumbSizes = GUI.getCoverThumbSizes(coverHeight);
+  auto thumbSizes = GUI.getCoverThumbSizes(coverHeight);
+  if (isLyraExtendedTheme()) {
+    constexpr auto& metrics = Lyra3CoversMetrics::values;
+    const int width = UITheme::getContentRect(renderer, true, false).width;
+    const int slotWidth = (width - 2 * metrics.contentSidePadding) / 3 - 2 * Lyra3CoversMetrics::coverInset;
+    const auto size = Lyra3CoversMetrics::nativeThumbSize(renderer.isX3(), slotWidth, coverHeight);
+    if (size.first > 0) thumbSizes.push_back(size);
+  }
 
   // Build the placeholder slots for a book on give-up. Multi-size themes placeholder every
   // WxH thumb; the single-height path placeholders its one thumb_<h>.bmp (width = h*0.6, matching
@@ -954,10 +964,7 @@ void HomeActivity::render(RenderLock&&) {
                                               recentBooks.empty() ? "" : tr(STR_READ));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
-    if (!firstRenderDone) {
-      firstRenderDone = true;
-      requestUpdate();
-    }
+    firstRenderDone = true;
     return;
   }
 
@@ -973,10 +980,7 @@ void HomeActivity::render(RenderLock&&) {
         [this](int index) { return menuEntries[index].icon; }, carouselLabels.btn1, carouselLabels.btn2,
         carouselLabels.btn3, carouselLabels.btn4);
     if (handled) {
-      if (!firstRenderDone) {
-        firstRenderDone = true;
-        requestUpdate();
-      }
+      firstRenderDone = true;
       return;
     }
     // Fast path failed (e.g. frame cache malloc failed). Force cover re-render
@@ -1027,10 +1031,7 @@ void HomeActivity::render(RenderLock&&) {
 
   renderer.displayBuffer();
 
-  if (!firstRenderDone) {
-    firstRenderDone = true;
-    requestUpdate();
-  }
+  firstRenderDone = true;
 }
 
 void HomeActivity::onSelectBook(const std::string& path) {

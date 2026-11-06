@@ -134,10 +134,11 @@ void SudokuGameActivity::enterGameMenu() {
 }
 
 void SudokuGameActivity::handleInputGameMenu() {
-  if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
+  using Button = MappedInputManager::Button;
+  if (mappedInput.wasPressed(Button::Up) || mappedInput.wasPressed(Button::Left)) {
     gameMenuIndex = static_cast<uint8_t>((gameMenuIndex + MENU_ITEM_COUNT - 1) % MENU_ITEM_COUNT);
     requestUpdate();
-  } else if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
+  } else if (mappedInput.wasPressed(Button::Down) || mappedInput.wasPressed(Button::Right)) {
     gameMenuIndex = static_cast<uint8_t>((gameMenuIndex + 1) % MENU_ITEM_COUNT);
     requestUpdate();
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {

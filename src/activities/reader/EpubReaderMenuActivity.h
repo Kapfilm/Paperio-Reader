@@ -45,20 +45,17 @@ class EpubReaderMenuActivity final : public MenuListActivity {
     READING_PROFILES,
   };
 
-  explicit EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
-                                  const int currentPage, const int totalPages, const int bookProgressPercent,
-                                  const uint8_t currentOrientation, const bool hasFootnotes,
-                                  const int8_t initialEmbeddedStyleOverride, const int8_t initialImageRenderingOverride,
-                                  const int8_t initialFontFamilyOverride,
-                                  const std::string& initialSdFontFamilyOverride, const int8_t initialFontSizeOverride,
-                                  const int16_t initialLineHeightPercentOverride, const uint8_t initialTextDarkness,
-                                  const bool initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
-                                  const int8_t initialParagraphAlignmentOverride,
-                                  const int8_t initialTextAntiAliasingOverride, const int8_t initialHyphenationOverride,
-                                  const int8_t initialFontSizeNormalizationOverride,
-                                  const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages,
-                                  const bool isCurrentPageStarred, const bool hasPrintedPages, const bool hasClippings,
-                                  uint8_t initialFontPointSizeOverride = 0);
+  explicit EpubReaderMenuActivity(
+      GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title, const int currentPage,
+      const int totalPages, const int bookProgressPercent, const uint8_t currentOrientation, const bool hasFootnotes,
+      const int8_t initialEmbeddedStyleOverride, const int8_t initialImageRenderingOverride,
+      const int8_t initialFontFamilyOverride, const std::string& initialSdFontFamilyOverride,
+      const int8_t initialFontSizeOverride, const int16_t initialLineHeightPercentOverride,
+      const uint8_t initialTextDarkness, const bool initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
+      const int8_t initialParagraphAlignmentOverride, const int8_t initialTextAntiAliasingOverride,
+      const int8_t initialHyphenationOverride, const int8_t initialFontSizeNormalizationOverride,
+      const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages, const bool isCurrentPageStarred,
+      const bool hasPrintedPages, const bool hasClippings, uint8_t initialFontPointSizeOverride = 0);
 
   void onEnter() override;
   void loop() override;
@@ -75,6 +72,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   const char* tabLabel(Tab value) const;
 
   bool currentPageStarred = false;
+  bool opening = true;
   void finishWithAction(MenuAction action);
 
   // MenuListActivity overrides

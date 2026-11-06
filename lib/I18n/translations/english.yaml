@@ -989,4 +989,5 @@ STR_DROPBOX_ALREADY_EXISTS: "This file is already on the SD card. It was not ove
 STR_DROPBOX_BUSY: "Dropbox is busy. Try again in a moment."
 STR_DROPBOX_API_ERROR: "Could not open the folder or download the book. Check Dropbox setup."
 STR_DROPBOX_FOLDER: "Folder"
+STR_DROPBOX_HOME_HINT: "Hold Back to go Home"
 STR_DROPBOX_DEPTH_LIMIT: "Folder navigation limit reached. Go back to a parent folder."

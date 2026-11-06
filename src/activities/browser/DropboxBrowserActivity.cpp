@@ -8,10 +8,10 @@
 #include <cctype>
 #include <utility>
 
-#include "CrossPointSettings.h"
+#include "BrowserListLayout.h"
 #include "DropboxStore.h"
 #include "MappedInputManager.h"
-#include "SilentRestart.h"
+#include "UiFonts.h"
 #include "activities/NetworkMemoryTrim.h"
 #include "activities/network/CrossPointWebServerActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -19,6 +19,10 @@
 #include "fontIds.h"
 
 namespace {
+constexpr size_t cacheBudget = 6 * 1024;
+constexpr size_t maxCachedPages = 3;
+constexpr unsigned long pageLifetimeMs = 90000;
+
 // Keep the format in a separate right-aligned column even for short titles.
 std::string bookFormat(const std::string& name) {
   std::string lower = name;
@@ -47,12 +51,13 @@ void DropboxBrowserActivity::onEnter() {
 void DropboxBrowserActivity::onExit() {
   Activity::onExit();
   // The web-server activity assumes ownership of the active Wi-Fi session and
-  // restarts when it exits. Do not reboot halfway through that handoff.
+  // restores the display when it exits. Keep the active Wi-Fi session for it.
   if (handingOffToWeb_ || !memoryTrimmed_) return;
-  if (WiFi.getMode() != WIFI_MODE_NULL) HalClock::wifiOff(false, SETTINGS.ntpServer);
-  // Network memory trimming is intentionally paired with a restart, even if
-  // association was cancelled or failed before the radio became connected.
-  silentRestart();
+  if (WiFi.getMode() != WIFI_MODE_NULL) HalClock::wifiOff(true);
+  page_ = {};
+  std::vector<CachedPage>().swap(cachedPages_);
+  std::vector<FolderFrame>().swap(folderHistory_);
+  restoreDisplayAfterNetworkSession(renderer);
 }
 
 int DropboxBrowserActivity::nextRow() const { return page_.hasMore ? static_cast<int>(page_.books.size()) : -1; }
@@ -64,10 +69,52 @@ void DropboxBrowserActivity::queueFetch(const std::string& cursor, const int res
     RenderLock lock(*this);
     pendingCursor_ = cursor;
     restoreSelection_ = restoreSelection;
+    if (!havePage_ && restoreCachedPage(pendingCursor_)) {
+      pending_ = PendingAction::None;
+      selectedIndex_ = std::clamp(restoreSelection_, 0, std::max(0, rowCount() - 1));
+      state_ = State::Browsing;
+      requestUpdate();
+      return;
+    }
     pending_ = PendingAction::Fetch;
     state_ = State::Loading;
   }
-  requestUpdate();
+}
+
+void DropboxBrowserActivity::cacheCurrentPage(const std::string& destinationId, const std::string& destinationCursor) {
+  const auto now = millis();
+  std::erase_if(cachedPages_, [now](const CachedPage& item) { return now - item.fetchedAt >= pageLifetimeMs; });
+  if (!havePage_ || now - pageFetchedAt_ >= pageLifetimeMs) return;
+  size_t bytes = sizeof(CachedPage) + currentFolderId_.size() + currentCursor_.size() + page_.cursor.capacity() +
+                 page_.books.capacity() * sizeof(DropboxClient::Entry);
+  for (const auto& entry : page_.books) bytes += entry.id.capacity() + entry.name.capacity();
+  if (bytes > cacheBudget) return;
+  size_t used = 0;
+  for (const auto& item : cachedPages_) used += item.bytes;
+  while (cachedPages_.size() >= maxCachedPages || used + bytes > cacheBudget) {
+    const auto evict = std::find_if(cachedPages_.begin(), cachedPages_.end(), [&](const CachedPage& item) {
+      return item.folderId != destinationId || item.cursor != destinationCursor;
+    });
+    if (evict == cachedPages_.end()) return;
+    used -= evict->bytes;
+    cachedPages_.erase(evict);
+  }
+  cachedPages_.push_back({currentFolderId_, currentCursor_, std::move(page_), pageFetchedAt_, bytes});
+}
+
+bool DropboxBrowserActivity::restoreCachedPage(const std::string& cursor) {
+  const auto now = millis();
+  std::erase_if(cachedPages_, [now](const CachedPage& item) { return now - item.fetchedAt >= pageLifetimeMs; });
+  const auto it = std::find_if(cachedPages_.begin(), cachedPages_.end(), [&](const CachedPage& item) {
+    return item.folderId == currentFolderId_ && item.cursor == cursor;
+  });
+  if (it == cachedPages_.end()) return false;
+  page_ = std::move(it->page);
+  pageFetchedAt_ = it->fetchedAt;
+  currentCursor_ = cursor;
+  havePage_ = true;
+  cachedPages_.erase(it);
+  return true;
 }
 
 void DropboxBrowserActivity::openFolder(const DropboxClient::Entry& folder) {
@@ -92,6 +139,7 @@ void DropboxBrowserActivity::openFolder(const DropboxClient::Entry& folder) {
   std::string name = folder.name;
   {
     RenderLock lock(*this);
+    cacheCurrentPage(id, "");
     folderHistory_.push_back({currentFolderId_, currentFolderName_, currentCursor_, selectedIndex_});
     currentFolderId_ = std::move(id);
     currentFolderName_ = std::move(name);
@@ -113,6 +161,7 @@ void DropboxBrowserActivity::goToParentFolder() {
     RenderLock lock(*this);
     parent = std::move(folderHistory_.back());
     folderHistory_.pop_back();
+    cacheCurrentPage(parent.id, parent.cursor);
     currentFolderId_ = std::move(parent.id);
     currentFolderName_ = std::move(parent.name);
     currentCursor_.clear();
@@ -156,8 +205,16 @@ void DropboxBrowserActivity::launchWifiSelection() {
 }
 
 void DropboxBrowserActivity::executePending() {
-  trimNetworkMemory();  // Before the radio starts, and again before every TLS operation.
-  if (WiFi.status() != WL_CONNECTED || WiFi.localIP() == IPAddress(0, 0, 0, 0)) {
+  const bool connected = WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
+  if (!memoryTrimmed_ || !connected) {
+    trimNetworkMemory();  // Show the initial loading screen before association.
+  } else if (pending_ == PendingAction::Fetch) {
+    // Keep the current screen visible until the new folder is ready. An
+    // intermediate e-ink refresh would block the start of every request.
+    RenderLock lock(*this);
+    trimMemoryForNetworkSession(renderer, "DBXUI");
+  }
+  if (!connected) {
     launchWifiSelection();
     return;
   }
@@ -174,9 +231,11 @@ void DropboxBrowserActivity::fetchPage() {
     showError(result.error);
     return;
   }
+  if (!resultPage.hasMore) std::string().swap(resultPage.cursor);
   {
     RenderLock lock(*this);
     page_ = std::move(resultPage);
+    pageFetchedAt_ = millis();
     currentCursor_ = pendingCursor_;
     havePage_ = true;
     selectedIndex_ = std::max(0, std::min(restoreSelection_, rowCount() - 1));
@@ -204,6 +263,7 @@ void DropboxBrowserActivity::downloadBook() {
   {
     RenderLock lock(*this);
     trimMemoryForNetworkSession(renderer, "DBXUI");
+    cachedPages_.clear();
   }
   uint32_t lastUpdate = millis();
   std::string savedPath;
@@ -307,18 +367,28 @@ void DropboxBrowserActivity::selectRow() {
       RenderLock lock(*this);
       state_ = State::Loading;
     }
-    requestUpdate();
   } else if (selectedIndex_ == nextRow()) {
     queueFetch(page_.cursor);
   }
+}
+
+bool DropboxBrowserActivity::onLongBack() {
+  if (!ignoreBackUntilRelease_) activityManager.goHome();
+  return true;
 }
 
 void DropboxBrowserActivity::loop() {
   if (ignoreBackUntilRelease_) {
     if (mappedInput.isPressed(MappedInputManager::Button::Back)) return;
     ignoreBackUntilRelease_ = false;
+    buttonEvents.drain();
+    return;
   }
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+  ButtonEventManager::ButtonEvent event{};
+  while (buttonEvents.consumeEvent(event)) {
+    if (event.button != MappedInputManager::Button::Back) continue;
+    if (event.type == ButtonEventManager::PressType::Long) continue;
+    pending_ = PendingAction::None;
     if ((state_ == State::Message || state_ == State::Error) && havePage_)
       returnToBooks();
     else
@@ -347,33 +417,45 @@ void DropboxBrowserActivity::loop() {
   }
 }
 
-void DropboxBrowserActivity::drawMessage(const Rect& content, const char* text, const std::string& detail) const {
-  const int width = std::max(40, content.width - 40);
-  const auto lines = renderer.wrappedText(UI_10_FONT_ID, text, width, 10);
-  const auto detailLines = renderer.wrappedText(UI_10_FONT_ID, detail.c_str(), width, 4);
+void DropboxBrowserActivity::drawMessage(const Rect& content, const char* text, const std::string& detail,
+                                         bool withProgress) const {
+  constexpr int progressHeight = 16;
+  constexpr int progressGap = 8;
+  const int width = content.width - 40;
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-  const int blockHeight = static_cast<int>(lines.size() + detailLines.size()) * lineHeight + (detail.empty() ? 0 : 16);
-  int y = std::max(content.y, content.y + (content.height - blockHeight) / 2);
-  for (const auto& line : lines) {
-    renderer.drawCenteredText(UI_10_FONT_ID, y, line.c_str());
-    y += lineHeight;
-  }
-  if (!detail.empty()) y += 16;
-  for (const auto& line : detailLines) {
-    renderer.drawCenteredText(UI_10_FONT_ID, y, line.c_str());
-    y += lineHeight;
+  const int progressSpace = withProgress ? progressGap + progressHeight : 0;
+  const int detailGap = detail.empty() ? 0 : 16;
+  const int maxLines = std::max(0, (content.height - progressSpace - detailGap) / lineHeight);
+  const auto lines =
+      renderer.wrappedText(UI_10_FONT_ID, text, width, std::min(10, std::max(0, maxLines - (detail.empty() ? 0 : 1))));
+  const auto detailLines = renderer.wrappedText(UI_10_FONT_ID, detail.c_str(), width,
+                                                std::min(4, maxLines - static_cast<int>(lines.size())));
+  const int blockHeight = static_cast<int>(lines.size() + detailLines.size()) * lineHeight + detailGap + progressSpace;
+  int y = content.y + std::max(0, (content.height - blockHeight) / 2);
+  const auto drawLines = [&](const auto& block) {
+    for (const auto& line : block) {
+      const int x = content.x + (content.width - renderer.getTextWidth(UI_10_FONT_ID, line.c_str())) / 2;
+      renderer.drawText(UI_10_FONT_ID, x, y, line.c_str());
+      y += lineHeight;
+    }
+  };
+  drawLines(lines);
+  y += detailGap;
+  drawLines(detailLines);
+  if (withProgress && content.width > 80 && y + progressSpace <= content.y + content.height) {
+    GUI.drawProgressBar(renderer, Rect{content.x + 40, y + progressGap, content.width - 80, progressHeight},
+                        downloaded_, total_);
   }
 }
 
 void DropboxBrowserActivity::drawEntries(const Rect& body) {
-  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-  const int rowHeight = lineHeight + 12;
+  const int rowHeight = BrowserList::rowHeight(renderer);
   const int visibleRows = body.height / rowHeight;
   if (visibleRows < 1 || rowCount() < 1) return;
   const int first = selectedIndex_ / visibleRows * visibleRows;
-  const int left = body.x + 16;
+  const int left = body.x + BrowserList::leftPadding;
   // The same fixed column is used on every row, independent of title length.
-  const int right = body.x + body.width - 24;
+  const int right = body.x + body.width - BrowserList::rightPadding;
   int formatWidth = 0;
   for (const auto& entry : page_.books) {
     if (!entry.isFolder)
@@ -383,7 +465,7 @@ void DropboxBrowserActivity::drawEntries(const Rect& body) {
     const int y = body.y + (index - first) * rowHeight;
     const bool ink = index != selectedIndex_;
     if (!ink) renderer.fillRect(body.x, y, body.width, rowHeight);
-    const int textY = y + 6;
+    const int textY = y + BrowserList::rowPadding;
     if (index == nextRow()) {
       renderer.drawText(UI_10_FONT_ID, left, textY, tr(STR_NEXT_PAGE), ink);
       continue;
@@ -392,16 +474,8 @@ void DropboxBrowserActivity::drawEntries(const Rect& body) {
     int textLeft = left;
     std::string title = entry.name;
     if (entry.isFolder) {
-      // An outlined folder has no opaque background and follows row polarity.
-      const int iconY = y + (rowHeight - 16) / 2;
-      renderer.drawLine(left, iconY + 4, left, iconY + 15, ink);
-      renderer.drawLine(left, iconY + 15, left + 20, iconY + 15, ink);
-      renderer.drawLine(left + 20, iconY + 15, left + 20, iconY + 4, ink);
-      renderer.drawLine(left, iconY + 4, left + 20, iconY + 4, ink);
-      renderer.drawLine(left, iconY + 4, left, iconY, ink);
-      renderer.drawLine(left, iconY, left + 8, iconY, ink);
-      renderer.drawLine(left + 8, iconY, left + 11, iconY + 4, ink);
-      textLeft += 30;
+      BrowserList::drawFolderIcon(renderer, left, y, rowHeight, ink);
+      textLeft += BrowserList::folderTextOffset;
     } else {
       const std::string format = bookFormat(entry.name);
       const size_t suffixLength = format.size() + 1;
@@ -440,11 +514,7 @@ void DropboxBrowserActivity::render(RenderLock&&) {
     drawMessage(body, tr(STR_LOADING));
     confirm = "";
   } else if (state_ == State::Downloading) {
-    drawMessage(body, tr(STR_DOWNLOADING), status_);
-    if (total_ > 0) {
-      const int barWidth = std::max(20, body.width - 80);
-      GUI.drawProgressBar(renderer, Rect{body.x + 40, body.y + body.height * 3 / 4, barWidth, 16}, downloaded_, total_);
-    }
+    drawMessage(body, tr(STR_DOWNLOADING), status_, total_ > 0);
     confirm = "";
   } else {
     auto& store = DropboxStore::instance();
@@ -454,6 +524,12 @@ void DropboxBrowserActivity::render(RenderLock&&) {
     const std::string safeFolder = renderer.truncatedText(UI_10_FONT_ID, folder.c_str(), body.width - 40);
     renderer.drawCenteredText(UI_10_FONT_ID, body.y, safeFolder.c_str());
     int listTop = body.y + renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing;
+    if (!folderHistory_.empty()) {
+      const auto hint = renderer.truncatedText(UI_HINT_FONT_ID, tr(STR_DROPBOX_HOME_HINT), body.width - 40);
+      const int hintX = body.x + (body.width - renderer.getTextWidth(UI_HINT_FONT_ID, hint.c_str())) / 2;
+      renderer.drawText(UI_HINT_FONT_ID, hintX, listTop, hint.c_str());
+      listTop += renderer.getLineHeight(UI_HINT_FONT_ID) + metrics.verticalSpacing;
+    }
     if (page_.books.empty()) {
       renderer.drawCenteredText(UI_10_FONT_ID, listTop, tr(STR_DROPBOX_NO_BOOKS));
       listTop += renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing;

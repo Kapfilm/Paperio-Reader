@@ -10,8 +10,8 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SdCardFontGlobals.h"
-#include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
+#include "activities/NetworkMemoryTrim.h"
 #include "activities/network/SignalStrengthWidget.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -67,8 +67,8 @@ void CalibreConnectActivity::onExit() {
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     HalClock::wifiOff(false, SETTINGS.ntpServer);
-    silentRestart();
   }
+  restoreDisplayAfterNetworkSession(renderer);
 }
 
 void CalibreConnectActivity::onWifiSelectionComplete(const bool connected) {
@@ -92,8 +92,7 @@ void CalibreConnectActivity::startWebServer() {
   // Unlike CrossPointWebServerActivity we keep rendering live progress UI, so
   // the primary framebuffer must stay. The ~52 KB secondary buffer and the SD
   // reader font are unused here though, and the web server needs the headroom
-  // (each request wants an 8 KB contiguous block). Safe to drop both without
-  // restoring: onExit() always silentRestart()s once WiFi is up.
+  // (each request wants an 8 KB contiguous block).
   LOG_DBG("CAL", "Free heap before trim: %d bytes", ESP.getFreeHeap());
   sdFontSystem.unload(renderer);
   if (renderer.hasSecondaryBuffer() && renderer.releaseSecondaryBuffer()) {
@@ -206,7 +205,7 @@ void CalibreConnectActivity::loop() {
   }
 
   if (exitRequested) {
-    finish();
+    activityManager.goHome();
     return;
   }
 }

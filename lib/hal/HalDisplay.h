@@ -97,6 +97,7 @@ class HalDisplay {
   // Must be called before any grayscale AA pass or (on X4) fast differential.
   // Returns true on success, false on OOM.
   bool reallocSecondaryBuffer();
+  bool reallocBuffers();
 
   // Returns true when the secondary (previous-frame) buffer is allocated.
   bool hasSecondaryBuffer() const;

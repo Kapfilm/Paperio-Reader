@@ -16,7 +16,7 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
-#include "SilentRestart.h"
+#include "UiFonts.h"
 #include "WeatherSettingsActivity.h"
 #include "activities/NetworkMemoryTrim.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -24,8 +24,15 @@
 #include "fontIds.h"
 
 namespace {
-inline bool getBitmapBit(const uint8_t* bitmap, const int size, const int x, const int y) {
-  const int rowBytes = size / 8;
+constexpr int cardGap = 8;
+constexpr int cardPadding = 8;
+constexpr int cardRadius = 6;
+constexpr int forecastIconSize = 48;
+constexpr int iconGap = 4;
+constexpr int maxForecastCards = 5;
+
+inline bool getBitmapBit(const uint8_t* bitmap, const int x, const int y) {
+  const int rowBytes = WEATHER_ICON_SIZE / 8;
   const int idx = y * rowBytes + (x / 8);
   const uint8_t mask = static_cast<uint8_t>(0x80 >> (x % 8));
   return (bitmap[idx] & mask) != 0;
@@ -33,15 +40,46 @@ inline bool getBitmapBit(const uint8_t* bitmap, const int size, const int x, con
 
 void drawWeatherIconWithOrientation(const GfxRenderer& renderer, const uint8_t* icon, const int x, const int y,
                                     const int size) {
-  for (int srcY = 0; srcY < size; srcY++) {
-    for (int srcX = 0; srcX < size; srcX++) {
+  for (int row = 0; row < size; ++row) {
+    for (int col = 0; col < size; ++col) {
       // 0 bits are black (drawn) in these icon bitmaps.
-      if (getBitmapBit(icon, size, srcX, srcY)) {
-        continue;
+      if (!getBitmapBit(icon, col * WEATHER_ICON_SIZE / size, row * WEATHER_ICON_SIZE / size)) {
+        renderer.drawPixel(x + col, y + row);
       }
-
-      renderer.drawPixel(x + srcX, y + srcY);
     }
+  }
+}
+
+void drawFittedWeatherText(const GfxRenderer& renderer, int fontId, int x, int y, int width, const char* text,
+                           EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
+  const auto fitted = renderer.truncatedText(fontId, text, width, style);
+  const int textWidth = renderer.getTextWidth(fontId, fitted.c_str(), style);
+  if (textWidth <= width) {
+    renderer.drawText(fontId, x + (width - textWidth) / 2, y, fitted.c_str(), true, style);
+  }
+}
+
+void drawSunTime(const GfxRenderer& renderer, int x, int y, int width, const char* time, bool sunrise) {
+  constexpr int markerWidth = 11;
+  const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, time);
+  const int availableWidth = width - markerWidth;
+  const int fittedWidth = std::min(availableWidth, textWidth);
+  const int startX = x + (width - fittedWidth - markerWidth) / 2;
+  const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const int markerX = startX + 3;
+  const int centerY = y + lineHeight / 2;
+  const int direction = sunrise ? 1 : -1;
+  const int tipY = centerY - direction * 3;
+  renderer.drawLine(markerX, tipY, markerX, centerY + direction * 3);
+  renderer.drawLine(markerX - 3, centerY, markerX, tipY);
+  renderer.drawLine(markerX, tipY, markerX + 3, centerY);
+
+  if (textWidth > availableWidth) {
+    const float scale = static_cast<float>(availableWidth) / textWidth;
+    const int offset = (lineHeight - renderer.getLineHeightScaled(SMALL_FONT_ID, scale)) / 2;
+    renderer.drawTextScaled(SMALL_FONT_ID, startX + markerWidth, y + offset, time, true, EpdFontFamily::REGULAR, scale);
+  } else {
+    renderer.drawText(SMALL_FONT_ID, startX + markerWidth, y, time);
   }
 }
 
@@ -228,8 +266,9 @@ void WeatherActivity::onExit() {
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     HalClock::wifiOff(false, SETTINGS.ntpServer);
-    silentRestart();
   }
+  weatherData = {};
+  restoreDisplayAfterNetworkSession(renderer);
 }
 
 void WeatherActivity::loadAndDisplay() {
@@ -309,7 +348,7 @@ void WeatherActivity::onWifiSelectionComplete(bool connected) {
     LOG_DBG("WEA", "state -> CHECK_WIFI (waitStart=%lu)", (unsigned long)wifiWaitStartedAtMs);
     requestUpdate(true);
   } else {
-    // Leave WiFi up; onExit's silent reboot handles teardown without further fragmenting.
+    // Leave Wi-Fi cleanup to onExit().
     state = State::ERROR;
     errorMessage = tr(STR_WIFI_CONN_FAILED);
     requestUpdate();
@@ -439,8 +478,8 @@ void WeatherActivity::loop() {
 void WeatherActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
-  const auto pageWidth = renderer.getScreenWidth();    // 800 in landscape
-  const auto pageHeight = renderer.getScreenHeight();  // 480 in landscape
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
 
   if (state == State::LOADING_CACHE || (state == State::FETCHING && (!showRefreshPopup || !weatherData.valid))) {
     renderer.drawCenteredText(UI_12_FONT_ID, pageHeight / 2, tr(STR_LOADING));
@@ -460,40 +499,22 @@ void WeatherActivity::render(RenderLock&&) {
     return;
   }
 
-  // DISPLAY state - Landscape layout (800x480 logical)
-  //
-  // +------------------+------------------------------------+
-  // |  Current weather  |    Daily forecast cards            |
-  // |  (icon, temp,     |    [Day1] [Day2] [Day3] ...       |
-  // |   details)        |                                    |
-  // | leftPanelWidth=220| right panel = contentWidth-220    |
-  // +------------------+------------------------------------+
-  // |                                                        |
-  // | hourly temperature + precipitation graph               |
-  // | height = graphHeight (currently 240)                  |
-  // +--------------------------------------------------------+
-  // |   [Back]  [Settings]  [Refresh]  Button hints          |
-  // +--------------------------------------------------------+
-
+  // In LandscapeClockwise, physical bottom buttons sit on the logical left.
   const auto& metrics = UITheme::getInstance().getMetrics();
-  // In LandscapeClockwise, physical bottom buttons are at the logical LEFT edge
-  const int contentX = metrics.buttonHintsHeight;
-  const int contentWidth = pageWidth - contentX;
-  constexpr int leftPanelWidth = 220;
-  constexpr int graphHeight = 240;
-  const int topSectionHeight = pageHeight - graphHeight;
+  const int contentX = metrics.buttonHintsHeight + cardGap;
+  const int contentWidth = pageWidth - contentX - cardGap;
+  constexpr int currentWidth = 216;
+  const int bodyLine = renderer.getLineHeight(SMALL_FONT_ID);
+  const int headingLine = renderer.getLineHeight(UI_10_FONT_ID);
+  const int currentHeight = headingLine + renderer.getLineHeight(UI_12_FONT_ID) + 7 * bodyLine;
+  const int forecastHeight = headingLine + 9 * bodyLine;
+  const int cardHeight = std::max(currentHeight, forecastHeight) + forecastIconSize + 2 * (cardPadding + iconGap);
 
-  // Draw current conditions (left panel, offset by button hints)
-  renderCurrentConditions(contentX, 0, leftPanelWidth, topSectionHeight);
+  renderCurrentConditions(contentX, cardGap, currentWidth, cardHeight);
+  renderDailyForecast(contentX + currentWidth + cardGap, cardGap, contentWidth - currentWidth - cardGap, cardHeight);
 
-  // Draw daily forecast (right of current conditions)
-  renderDailyForecast(contentX + leftPanelWidth, 0, contentWidth - leftPanelWidth, topSectionHeight);
-
-  // Separator line
-  renderer.drawLine(contentX, topSectionHeight, pageWidth, topSectionHeight);
-
-  // Draw hourly graph
-  renderHourlyGraph(contentX, topSectionHeight + 1, contentWidth, graphHeight - 1);
+  const int graphY = cardGap + cardHeight + cardGap;
+  renderHourlyGraph(contentX, graphY, contentWidth, pageHeight - graphY - cardGap);
 
   // Button hints
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_WEATHER_SETTINGS_SHORT), tr(STR_WEATHER_REFRESH), "");
@@ -509,99 +530,57 @@ void WeatherActivity::render(RenderLock&&) {
 
 void WeatherActivity::renderCurrentConditions(int x, int y, int w, int h) {
   const auto& cur = weatherData.current;
-
-  // Location name
-  int textY = y + 15;
-  auto locationName = WEATHER_SETTINGS.getLocationName();
-  if (!locationName.empty()) {
-    auto truncated = renderer.truncatedText(UI_10_FONT_ID, locationName.c_str(), w - 10);
-    renderer.drawText(UI_10_FONT_ID, x + 5, textY, truncated.c_str(), true, EpdFontFamily::BOLD);
-    textY += 20;
-  }
-
-  // Last updated time
-  if (weatherData.fetchedAt > 0) {
-    struct tm timeinfo;
-    time_t localTime = weatherData.fetchedAt + weatherData.utcOffsetSeconds;
-    gmtime_r(&localTime, &timeinfo);
-    char timeBuf[32];
-    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-    renderer.drawText(SMALL_FONT_ID, x + 5, textY, timeBuf);
-    textY += 15;
-  }
-
-  // Weather icon (WEATHER_ICON_SIZE x WEATHER_ICON_SIZE)
-  auto iconType = getWeatherIconType(cur.weatherCode, cur.isDay);
-  const uint8_t* icon = getWeatherIconLarge(iconType);
-  int iconX = x + (w - WEATHER_ICON_SIZE) / 2;
-  drawWeatherIconWithOrientation(renderer, icon, iconX, textY + 2, WEATHER_ICON_SIZE);
-  textY += WEATHER_ICON_SIZE + 5;
-
-  // Temperature (large)
-  char tempBuf[16];
-  const char* unitSuffix = WEATHER_SETTINGS.getTempUnit() == WeatherTempUnit::CELSIUS ? "C" : "F";
-  snprintf(tempBuf, sizeof(tempBuf), "%.1f %s", cur.temperature, unitSuffix);
-  int tempWidth = renderer.getTextWidth(UI_12_FONT_ID, tempBuf, EpdFontFamily::BOLD);
-  renderer.drawText(UI_12_FONT_ID, x + (w - tempWidth) / 2, textY, tempBuf, true, EpdFontFamily::BOLD);
-  textY += 22;
-
-  // Feels like
-  snprintf(tempBuf, sizeof(tempBuf), "%.1f %s", cur.apparentTemperature, unitSuffix);
-  char feelsLikeBuf[48];
-  snprintf(feelsLikeBuf, sizeof(feelsLikeBuf), "%s: %s", tr(STR_WEATHER_FEELS_LIKE), tempBuf);
-  auto feelsText = renderer.truncatedText(SMALL_FONT_ID, feelsLikeBuf, w - 10);
-  int feelsWidth = renderer.getTextWidth(SMALL_FONT_ID, feelsText.c_str());
-  renderer.drawText(SMALL_FONT_ID, x + (w - feelsWidth) / 2, textY, feelsText.c_str());
-  textY += 16;
-
-  // Weather description
-  const char* desc = I18N.get(getWeatherDescriptionStrId(cur.weatherCode));
-  int descWidth = renderer.getTextWidth(SMALL_FONT_ID, desc);
-  renderer.drawText(SMALL_FONT_ID, x + (w - descWidth) / 2, textY, desc);
-  textY += 20;
-
-  // Details grid
-  const char* windDir = getWindDirectionText(cur.windDirection);
-  char detailBuf[64];
-  const auto drawCenteredDetail = [&](const char* text) {
-    auto truncated = renderer.truncatedText(SMALL_FONT_ID, text, w - 10);
-    const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, truncated.c_str());
-    renderer.drawText(SMALL_FONT_ID, x + (w - textWidth) / 2, textY, truncated.c_str());
+  renderer.drawRoundedRect(x, y, w, h, 1, cardRadius, true);
+  int textY = y + cardPadding;
+  const auto drawLine = [&](const char* text, int fontId = SMALL_FONT_ID,
+                            EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
+    drawFittedWeatherText(renderer, fontId, x + cardPadding, textY, w - 2 * cardPadding, text, style);
+    textY += renderer.getLineHeight(fontId);
   };
 
-  // Wind
-  snprintf(detailBuf, sizeof(detailBuf), "%s: %.0f %s %s", tr(STR_WEATHER_WIND), cur.windSpeed,
-           WEATHER_SETTINGS.getWindUnitParam(), windDir);
-  drawCenteredDetail(detailBuf);
-  textY += 14;
+  const auto locationName = WEATHER_SETTINGS.getLocationName();
+  if (!locationName.empty()) drawLine(locationName.c_str(), UI_10_FONT_ID, EpdFontFamily::BOLD);
 
-  // Humidity
-  snprintf(detailBuf, sizeof(detailBuf), "%s: %d%%", tr(STR_WEATHER_HUMIDITY), cur.humidity);
-  drawCenteredDetail(detailBuf);
-  textY += 14;
-
-  // Precipitation
-  if (std::fabs(cur.precipitation) < 0.0001f) {
-    snprintf(detailBuf, sizeof(detailBuf), "%s: --", tr(STR_WEATHER_PRECIP));
-  } else {
-    snprintf(detailBuf, sizeof(detailBuf), "%s: %.1f %s", tr(STR_WEATHER_PRECIP), cur.precipitation,
-             WEATHER_SETTINGS.getPrecipUnitParam());
+  if (weatherData.fetchedAt > 0) {
+    struct tm timeinfo;
+    const time_t localTime = weatherData.fetchedAt + weatherData.utcOffsetSeconds;
+    gmtime_r(&localTime, &timeinfo);
+    char timeBuf[16];
+    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+    drawLine(timeBuf);
   }
-  drawCenteredDetail(detailBuf);
-  textY += 14;
 
-  // UV Index
-  snprintf(detailBuf, sizeof(detailBuf), "UV: %.1f", cur.uvIndex);
-  drawCenteredDetail(detailBuf);
+  const auto icon = getWeatherIconLarge(getWeatherIconType(cur.weatherCode, cur.isDay));
+  drawWeatherIconWithOrientation(renderer, icon, x + (w - forecastIconSize) / 2, textY + iconGap, forecastIconSize);
+  textY += forecastIconSize + 2 * iconGap;
 
-  // Vertical separator
-  renderer.drawLine(x + w, y, x + w, y + h);
+  char value[32];
+  const char* unitSuffix = WEATHER_SETTINGS.getTempUnit() == WeatherTempUnit::CELSIUS ? "C" : "F";
+  snprintf(value, sizeof(value), "%.1f %s", cur.temperature, unitSuffix);
+  drawLine(value, UI_12_FONT_ID, EpdFontFamily::BOLD);
+
+  snprintf(value, sizeof(value), "%.1f %s", cur.apparentTemperature, unitSuffix);
+  drawLine((std::string(tr(STR_WEATHER_FEELS_LIKE)) + ": " + value).c_str());
+  drawLine(I18N.get(getWeatherDescriptionStrId(cur.weatherCode)));
+
+  snprintf(value, sizeof(value), "%.0f %s %s", cur.windSpeed, WEATHER_SETTINGS.getWindUnitParam(),
+           getWindDirectionText(cur.windDirection));
+  drawLine((std::string(tr(STR_WEATHER_WIND)) + ": " + value).c_str());
+
+  snprintf(value, sizeof(value), "%d%%", cur.humidity);
+  drawLine((std::string(tr(STR_WEATHER_HUMIDITY)) + ": " + value).c_str());
+
+  snprintf(value, sizeof(value), "%.1f %s", cur.precipitation, WEATHER_SETTINGS.getPrecipUnitParam());
+  drawLine((std::string(tr(STR_WEATHER_PRECIP)) + ": " + value).c_str());
+
+  snprintf(value, sizeof(value), "UV: %.1f", cur.uvIndex);
+  drawLine(value);
 }
 
 void WeatherActivity::renderDailyForecast(int x, int y, int w, int h) {
-  if (weatherData.daily.empty()) return;
+  const int numDays = std::min(static_cast<int>(weatherData.daily.size()), maxForecastCards);
+  if (numDays == 0) return;
 
-  // Localized weekday names (indexed by tm_wday: 0=Sun..6=Sat)
   const StrId dayNameIds[] = {StrId::STR_WEATHER_DAY_SUN, StrId::STR_WEATHER_DAY_MON, StrId::STR_WEATHER_DAY_TUE,
                               StrId::STR_WEATHER_DAY_WED, StrId::STR_WEATHER_DAY_THU, StrId::STR_WEATHER_DAY_FRI,
                               StrId::STR_WEATHER_DAY_SAT};
@@ -610,133 +589,74 @@ void WeatherActivity::renderDailyForecast(int x, int y, int w, int h) {
       StrId::STR_WEATHER_MONTH_APR, StrId::STR_WEATHER_MONTH_MAY, StrId::STR_WEATHER_MONTH_JUN,
       StrId::STR_WEATHER_MONTH_JUL, StrId::STR_WEATHER_MONTH_AUG, StrId::STR_WEATHER_MONTH_SEP,
       StrId::STR_WEATHER_MONTH_OCT, StrId::STR_WEATHER_MONTH_NOV, StrId::STR_WEATHER_MONTH_DEC};
-
   const char* unitSuffix = WEATHER_SETTINGS.getTempUnit() == WeatherTempUnit::CELSIUS ? "C" : "F";
-  int numDays = static_cast<int>(weatherData.daily.size());
 
-  if (numDays <= 0) return;
-
-  // Derive weekday progression from the first forecast day to avoid timezone
-  // conversion edge cases causing repeated day labels.
+  // Advance from the first weekday to avoid duplicate day labels around timezone changes.
   struct tm firstDayInfo;
-  time_t firstLocalDate = weatherData.daily[0].date + weatherData.utcOffsetSeconds;
+  const time_t firstLocalDate = weatherData.daily[0].date + weatherData.utcOffsetSeconds;
   gmtime_r(&firstLocalDate, &firstDayInfo);
   const int firstWeekday = firstDayInfo.tm_wday;
 
-  // Keep all day panels evenly split (distribute remainder 1px left-to-right)
-  const int baseDayWidth = w / numDays;
-  const int extraPx = w % numDays;
-
+  const int availableWidth = w - cardGap * (numDays - 1);
+  const int baseDayWidth = availableWidth / numDays;
+  const int extraPx = availableWidth % numDays;
   int cardX = x;
 
-  for (int i = 0; i < numDays; i++) {
+  for (int i = 0; i < numDays; ++i) {
     const auto& day = weatherData.daily[i];
-    int cardWidth = baseDayWidth + (i < extraPx ? 1 : 0);
-    int textY = y + 10;
+    const int cardWidth = baseDayWidth + (i < extraPx ? 1 : 0);
+    renderer.drawRoundedRect(cardX, y, cardWidth, h, 1, cardRadius, true);
+    const int textX = cardX + cardPadding;
+    const int textWidth = cardWidth - 2 * cardPadding;
+    int textY = y + cardPadding;
+    const auto drawLine = [&](const char* text, int fontId = SMALL_FONT_ID,
+                              EpdFontFamily::Style style = EpdFontFamily::REGULAR) {
+      drawFittedWeatherText(renderer, fontId, textX, textY, textWidth, text, style);
+      textY += renderer.getLineHeight(fontId);
+    };
 
-    // Day name (localized)
     struct tm timeinfo;
-    time_t localDate = day.date + weatherData.utcOffsetSeconds;
+    const time_t localDate = day.date + weatherData.utcOffsetSeconds;
     gmtime_r(&localDate, &timeinfo);
-    const int weekdayIndex = (firstWeekday + i) % 7;
-    const char* dayName = I18N.get(dayNameIds[weekdayIndex]);
+    drawLine(I18N.get(dayNameIds[(firstWeekday + i) % 7]), UI_10_FONT_ID, EpdFontFamily::BOLD);
+    const auto date = std::string(I18N.get(monthNameIds[timeinfo.tm_mon])) + " " + std::to_string(timeinfo.tm_mday);
+    drawLine(date.c_str());
 
-    int dayNameWidth = renderer.getTextWidth(UI_10_FONT_ID, dayName, EpdFontFamily::BOLD);
-    renderer.drawText(UI_10_FONT_ID, cardX + (cardWidth - dayNameWidth) / 2, textY, dayName, true, EpdFontFamily::BOLD);
-    textY += 20;
+    const auto icon = getWeatherIconLarge(getWeatherIconType(day.weatherCode, true));
+    drawWeatherIconWithOrientation(renderer, icon, cardX + (cardWidth - forecastIconSize) / 2, textY + iconGap,
+                                   forecastIconSize);
+    textY += forecastIconSize + 2 * iconGap;
+    drawLine(I18N.get(getWeatherDescriptionStrId(day.weatherCode)));
 
-    // Date (e.g. "Apr 3") - for all days
-    char dateBuf[16];
-    const char* monthName = I18N.get(monthNameIds[timeinfo.tm_mon]);
-    snprintf(dateBuf, sizeof(dateBuf), "%s %d", monthName, timeinfo.tm_mday);
-    int dateWidth = renderer.getTextWidth(SMALL_FONT_ID, dateBuf);
-    renderer.drawText(SMALL_FONT_ID, cardX + (cardWidth - dateWidth) / 2, textY, dateBuf);
-    textY += 18;
-
-    // Weather icon (WEATHER_ICON_SIZE for all days)
-    auto iconType = getWeatherIconType(day.weatherCode, true);
-    const uint8_t* icon = getWeatherIconLarge(iconType);
-    int iconX = cardX + (cardWidth - WEATHER_ICON_SIZE) / 2;
-    drawWeatherIconWithOrientation(renderer, icon, iconX, textY, WEATHER_ICON_SIZE);
-    textY += WEATHER_ICON_SIZE + 8;
-
-    // Weather description (short)
-    const char* desc = I18N.get(getWeatherDescriptionStrId(day.weatherCode));
-    auto truncDesc = renderer.truncatedText(SMALL_FONT_ID, desc, cardWidth - 8);
-    int descWidth = renderer.getTextWidth(SMALL_FONT_ID, truncDesc.c_str());
-    renderer.drawText(SMALL_FONT_ID, cardX + (cardWidth - descWidth) / 2, textY, truncDesc.c_str());
-    textY += 16;
-
-    // High / Low temp with unit
-    char tempBuf[32];
-    snprintf(tempBuf, sizeof(tempBuf), "%.0f / %.0f %s", day.tempMax, day.tempMin, unitSuffix);
-    int tempWidth = renderer.getTextWidth(SMALL_FONT_ID, tempBuf, EpdFontFamily::BOLD);
-    renderer.drawText(SMALL_FONT_ID, cardX + (cardWidth - tempWidth) / 2, textY, tempBuf, true, EpdFontFamily::BOLD);
-    textY += 16;
-
-    // Precipitation
-    char precipBuf[24];
-    if (std::fabs(day.precipSum) < 0.0001f) {
-      snprintf(precipBuf, sizeof(precipBuf), "%s: --", tr(STR_WEATHER_PRECIP));
-    } else {
-      snprintf(precipBuf, sizeof(precipBuf), "%s: %.1f %s", tr(STR_WEATHER_PRECIP), day.precipSum,
-               WEATHER_SETTINGS.getPrecipUnitParam());
+    char value[32];
+    snprintf(value, sizeof(value), "%.0f / %.0f %s", day.tempMax, day.tempMin, unitSuffix);
+    if (renderer.getTextWidth(SMALL_FONT_ID, value, EpdFontFamily::BOLD) > textWidth) {
+      snprintf(value, sizeof(value), "%.0f/%.0f%s", day.tempMax, day.tempMin, unitSuffix);
     }
-    auto truncPrecip = renderer.truncatedText(SMALL_FONT_ID, precipBuf, cardWidth - 8);
-    int precipWidth = renderer.getTextWidth(SMALL_FONT_ID, truncPrecip.c_str());
-    renderer.drawText(SMALL_FONT_ID, cardX + (cardWidth - precipWidth) / 2, textY, truncPrecip.c_str());
-    textY += 16;
+    drawLine(value, SMALL_FONT_ID, EpdFontFamily::BOLD);
 
-    // UV Index
-    char uvBuf[16];
-    snprintf(uvBuf, sizeof(uvBuf), "UV: %.0f", day.uvIndexMax);
-    int uvWidth = renderer.getTextWidth(SMALL_FONT_ID, uvBuf);
-    renderer.drawText(SMALL_FONT_ID, cardX + (cardWidth - uvWidth) / 2, textY, uvBuf);
-    textY += 16;
+    snprintf(value, sizeof(value), "%.1f %s", day.precipSum, WEATHER_SETTINGS.getPrecipUnitParam());
+    const auto precipitation = std::string(tr(STR_WEATHER_PRECIP)) + ": " + value;
+    drawLine(renderer.getTextWidth(SMALL_FONT_ID, precipitation.c_str()) <= textWidth ? precipitation.c_str() : value);
 
-    // Sunrise/Sunset
-    {
-      char sunriseStr[16];
-      char sunsetStr[16];
-      formatSunriseSunsetTime(sunriseStr, sizeof(sunriseStr), day.sunrise, weatherData.utcOffsetSeconds,
-                              !SETTINGS.clockFormat12h);
-      formatSunriseSunsetTime(sunsetStr, sizeof(sunsetStr), day.sunset, weatherData.utcOffsetSeconds,
-                              !SETTINGS.clockFormat12h);
+    snprintf(value, sizeof(value), "UV: %.0f", day.uvIndexMax);
+    drawLine(value);
 
-      char sunBuf[48];
-      snprintf(sunBuf, sizeof(sunBuf), "%s: %s/%s", tr(STR_WEATHER_SUN_INFO), sunriseStr, sunsetStr);
-      auto truncSun = renderer.truncatedText(SMALL_FONT_ID, sunBuf, cardWidth - 8);
-      int sunWidth = renderer.getTextWidth(SMALL_FONT_ID, truncSun.c_str());
-      renderer.drawText(SMALL_FONT_ID, cardX + (cardWidth - sunWidth) / 2, textY, truncSun.c_str());
-      textY += 14;
-    }
+    const int lineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+    formatSunriseSunsetTime(value, sizeof(value), day.sunrise, weatherData.utcOffsetSeconds, !SETTINGS.clockFormat12h);
+    drawSunTime(renderer, textX, textY, textWidth, value, true);
+    textY += lineHeight;
+    formatSunriseSunsetTime(value, sizeof(value), day.sunset, weatherData.utcOffsetSeconds, !SETTINGS.clockFormat12h);
+    drawSunTime(renderer, textX, textY, textWidth, value, false);
+    textY += lineHeight;
 
-    // Moon phase (derived from local calculation when API data unavailable)
-    {
-      float phase = day.moonPhase;
-      if (phase < 0.0f || phase > 1.0f) {
-        phase = getMoonPhaseCycleFromTime(day.date + weatherData.utcOffsetSeconds + 12 * 3600);
-      }
-      MoonPhaseType phaseType = getMoonPhaseType(phase);
-      float illumination = getMoonIlluminationFromCycle(phase);
-      int phasePercent = static_cast<int>(illumination * 100.0f + 0.5f);
+    float phase = day.moonPhase;
+    if (phase < 0.0f || phase > 1.0f) phase = getMoonPhaseCycleFromTime(localDate + 12 * 3600);
+    drawLine(I18N.get(getMoonPhaseStrId(getMoonPhaseType(phase))));
+    snprintf(value, sizeof(value), "%d%%", static_cast<int>(getMoonIlluminationFromCycle(phase) * 100.0f + 0.5f));
+    drawLine(value);
 
-      const char* phaseName = I18N.get(getMoonPhaseStrId(phaseType));
-      char moonBuf[48];
-      snprintf(moonBuf, sizeof(moonBuf), "%s %3d%%", phaseName, phasePercent);
-
-      int moonWidth = renderer.getTextWidth(SMALL_FONT_ID, moonBuf);
-      renderer.drawText(SMALL_FONT_ID, cardX + (cardWidth - moonWidth) / 2, textY, moonBuf);
-
-      textY += 14;
-    }
-
-    // Card separator
-    if (i < numDays - 1) {
-      renderer.drawLine(cardX + cardWidth, y, cardX + cardWidth, y + h);
-    }
-
-    cardX += cardWidth;
+    cardX += cardWidth + cardGap;
   }
 }
 
@@ -748,11 +668,27 @@ void WeatherActivity::renderHourlyGraph(int x, int y, int w, int h) {
                               StrId::STR_WEATHER_DAY_WED, StrId::STR_WEATHER_DAY_THU, StrId::STR_WEATHER_DAY_FRI,
                               StrId::STR_WEATHER_DAY_SAT};
 
-  constexpr int leftMargin = 56;  // Space for Y-axis labels with unit suffix
+  constexpr int graphFont = UI_HINT_FONT_ID;
+  constexpr int leftMargin = 62;  // Space for Y-axis labels with unit suffix
   constexpr int rightMargin = 10;
-  constexpr int topMargin = 28;     // Keep heading clear of top temperature label
-  constexpr int bottomMargin = 25;  // Space for X-axis labels
-  constexpr int precipBarMaxHeight = 30;
+  constexpr int precipBarMaxHeight = 18;
+  const int lineHeight = renderer.getLineHeight(graphFont);
+  const int ascender = renderer.getFontAscenderSize(graphFont);
+  const char* graphTitle = tr(STR_WEATHER_48H_FORECAST);
+  int titleAbove, titleBelow;
+  renderer.getTextInkMetrics(graphFont, graphTitle, EpdFontFamily::BOLD, &titleAbove, &titleBelow);
+  int dayAbove = 0, dayBelow = 0;
+  for (const StrId dayNameId : dayNameIds) {
+    int above, below;
+    renderer.getTextInkMetrics(graphFont, I18N.get(dayNameId), EpdFontFamily::BOLD, &above, &below);
+    dayAbove = std::max(dayAbove, above);
+    dayBelow = std::max(dayBelow, below);
+  }
+  int timeAbove, timeBelow;
+  renderer.getTextInkMetrics(graphFont, "00:00", EpdFontFamily::REGULAR, &timeAbove, &timeBelow);
+  const int dayTop = titleAbove + titleBelow + 4;
+  const int topMargin = dayTop + dayAbove + dayBelow + 4;
+  const int bottomMargin = timeAbove + timeBelow + 4;
 
   const int graphX = x + leftMargin;
   const int graphY = y + topMargin;
@@ -760,8 +696,8 @@ void WeatherActivity::renderHourlyGraph(int x, int y, int w, int h) {
   const int graphH = h - topMargin - bottomMargin - precipBarMaxHeight;
   const int precipY = graphY + graphH;
 
-  size_t numPoints = weatherData.hourly.size();
-  if (numPoints < 2) return;
+  const size_t numPoints = weatherData.hourly.size();
+  if (numPoints < 2 || graphH <= 0 || graphW <= 0) return;
 
   // Find day boundaries in hourly data (start index of each day).
   std::vector<size_t> dayStartIndices;
@@ -802,40 +738,37 @@ void WeatherActivity::renderHourlyGraph(int x, int y, int w, int h) {
   tempRange = tempMax - tempMin;
 
   // Draw graph title centered over the graph area.
-  const char* graphTitle = tr(STR_WEATHER_48H_FORECAST);
-  const int graphTitleWidth = renderer.getTextWidth(SMALL_FONT_ID, graphTitle, EpdFontFamily::BOLD);
-  const int graphTitleX = graphX + (graphW - graphTitleWidth) / 2;
-  renderer.drawText(SMALL_FONT_ID, graphTitleX, y + 3, graphTitle, true, EpdFontFamily::BOLD);
+  drawFittedWeatherText(renderer, graphFont, graphX, y + titleAbove - ascender, graphW, graphTitle,
+                        EpdFontFamily::BOLD);
 
   // Draw weekday labels above the chart area at each day start.
-  for (size_t startIdx : dayStartIndices) {
+  for (size_t dayIndex = 0; dayIndex < dayStartIndices.size(); ++dayIndex) {
+    const size_t startIdx = dayStartIndices[dayIndex];
     struct tm dayInfo;
     time_t localTime = weatherData.hourly[startIdx].time + weatherData.utcOffsetSeconds;
     gmtime_r(&localTime, &dayInfo);
 
     const char* dayName = I18N.get(dayNameIds[dayInfo.tm_wday]);
-    const int dayLabelWidth = renderer.getTextWidth(SMALL_FONT_ID, dayName, EpdFontFamily::BOLD);
-    const int px = graphX + static_cast<int>(startIdx * graphW / (numPoints - 1));
-    int labelX = px + 2;
-    const int maxLabelX = graphX + graphW - dayLabelWidth - 2;
-    if (labelX > maxLabelX) {
-      labelX = maxLabelX;
+    const int labelX = graphX + static_cast<int>(startIdx * graphW / (numPoints - 1)) + 3;
+    const int dayEnd = dayIndex + 1 < dayStartIndices.size()
+                           ? static_cast<int>(dayStartIndices[dayIndex + 1] * graphW / (numPoints - 1))
+                           : graphW;
+    const int dayLabelWidth = renderer.getTextWidth(graphFont, dayName, EpdFontFamily::BOLD);
+    if (labelX + dayLabelWidth <= graphX + dayEnd - 3) {
+      renderer.drawText(graphFont, labelX, y + dayTop + dayAbove - ascender, dayName, true, EpdFontFamily::BOLD);
     }
-    if (labelX < graphX + 2) {
-      labelX = graphX + 2;
-    }
-    renderer.drawText(SMALL_FONT_ID, labelX, y + 14, dayName, true, EpdFontFamily::BOLD);
   }
 
   // Draw Y-axis labels (temperature)
-  float tempStep = tempRange / 4.0f;
+  const int numIntervals = std::clamp(graphH / lineHeight, 1, 4);
+  const float tempStep = tempRange / numIntervals;
   const char* unitSuffix = WEATHER_SETTINGS.getTempUnit() == WeatherTempUnit::CELSIUS ? "C" : "F";
-  for (int i = 0; i <= 4; i++) {
+  for (int i = 0; i <= numIntervals; ++i) {
     float temp = tempMax - i * tempStep;
-    int labelY = graphY + i * graphH / 4;
+    int labelY = graphY + i * graphH / numIntervals;
     char label[16];
     snprintf(label, sizeof(label), "%.0f %s", temp, unitSuffix);
-    renderer.drawText(SMALL_FONT_ID, x + 2, labelY - 4, label);
+    drawFittedWeatherText(renderer, graphFont, x + 2, labelY - lineHeight / 2, leftMargin - 5, label);
     // Grid line (dashed effect using short segments)
     for (int gx = graphX; gx < graphX + graphW; gx += 8) {
       renderer.drawPixel(gx, labelY);
@@ -878,6 +811,7 @@ void WeatherActivity::renderHourlyGraph(int x, int y, int w, int h) {
   }
 
   // Draw X-axis labels (every 6 hours)
+  int lastLabelEnd = x;
   for (size_t i = 0; i < numPoints; i += 6) {
     int px = graphX + static_cast<int>(i * graphW / (numPoints - 1));
     struct tm timeinfo;
@@ -885,7 +819,12 @@ void WeatherActivity::renderHourlyGraph(int x, int y, int w, int h) {
     gmtime_r(&localTime, &timeinfo);
     char label[8];
     snprintf(label, sizeof(label), "%02d:00", timeinfo.tm_hour);
-    renderer.drawText(SMALL_FONT_ID, px - 12, precipY + precipBarMaxHeight + 3, label);
+    const int labelWidth = renderer.getTextWidth(graphFont, label);
+    const int labelX = std::clamp(px - labelWidth / 2, x, x + w - labelWidth);
+    if (labelX >= lastLabelEnd + 3) {
+      renderer.drawText(graphFont, labelX, precipY + precipBarMaxHeight + 3 + timeAbove - ascender, label);
+      lastLabelEnd = labelX + labelWidth;
+    }
 
     // Vertical grid line
     for (int gy = graphY; gy < precipY + precipBarMaxHeight; gy += 8) {

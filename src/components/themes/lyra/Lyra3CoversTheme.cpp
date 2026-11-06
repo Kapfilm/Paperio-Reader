@@ -42,6 +42,8 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
   const int tileWidth = (rect.width - 2 * sidePadding) / 3;
   const int coverHeight = Lyra3CoversMetrics::coverHeightForTile(rect.height);
   if (tileWidth <= 2 * inset || rect.height <= 2 * inset) return;
+  const auto [thumbWidth, thumbHeight] =
+      Lyra3CoversMetrics::nativeThumbSize(renderer.isX3(), tileWidth - 2 * inset, coverHeight);
   if (recentBooks.empty()) {
     renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
     coverRendered = false;
@@ -68,7 +70,9 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
       bool hasCover = false;
       bool pending = false;
       if (!recentBooks[i].coverBmpPath.empty()) {
-        const std::string path = UITheme::getCoverThumbPath(recentBooks[i].coverBmpPath, coverHeight);
+        const auto& coverPath = recentBooks[i].coverBmpPath;
+        const std::string path = thumbWidth > 0 ? UITheme::getCoverThumbPath(coverPath, thumbWidth, thumbHeight)
+                                                : UITheme::getCoverThumbPath(coverPath, coverHeight);
         FsFile file;
         if (Storage.openFileForRead("HOME", path, file)) {
           Bitmap bitmap(file);

@@ -2681,6 +2681,16 @@ void GfxRenderer::triggerDisplayAsync(const HalDisplay::RefreshMode mode, const 
   frameBuffer = display.getFrameBuffer();
 }
 
+bool GfxRenderer::restoreFrameBuffers() {
+  if (!display.reallocBuffers()) return false;
+  frameBuffer = display.getFrameBuffer();
+  setSingleBufferFastDiff(false);
+  // Fresh host buffers do not describe the previous X4 image. Establish a
+  // clean baseline on the next real redraw. X3 uses its retained panel RAM.
+  if (!isX3()) setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
+  return true;
+}
+
 void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const {
   // The web server session releases both framebuffers (releaseFrameBuffers());
   // a flush would stream the null buffer over SPI and fault (field crash: a

@@ -145,6 +145,11 @@ void HalDisplay::syncWriteBufferFromActive() const { einkDisplay.syncWriteBuffer
 
 void HalDisplay::releaseBuffers() { einkDisplay.releaseBuffers(); }
 
+bool HalDisplay::reallocBuffers() {
+  HalSpiBus::Lock spiLock;
+  return einkDisplay.reallocBuffers();
+}
+
 // FBUF: centralized framebuffer-state trace. Every secondary-buffer / RED-RAM / single-buffer
 // transition logs here so a ghosting regression can be tracked to the exact op that left the panel
 // diffing against the wrong baseline. free=largest contiguous 8-bit block (what a realloc needs).

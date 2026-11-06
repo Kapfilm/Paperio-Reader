@@ -11,7 +11,8 @@
  */
 enum class OpdsEntryType {
   NAVIGATION,  // Link to another catalog
-  BOOK         // Downloadable book
+  BOOK,        // Downloadable book
+  PAGINATION   // Synthetic previous/next link added by the browser
 };
 
 struct OpdsAcquisitionLink {

@@ -975,11 +975,9 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   // Overlay the menu on the displayed reader page. Only the lower three
   // quarters are cleared, so the top quarter remains readable as context.
   renderer.syncWriteBufferFromDisplayed();
-  const int panelTop = renderer.getScreenHeight() / 4;
-  renderer.fillRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 12, true,
-                           true, false, false, Color::White);
-  renderer.drawRoundedRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, 2, 12, true,
-                           true, false, false, true);
+  const int screenWidth = renderer.getScreenWidth();
+  const int screenHeight = renderer.getScreenHeight();
+  const int panelTop = screenHeight / 4;
 
   Rect contentRect = UITheme::getContentRect(renderer, true, false);
   const int contentBottom = contentRect.y + contentRect.height;
@@ -992,6 +990,28 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   const int titleX =
       contentRect.x +
       (contentRect.width - renderer.getTextWidth(UI_12_FONT_ID, truncTitle.c_str(), EpdFontFamily::BOLD)) / 2;
+
+  const int tabTop = 86 + contentRect.y;
+  const auto drawPanel = [&](int top, int headingHeight) {
+    renderer.fillRoundedRect(0, top, screenWidth, screenHeight - top, 12, true, true, false, false, Color::White);
+    renderer.fillRoundedRect(0, top, screenWidth, headingHeight, 12, true, true, false, false, Color::LightGray);
+    renderer.drawRoundedRect(0, top, screenWidth, screenHeight - top, 2, 12, true, true, false, false, true);
+  };
+  if (opening) {
+    opening = false;
+    // X4 can reveal the title strip with a fast window update. X3 redraws
+    // the whole panel, and gray or inverted X4 frames need a clean baseline.
+    if (!renderer.isX3() && !renderer.isDarkMode() && renderer.hasSecondaryBuffer() && renderer.isRedRamSynced()) {
+      const int titleHeight = renderer.getLineHeight(UI_12_FONT_ID);
+      const int stripHeight = ((titleHeight + 24 + 7) / 8) * 8;
+      const int stripTop = screenHeight - stripHeight;
+      drawPanel(stripTop, stripHeight);
+      renderer.drawText(UI_12_FONT_ID, titleX, stripTop + (stripHeight - titleHeight) / 2, truncTitle.c_str(), true,
+                        EpdFontFamily::BOLD);
+      renderer.displayWindow(0, stripTop, screenWidth, stripHeight);
+    }
+  }
+  drawPanel(panelTop, tabTop - panelTop);
   renderer.drawText(UI_12_FONT_ID, titleX, 15 + contentRect.y, truncTitle.c_str(), true, EpdFontFamily::BOLD);
 
   // Progress summary
@@ -1007,7 +1027,6 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   // Match the main Settings header: one 3 px separator immediately before the tabs.
   // Give the chapter/progress summary a little more breathing room before
   // the separator and tabs.
-  const int tabTop = 86 + contentRect.y;
   renderer.drawLine(contentRect.x, tabTop - 3, contentRect.x + contentRect.width - 1, tabTop - 3, 3, true);
   renderTabBar(Rect{contentRect.x, tabTop, contentRect.width, metrics.tabBarHeight});
 
@@ -1027,5 +1046,5 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirm, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
-  renderer.displayWindow(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop);
+  renderer.displayWindow(0, panelTop, screenWidth, screenHeight - panelTop);
 }

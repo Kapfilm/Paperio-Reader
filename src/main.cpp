@@ -1062,7 +1062,7 @@ void loop() {
   const bool batteryPercentChanged =
       lastObservedBatteryPercent >= 0 && observedBatteryPercent != lastObservedBatteryPercent;
   lastObservedBatteryPercent = observedBatteryPercent;
-  buttonEventManager.update();
+  buttonEventManager.update(activityManager.hasFastBackExit());
   serviceBootPowerRelease();
   HalClock::updatePeriodic(SETTINGS.ntpServer);
   halTiltSensor.update(static_cast<CrossPointTiltPageTurn::Value>(SETTINGS.tiltPageTurn),
@@ -1352,6 +1352,8 @@ void loop() {
       // The wake press is drained until stable release. Retain the startup
       // hold guard as well, including when a custom action replaces Sleep.
       if (ev.button == B::Power && ev.type == ButtonEventManager::PressType::Long && millis() < allowSleepAt) continue;
+      if (ev.button == B::Back && ev.type == ButtonEventManager::PressType::Long && activityManager.handleLongBack())
+        continue;
       const uint8_t action = actionFor(ev);
       // Fall through to the activity when the event has no global effect here: either an
       // explicit Default mapping, or a reader-scoped action while not in the reader.

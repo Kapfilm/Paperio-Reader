@@ -50,7 +50,6 @@ bool SettingsActivity::isListItemSelectable(int settingIdx) const {
 
 void SettingsActivity::onEnter() {
   Activity::onEnter();
-  needsHalfRefresh = true;
 
   // Build per-category vectors from the shared settings list.
   // addTo tracks the last subcategory per vector and automatically inserts a separator
@@ -71,13 +70,6 @@ void SettingsActivity::onEnter() {
   StrId lastControlsSub = StrId::STR_NONE_OPT;
   StrId lastSystemSub = StrId::STR_NONE_OPT;
 
-  auto addTo = [](std::vector<SettingInfo>& vec, StrId& lastSub, const SettingInfo& s) {
-    if (s.subcategory != StrId::STR_NONE_OPT && s.subcategory != lastSub) {
-      vec.push_back(SettingInfo::Separator(s.subcategory));
-      lastSub = s.subcategory;
-    }
-    vec.push_back(s);
-  };
   auto addToMoved = [](std::vector<SettingInfo>& vec, StrId& lastSub, SettingInfo s) {
     if (s.subcategory != StrId::STR_NONE_OPT && s.subcategory != lastSub) {
       vec.push_back(SettingInfo::Separator(s.subcategory));
@@ -103,50 +95,48 @@ void SettingsActivity::onEnter() {
                            .withSubcategory(StrId::STR_MENU_READER_FONT)));
   insertFontDownloadBelowFontSection();
 
-  for (const auto& setting : getSettingsList()) {
-    if (setting.category == StrId::STR_NONE_OPT) continue;
-    if (setting.category == StrId::STR_CAT_READER && isUnifiedTextSetting(setting)) continue;
+  forEachSetting([&](SettingInfo&& setting) {
+    if (setting.category == StrId::STR_NONE_OPT) return;
+    if (setting.category == StrId::STR_CAT_READER && isUnifiedTextSetting(setting)) return;
     if (setting.category == StrId::STR_CAT_SYSTEM &&
         (setting.nameId == StrId::STR_USE_CLOCK || setting.nameId == StrId::STR_CLOCK_FORMAT ||
          setting.nameId == StrId::STR_TIMEZONE)) {
-      continue;
+      return;
     }
     // Enrich font-family entries with SD card families discovered at boot.
-    // The list itself is a namespace-static; we only mutate our local copy here.
-    SettingInfo enriched = setting;
     if (setting.key &&
         (std::strcmp(setting.key, "fontFamily") == 0 || std::strcmp(setting.key, "txtFontFamily") == 0)) {
       const uint8_t n = fontFamilyOptionCount();
-      enriched.enumLabels.clear();
-      enriched.enumLabels.reserve(n);
-      for (uint8_t i = 0; i < n; i++) enriched.enumLabels.push_back(fontFamilyOptionLabel(i));
+      setting.enumLabels.clear();
+      setting.enumLabels.reserve(n);
+      for (uint8_t i = 0; i < n; i++) setting.enumLabels.push_back(fontFamilyOptionLabel(i));
     }
-    if (enriched.nameId == StrId::STR_INCLUDE_BETA_UPDATES) {
-      includeBetaUpdatesSetting = enriched;
+    if (setting.nameId == StrId::STR_INCLUDE_BETA_UPDATES) {
+      includeBetaUpdatesSetting = std::move(setting);
       sawIncludeBetaUpdates = true;
-      continue;
+      return;
     }
     const bool isReaderFontEntry =
-        enriched.category == StrId::STR_CAT_READER &&
-        (enriched.submenu == StrId::STR_MENU_READER_FONT || enriched.submenu == StrId::STR_MENU_TXT_FONT);
+        setting.category == StrId::STR_CAT_READER &&
+        (setting.submenu == StrId::STR_MENU_READER_FONT || setting.submenu == StrId::STR_MENU_TXT_FONT);
 
     if (!insertedFontDownload && sawReaderFontSection && !isReaderFontEntry) {
       insertFontDownloadBelowFontSection();
     }
 
-    if (enriched.category == StrId::STR_CAT_DISPLAY) {
-      addTo(displaySettings, lastDisplaySub, enriched);
-    } else if (enriched.category == StrId::STR_CAT_READER) {
-      addTo(readerSettings, lastReaderSub, enriched);
-    } else if (enriched.category == StrId::STR_CAT_CONTROLS) {
-      addTo(controlsSettings, lastControlsSub, enriched);
-    } else if (enriched.category == StrId::STR_CAT_SYSTEM) {
-      addTo(systemSettings, lastSystemSub, enriched);
+    if (setting.category == StrId::STR_CAT_DISPLAY) {
+      addToMoved(displaySettings, lastDisplaySub, std::move(setting));
+    } else if (setting.category == StrId::STR_CAT_READER) {
+      addToMoved(readerSettings, lastReaderSub, std::move(setting));
+    } else if (setting.category == StrId::STR_CAT_CONTROLS) {
+      addToMoved(controlsSettings, lastControlsSub, std::move(setting));
+    } else if (setting.category == StrId::STR_CAT_SYSTEM) {
+      addToMoved(systemSettings, lastSystemSub, std::move(setting));
     }
     if (isReaderFontEntry) sawReaderFontSection = true;
 
     // Web-only categories (KOReader Sync, OPDS Browser) are skipped for device UI
-  }
+  });
 
   if (!insertedFontDownload && sawReaderFontSection) {
     insertFontDownloadBelowFontSection();

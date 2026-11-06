@@ -29,15 +29,6 @@ constexpr std::array<ButtonRow, 7> kButtonRows = {{
     {StrId::STR_BTN_CONFIRM, StrId::STR_BTN_CONFIRM},
 }};
 
-// Find the SettingInfo for a given (button submenu, press kind) pair in the shared settings list.
-std::string cellValue(const std::vector<SettingInfo>& settings, StrId submenu, StrId pressKind) {
-  auto it = std::find_if(settings.begin(), settings.end(), [submenu, pressKind](const SettingInfo& s) {
-    return s.submenu == submenu && s.nameId == pressKind && s.category == StrId::STR_CAT_CONTROLS;
-  });
-  if (it == settings.end()) return {};
-  return it->getDisplayValue();
-}
-
 }  // namespace
 
 void ButtonActionsOverviewActivity::onEnter() {
@@ -123,21 +114,41 @@ void ButtonActionsOverviewActivity::render(RenderLock&&) {
   renderer.fillPolygon(underlineX, underlineY, 4, true);
   y += 4;
 
-  const auto settings = getSettingsList();
+  std::array<std::array<std::string, 3>, kButtonRows.size()> actions;
+  forEachSetting([&](const SettingInfo& setting) {
+    if (setting.category != StrId::STR_CAT_CONTROLS) return;
+    int col;
+    switch (setting.nameId) {
+      case StrId::STR_BTN_SHORT_PRESS:
+        col = 0;
+        break;
+      case StrId::STR_BTN_DOUBLE_PRESS:
+        col = 1;
+        break;
+      case StrId::STR_BTN_LONG_PRESS:
+        col = 2;
+        break;
+      default:
+        return;
+    }
+    for (size_t row = 0; row < kButtonRows.size(); ++row) {
+      if (setting.submenu == kButtonRows[row].submenu) {
+        actions[row][col] = setting.getDisplayValue();
+        break;
+      }
+    }
+  });
 
   // Data rows
-  for (const auto& row : kButtonRows) {
-    const std::string label = I18N.get(row.labelStrId);
+  for (size_t row = 0; row < kButtonRows.size(); ++row) {
+    const std::string label = I18N.get(kButtonRows[row].labelStrId);
     const std::string clippedLabel = renderer.truncatedText(fontId, label.c_str(), colW[0], EpdFontFamily::BOLD);
     renderer.drawText(fontId, colX[0], y, clippedLabel.c_str(), true, EpdFontFamily::BOLD);
 
-    const std::string vShort = cellValue(settings, row.submenu, StrId::STR_BTN_SHORT_PRESS);
-    const std::string vDouble = cellValue(settings, row.submenu, StrId::STR_BTN_DOUBLE_PRESS);
-    const std::string vLong = cellValue(settings, row.submenu, StrId::STR_BTN_LONG_PRESS);
-
-    renderer.drawText(fontId, colX[1], y, renderer.truncatedText(fontId, vShort.c_str(), colW[1]).c_str());
-    renderer.drawText(fontId, colX[2], y, renderer.truncatedText(fontId, vDouble.c_str(), colW[2]).c_str());
-    renderer.drawText(fontId, colX[3], y, renderer.truncatedText(fontId, vLong.c_str(), colW[3]).c_str());
+    for (int c = 1; c < 4; ++c) {
+      const auto clipped = renderer.truncatedText(fontId, actions[row][c - 1].c_str(), colW[c]);
+      renderer.drawText(fontId, colX[c], y, clipped.c_str());
+    }
 
     y += rowStep;
   }

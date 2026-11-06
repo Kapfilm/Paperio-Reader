@@ -34,9 +34,9 @@ struct Rig {
     testMillisValue = t;
     gpio.edge(input.rawIndex(b), down, t);
   }
-  void tick(unsigned long t) {
+  void tick(unsigned long t, bool fastBackExit = false) {
     testMillisValue = t;
-    events.update();
+    events.update(fastBackExit);
   }
   void expect(B b, T type) {
     ButtonEventManager::ButtonEvent e;
@@ -90,6 +90,36 @@ void shortPowerAndOtherButtonThresholds() {
   r.empty();
   r.tick(2000);
   r.expect(B::Confirm, T::Long);
+  r.empty();
+}
+
+void browserBackUsesShorterHoldAndDoesNotRepeat() {
+  Rig r;
+  r.edge(B::Back, true, 100);
+  r.tick(599, true);
+  r.empty();
+  r.tick(600, true);
+  r.expect(B::Back, T::Long);
+  r.edge(B::Back, false, 650);
+  r.tick(650, true);
+  r.empty();
+
+  // A whole gesture can be queued while a browser operation is running.
+  r.edge(B::Back, true, 1000);
+  r.edge(B::Back, false, 1499);
+  r.tick(1800, true);
+  r.expect(B::Back, T::Short);
+  r.edge(B::Back, true, 2000);
+  r.edge(B::Back, false, 2500);
+  r.tick(2700, true);
+  r.expect(B::Back, T::Long);
+  r.empty();
+
+  r.edge(B::Back, true, 3000);
+  r.tick(3500);
+  r.empty();
+  r.tick(4000);
+  r.expect(B::Back, T::Long);
   r.empty();
 }
 
@@ -189,10 +219,11 @@ int main() {
   defaultAndCustomPowerActions();
   queuedPowerPressUses400msAndOnlyOneAction();
   shortPowerAndOtherButtonThresholds();
+  browserBackUsesShorterHoldAndDoesNotRepeat();
   wakePressIsDiscardedUntilFreshPress();
   screenshotDrainAndDoublePressRemainDistinct();
   independentWakeCannotBeBypassedByQuickArtwork();
   chargerGuardNeedsRealX3GateEvidence();
   earlyShortTapDoesNotHaveToSurviveNvsReads();
-  std::cout << "8 power-button scenarios passed\n";
+  std::cout << "9 button scenarios passed\n";
 }

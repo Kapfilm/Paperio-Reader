@@ -10,6 +10,7 @@
 #include <esp_system.h>
 #include <esp_wifi.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <vector>
@@ -578,136 +579,149 @@ void KOReaderSyncActivity::resumeReader(const KOReaderSyncOutcomeState outcome, 
 }
 
 void KOReaderSyncActivity::render(RenderLock&&) {
-  const Rect contentRect = UITheme::getContentRect(renderer, true, false);
+  const Rect content = UITheme::getContentRect(renderer, true, false);
+  constexpr int margin = 16;
+  constexpr int gap = 8;
+  const int headingY = content.y + margin;
+  const int bodyY = headingY + renderer.getLineHeight(UI_12_FONT_ID) + gap;
+  const int bodyHeight = content.y + content.height - margin - bodyY;
+  const int textX = content.x + margin;
+  const int textWidth = content.width - 2 * margin;
+  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+
+  const auto centeredLine = [&](int font, int y, const char* text, EpdFontFamily::Style style) {
+    const auto line = renderer.truncatedText(font, text, textWidth, style);
+    const int width = renderer.getTextWidth(font, line.c_str(), style);
+    if (width <= textWidth) renderer.drawText(font, textX + (textWidth - width) / 2, y, line.c_str(), true, style);
+  };
 
   renderer.clearScreen();
-  renderer.drawCenteredText(UI_12_FONT_ID, 15 + contentRect.y, tr(STR_KOREADER_SYNC), true, EpdFontFamily::BOLD);
+  centeredLine(UI_12_FONT_ID, headingY, tr(STR_KOREADER_SYNC), EpdFontFamily::BOLD);
 
-  if (state == NO_CREDENTIALS) {
-    renderer.drawCenteredText(UI_10_FONT_ID, 280, tr(STR_NO_CREDENTIALS_MSG), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, 320, tr(STR_KOREADER_SETUP_HINT));
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (state == SYNCING || state == UPLOADING) {
+    const int popupLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+    const int linesFit = std::min(4, (bodyHeight - 2 * margin) / popupLineHeight);
+    const auto lines = renderer.wrappedText(UI_12_FONT_ID, statusMessage.c_str(), textWidth - 2 * margin, linesFit);
+    if (!lines.empty()) {
+      int widest = 0;
+      for (const auto& line : lines) widest = std::max(widest, renderer.getTextWidth(UI_12_FONT_ID, line.c_str()));
+      const int width = widest + 2 * margin;
+      const int height = static_cast<int>(lines.size()) * popupLineHeight + 2 * margin;
+      const int y = bodyY + (bodyHeight - height) / 2;
+      renderer.drawRoundedRect(content.x + (content.width - width) / 2, y, width, height, 2, 6, true);
+      int textY = y + margin;
+      for (const auto& line : lines) {
+        centeredLine(UI_12_FONT_ID, textY, line.c_str(), EpdFontFamily::REGULAR);
+        textY += popupLineHeight;
+      }
+    }
     renderer.displayBuffer();
     return;
   }
 
-  if (state == SYNCING || state == UPLOADING) {
-    // Title frame already composed into the write buffer above (clearScreen); overlay the popup on
-    // it. drawPopup ships the frame itself — a second displayBuffer() here would ship the stale
-    // post-swap buffer.
-    GUI.drawPopup(renderer, statusMessage.c_str(), /*overlayDisplayedFrame=*/false);
-    return;
-  }
-
   if (state == SHOWING_RESULT) {
-    // Show comparison
-    renderer.drawCenteredText(UI_10_FONT_ID, 120, tr(STR_PROGRESS_FOUND), true, EpdFontFamily::BOLD);
+    const bool showDevice = !remoteProgress.device.empty();
+    const int optionHeight = lineHeight + gap;
+    const int blockHeight = (showDevice ? 8 : 7) * lineHeight + 3 * gap + 2 * optionHeight;
+    int y = bodyY + std::max(0, (bodyHeight - blockHeight) / 4);
+    centeredLine(UI_10_FONT_ID, y, tr(STR_PROGRESS_FOUND), EpdFontFamily::BOLD);
+    y += lineHeight + gap;
 
-    // Get chapter names from TOC
-    const std::string& remoteChapter = remoteChapterLabel;
-    const std::string& localChapter = localChapterLabel;
+    const auto drawRow = [&](const char* text, int indent = 0) {
+      const auto line = renderer.truncatedText(UI_10_FONT_ID, text, textWidth - indent);
+      renderer.drawText(UI_10_FONT_ID, textX + indent, y, line.c_str());
+      y += lineHeight;
+    };
 
-    // Remote progress - chapter and page
-    renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 160, tr(STR_REMOTE_LABEL), true);
-    char remoteChapterStr[128];
-    snprintf(remoteChapterStr, sizeof(remoteChapterStr), "  %s", remoteChapter.c_str());
-    renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 185, remoteChapterStr);
-    char remotePageStr[64];
+    drawRow(tr(STR_REMOTE_LABEL));
+    drawRow(remoteChapterLabel.c_str(), gap);
+    char page[64];
     if (std::isfinite(remoteProgress.percentage)) {
-      snprintf(remotePageStr, sizeof(remotePageStr), tr(STR_PAGE_OVERALL_FORMAT), remotePosition.pageNumber + 1,
+      snprintf(page, sizeof(page), tr(STR_PAGE_OVERALL_FORMAT), remotePosition.pageNumber + 1,
                remoteProgress.percentage * 100);
     } else {
-      snprintf(remotePageStr, sizeof(remotePageStr), tr(STR_PAGE_WITHOUT_PERCENT_FORMAT),
-               remotePosition.pageNumber + 1);
+      snprintf(page, sizeof(page), tr(STR_PAGE_WITHOUT_PERCENT_FORMAT), remotePosition.pageNumber + 1);
     }
-    renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 210, remotePageStr);
-
-    if (!remoteProgress.device.empty()) {
-      char deviceStr[64];
-      snprintf(deviceStr, sizeof(deviceStr), tr(STR_DEVICE_FROM_FORMAT), remoteProgress.device.c_str());
-      renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 235, deviceStr);
+    drawRow(page);
+    if (showDevice) {
+      const auto device = renderer.truncatedText(UI_10_FONT_ID, remoteProgress.device.c_str(), textWidth);
+      const char* format = tr(STR_DEVICE_FROM_FORMAT);
+      const int length = snprintf(nullptr, 0, format, device.c_str());
+      if (length > 0) {
+        std::string label(length, '\0');
+        snprintf(label.data(), label.size() + 1, format, device.c_str());
+        drawRow(label.c_str());
+      }
     }
 
-    // Local progress - chapter and page
-    renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 270, tr(STR_LOCAL_LABEL), true);
-    char localChapterStr[128];
-    snprintf(localChapterStr, sizeof(localChapterStr), "  %s", localChapter.c_str());
-    renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 295, localChapterStr);
-    char localPageStr[64];
-    snprintf(localPageStr, sizeof(localPageStr), tr(STR_PAGE_TOTAL_OVERALL_FORMAT), currentPage + 1, totalPagesInSpine,
+    y += gap;
+    drawRow(tr(STR_LOCAL_LABEL));
+    drawRow(localChapterLabel.c_str(), gap);
+    snprintf(page, sizeof(page), tr(STR_PAGE_TOTAL_OVERALL_FORMAT), currentPage + 1, totalPagesInSpine,
              localProgress.percentage * 100);
-    renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 320, localPageStr);
+    drawRow(page);
+    y += gap;
 
-    const int optionY = 350;
-    const int optionHeight = 30;
-
-    // Apply option
-    if (selectedOption == 0) {
-      renderer.fillRect(contentRect.x, optionY - 2, contentRect.width - 1, optionHeight);
+    const char* options[] = {tr(STR_APPLY_REMOTE), tr(STR_UPLOAD_LOCAL)};
+    for (int i = 0; i < 2; ++i) {
+      if (selectedOption == i) renderer.fillRect(content.x, y, content.width, optionHeight);
+      const auto label = renderer.truncatedText(UI_10_FONT_ID, options[i], textWidth);
+      renderer.drawText(UI_10_FONT_ID, textX, y + gap / 2, label.c_str(), selectedOption != i);
+      y += optionHeight;
     }
-    renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, optionY, tr(STR_APPLY_REMOTE), selectedOption != 0);
 
-    // Upload option
-    if (selectedOption == 1) {
-      renderer.fillRect(contentRect.x, optionY + optionHeight - 2, contentRect.width - 1, optionHeight);
-    }
-    renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, optionY + optionHeight, tr(STR_UPLOAD_LOCAL),
-                      selectedOption != 1);
-
-    // Bottom button hints
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer();
     return;
   }
 
-  if (state == NO_REMOTE_PROGRESS) {
-    renderer.drawCenteredText(UI_10_FONT_ID, 280, tr(STR_NO_REMOTE_MSG), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, 320, tr(STR_UPLOAD_PROMPT));
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_UPLOAD), "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
-    return;
+  const char* title = nullptr;
+  const char* detail = nullptr;
+  const char* confirm = "";
+  switch (state) {
+    case NO_CREDENTIALS:
+      title = tr(STR_NO_CREDENTIALS_MSG);
+      detail = tr(STR_KOREADER_SETUP_HINT);
+      break;
+    case NO_REMOTE_PROGRESS:
+      title = tr(STR_NO_REMOTE_MSG);
+      detail = tr(STR_UPLOAD_PROMPT);
+      confirm = tr(STR_UPLOAD);
+      break;
+    case UPLOAD_COMPLETE:
+      title = tr(STR_UPLOAD_SUCCESS);
+      break;
+    case APPLY_COMPLETE:
+      title = tr(STR_PULL_SUCCESS);
+      break;
+    case SYNC_FAILED:
+      title = tr(STR_SYNC_FAILED_MSG);
+      detail = statusMessage.c_str();
+      break;
+    default:
+      return;
   }
 
-  if (state == UPLOAD_COMPLETE) {
-    renderer.drawCenteredText(UI_10_FONT_ID, 300, tr(STR_UPLOAD_SUCCESS), true, EpdFontFamily::BOLD);
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
-    return;
+  const auto heading = renderer.wrappedText(UI_10_FONT_ID, title, textWidth, 2, EpdFontFamily::BOLD);
+  const int headingHeight = static_cast<int>(heading.size()) * lineHeight;
+  const int detailsFit = std::min(4, (bodyHeight - headingHeight - gap) / lineHeight);
+  const auto details = renderer.wrappedText(UI_10_FONT_ID, detail, textWidth, detailsFit);
+  const int blockHeight = headingHeight + (details.empty() ? 0 : gap + static_cast<int>(details.size()) * lineHeight);
+  int y = bodyY + (bodyHeight - blockHeight) / 2;
+  for (const auto& line : heading) {
+    centeredLine(UI_10_FONT_ID, y, line.c_str(), EpdFontFamily::BOLD);
+    y += lineHeight;
+  }
+  y += gap;
+  for (const auto& line : details) {
+    centeredLine(UI_10_FONT_ID, y, line.c_str(), EpdFontFamily::REGULAR);
+    y += lineHeight;
   }
 
-  if (state == APPLY_COMPLETE) {
-    renderer.drawCenteredText(UI_10_FONT_ID, 300, tr(STR_PULL_SUCCESS), true, EpdFontFamily::BOLD);
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
-    return;
-  }
-
-  if (state == SYNC_FAILED) {
-    renderer.drawCenteredText(UI_10_FONT_ID, 280, tr(STR_SYNC_FAILED_MSG), true, EpdFontFamily::BOLD);
-
-    // Word-wrap the detail message so long TLS/network diagnostics aren't clipped.
-    const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
-    const auto lines = renderer.wrappedText(UI_10_FONT_ID, statusMessage.c_str(), contentRect.width - 20, 4);
-    int y = 320;
-    for (const auto& line : lines) {
-      renderer.drawCenteredText(UI_10_FONT_ID, y, line.c_str());
-      y += lineHeight;
-    }
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
-    return;
-  }
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirm, "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  renderer.displayBuffer();
 }
 
 bool KOReaderSyncActivity::ensureEpubLoadedForMapping() {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <utility>
 
 #include "components/themes/lyra/LyraTheme.h"
 
@@ -45,6 +46,14 @@ constexpr ThemeMetrics values = {.batteryWidth = 16,
                                  .keyboardVerticalOffset = -7,
                                  .keyboardTextFieldWidthPercent = 85,
                                  .keyboardWidthPercent = 90};
+// Preserve the display bounds of the legacy 3:5 thumbnail. When the X4
+// slot is narrower, generate at those bounds before dithering.
+constexpr std::pair<int, int> nativeThumbSize(bool isX3, int slotWidth, int coverHeight) {
+  const int legacyWidth = coverHeight * 3 / 5;
+  if (isX3 || slotWidth <= 0 || slotWidth >= legacyWidth) return {0, 0};
+  const int height = (coverHeight * slotWidth + legacyWidth - 1) / legacyWidth;
+  return {slotWidth, height};
+}
 }  // namespace Lyra3CoversMetrics
 
 class Lyra3CoversTheme : public LyraTheme {

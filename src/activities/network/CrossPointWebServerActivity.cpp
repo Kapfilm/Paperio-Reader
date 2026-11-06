@@ -18,6 +18,7 @@
 #include "SdCardFontGlobals.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
+#include "activities/NetworkMemoryTrim.h"
 #include "activities/network/CalibreConnectActivity.h"
 #include "activities/network/SignalStrengthWidget.h"
 #include "components/UITheme.h"
@@ -84,18 +85,24 @@ void CrossPointWebServerActivity::onExit() {
   Activity::onExit();
 
   state = WebServerActivityState::SHUTTING_DOWN;
+  webServer.reset();
   stopDnsServer();
   MDNS.end();
 
-  // Skip reboot if WiFi was never activated (e.g. user backed out of mode selection).
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    if (isApMode) {
-      WiFi.softAPdisconnect(true);
-    } else {
-      HalClock::wifiOff(false, SETTINGS.ntpServer);
+    if (isApMode) WiFi.softAPdisconnect(true);
+    HalClock::wifiOff(isApMode, SETTINGS.ntpServer);
+  }
+  if (buffersReleased) {
+    if (!renderer.restoreFrameBuffers()) {
+      silentRestart();
+      return;
     }
-    delay(30);
-    silentRestart();
+    // Settings and font files can change through the web interface.
+    UITheme::getInstance().reload();
+    sdFontSystem.begin(renderer);
+  } else {
+    restoreDisplayAfterNetworkSession(renderer);
   }
 }
 
@@ -257,11 +264,11 @@ void CrossPointWebServerActivity::startAccessPoint() {
 }
 
 void CrossPointWebServerActivity::showServerScreenAndReleaseBuffers() {
+  RenderLock lock(*this);
   // Free SD font heap for the web server session. A loaded SD font
   // (Literata etc.) holds ~24-60KB of kern/ligature/glyph data that is
-  // completely unused during the web server session. The device restarts
-  // after the web server exits (silentRestart in onExit), so the font
-  // will be reloaded fresh on the next boot anyway.
+  // completely unused during the web server session. The reader reloads it
+  // when the next book is opened.
   LOG_DBG("WEBACT", "Free heap before SD font unload: %d bytes", ESP.getFreeHeap());
   sdFontSystem.unload(renderer);
   LOG_DBG("WEBACT", "Free heap after SD font unload: %d bytes", ESP.getFreeHeap());

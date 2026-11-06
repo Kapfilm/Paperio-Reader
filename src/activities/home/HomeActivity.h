@@ -2,6 +2,7 @@
 
 #include <PngToBmpConverter.h>
 
+#include <atomic>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -46,7 +47,7 @@ class HomeActivity final : public Activity {
   int lastCarouselBookIndex = 0;  // remembered position when leaving carousel row
   bool recentsLoading = false;
   bool recentsLoaded = false;
-  bool firstRenderDone = false;
+  std::atomic<bool> firstRenderDone{false};
   bool hasOpdsServers = false;
   bool minimalMenuOpen = false;
   int minimalMenuIndex = 0;

@@ -4,6 +4,8 @@
 #include <GfxRenderer.h>
 #include <Logging.h>
 
+#include "SilentRestart.h"
+
 void trimMemoryForNetworkSession(const GfxRenderer& renderer, const char* logTag) {
   if (auto* cache = renderer.getFontCacheManager()) {
     cache->clearCache();
@@ -15,5 +17,16 @@ void trimMemoryForNetworkSession(const GfxRenderer& renderer, const char* logTag
       LOG_DBG(logTag, "Released secondary framebuffer before network session (~52 KB contiguous)");
       renderer.setSingleBufferFastDiff(true);
     }
+  }
+}
+
+void restoreDisplayAfterNetworkSession(const GfxRenderer& renderer) {
+  if (renderer.hasSecondaryBuffer()) return;
+  if (auto* cache = renderer.getFontCacheManager()) cache->clearCache();
+  if (renderer.reallocSecondaryBuffer()) {
+    // The display driver uses its retained baseline for the first refresh.
+    renderer.setSingleBufferFastDiff(false);
+  } else {
+    silentRestart();
   }
 }

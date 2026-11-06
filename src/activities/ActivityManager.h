@@ -195,6 +195,8 @@ class ActivityManager {
   // Reader-specific actions (page navigation, TOC, bookmarks, footnotes) are forwarded
   // only when the current activity is a reader; others are no-ops in other contexts.
   void dispatchButtonAction(CrossPointSettings::BUTTON_ACTION action);
+  bool hasFastBackExit() const;
+  bool handleLongBack();
 
   // If immediate is true, the update will be triggered immediately.
   // Otherwise, it will be deferred until the end of the current loop iteration.

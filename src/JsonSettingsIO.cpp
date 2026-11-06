@@ -4,8 +4,8 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
-
 #include <esp_heap_caps.h>
+
 #include <cctype>
 #include <cstring>
 #include <string>
@@ -204,12 +204,10 @@ bool JsonSettingsIO::loadState(CrossPointState& s, const char* json) {
 
 bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path) {
   JsonDocument doc;
-  const auto settings = getSettingsList();
-
-  for (const auto& info : settings) {
-    if (!info.key) continue;
+  forEachSetting([&](const SettingInfo& info) {
+    if (!info.key) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
-    if (!info.valuePtr && !info.stringOffset) continue;
+    if (!info.valuePtr && !info.stringOffset) return;
 
     if (info.stringOffset) {
       const char* strPtr = (const char*)&s + info.stringOffset;
@@ -221,7 +219,7 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
     } else {
       doc[info.key] = s.*(info.valuePtr);
     }
-  }
+  });
 
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   doc["frontButtonBack"] = s.frontButtonBack;
@@ -259,10 +257,10 @@ bool JsonSettingsIO::saveButtonSettings(const CrossPointSettings& s, const char*
   JsonDocument doc;
   doc["format"] = 1;
 
-  for (const auto& info : getSettingsList()) {
-    if (!info.key || !info.valuePtr || info.category != StrId::STR_CAT_CONTROLS) continue;
+  forEachSetting([&](const SettingInfo& info) {
+    if (!info.key || !info.valuePtr || info.category != StrId::STR_CAT_CONTROLS) return;
     doc[info.key] = s.*(info.valuePtr);
-  }
+  });
 
   doc["frontButtonBack"] = s.frontButtonBack;
   doc["frontButtonConfirm"] = s.frontButtonConfirm;
@@ -287,14 +285,14 @@ bool JsonSettingsIO::loadButtonSettings(CrossPointSettings& s, const char* json)
     uint8_t value;
   };
   std::vector<PendingValue> pending;
-  for (const auto& info : getSettingsList()) {
-    if (!info.key || !info.valuePtr || info.category != StrId::STR_CAT_CONTROLS) continue;
-    if (doc[info.key].isNull()) continue;
+  forEachSetting([&](const SettingInfo& info) {
+    if (!info.key || !info.valuePtr || info.category != StrId::STR_CAT_CONTROLS) return;
+    if (doc[info.key].isNull()) return;
     const uint8_t value = doc[info.key].as<uint8_t>();
     const size_t optionCount = info.type == SettingType::TOGGLE ? 2 : info.getEnumOptionCount();
     pending.push_back(
         {info.valuePtr, value < optionCount ? value : static_cast<uint8_t>(CrossPointSettings::BTN_DEFAULT)});
-  }
+  });
 
   using S = CrossPointSettings;
   const auto front = [&doc](const char* key, uint8_t fallback) {
@@ -409,12 +407,10 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
     if (needsResave) *needsResave = true;
   }
 
-  const auto settings = getSettingsList();
-
-  for (const auto& info : settings) {
-    if (!info.key) continue;
+  forEachSetting([&](const SettingInfo& info) {
+    if (!info.key) return;
     // Dynamic entries (KOReader etc.) are stored in their own files — skip.
-    if (!info.valuePtr && !info.stringOffset) continue;
+    if (!info.valuePtr && !info.stringOffset) return;
 
     if (info.stringOffset) {
       const char* strPtr = (const char*)&s + info.stringOffset;
@@ -443,7 +439,7 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
         LOG_ERR("CPS", "Misconfigured SettingInfo: stringMaxLen is 0 for key '%s'", info.key);
         destPtr[0] = '\0';
         if (needsResave) *needsResave = true;
-        continue;
+        return;
       }
       strncpy(destPtr, val.c_str(), info.stringMaxLen - 1);
       destPtr[info.stringMaxLen - 1] = '\0';
@@ -462,7 +458,7 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
       }
       s.*(info.valuePtr) = v;
     }
-  }
+  });
 
   // Front button remap — managed by RemapFrontButtons sub-activity, not in SettingsList.
   using S = CrossPointSettings;
@@ -482,8 +478,7 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
                        CrossPointSettings::BUILTIN_FONT_COUNT, CrossPointSettings::NOTOSANS);
   s.numericFontSizes = (doc["numericFontSizes"] | 0) == 1 ? 1 : 0;
   const int pointSize = doc["readerFontPointSize"] | 0;
-  s.readerFontPointSize = s.numericFontSizes && pointSize > 0 && pointSize <= 255
-                              ? static_cast<uint8_t>(pointSize) : 0;
+  s.readerFontPointSize = s.numericFontSizes && pointSize > 0 && pointSize <= 255 ? static_cast<uint8_t>(pointSize) : 0;
   const char* sfn = doc["sdFontFamilyName"] | "";
   strncpy(s.sdFontFamilyName, sfn, sizeof(s.sdFontFamilyName) - 1);
   s.sdFontFamilyName[sizeof(s.sdFontFamilyName) - 1] = '\0';
@@ -966,15 +961,16 @@ bool JsonSettingsIO::loadReadingStatsInput(ReadingStatsStore& destination, Input
     if (value.isNull()) return true;  // legacy history may omit day buckets
     if (!value.is<JsonArray>()) return false;
     for (JsonVariant entry : value.as<JsonArray>()) {
-      if (!entry.is<JsonArray>() || entry.size() != 2 ||
-          !entry[0].is<uint16_t>() || !entry[1].is<uint32_t>()) return false;
+      if (!entry.is<JsonArray>() || entry.size() != 2 || !entry[0].is<uint16_t>() || !entry[1].is<uint32_t>())
+        return false;
     }
     return true;
   };
   if (!validDays(doc["globalDays"])) return false;
   for (JsonVariant entry : inputBooks) {
-    if (!entry.is<JsonObject>() || !entry["docId"].is<const char*>() ||
-        strlen(entry["docId"].as<const char*>()) == 0 || !validDays(entry["days"])) return false;
+    if (!entry.is<JsonObject>() || !entry["docId"].is<const char*>() || strlen(entry["docId"].as<const char*>()) == 0 ||
+        !validDays(entry["days"]))
+      return false;
     for (const char* key : {"title", "author"}) {
       if (!entry[key].isNull() && !entry[key].is<const char*>()) return false;
     }

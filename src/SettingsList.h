@@ -3,8 +3,8 @@
 #include <HalGPIO.h>
 #include <I18n.h>
 
-#include <algorithm>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "CrossPointSettings.h"
@@ -33,12 +33,6 @@
 // ACTION-type entries and entries without a key are device-only and are added directly
 // in SettingsActivity::onEnter(), not here.
 //
-// Implementation note: the list is a namespace-level static (not a function-local static)
-// so it is initialised during the global-static phase before setup() runs. A
-// function-local static would trigger __cxa_guard_acquire on first call, which creates a
-// FreeRTOS mutex deep inside the heap allocator chain — enough stack to overflow the 8 KB
-// loop task stack when called from inside SETTINGS.loadFromFile() at boot time.
-// Therefore the list is built at runtime in a local function and returned by value.
 namespace SettingsListDetail {
 inline uint8_t getKoReaderMatchMethod(const void*) { return static_cast<uint8_t>(KOREADER_STORE.getMatchMethod()); }
 
@@ -60,7 +54,19 @@ inline std::string getRefreshFrequencyDisplay(void*) {
   return std::to_string(v) + tr(STR_PAGES_SUFFIX);
 }
 
-inline std::vector<SettingInfo> buildSettingsList() {
+using SettingVisitor = void (*)(const void*, SettingInfo&&);
+
+// Emit a single setting at a time. Building a full vector here requires a
+// contiguous heap block that may be unavailable after restoring the display.
+inline void visitSettings(const void* context, SettingVisitor visitor) {
+  const bool isX3 = gpio.deviceIsX3();
+  const auto add = [&](auto&& setting) {
+    if ((setting.deviceTarget == SettingDeviceTarget::X3 && !isX3) ||
+        (setting.deviceTarget == SettingDeviceTarget::X4 && isX3)) {
+      return;
+    }
+    visitor(context, std::move(setting));
+  };
   // Shared button action options used by all button enum entries.
   const std::vector<StrId> btnActionOptions = {StrId::STR_BTN_ACT_PAGE_FORWARD,
                                                StrId::STR_BTN_ACT_PAGE_BACK,
@@ -99,74 +105,64 @@ inline std::vector<SettingInfo> buildSettingsList() {
     return result;
   };
 
-  std::vector<SettingInfo> settings;
-  settings.reserve(78);
-
   // --- Display ---
-  settings.push_back(SettingInfo::Enum(StrId::STR_UI_TEXT_SIZE, &CrossPointSettings::uiTextSize,
-                                       {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_TEXT_LARGE}, "uiTextSize",
-                                       StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(StrId::STR_UI_FONT_STYLE, &CrossPointSettings::uiFontStyle,
-                                       {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_FONT_DARK}, "uiFontStyle",
-                                       StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(StrId::STR_DARK_MODE, &CrossPointSettings::darkMode,
-                                       {StrId::STR_STATE_OFF, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "darkMode",
-                                       StrId::STR_CAT_DISPLAY)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Action(StrId::STR_TIME_TO_SLEEP, SettingAction::SleepTimeoutPicker)
-                         .withDisplayGetter(getSleepTimeoutDisplay)
-                         .withCategory(StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen,
-                                       {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER,
-                                        StrId::STR_NONE_OPT, StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY,
-                                        StrId::STR_QUICK_RESUME, StrId::STR_RANDOM_HIGHLIGHT},
-                                       "sleepScreen", StrId::STR_CAT_DISPLAY)
-                         .withSubcategory(StrId::STR_MENU_DISP_SLEEP)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
-                                       {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode",
-                                       StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(
+  add(SettingInfo::Enum(StrId::STR_UI_TEXT_SIZE, &CrossPointSettings::uiTextSize,
+                        {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_TEXT_LARGE}, "uiTextSize", StrId::STR_CAT_DISPLAY));
+  add(SettingInfo::Enum(StrId::STR_UI_FONT_STYLE, &CrossPointSettings::uiFontStyle,
+                        {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_FONT_DARK}, "uiFontStyle", StrId::STR_CAT_DISPLAY));
+  add(SettingInfo::Enum(StrId::STR_DARK_MODE, &CrossPointSettings::darkMode,
+                        {StrId::STR_STATE_OFF, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "darkMode",
+                        StrId::STR_CAT_DISPLAY)
+          .withSelectorActivity());
+  add(SettingInfo::Action(StrId::STR_TIME_TO_SLEEP, SettingAction::SleepTimeoutPicker)
+          .withDisplayGetter(getSleepTimeoutDisplay)
+          .withCategory(StrId::STR_CAT_DISPLAY));
+  add(SettingInfo::Enum(
+          StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen,
+          {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER, StrId::STR_NONE_OPT,
+           StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY, StrId::STR_QUICK_RESUME, StrId::STR_RANDOM_HIGHLIGHT},
+          "sleepScreen", StrId::STR_CAT_DISPLAY)
+          .withSubcategory(StrId::STR_MENU_DISP_SLEEP)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_SLEEP_COVER_MODE, &CrossPointSettings::sleepScreenCoverMode,
+                        {StrId::STR_FIT, StrId::STR_CROP}, "sleepScreenCoverMode", StrId::STR_CAT_DISPLAY));
+  add(SettingInfo::Enum(
       StrId::STR_SLEEP_COVER_FILTER, &CrossPointSettings::sleepScreenCoverFilter,
       {StrId::STR_NONE_OPT, StrId::STR_FILTER_CONTRAST, StrId::STR_INVERTED, StrId::STR_FILTER_ADAPTIVE},
       "sleepScreenCoverFilter", StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_COVER_OVERLAY, &CrossPointSettings::sleepCoverOverlay,
-                                       {StrId::STR_OVERLAY_OFF, StrId::STR_OVERLAY_WHITE, StrId::STR_OVERLAY_GRAY,
-                                        StrId::STR_OVERLAY_BLACK},
-                                       "sleepCoverOverlay", StrId::STR_CAT_DISPLAY)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_SLEEP_IMAGE_PICK_MODE, &CrossPointSettings::sleepImagePickMode,
-                                       {StrId::STR_RANDOM, StrId::STR_SEQUENTIAL}, "sleepImagePickMode",
-                                       StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &CrossPointSettings::quickResumeSleepScreen,
-                                       {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen",
-                                       StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &CrossPointSettings::hideBatteryPercentage,
-                                       {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS},
-                                       "hideBatteryPercentage", StrId::STR_CAT_DISPLAY)
-                         .withSubcategory(StrId::STR_MENU_DISP_BATTERY));
-  settings.push_back(SettingInfo::Action(StrId::STR_REFRESH_FREQ, SettingAction::RefreshFrequencyPicker)
-                         .withDisplayGetter(getRefreshFrequencyDisplay)
-                         .withCategory(StrId::STR_CAT_DISPLAY)
-                         .withSubmenu(StrId::STR_MENU_DISP_REFRESH)
-                         .withSubcategory(StrId::STR_MENU_DISP_REFRESH));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_REFRESH_AFTER_IMAGE_PAGES,
-                                         &CrossPointSettings::halfRefreshAfterImagePage, "halfRefreshAfterImagePage",
-                                         StrId::STR_CAT_DISPLAY)
-                         .withSubmenu(StrId::STR_MENU_DISP_REFRESH)
-                         .withSubcategory(StrId::STR_MENU_DISP_REFRESH));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
-                                         StrId::STR_CAT_DISPLAY));
-  settings.push_back(SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
-                                       {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
-                                        StrId::STR_THEME_LYRA_CAROUSEL, StrId::STR_THEME_MINIMAL},
-                                       "uiTheme", StrId::STR_CAT_DISPLAY)
-                         .withSelectorActivity());
+  add(SettingInfo::Enum(
+          StrId::STR_SLEEP_COVER_OVERLAY, &CrossPointSettings::sleepCoverOverlay,
+          {StrId::STR_OVERLAY_OFF, StrId::STR_OVERLAY_WHITE, StrId::STR_OVERLAY_GRAY, StrId::STR_OVERLAY_BLACK},
+          "sleepCoverOverlay", StrId::STR_CAT_DISPLAY)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_SLEEP_IMAGE_PICK_MODE, &CrossPointSettings::sleepImagePickMode,
+                        {StrId::STR_RANDOM, StrId::STR_SEQUENTIAL}, "sleepImagePickMode", StrId::STR_CAT_DISPLAY));
+  add(SettingInfo::Enum(StrId::STR_QUICK_RESUME_TIMEOUT, &CrossPointSettings::quickResumeSleepScreen,
+                        {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "quickResumeSleepScreen", StrId::STR_CAT_DISPLAY));
+  add(SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &CrossPointSettings::hideBatteryPercentage,
+                        {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
+                        StrId::STR_CAT_DISPLAY)
+          .withSubcategory(StrId::STR_MENU_DISP_BATTERY));
+  add(SettingInfo::Action(StrId::STR_REFRESH_FREQ, SettingAction::RefreshFrequencyPicker)
+          .withDisplayGetter(getRefreshFrequencyDisplay)
+          .withCategory(StrId::STR_CAT_DISPLAY)
+          .withSubmenu(StrId::STR_MENU_DISP_REFRESH)
+          .withSubcategory(StrId::STR_MENU_DISP_REFRESH));
+  add(SettingInfo::Toggle(StrId::STR_REFRESH_AFTER_IMAGE_PAGES, &CrossPointSettings::halfRefreshAfterImagePage,
+                          "halfRefreshAfterImagePage", StrId::STR_CAT_DISPLAY)
+          .withSubmenu(StrId::STR_MENU_DISP_REFRESH)
+          .withSubcategory(StrId::STR_MENU_DISP_REFRESH));
+  add(SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
+                          StrId::STR_CAT_DISPLAY));
+  add(SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
+                        {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
+                         StrId::STR_THEME_LYRA_CAROUSEL, StrId::STR_THEME_MINIMAL},
+                        "uiTheme", StrId::STR_CAT_DISPLAY)
+          .withSelectorActivity());
 
   // --- Reader ---
   // General reader settings
-  settings.push_back(
-      SettingInfo::Enum(StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
+  add(SettingInfo::Enum(StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
                         {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_INVERTED, StrId::STR_LANDSCAPE_CCW},
                         "orientation", StrId::STR_CAT_READER)
           .withSelectorActivity());
@@ -175,97 +171,91 @@ inline std::vector<SettingInfo> buildSettingsList() {
   // side (SettingsActivity / CrossPointWebServer enrich enumLabels before
   // iterating). The built-in StrIds are kept as a fallback for code paths that
   // don't enrich enumLabels.
-  settings.push_back(SettingInfo::DynamicEnum(StrId::STR_FONT_FAMILY, {StrId::STR_NOTO_SANS}, fontFamilyDynamicGetter,
-                                              fontFamilyDynamicSetter, "fontFamily", StrId::STR_CAT_READER)
-                         .withSubcategory(StrId::STR_MENU_READER_FONT)
-                         .withSubmenu(StrId::STR_MENU_READER_FONT)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_FONT_SIZE, &CrossPointSettings::fontSize,
-                                       {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE},
-                                       "fontSize", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_READER_FONT)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Toggle(StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, "textAntiAliasing",
-                                         StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_READER_FONT));
+  add(SettingInfo::DynamicEnum(StrId::STR_FONT_FAMILY, {StrId::STR_NOTO_SANS}, fontFamilyDynamicGetter,
+                               fontFamilyDynamicSetter, "fontFamily", StrId::STR_CAT_READER)
+          .withSubcategory(StrId::STR_MENU_READER_FONT)
+          .withSubmenu(StrId::STR_MENU_READER_FONT)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_FONT_SIZE, &CrossPointSettings::fontSize,
+                        {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE}, "fontSize",
+                        StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_MENU_READER_FONT)
+          .withSelectorActivity());
+  add(SettingInfo::Toggle(StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, "textAntiAliasing",
+                          StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_MENU_READER_FONT));
   // X3-only fast AA LUT toggle. Swaps the 53-frame OEM grayscale waveform
   // (~2.4 s panel time, X4-accurate grays) for the 7-frame community LUT
   // (~130 ms, mid-tones slightly darker). See freeink-sdk
   // FreeInkDisplay::setFastGrayscaleLut for trade-offs.
-  settings.push_back(SettingInfo::Toggle(StrId::STR_FAST_AA, &CrossPointSettings::fastAntiAliasing,
-                                         "fastAntiAliasingV2", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_READER_FONT)
-                         .withDeviceTarget(SettingDeviceTarget::X3));
-  settings.push_back(SettingInfo::Enum(StrId::STR_TEXT_DARKNESS, &CrossPointSettings::textDarkness,
-                                       {StrId::STR_NORMAL, StrId::STR_DARK, StrId::STR_EXTRA_DARK, StrId::STR_MAX_DARK},
-                                       "textDarkness", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_READER_FONT)
-                         .withSelectorActivity());
+  add(SettingInfo::Toggle(StrId::STR_FAST_AA, &CrossPointSettings::fastAntiAliasing, "fastAntiAliasingV2",
+                          StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_MENU_READER_FONT)
+          .withDeviceTarget(SettingDeviceTarget::X3));
+  add(SettingInfo::Enum(StrId::STR_TEXT_DARKNESS, &CrossPointSettings::textDarkness,
+                        {StrId::STR_NORMAL, StrId::STR_DARK, StrId::STR_EXTRA_DARK, StrId::STR_MAX_DARK},
+                        "textDarkness", StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_MENU_READER_FONT)
+          .withSelectorActivity());
   // TXT/MD font submenu — same dynamic structure as EPUB, includes SD card fonts.
-  settings.push_back(SettingInfo::DynamicEnum(StrId::STR_TXT_FONT_FAMILY, {StrId::STR_NOTO_SANS},
-                                              txtFontFamilyDynamicGetter, txtFontFamilyDynamicSetter, "txtFontFamily",
-                                              StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_TXT_FONT)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_TXT_FONT_SIZE, &CrossPointSettings::txtFontSize,
-                                       {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE},
-                                       "txtFontSize", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_TXT_FONT)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_PARA_ALIGNMENT, &CrossPointSettings::paragraphAlignment,
-                                       {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER,
-                                        StrId::STR_ALIGN_RIGHT, StrId::STR_BOOK_S_STYLE},
-                                       "paragraphAlignment", StrId::STR_CAT_READER)
-                         .withSubcategory(StrId::STR_MENU_READER_LAYOUT)
-                         .withSelectorActivity());
+  add(SettingInfo::DynamicEnum(StrId::STR_TXT_FONT_FAMILY, {StrId::STR_NOTO_SANS}, txtFontFamilyDynamicGetter,
+                               txtFontFamilyDynamicSetter, "txtFontFamily", StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_MENU_TXT_FONT)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_TXT_FONT_SIZE, &CrossPointSettings::txtFontSize,
+                        {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE}, "txtFontSize",
+                        StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_MENU_TXT_FONT)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_PARA_ALIGNMENT, &CrossPointSettings::paragraphAlignment,
+                        {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
+                         StrId::STR_BOOK_S_STYLE},
+                        "paragraphAlignment", StrId::STR_CAT_READER)
+          .withSubcategory(StrId::STR_MENU_READER_LAYOUT)
+          .withSelectorActivity());
   // Formatting settings
-  settings.push_back(SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
-                                         StrId::STR_CAT_READER));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled,
-                                         "hyphenationEnabled", StrId::STR_CAT_READER));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_FONT_SIZE_NORMALIZATION, &CrossPointSettings::fontSizeNormalization,
-                                         "fontSizeNormalization", StrId::STR_CAT_READER));
-  settings.push_back(
-      SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
+  add(SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
+                          StrId::STR_CAT_READER));
+  add(SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled, "hyphenationEnabled",
+                          StrId::STR_CAT_READER));
+  add(SettingInfo::Toggle(StrId::STR_FONT_SIZE_NORMALIZATION, &CrossPointSettings::fontSizeNormalization,
+                          "fontSizeNormalization", StrId::STR_CAT_READER));
+  add(SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                         {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                         "imageRendering", StrId::STR_CAT_READER)
           .withSubmenu(StrId::STR_IMAGES));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_LARGE_IMAGE_PLACEHOLDER, &CrossPointSettings::largeImagePlaceholder,
-                                         "largeImagePlaceholder", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_IMAGES));
-  settings.push_back(SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin, {5, 40, 5},
-                                        "screenMargin", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_READER_SPACING));
-  settings.push_back(
-      SettingInfo::Value(StrId::STR_LINE_SPACING, &CrossPointSettings::lineHeightPercent,
+  add(SettingInfo::Toggle(StrId::STR_LARGE_IMAGE_PLACEHOLDER, &CrossPointSettings::largeImagePlaceholder,
+                          "largeImagePlaceholder", StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_IMAGES));
+  add(SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin, {5, 40, 5}, "screenMargin",
+                         StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_MENU_READER_SPACING));
+  add(SettingInfo::Value(StrId::STR_LINE_SPACING, &CrossPointSettings::lineHeightPercent,
                          {CrossPointSettings::MIN_LINE_HEIGHT_PERCENT, CrossPointSettings::MAX_LINE_HEIGHT_PERCENT,
                           CrossPointSettings::LINE_HEIGHT_PERCENT_STEP},
                          "lineHeightPercent", StrId::STR_CAT_READER)
           .withSubmenu(StrId::STR_MENU_READER_SPACING));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
-                                         "extraParagraphSpacing", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_MENU_READER_SPACING));
+  add(SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing, "extraParagraphSpacing",
+                          StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_MENU_READER_SPACING));
 
   // Generic reader settings
-  settings.push_back(SettingInfo::Toggle(StrId::STR_CREATE_FALLBACK_FOR_INVALID_TOC,
-                                         &CrossPointSettings::syntheticTocFallback, "syntheticTocFallback",
-                                         StrId::STR_CAT_READER)
-                         .withSubcategory(StrId::STR_MENU_READER_TWEAKS));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_BIONIC_READING, &CrossPointSettings::bionicReading, "bionicReading",
-                                         StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_READING_AIDS));
-  settings.push_back(
-      SettingInfo::Toggle(StrId::STR_GUIDE_DOTS, &CrossPointSettings::guideDots, "guideDots", StrId::STR_CAT_READER)
+  add(SettingInfo::Toggle(StrId::STR_CREATE_FALLBACK_FOR_INVALID_TOC, &CrossPointSettings::syntheticTocFallback,
+                          "syntheticTocFallback", StrId::STR_CAT_READER)
+          .withSubcategory(StrId::STR_MENU_READER_TWEAKS));
+  add(SettingInfo::Toggle(StrId::STR_BIONIC_READING, &CrossPointSettings::bionicReading, "bionicReading",
+                          StrId::STR_CAT_READER)
           .withSubmenu(StrId::STR_READING_AIDS));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_INLINE_FOOTNOTE_PREVIEWS,
-                                         &CrossPointSettings::inlineFootnotePreviews, "inlineFootnotePreviews",
-                                         StrId::STR_CAT_READER));
-  settings.push_back(SettingInfo::Enum(StrId::STR_HIGHLIGHT_STYLE, &CrossPointSettings::clippingHighlightStyle,
-                                       {StrId::STR_HIGHLIGHT_MARKER, StrId::STR_HIGHLIGHT_UNDERLINE,
-                                        StrId::STR_HIGHLIGHT_BLACK_MARKER},
-                                       "clippingHighlightStyle", StrId::STR_CAT_READER)
-                         .withSubmenu(StrId::STR_CREATE_CLIPPING)
-                         .withSelectorActivity());
+  add(SettingInfo::Toggle(StrId::STR_GUIDE_DOTS, &CrossPointSettings::guideDots, "guideDots", StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_READING_AIDS));
+  add(SettingInfo::Toggle(StrId::STR_INLINE_FOOTNOTE_PREVIEWS, &CrossPointSettings::inlineFootnotePreviews,
+                          "inlineFootnotePreviews", StrId::STR_CAT_READER));
+  add(SettingInfo::Enum(
+          StrId::STR_HIGHLIGHT_STYLE, &CrossPointSettings::clippingHighlightStyle,
+          {StrId::STR_HIGHLIGHT_MARKER, StrId::STR_HIGHLIGHT_UNDERLINE, StrId::STR_HIGHLIGHT_BLACK_MARKER},
+          "clippingHighlightStyle", StrId::STR_CAT_READER)
+          .withSubmenu(StrId::STR_CREATE_CLIPPING)
+          .withSelectorActivity());
 
   // --- Controls ---
   // --- Button Actions (short / double / long press per logical button) ---
@@ -273,211 +263,195 @@ inline std::vector<SettingInfo> buildSettingsList() {
   // behind a single placeholder row in the device UI.
   // Shared action options (everything except the first "default" entry).
   // Back button: short=exit reader, double=ignore, long=go home
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortBack,
-                                       {StrId::STR_BTN_DEF_EXIT_READER}, "btnShortBack", StrId::STR_CAT_CONTROLS)
-                         .withSubcategory(StrId::STR_MENU_BTN_ACTIONS)
-                         .withSubmenu(StrId::STR_BTN_BACK));
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleBack,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleBack",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_BACK)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongBack,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_GO_HOME), "btnLongBack",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_BACK)
-                         .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortBack, {StrId::STR_BTN_DEF_EXIT_READER},
+                        "btnShortBack", StrId::STR_CAT_CONTROLS)
+          .withSubcategory(StrId::STR_MENU_BTN_ACTIONS)
+          .withSubmenu(StrId::STR_BTN_BACK));
+  add(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleBack,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleBack", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_BACK)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongBack,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_GO_HOME), "btnLongBack", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_BACK)
+          .withSelectorActivity());
   // Confirm button: short=reader menu, double=ignore, long=KOReader sync
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortConfirm,
-                                       {StrId::STR_BTN_DEF_READER_MENU}, "btnShortConfirm", StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_CONFIRM));
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleConfirm,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleConfirm",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_CONFIRM)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongConfirm,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_KOREADER_SYNC), "btnLongConfirm",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_CONFIRM)
-                         .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortConfirm,
+                        {StrId::STR_BTN_DEF_READER_MENU}, "btnShortConfirm", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_CONFIRM));
+  add(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleConfirm,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleConfirm", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_CONFIRM)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongConfirm,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_KOREADER_SYNC), "btnLongConfirm",
+                        StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_CONFIRM)
+          .withSelectorActivity());
   // Left button: short=previous page, double=ignore, long=chapter back
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortLeft,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_PREV_PAGE), "btnShortLeft",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_LEFT)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleLeft,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleLeft",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_LEFT)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongLeft,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_BACK), "btnLongLeft",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_LEFT)
-                         .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortLeft,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_PREV_PAGE), "btnShortLeft", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_LEFT)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleLeft,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleLeft", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_LEFT)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongLeft,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_BACK), "btnLongLeft", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_LEFT)
+          .withSelectorActivity());
   // Right button: short=next page, double=ignore, long=chapter forward
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortRight,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_NEXT_PAGE), "btnShortRight",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_RIGHT)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleRight,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleRight",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_RIGHT)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongRight,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_FORWARD), "btnLongRight",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_RIGHT)
-                         .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortRight,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_NEXT_PAGE), "btnShortRight", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_RIGHT)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoubleRight,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoubleRight", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_RIGHT)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongRight,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_FORWARD), "btnLongRight",
+                        StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_RIGHT)
+          .withSelectorActivity());
   // Page Back button: short=previous page, double=ignore, long=chapter back
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPageBack,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_PREV_PAGE), "btnShortPageBack",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_UP)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePageBack,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoublePageBack",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_UP)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPageBack,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_BACK), "btnLongPageBack",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_UP)
-                         .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPageBack,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_PREV_PAGE), "btnShortPageBack", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_UP)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePageBack,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoublePageBack", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_UP)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPageBack,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_BACK), "btnLongPageBack",
+                        StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_UP)
+          .withSelectorActivity());
   // Page Forward button: short=next page, double=ignore, long=chapter forward
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPageForward,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_NEXT_PAGE), "btnShortPageForward",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_DOWN)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePageForward,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoublePageForward",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_DOWN)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPageForward,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_FORWARD), "btnLongPageForward",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_DOWN)
-                         .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPageForward,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_NEXT_PAGE), "btnShortPageForward",
+                        StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_DOWN)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePageForward,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoublePageForward",
+                        StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_DOWN)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPageForward,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_CHAPTER_FORWARD), "btnLongPageForward",
+                        StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_DOWN)
+          .withSelectorActivity());
   // Power button: short and long default to sleep; all gestures are remappable.
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPower,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_SLEEP), "btnShortPower",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_POWER)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePower,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoublePower",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_POWER)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPower,
-                                       makeBtnActionOptions(StrId::STR_BTN_DEF_SLEEP), "btnLongPower",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_POWER)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_POWER_WAKE_MODE, &CrossPointSettings::powerWakeMode,
-                                       {StrId::STR_BTN_SHORT_PRESS, StrId::STR_BTN_LONG_PRESS}, "powerWakeMode",
-                                       StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_BTN_POWER)
-                         .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_SHORT_PRESS, &CrossPointSettings::btnShortPower,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_SLEEP), "btnShortPower", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_POWER)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_DOUBLE_PRESS, &CrossPointSettings::btnDoublePower,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_IGNORE), "btnDoublePower", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_POWER)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_BTN_LONG_PRESS, &CrossPointSettings::btnLongPower,
+                        makeBtnActionOptions(StrId::STR_BTN_DEF_SLEEP), "btnLongPower", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_POWER)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_POWER_WAKE_MODE, &CrossPointSettings::powerWakeMode,
+                        {StrId::STR_BTN_SHORT_PRESS, StrId::STR_BTN_LONG_PRESS}, "powerWakeMode",
+                        StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_BTN_POWER)
+          .withSelectorActivity());
   // Tilt page turn (X3-only)
-  settings.push_back(SettingInfo::Toggle(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn, "tiltPageTurn",
-                                         StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_TILT_PAGE_TURN)
-                         .withDeviceTarget(SettingDeviceTarget::X3));
-  settings.push_back(SettingInfo::Enum(StrId::STR_TILT_DIRECTION, &CrossPointSettings::tiltDirection,
-                                       {StrId::STR_TILT_SIDE, StrId::STR_TILT_SIDE_REVERSE, StrId::STR_TILT_FORWARD,
-                                        StrId::STR_TILT_FORWARD_REVERSE},
-                                       "tiltDirection", StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_TILT_PAGE_TURN)
-                         .withDeviceTarget(SettingDeviceTarget::X3)
-                         .withSelectorActivity());
-  settings.push_back(SettingInfo::Enum(StrId::STR_TILT_FIRST_ACTION, &CrossPointSettings::tiltPositiveAction,
-                                       {StrId::STR_NONE_OPT, StrId::STR_NEXT_PAGE, StrId::STR_PREV_PAGE},
-                                       "tiltPositiveAction", StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_TILT_PAGE_TURN)
-                         .withDeviceTarget(SettingDeviceTarget::X3));
-  settings.push_back(SettingInfo::Enum(StrId::STR_TILT_REVERSE_ACTION, &CrossPointSettings::tiltNegativeAction,
-                                       {StrId::STR_NONE_OPT, StrId::STR_NEXT_PAGE, StrId::STR_PREV_PAGE},
-                                       "tiltNegativeAction", StrId::STR_CAT_CONTROLS)
-                         .withSubmenu(StrId::STR_TILT_PAGE_TURN)
-                         .withDeviceTarget(SettingDeviceTarget::X3));
+  add(SettingInfo::Toggle(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn, "tiltPageTurn",
+                          StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_TILT_PAGE_TURN)
+          .withDeviceTarget(SettingDeviceTarget::X3));
+  add(SettingInfo::Enum(StrId::STR_TILT_DIRECTION, &CrossPointSettings::tiltDirection,
+                        {StrId::STR_TILT_SIDE, StrId::STR_TILT_SIDE_REVERSE, StrId::STR_TILT_FORWARD,
+                         StrId::STR_TILT_FORWARD_REVERSE},
+                        "tiltDirection", StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_TILT_PAGE_TURN)
+          .withDeviceTarget(SettingDeviceTarget::X3)
+          .withSelectorActivity());
+  add(SettingInfo::Enum(StrId::STR_TILT_FIRST_ACTION, &CrossPointSettings::tiltPositiveAction,
+                        {StrId::STR_NONE_OPT, StrId::STR_NEXT_PAGE, StrId::STR_PREV_PAGE}, "tiltPositiveAction",
+                        StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_TILT_PAGE_TURN)
+          .withDeviceTarget(SettingDeviceTarget::X3));
+  add(SettingInfo::Enum(StrId::STR_TILT_REVERSE_ACTION, &CrossPointSettings::tiltNegativeAction,
+                        {StrId::STR_NONE_OPT, StrId::STR_NEXT_PAGE, StrId::STR_PREV_PAGE}, "tiltNegativeAction",
+                        StrId::STR_CAT_CONTROLS)
+          .withSubmenu(StrId::STR_TILT_PAGE_TURN)
+          .withDeviceTarget(SettingDeviceTarget::X3));
   // --- System ---
-  settings.push_back(SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles,
-                                         "showHiddenFiles", StrId::STR_CAT_SYSTEM)
-                         .withSubmenu(StrId::STR_SHOW_FILES));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_SHOW_FILE_EXTENSIONS, &CrossPointSettings::showFileExtensions,
-                                         "showFileExtensions", StrId::STR_CAT_SYSTEM)
-                         .withSubmenu(StrId::STR_SHOW_FILES));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_INCLUDE_BETA_UPDATES, &CrossPointSettings::includeBetaUpdates,
-                                         "includeRcUpdates", StrId::STR_CAT_SYSTEM));
+  add(SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
+                          StrId::STR_CAT_SYSTEM)
+          .withSubmenu(StrId::STR_SHOW_FILES));
+  add(SettingInfo::Toggle(StrId::STR_SHOW_FILE_EXTENSIONS, &CrossPointSettings::showFileExtensions,
+                          "showFileExtensions", StrId::STR_CAT_SYSTEM)
+          .withSubmenu(StrId::STR_SHOW_FILES));
+  add(SettingInfo::Toggle(StrId::STR_INCLUDE_BETA_UPDATES, &CrossPointSettings::includeBetaUpdates, "includeRcUpdates",
+                          StrId::STR_CAT_SYSTEM));
   // OPDS download settings are edited from the OPDS server list. Keep them
   // category-less so they persist and remain available to the web API without
   // cluttering the device settings screen.
-  settings.push_back(SettingInfo::String(StrId::STR_OPDS_DOWNLOAD_FOLDER, SETTINGS.opdsDownloadFolder,
-                                         sizeof(SETTINGS.opdsDownloadFolder), "opdsDownloadFolder"));
-  settings.push_back(SettingInfo::Enum(StrId::STR_OPDS_FILENAME_FORMAT, &CrossPointSettings::opdsFilenameFormat,
-                                       {StrId::STR_FMT_AUTHOR_TITLE, StrId::STR_FMT_TITLE_AUTHOR, StrId::STR_FMT_TITLE},
-                                       "opdsFilenameFormat"));
+  add(SettingInfo::String(StrId::STR_OPDS_DOWNLOAD_FOLDER, SETTINGS.opdsDownloadFolder,
+                          sizeof(SETTINGS.opdsDownloadFolder), "opdsDownloadFolder"));
+  add(SettingInfo::Enum(StrId::STR_OPDS_FILENAME_FORMAT, &CrossPointSettings::opdsFilenameFormat,
+                        {StrId::STR_FMT_AUTHOR_TITLE, StrId::STR_FMT_TITLE_AUTHOR, StrId::STR_FMT_TITLE},
+                        "opdsFilenameFormat"));
   // Will be dealt with separately, so these receive none of the main categories and
   // are visible in the web UI but not the device UI.
-  settings.push_back(
-      SettingInfo::Toggle(StrId::STR_USE_CLOCK, &CrossPointSettings::useClock, "useClock", StrId::STR_CLOCK));
-  settings.push_back(SettingInfo::Enum(StrId::STR_CLOCK_FORMAT, &CrossPointSettings::clockFormat12h,
-                                       {StrId::STR_24H, StrId::STR_12H}, "clockFormat12h", StrId::STR_CLOCK));
-  settings.push_back(
-      SettingInfo::Enum(StrId::STR_TIMEZONE, &CrossPointSettings::timeZone,
+  add(SettingInfo::Toggle(StrId::STR_USE_CLOCK, &CrossPointSettings::useClock, "useClock", StrId::STR_CLOCK));
+  add(SettingInfo::Enum(StrId::STR_CLOCK_FORMAT, &CrossPointSettings::clockFormat12h, {StrId::STR_24H, StrId::STR_12H},
+                        "clockFormat12h", StrId::STR_CLOCK));
+  add(SettingInfo::Enum(StrId::STR_TIMEZONE, &CrossPointSettings::timeZone,
                         {StrId::STR_TZ_UTC, StrId::STR_TZ_CET, StrId::STR_TZ_EET, StrId::STR_TZ_MSK,
                          StrId::STR_TZ_UTC_PLUS4, StrId::STR_TZ_IST, StrId::STR_TZ_UTC_PLUS7, StrId::STR_TZ_UTC_PLUS8,
                          StrId::STR_TZ_UTC_PLUS9, StrId::STR_TZ_AEST, StrId::STR_TZ_NZST, StrId::STR_TZ_UTC_MINUS3,
                          StrId::STR_TZ_EST, StrId::STR_TZ_CST, StrId::STR_TZ_MST, StrId::STR_TZ_PST},
                         "timeZone", StrId::STR_CLOCK)
           .withSelectorActivity());
-  settings.push_back(SettingInfo::String(StrId::STR_NTP_SERVER, SETTINGS.ntpServer, sizeof(SETTINGS.ntpServer),
-                                         "ntpServer", StrId::STR_CLOCK));
+  add(SettingInfo::String(StrId::STR_NTP_SERVER, SETTINGS.ntpServer, sizeof(SETTINGS.ntpServer), "ntpServer",
+                          StrId::STR_CLOCK));
   // Weather
-  settings.push_back(
-      SettingInfo::Toggle(StrId::STR_USE_WEATHER, &CrossPointSettings::useWeather, "useWeather", StrId::STR_WEATHER));
+  add(SettingInfo::Toggle(StrId::STR_USE_WEATHER, &CrossPointSettings::useWeather, "useWeather", StrId::STR_WEATHER));
 
   // --- KOReader Sync (web-only, uses KOReaderCredentialStore) ---
-  settings.push_back(SettingInfo::DynamicString(
+  add(SettingInfo::DynamicString(
       StrId::STR_SYNC_SERVER_URL, static_cast<SettingInfo::StringGetterFn>(getKoReaderServerUrl),
       [](void*, const std::string& v) {
         KOREADER_STORE.setServerUrl(v);
         KOREADER_STORE.saveToFile();
       },
       "koServerUrl", StrId::STR_KOREADER_SYNC));
-  settings.push_back(SettingInfo::DynamicString(
+  add(SettingInfo::DynamicString(
       StrId::STR_KOREADER_USERNAME, static_cast<SettingInfo::StringGetterFn>(getKoReaderUsername),
       [](void*, const std::string& v) {
         KOREADER_STORE.setCredentials(v, KOREADER_STORE.getPassword());
         KOREADER_STORE.saveToFile();
       },
       "koUsername", StrId::STR_KOREADER_SYNC));
-  settings.push_back(SettingInfo::DynamicString(
-                         StrId::STR_KOREADER_PASSWORD, static_cast<SettingInfo::StringGetterFn>(getKoReaderPassword),
-                         [](void*, const std::string& v) {
-                           KOREADER_STORE.setCredentials(KOREADER_STORE.getUsername(), v);
-                           KOREADER_STORE.saveToFile();
-                         },
-                         "koPassword", StrId::STR_KOREADER_SYNC)
-                         .withObfuscated());
-  settings.push_back(SettingInfo::DynamicEnum(
+  add(SettingInfo::DynamicString(
+          StrId::STR_KOREADER_PASSWORD, static_cast<SettingInfo::StringGetterFn>(getKoReaderPassword),
+          [](void*, const std::string& v) {
+            KOREADER_STORE.setCredentials(KOREADER_STORE.getUsername(), v);
+            KOREADER_STORE.saveToFile();
+          },
+          "koPassword", StrId::STR_KOREADER_SYNC)
+          .withObfuscated());
+  add(SettingInfo::DynamicEnum(
       StrId::STR_DOCUMENT_MATCHING, {StrId::STR_FILENAME, StrId::STR_BINARY}, getKoReaderMatchMethod,
       [](void*, uint8_t v) {
         KOREADER_STORE.setMatchMethod(static_cast<DocumentMatchMethod>(v));
         KOREADER_STORE.saveToFile();
       },
       "koMatchMethod", StrId::STR_KOREADER_SYNC));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_KO_SYNC_ON_BOOK_CLOSE, &CrossPointSettings::koSyncOnBookClose,
-                                         "koSyncOnBookClose", StrId::STR_KOREADER_SYNC));
-  settings.push_back([]() {
+  add(SettingInfo::Toggle(StrId::STR_KO_SYNC_ON_BOOK_CLOSE, &CrossPointSettings::koSyncOnBookClose, "koSyncOnBookClose",
+                          StrId::STR_KOREADER_SYNC));
+  add([]() {
     SettingInfo s;
     s.nameId = StrId::STR_SEND_METADATA;
     s.type = SettingType::TOGGLE;
@@ -492,56 +466,43 @@ inline std::vector<SettingInfo> buildSettingsList() {
   }());
 
   // --- Status Bar Settings (web-only, uses StatusBarSettingsActivity) ---
-  settings.push_back(SettingInfo::Enum(StrId::STR_UPPER_PROGRESS_BAR, &CrossPointSettings::statusBarUpperProgressBar,
-                                       {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE},
-                                       "statusBarUpperProgressBar", StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Enum(
-      StrId::STR_UPPER_PROGRESS_BAR_THICKNESS, &CrossPointSettings::statusBarUpperProgressBarThickness,
-      {StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK},
-      "statusBarUpperProgressBarThickness", StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Enum(StrId::STR_STATUS_ITEMS_POSITION, &CrossPointSettings::statusBarItemsPosition,
-                                       {StrId::STR_TOP, StrId::STR_BOTTOM}, "statusBarItemsPosition",
-                                       StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount,
-                                         "statusBarChapterPageCount", StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_PRINTED_PAGE_NUMBER, &CrossPointSettings::statusBarPrintedPage,
-                                         "statusBarPrintedPage", StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_BOOK_PROGRESS_PERCENTAGE,
-                                         &CrossPointSettings::statusBarBookProgressPercentage,
-                                         "statusBarBookProgressPercentage", StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Enum(StrId::STR_TITLE, &CrossPointSettings::statusBarTitle,
-                                       {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarTitle",
-                                       StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery, "statusBarBattery",
-                                         StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Toggle(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock, "statusBarClock",
-                                         StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Enum(StrId::STR_LOWER_PROGRESS_BAR, &CrossPointSettings::statusBarLowerProgressBar,
-                                       {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE},
-                                       "statusBarLowerProgressBar", StrId::STR_CUSTOMISE_STATUS_BAR));
-  settings.push_back(SettingInfo::Enum(
-      StrId::STR_LOWER_PROGRESS_BAR_THICKNESS, &CrossPointSettings::statusBarLowerProgressBarThickness,
-      {StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK},
-      "statusBarLowerProgressBarThickness", StrId::STR_CUSTOMISE_STATUS_BAR));
-
-  return settings;
+  add(SettingInfo::Enum(StrId::STR_UPPER_PROGRESS_BAR, &CrossPointSettings::statusBarUpperProgressBar,
+                        {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarUpperProgressBar",
+                        StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Enum(StrId::STR_UPPER_PROGRESS_BAR_THICKNESS,
+                        &CrossPointSettings::statusBarUpperProgressBarThickness,
+                        {StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK},
+                        "statusBarUpperProgressBarThickness", StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Enum(StrId::STR_STATUS_ITEMS_POSITION, &CrossPointSettings::statusBarItemsPosition,
+                        {StrId::STR_TOP, StrId::STR_BOTTOM}, "statusBarItemsPosition",
+                        StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Toggle(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount,
+                          "statusBarChapterPageCount", StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Toggle(StrId::STR_PRINTED_PAGE_NUMBER, &CrossPointSettings::statusBarPrintedPage,
+                          "statusBarPrintedPage", StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Toggle(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage,
+                          "statusBarBookProgressPercentage", StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Enum(StrId::STR_TITLE, &CrossPointSettings::statusBarTitle,
+                        {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarTitle",
+                        StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Toggle(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery, "statusBarBattery",
+                          StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Toggle(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock, "statusBarClock",
+                          StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Enum(StrId::STR_LOWER_PROGRESS_BAR, &CrossPointSettings::statusBarLowerProgressBar,
+                        {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarLowerProgressBar",
+                        StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(SettingInfo::Enum(StrId::STR_LOWER_PROGRESS_BAR_THICKNESS,
+                        &CrossPointSettings::statusBarLowerProgressBarThickness,
+                        {StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM, StrId::STR_PROGRESS_BAR_THICK},
+                        "statusBarLowerProgressBarThickness", StrId::STR_CUSTOMISE_STATUS_BAR));
 }
 
 }  // namespace SettingsListDetail
 
-inline std::vector<SettingInfo> getSettingsList() {
-  std::vector<SettingInfo> settings = SettingsListDetail::buildSettingsList();
-  const bool isX3 = gpio.deviceIsX3();
-  settings.erase(std::remove_if(settings.begin(), settings.end(),
-                                [isX3](const SettingInfo& setting) {
-                                  if (setting.deviceTarget == SettingDeviceTarget::BOTH) {
-                                    return false;
-                                  }
-                                  if (setting.deviceTarget == SettingDeviceTarget::X3) {
-                                    return !isX3;
-                                  }
-                                  return isX3;
-                                }),
-                 settings.end());
-  return settings;
+template <typename Visitor>
+void forEachSetting(const Visitor& visit) {
+  SettingsListDetail::visitSettings(&visit, [](const void* context, SettingInfo&& setting) {
+    (*static_cast<const Visitor*>(context))(std::move(setting));
+  });
 }

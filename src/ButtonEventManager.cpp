@@ -100,7 +100,8 @@ void ButtonEventManager::drain() {
   input.flushRawEdges();
 }
 
-void ButtonEventManager::applyEdge(const int idx, const Button btn, const bool pressed, const unsigned long t) {
+void ButtonEventManager::applyEdge(const int idx, const Button btn, const bool pressed, const unsigned long t,
+                                   const unsigned long holdThreshold) {
   PerButton& s = buttons[idx];
   switch (s.state) {
     case State::Idle:
@@ -113,7 +114,7 @@ void ButtonEventManager::applyEdge(const int idx, const Button btn, const bool p
     case State::Pressed:
       if (!pressed) {
         const unsigned long heldMs = t - s.pressDownTime;
-        if (heldMs >= longPressDuration(btn)) {
+        if (heldMs >= holdThreshold) {
           pushEvent(btn, PressType::Long);
           s.state = State::Idle;
         } else if (hasDoubleAction(btn)) {
@@ -153,11 +154,12 @@ void ButtonEventManager::applyEdge(const int idx, const Button btn, const bool p
   }
 }
 
-void ButtonEventManager::applyTimeout(const int idx, const Button btn, const unsigned long now, const bool heldNow) {
+void ButtonEventManager::applyTimeout(const int idx, const Button btn, const unsigned long now, const bool heldNow,
+                                      const unsigned long holdThreshold) {
   PerButton& s = buttons[idx];
   switch (s.state) {
     case State::Pressed:
-      if (heldNow && now - s.pressDownTime >= longPressDuration(btn)) {
+      if (heldNow && now - s.pressDownTime >= holdThreshold) {
         // Fire Long as soon as the hold threshold passes, without waiting for
         // release. The eventual release edge lands in Idle and is ignored.
         pushEvent(btn, PressType::Long);
@@ -178,7 +180,10 @@ void ButtonEventManager::applyTimeout(const int idx, const Button btn, const uns
   }
 }
 
-void ButtonEventManager::update() {
+void ButtonEventManager::update(const bool fastBackExit) {
+  const auto holdThreshold = [fastBackExit](Button button) {
+    return fastBackExit && button == Button::Back ? FAST_BACK_PRESS_MS : longPressDuration(button);
+  };
   // 1) Replay every debounced edge the sampler captured since the last tick, in
   //    order, each with its own timestamp. Processing edges discretely (rather
   //    than sampling instantaneous wasPressed/wasReleased) means a press+release
@@ -190,7 +195,7 @@ void ButtonEventManager::update() {
       if (input.rawIndex(btn) != edge.button) {
         continue;
       }
-      applyEdge(i, btn, edge.pressed, edge.timeMs);
+      applyEdge(i, btn, edge.pressed, edge.timeMs, holdThreshold(btn));
     }
   }
 
@@ -198,6 +203,7 @@ void ButtonEventManager::update() {
   //    double-click-window expiry.
   const unsigned long now = millis();
   for (int i = 0; i < NUM_BUTTONS; i++) {
-    applyTimeout(i, ALL_BUTTONS[i], now, input.isPressed(ALL_BUTTONS[i]));
+    const Button btn = ALL_BUTTONS[i];
+    applyTimeout(i, btn, now, input.isPressed(btn), holdThreshold(btn));
   }
 }

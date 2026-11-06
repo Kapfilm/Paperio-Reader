@@ -322,8 +322,8 @@ class GfxRenderer {
   void drawImage(const uint8_t bitmap[], int x, int y, int width, int height) const;
   void drawIcon(const uint8_t bitmap[], int x, int y, int width, int height) const;
   void drawIconInverted(const uint8_t bitmap[], int x, int y, int width, int height) const;
-  void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0,
-                  float cropY = 0, bool preserveColors = false) const;
+  void drawBitmap(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight, float cropX = 0, float cropY = 0,
+                  bool preserveColors = false) const;
   void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight,
                       bool preserveColors = false) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
@@ -609,13 +609,14 @@ class GfxRenderer {
   // Release both display frame buffers back to the heap (~96-104KB total).
   // Nulls the local frameBuffer pointer too; displayBuffer() rejects flushes
   // (LOG_ERR + no-op) while it is null instead of streaming freed memory.
-  // Only valid after the final displayBuffer(); the device must reboot before
-  // any display operation is attempted again.
+  // Only valid after the final displayBuffer(); restore both buffers before
+  // drawing again.
   void releaseFrameBuffers() {
     display.releaseBuffers();
     frameBuffer = nullptr;
     releaseScaledGlyphCache();
   }
+  bool restoreFrameBuffers();
 
   // Release both display buffers and install a caller-owned scratch buffer as
   // the active framebuffer. Pixel writes during the warm pass land in scratch

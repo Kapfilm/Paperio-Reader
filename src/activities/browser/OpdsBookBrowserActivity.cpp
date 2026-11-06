@@ -18,10 +18,11 @@
 #include <cstdio>
 #include <memory>
 
+#include "BrowserListLayout.h"
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "OpdsFormatLabel.h"
-#include "SilentRestart.h"
+#include "UiFonts.h"
 #include "activities/NetworkMemoryTrim.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -34,7 +35,7 @@
 #include "util/UrlUtils.h"
 
 namespace {
-constexpr int PAGE_ITEMS = 23;
+constexpr int INITIAL_FEED_RESERVE = 25;
 
 // Hard ceiling on entries held from a single feed. Each entry costs 4 bytes in
 // the in-RAM entryOffsets index; the bodies live on the SD cache file. Well-behaved
@@ -42,19 +43,8 @@ constexpr int PAGE_ITEMS = 23;
 // server returning one giant unpaginated feed — where we'd otherwise grow the
 // offset vector until the heap OOMs. 2000 entries ≈ 8 KB, a safe bound on 380 KB RAM.
 constexpr size_t MAX_FEED_ENTRIES = 2000;
-constexpr int FORMAT_ITEM_HEIGHT = 30;
 constexpr int FORMAT_LIST_TOP_OFFSET = 20;
 constexpr int FORMAT_LIST_BOTTOM_PADDING = 20;
-
-int formatItemsPerPage(const Rect& contentRect) {
-  const int midY = contentRect.y + contentRect.height / 2;
-  const int listTop = midY + FORMAT_LIST_TOP_OFFSET;
-  const int listBottom = contentRect.y + contentRect.height - FORMAT_LIST_BOTTOM_PADDING;
-  const int rawAvailableHeight = listBottom - listTop;
-  const int availableHeight = rawAvailableHeight > FORMAT_ITEM_HEIGHT ? rawAvailableHeight : FORMAT_ITEM_HEIGHT;
-  const int itemsPerPage = availableHeight / FORMAT_ITEM_HEIGHT;
-  return itemsPerPage > 0 ? itemsPerPage : 1;
-}
 
 void writeString(HalFile& f, const std::string& s) {
   if (s.length() > UINT16_MAX) {
@@ -242,6 +232,7 @@ void OpdsBookBrowserActivity::onEnter() {
   consumeConfirm = false;
   consumeBack = false;
   memoryTrimmed = false;
+  fastExit = false;
   errorMessage.clear();
   statusMessage = tr(STR_CHECKING_WIFI);
   requestUpdate();
@@ -276,15 +267,21 @@ void OpdsBookBrowserActivity::onEnter() {
 void OpdsBookBrowserActivity::onExit() {
   Activity::onExit();
 
-  entryOffsets.clear();
-  navigationHistory.clear();
-  formatSelectionLabels.clear();
+  decltype(entryOffsets)().swap(entryOffsets);
+  decltype(navigationHistory)().swap(navigationHistory);
+  decltype(formatSelectionLabels)().swap(formatSelectionLabels);
   Storage.remove("/.tmp_opds_cache.dat");
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
-    HalClock::wifiOff(false, SETTINGS.ntpServer);
-    silentRestart();
+    HalClock::wifiOff(fastExit, SETTINGS.ntpServer);
   }
+  if (memoryTrimmed) restoreDisplayAfterNetworkSession(renderer);
+}
+
+bool OpdsBookBrowserActivity::onLongBack() {
+  fastExit = true;
+  activityManager.goHome();
+  return true;
 }
 
 void OpdsBookBrowserActivity::loop() {
@@ -369,25 +366,30 @@ void OpdsBookBrowserActivity::loop() {
       return;
     }
 
-    buttonNavigator.onNextList({MappedInputManager::Button::Down}, formatSelectorIndex,
-                               static_cast<int>(entry.acquisitionLinks.size()), [this] { requestUpdate(); });
-    buttonNavigator.onPreviousList({MappedInputManager::Button::Up}, formatSelectorIndex,
-                                   static_cast<int>(entry.acquisitionLinks.size()), [this] { requestUpdate(); });
+    const auto formatCount = static_cast<int>(entry.acquisitionLinks.size());
+    buttonNavigator.onNextList(formatSelectorIndex, formatCount, [this] { requestUpdate(); });
+    buttonNavigator.onPreviousList(formatSelectorIndex, formatCount, [this] { requestUpdate(); });
     return;
   }
 
   if (state == BrowserState::BROWSING) {
+    const auto entryCount = static_cast<int>(entryOffsets.size());
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      if (!entryOffsets.empty()) {
+      if (entryCount > 0) {
         const auto entry = getEntry(selectorIndex);
         entry.type == OpdsEntryType::BOOK ? chooseBookFormat(entry) : navigateToEntry(entry);
       }
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       navigateBack();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-      if (!searchTemplate.empty()) launchSearch();
+      if (!searchTemplate.empty()) {
+        launchSearch();
+      } else if (entryCount > 0) {
+        selectorIndex = ButtonNavigator::previousIndex(selectorIndex, entryCount);
+        requestUpdate();
+      }
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-      if (!entryOffsets.empty()) {
+      if (entryCount > 0) {
         const auto entry = getEntry(selectorIndex);
         if (entry.type == OpdsEntryType::BOOK) {
           state = BrowserState::LOADING;
@@ -396,16 +398,16 @@ void OpdsBookBrowserActivity::loop() {
           fetchCoverForEntry(entry);
           state = BrowserState::BOOK_DETAIL;
           requestUpdate();
+        } else {
+          selectorIndex = ButtonNavigator::nextIndex(selectorIndex, entryCount);
+          requestUpdate();
         }
       }
-    }
-
-    if (!entryOffsets.empty()) {
-      // Left/Right are reserved for Back and Search, so restrict to Up/Down only.
-      buttonNavigator.onNextList({MappedInputManager::Button::Down}, selectorIndex,
-                                 static_cast<int>(entryOffsets.size()), [this] { requestUpdate(); });
-      buttonNavigator.onPreviousList({MappedInputManager::Button::Up}, selectorIndex,
-                                     static_cast<int>(entryOffsets.size()), [this] { requestUpdate(); });
+    } else {
+      buttonNavigator.onNextList({MappedInputManager::Button::Down}, selectorIndex, entryCount,
+                                 [this] { requestUpdate(); });
+      buttonNavigator.onPreviousList({MappedInputManager::Button::Up}, selectorIndex, entryCount,
+                                     [this] { requestUpdate(); });
     }
   }
 }
@@ -414,11 +416,25 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
   const Rect contentRect = UITheme::getContentRect(renderer, true, false);
+  const auto& metrics = UITheme::getInstance().getMetrics();
   const int midY = contentRect.y + contentRect.height / 2;
+  const int contentBottom = contentRect.y + contentRect.height;
+  const int statusY = contentRect.y + metrics.topPadding;
+  const int statusHeight = std::max(metrics.batteryBarHeight, 5 + renderer.getLineHeight(SMALL_FONT_ID));
+  GUI.drawHeader(renderer, Rect{contentRect.x, statusY, contentRect.width, statusHeight}, nullptr);
+
+  const int titleY = statusY + statusHeight + 3;
+  const int separatorY = titleY + renderer.getLineHeight(UI_12_FONT_ID) + 3;
+  constexpr int separatorHeight = 3;
+  const int listTop = separatorY + separatorHeight + 6;
 
   // Show server name in header if available, otherwise generic title
   const char* headerTitle = server.name.empty() ? tr(STR_OPDS_BROWSER) : server.name.c_str();
-  renderer.drawCenteredText(UI_12_FONT_ID, 15, headerTitle, true, EpdFontFamily::BOLD);
+  const auto headerText =
+      renderer.truncatedText(UI_12_FONT_ID, headerTitle, contentRect.width - 32, EpdFontFamily::BOLD);
+  renderer.drawText(UI_12_FONT_ID, contentRect.x + BrowserList::leftPadding, titleY, headerText.c_str(), true,
+                    EpdFontFamily::BOLD);
+  renderer.fillRect(contentRect.x, separatorY, contentRect.width, separatorHeight);
 
   if (state == BrowserState::CHECK_WIFI) {
     renderer.drawCenteredText(UI_10_FONT_ID, midY, statusMessage.c_str());
@@ -472,17 +488,20 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
       renderer.drawCenteredText(UI_10_FONT_ID, midY - 10, author.c_str());
     }
 
-    const int listTop = midY + 20;
-    const int itemsPerPage = formatItemsPerPage(contentRect);
+    const int formatListTop = midY + FORMAT_LIST_TOP_OFFSET;
+    const int rowHeight = BrowserList::rowHeight(renderer);
+    const int itemsPerPage = std::max(1, (contentBottom - FORMAT_LIST_BOTTOM_PADDING - formatListTop) / rowHeight);
     const int pageStartIndex = formatSelectorIndex / itemsPerPage * itemsPerPage;
-    renderer.fillRect(contentRect.x, listTop + (formatSelectorIndex - pageStartIndex) * FORMAT_ITEM_HEIGHT - 2,
-                      contentRect.width - 1, FORMAT_ITEM_HEIGHT);
+    renderer.fillRect(contentRect.x, formatListTop + (formatSelectorIndex - pageStartIndex) * rowHeight,
+                      contentRect.width, rowHeight);
     for (int i = pageStartIndex;
          i < static_cast<int>(entry.acquisitionLinks.size()) && i < pageStartIndex + itemsPerPage; i++) {
       const char* label = i < static_cast<int>(formatSelectionLabels.size()) ? formatSelectionLabels[i].c_str() : "";
-      auto item = renderer.truncatedText(UI_10_FONT_ID, label, contentRect.width - 40);
-      renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, listTop + (i - pageStartIndex) * FORMAT_ITEM_HEIGHT,
-                        item.c_str(), i != formatSelectorIndex);
+      const auto item = renderer.truncatedText(
+          UI_10_FONT_ID, label, contentRect.width - BrowserList::leftPadding - BrowserList::rightPadding);
+      renderer.drawText(UI_10_FONT_ID, contentRect.x + BrowserList::leftPadding,
+                        formatListTop + (i - pageStartIndex) * rowHeight + BrowserList::rowPadding, item.c_str(),
+                        i != formatSelectorIndex);
     }
 
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DOWNLOAD), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
@@ -503,14 +522,14 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
       if (Storage.openFileForRead("OPDS", "/.tmp_opds_cover.bmp", bmpFile)) {
         Bitmap bmp(bmpFile);
         if (bmp.parseHeaders() == BmpReaderError::Ok && bmp.getWidth() > 0 && bmp.getHeight() > 0) {
-          const int coverAreaH = fmtY - 35 - 4;
+          const int coverAreaH = fmtY - listTop - 4;
           int coverH = std::min(bmp.getHeight(), coverAreaH);
           int coverW = bmp.getWidth() * coverH / bmp.getHeight();
           if (coverW > contentRect.width / 3) {
             coverW = contentRect.width / 3;
             coverH = bmp.getHeight() * coverW / bmp.getWidth();
           }
-          renderer.drawBitmap(bmp, contentRect.x, 35, coverW, coverH, 0, 0, true);
+          renderer.drawBitmap(bmp, contentRect.x, listTop, coverW, coverH, 0, 0, true);
           coverColW = coverW + 6;
         }
         bmpFile.close();
@@ -520,7 +539,7 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
     // Text column (right of cover, or full width)
     const int textX = contentRect.x + coverColW + 10;
     const int textW = contentRect.width - coverColW - 20;
-    int y = 35;
+    int y = listTop;
 
     auto title = renderer.truncatedText(UI_10_FONT_ID, entry.title.c_str(), textW, EpdFontFamily::BOLD);
     renderer.drawText(UI_10_FONT_ID, textX, y, title.c_str(), true, EpdFontFamily::BOLD);
@@ -578,28 +597,32 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
     return;
   }
 
-  const auto pageStartIndex = selectorIndex / PAGE_ITEMS * PAGE_ITEMS;
-  renderer.fillRect(contentRect.x, 60 + (selectorIndex % PAGE_ITEMS) * 30 - 2, contentRect.width - 1, 30);
-
-  for (size_t i = pageStartIndex; i < entryOffsets.size() && i < static_cast<size_t>(pageStartIndex + PAGE_ITEMS);
-       i++) {
-    const auto entry = getEntry(i);
-
-    // Format display text with type indicator
-    std::string displayText;
-    if (entry.type == OpdsEntryType::NAVIGATION) {
-      displayText = "> " + entry.title;  // Folder/navigation indicator
-    } else {
-      // Book: "Title - Author" or just "Title"
-      displayText = entry.title;
-      if (!entry.author.empty()) {
+  const int left = contentRect.x + BrowserList::leftPadding;
+  const int right = contentRect.x + contentRect.width - BrowserList::rightPadding;
+  const auto hint = renderer.truncatedText(UI_HINT_FONT_ID, tr(STR_DROPBOX_HOME_HINT), right - left);
+  renderer.drawText(UI_HINT_FONT_ID, left, listTop, hint.c_str());
+  const int entriesTop = listTop + renderer.getLineHeight(UI_HINT_FONT_ID) + 4;
+  const int rowHeight = BrowserList::rowHeight(renderer);
+  const int itemsPerPage = (contentBottom - entriesTop) / rowHeight;
+  if (itemsPerPage > 0) {
+    const int first = selectorIndex / itemsPerPage * itemsPerPage;
+    const int last = std::min(static_cast<int>(entryOffsets.size()), first + itemsPerPage);
+    for (int i = first; i < last; ++i) {
+      const auto entry = getEntry(i);
+      const int y = entriesTop + (i - first) * rowHeight;
+      const bool ink = i != selectorIndex;
+      if (!ink) renderer.fillRect(contentRect.x, y, contentRect.width, rowHeight);
+      int textLeft = left;
+      std::string displayText = entry.title;
+      if (entry.type == OpdsEntryType::NAVIGATION) {
+        BrowserList::drawFolderIcon(renderer, left, y, rowHeight, ink);
+        textLeft += BrowserList::folderTextOffset;
+      } else if (entry.type == OpdsEntryType::BOOK && !entry.author.empty()) {
         displayText += " - " + entry.author;
       }
+      const auto item = renderer.truncatedText(UI_10_FONT_ID, displayText.c_str(), right - textLeft);
+      renderer.drawText(UI_10_FONT_ID, textLeft, y + BrowserList::rowPadding, item.c_str(), ink);
     }
-
-    auto item = renderer.truncatedText(UI_10_FONT_ID, displayText.c_str(), contentRect.width - 40);
-    renderer.drawText(UI_10_FONT_ID, contentRect.x + 20, 60 + (i % PAGE_ITEMS) * 30, item.c_str(),
-                      i != static_cast<size_t>(selectorIndex));
   }
 
   renderer.displayBuffer();
@@ -624,7 +647,7 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   // Reserve up front so the per-entry push_back loop doesn't repeatedly realloc
   // (2x grow + copy) and fragment the heap mid-fetch. One page-ish worth covers
   // the common case; larger feeds grow once or twice up to MAX_FEED_ENTRIES.
-  entryOffsets.reserve(PAGE_ITEMS + 2);  // +2 for prev/next nav entries
+  entryOffsets.reserve(INITIAL_FEED_RESERVE);
   bool feedCapped = false;
 
   // Root feed: path is empty (first open or back-to-root navigation).
@@ -702,13 +725,13 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
 
   if (!prevUrl.empty()) {
     std::string resolvedPrevUrl = UrlUtils::buildUrl(url, prevUrl);
-    OpdsEntry prevEntry{OpdsEntryType::NAVIGATION, tr(STR_PREV_PAGE), "", resolvedPrevUrl, ""};
+    OpdsEntry prevEntry{OpdsEntryType::PAGINATION, tr(STR_PREV_PAGE), "", resolvedPrevUrl, ""};
     entryOffsets.insert(entryOffsets.begin(), cacheFile.position());
     writeEntryToCache(cacheFile, prevEntry);
   }
   if (!nextUrl.empty()) {
     std::string resolvedNextUrl = UrlUtils::buildUrl(url, nextUrl);
-    OpdsEntry nextEntry{OpdsEntryType::NAVIGATION, tr(STR_NEXT_PAGE), "", resolvedNextUrl, ""};
+    OpdsEntry nextEntry{OpdsEntryType::PAGINATION, tr(STR_NEXT_PAGE), "", resolvedNextUrl, ""};
     entryOffsets.push_back(cacheFile.position());
     writeEntryToCache(cacheFile, nextEntry);
   }
