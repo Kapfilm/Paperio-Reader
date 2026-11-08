@@ -11,6 +11,7 @@
 #include <sys/time.h>
 #include <time.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 
@@ -76,6 +77,7 @@ RTC_NOINIT_ATTR static float rtcTemperatureC;  // captured chip temperature at s
 RTC_NOINIT_ATTR static uint32_t rtcStateChecksum;
 
 static bool clockApproximate = true;
+static std::atomic<bool> maintenanceEnabled{false};
 
 // Drift correction scale factor (learned from NTP sync results).
 //
@@ -430,6 +432,24 @@ static void capture(bool lpValid) {
 
 namespace HalClock {
 
+void setMaintenanceEnabled(bool enabled) {
+  if (maintenanceEnabled.exchange(enabled) == enabled) {
+    return;
+  }
+
+  if (enabled) {
+    if (!isSynced() || rtcValid()) {
+      restore();
+    }
+    return;
+  }
+
+  if (esp_sntp_enabled()) {
+    esp_sntp_stop();
+  }
+  rtcClockMagic = 0;
+}
+
 void applyTimezone(uint8_t timeZoneSetting) {
   const size_t index = timeZoneSetting < (sizeof(TIMEZONES) / sizeof(TIMEZONES[0])) ? timeZoneSetting : 0;
   setenv("TZ", TIMEZONES[index].tz, 1);
@@ -512,8 +532,15 @@ bool syncNtp(char* errorBuf, size_t errorBufSize, const char* preferredServer) {
     return false;
   }
 
-  // NTP sync yields authoritative time; allow DS3231 to be updated.
   clockApproximate = false;
+  // Explicit sync and TLS can still obtain time without leaving a poller
+  // running or updating clock calibration and snapshots.
+  if (!maintenanceEnabled) {
+    esp_sntp_stop();
+    return true;
+  }
+
+  // NTP sync yields authoritative time; allow DS3231 to be updated.
   capture(false);
   nvsWriteSyncTime(rtcEpoch);
 
@@ -566,7 +593,7 @@ bool syncNtp(char* errorBuf, size_t errorBufSize, const char* preferredServer) {
 bool syncNtp(const char* preferredServer) { return syncNtp(nullptr, 0, preferredServer); }
 
 bool syncNtpIfDue(const char* preferredServer) {
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!maintenanceEnabled || WiFi.status() != WL_CONNECTED) {
     return false;
   }
 
@@ -590,7 +617,7 @@ bool syncNtpIfDue(const char* preferredServer) {
 }
 
 void saveBeforeSleep(bool keepLpAlive) {
-  if (!isSynced()) {
+  if (!maintenanceEnabled || !isSynced()) {
     return;
   }
   capture(keepLpAlive);
@@ -698,6 +725,10 @@ time_t now() {
 }
 
 void updatePeriodic(const char* preferredServer) {
+  if (!maintenanceEnabled) {
+    return;
+  }
+
   const unsigned long nowMs = millis();
   if (nowMs - lastPeriodicUpdateMs < PERIODIC_UPDATE_INTERVAL_MS) {
     return;
@@ -790,7 +821,7 @@ void formatTime(char* buf, size_t bufSize, bool use24h) {
 }
 
 void formatLogTime(char* buf, size_t bufSize) {
-  if (!isSynced()) {
+  if (!maintenanceEnabled || !isSynced()) {
     buf[0] = '\0';
     return;
   }
@@ -815,6 +846,10 @@ void wifiOff(bool skipNtpSync, const char* preferredServer) {
 }
 
 bool applyClientTime(time_t timestamp) {
+  if (!maintenanceEnabled) {
+    return false;
+  }
+
   // Validate bounds: [2020-01-01, 2100-01-01]
   static constexpr time_t MIN_TIMESTAMP = 1577836800;  // 2020-01-01 UTC
   static constexpr time_t MAX_TIMESTAMP = 4102444800;  // 2100-01-01 UTC

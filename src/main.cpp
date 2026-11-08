@@ -962,7 +962,7 @@ void setup() {
   // kind, which is what makes the gap back to `gate` the number that matters.
   markBootPhase(BootPhase::FirstPaint);
 
-  HalClock::restore();
+  HalClock::setMaintenanceEnabled(SETTINGS.useClock);
   // Split checkpoints: two boots of the same firmware differed by 14780 B of free heap and, far
   // more importantly, by largest8 65524 vs 26612 at after_activity_route — and the only thing
   // that differed was the reading-stats file (1 book / 110 s vs 36 books / 100788 s). Boot min

@@ -76,6 +76,7 @@ void ClockSettingsActivity::onActionSelected(int index) {
 void ClockSettingsActivity::onSettingToggled(int index) {
   const auto& item = menuItems[index];
   if (item.nameId == StrId::STR_USE_CLOCK) {
+    HalClock::setMaintenanceEnabled(SETTINGS.useClock);
     if (!SETTINGS.useClock) {
       SETTINGS.statusBarClock = 0;
     }

@@ -1898,6 +1898,7 @@ void CrossPointWebServer::handlePostSettings() {
   }
 
   CrossPointSettings::normalizeDependentSettings(SETTINGS);
+  HalClock::setMaintenanceEnabled(SETTINGS.useClock);
   SETTINGS.saveToFile();
 
   LOG_DBG("WEB", "Applied %d setting(s)", applied);

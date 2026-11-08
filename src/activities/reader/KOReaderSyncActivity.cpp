@@ -90,10 +90,8 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
 
   // Avoid repeated NTP churn during rapid sync retries; it can fragment heap
   // right before TLS. Re-sync only when clock is stale.
-  if (shouldSyncNtpNow()) {
+  if (SETTINGS.useClock && shouldSyncNtpNow()) {
     HalClock::syncNtp(SETTINGS.ntpServer);
-  } else {
-    LOG_DBG("KOSync", "Skipping NTP sync (recently synced)");
   }
 
   {

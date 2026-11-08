@@ -18,13 +18,16 @@
 ///    RTC memory is unavailable (cold boot).
 ///
 /// Usage:
-///  1. On boot, call `restore()` to seed the system clock from the best
-///     available source (RTC memory + LP correction > NVS).
+///  1. After loading settings and when the clock setting changes, call
+///     `setMaintenanceEnabled()` to control automatic clock maintenance.
 ///  2. After a successful NTP sync, call `syncNtp()`.
 ///  3. Before entering deep sleep, call `saveBeforeSleep()`.
 ///
 /// `now()` returns the best-effort epoch (0 if never synced).
 namespace HalClock {
+
+/// Enable automatic clock maintenance or stop it, including active SNTP polling.
+void setMaintenanceEnabled(bool enabled);
 
 /// Perform an NTP sync (requires WiFi to be connected).  Starts SNTP,
 /// waits up to 5 seconds for completion, then captures the result.
