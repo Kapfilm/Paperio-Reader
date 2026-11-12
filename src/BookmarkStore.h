@@ -92,6 +92,20 @@ class BookmarkStore {
         }
         bm.fullNote = fullNote != 0;
       }
+      if (version >= 4) {
+        uint8_t length = 0;
+        if (f.read(&length, 1) != 1 || length > MAX_TEXT_ANCHOR_LENGTH) {
+          bookmarks.clear();
+          f.close();
+          return;
+        }
+        bm.textAnchor.resize(length);
+        if (length && f.read(reinterpret_cast<uint8_t*>(bm.textAnchor.data()), length) != length) {
+          bookmarks.clear();
+          f.close();
+          return;
+        }
+      }
       bookmarks.push_back(std::move(bm));
     }
 
@@ -134,7 +148,11 @@ class BookmarkStore {
         ok = f.write(reinterpret_cast<const uint8_t*>(bm.previewAnchor.data()), anchorLen) == anchorLen;
       }
       const uint8_t fullNote = bm.fullNote ? 1 : 0;
-      ok = ok && writePodChecked(fullNote);
+      const auto textLength = static_cast<uint8_t>(bm.textAnchor.size());
+      ok = ok && writePodChecked(fullNote) && writePodChecked(textLength);
+      if (ok && textLength) {
+        ok = f.write(reinterpret_cast<const uint8_t*>(bm.textAnchor.data()), textLength) == textLength;
+      }
     }
 
     if (ok) {
@@ -153,7 +171,8 @@ class BookmarkStore {
   }
 
   // Toggle bookmark for the given page. Returns true if now starred, false if removed.
-  bool toggle(uint16_t spineIndex, uint16_t pageNumber, const std::string& previewAnchor = {}, bool fullNote = false) {
+  bool toggle(uint16_t spineIndex, uint16_t pageNumber, const std::string& previewAnchor = {}, bool fullNote = false,
+              std::string textAnchor = {}) {
     if (previewAnchor.size() > MAX_PREVIEW_ANCHOR_LENGTH) return false;
     auto it = find(spineIndex, pageNumber, previewAnchor, fullNote);
     if (it != bookmarks.end()) {
@@ -162,7 +181,7 @@ class BookmarkStore {
       return false;
     }
     if (bookmarks.size() >= MAX_BOOKMARKS) return false;
-    bookmarks.push_back({spineIndex, pageNumber, {}, previewAnchor, fullNote});
+    bookmarks.push_back({spineIndex, pageNumber, {}, previewAnchor, fullNote, std::move(textAnchor)});
     dirty = true;
     return true;
   }
@@ -180,6 +199,13 @@ class BookmarkStore {
   [[nodiscard]] const std::vector<Bookmark>& getAll() const { return bookmarks; }
   [[nodiscard]] bool isEmpty() const { return bookmarks.empty(); }
   void markDirty() { dirty = true; }
+  bool setTextAnchor(size_t index, std::string textAnchor) {
+    if (textAnchor.empty() || textAnchor.size() > MAX_TEXT_ANCHOR_LENGTH) return false;
+    bookmarks[index].textAnchor = std::move(textAnchor);
+    dirty = true;
+    return true;
+  }
+  void remapPage(size_t index, uint16_t page) { bookmarks[index].pageNumber = page; }
 
   // Set or clear the name for the bookmark at index. Empty name reverts to default label.
   void rename(size_t index, std::string name) {
@@ -195,11 +221,12 @@ class BookmarkStore {
     dirty = true;
   }
 
+  static constexpr uint8_t MAX_TEXT_ANCHOR_LENGTH = 64;
   static constexpr uint16_t MAX_NAME_LENGTH = 128;
   static constexpr uint16_t MAX_PREVIEW_ANCHOR_LENGTH = 191;
 
  private:
-  static constexpr uint8_t FILE_VERSION = 3;
+  static constexpr uint8_t FILE_VERSION = 4;
   static constexpr uint16_t MAX_BOOKMARKS = 1000;
 
   std::vector<Bookmark> bookmarks;

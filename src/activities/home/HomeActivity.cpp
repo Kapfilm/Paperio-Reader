@@ -241,6 +241,11 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
   // function) or on exit. Release under the render lock so we never free it mid-render.
   if (!secondaryBufferReleased && renderer.hasSecondaryBuffer()) {
     RenderLock lock;
+    if (!renderer.isX3()) {
+      // Quick sleep can interrupt cover loading before Home draws again.
+      // Keep the displayed Home frame in the buffer that survives the release.
+      renderer.syncWriteBufferFromDisplayed();
+    }
     if (renderer.releaseSecondaryBuffer()) {
       secondaryBufferReleased = true;
       // Keep X4 fast-differential refresh alive while the secondary buffer is gone:
@@ -716,6 +721,15 @@ void HomeActivity::onEnter() {
     }
   }
   focusSelectorIndex = -1;
+  if (sleepState.selectorIndex >= 0) {
+    const int lastBook = std::max(0, static_cast<int>(recentBooks.size()) - 1);
+    lastCarouselBookIndex = std::clamp(sleepState.carouselBookIndex, 0, lastBook);
+    if (isMinimalTheme() && sleepState.minimalMenuIndex >= 0 && !menuEntries.empty()) {
+      minimalMenuOpen = true;
+      minimalMenuIndex = std::min(sleepState.minimalMenuIndex, static_cast<int>(menuEntries.size()) - 1);
+    }
+    sleepState = {};
+  }
 
   // Trigger first update
   menuEntriesDirty = true;

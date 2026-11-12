@@ -130,7 +130,7 @@ void KakuroMenuActivity::renderList() {
   };
   GUI.drawList(renderer, Rect{0, listY, width, listHeight}, static_cast<int>(items.size()), selected, title, subtitle);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void KakuroMenuActivity::renderStats() {
@@ -158,5 +158,5 @@ void KakuroMenuActivity::renderStats() {
   };
   GUI.drawList(renderer, Rect{0, listY, width, listHeight}, 3, -1, title, subtitle);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }

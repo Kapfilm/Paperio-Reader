@@ -1736,6 +1736,14 @@ BookMetadataCache::TocEntry Epub::getTocItem(const int tocIndex) const {
   return bookMetadataCache->getTocEntry(tocIndex);
 }
 
+std::deque<uint8_t> Epub::readTocLevels() const {
+  if (!bookMetadataCache || !bookMetadataCache->isLoaded()) return {};
+  if (syntheticTocFallbackEnabled && !hasReliableToc()) {
+    return std::deque<uint8_t>(bookMetadataCache->getSpineCount(), 1);
+  }
+  return bookMetadataCache->readTocLevels();
+}
+
 int Epub::getTocItemsCount() const {
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
     return 0;

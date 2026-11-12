@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstdlib>
 #include "Epub/BookMetadataCache.h"
+#include "Epub/parsers/TocNavParser.h"
 #include "Epub.h"
 
 namespace {
@@ -23,9 +24,9 @@ class BookMetadataCacheRecovery : public ::testing::Test {
     out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   }
   static std::vector<unsigned char> valid() {
-    // Version 11, metadata boundary 42, no spine/TOC entries, eight empty strings.
+    // Version 12, metadata boundary 42, no spine/TOC entries, eight empty strings.
     std::vector<unsigned char> bytes(42, 0);
-    bytes[0] = 11;
+    bytes[0] = 12;
     bytes[1] = 42;
     return bytes;
   }
@@ -126,4 +127,39 @@ TEST_F(BookMetadataCacheRecovery, SequentialTocHandlesBibleSizeRepeatedBackwardA
     const int expected = i < 3941 ? i : i == 3941 ? 3940 : i == 3942 ? 2 : i == 3943 ? -1 : 0;
     EXPECT_EQ(spine, expected) << i;
   }
+}
+
+TEST_F(BookMetadataCacheRecovery, Epub3NavKeepsUnlinkedGroupAndLinkedChaptersInOrder) {
+  const std::string package = dir + "/package.epub";
+  std::filesystem::create_directories(package);
+  BookMetadataCache cache(dir);
+  ASSERT_TRUE(cache.beginWrite());
+  ASSERT_TRUE(cache.beginContentOpfPass());
+  cache.createSpineEntry("book.xhtml");
+  ASSERT_TRUE(cache.endContentOpfPass());
+  ASSERT_TRUE(cache.beginTocPass());
+  const std::string nav = R"(<html><body><nav epub:type="toc"><ol>
+    <li><a href="book.xhtml#intro">Introduction</a></li>
+    <li><span>Part <span>One</span></span><ol>
+      <li><a href="book.xhtml#first">First chapter</a></li>
+      <li><a href="book.xhtml#second"><span>Second chapter</span></a></li>
+    </ol></li></ol></nav></body></html>)";
+  const std::string base;
+  TocNavParser parser(base, nav.size(), &cache, nullptr);
+  ASSERT_TRUE(parser.setup());
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(nav.data()), nav.size()), nav.size());
+  ASSERT_TRUE(cache.endTocPass());
+  ASSERT_TRUE(cache.endWrite());
+  ASSERT_TRUE(cache.buildBookBin(package, {}, true));
+  ASSERT_TRUE(cache.load());
+  ASSERT_EQ(cache.getTocCount(), 4);
+  EXPECT_EQ(cache.readTocLevels(), (std::deque<uint8_t>{1, 1, 2, 2}));
+  EXPECT_EQ(cache.getTocEntry(0).anchor, "intro");
+  EXPECT_EQ(cache.getTocEntry(1).title, "Part One");
+  EXPECT_EQ(cache.getTocEntry(1).level, 1);
+  EXPECT_EQ(cache.getTocEntry(1).spineIndex, -1);
+  EXPECT_EQ(cache.getTocEntry(2).level, 2);
+  EXPECT_EQ(cache.getTocEntry(2).anchor, "first");
+  EXPECT_EQ(cache.getTocEntry(3).title, "Second chapter");
+  EXPECT_EQ(cache.getTocEntry(3).anchor, "second");
 }

@@ -33,7 +33,12 @@ constexpr StrId ALIGNMENT_IDS[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, St
 constexpr StrId DARKNESS_IDS[] = {StrId::STR_NORMAL, StrId::STR_DARK, StrId::STR_EXTRA_DARK,
                                   StrId::STR_MAX_DARK};
 
-constexpr int LAYOUT_ROW_COUNT = 4;
+constexpr int LAYOUT_ROW_COUNT = 6;
+
+uint8_t nextMargin(uint8_t margin, uint8_t firstValue) {
+  constexpr auto step = CrossPointSettings::SCREEN_MARGIN_STEP;
+  return margin > CrossPointSettings::MAX_SCREEN_MARGIN - step ? firstValue : margin + step;
+}
 constexpr int STYLE_BASE_ROW_COUNT = 7;
 }  // namespace
 
@@ -181,9 +186,15 @@ void TextSettingsActivity::activateRow(const int row) {
               static_cast<uint8_t>((SETTINGS.paragraphAlignment + 1) % CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT);
           break;
         case 1:
-          SETTINGS.screenMargin = SETTINGS.screenMargin >= 40 ? 5 : static_cast<uint8_t>(SETTINGS.screenMargin + 5);
+          SETTINGS.screenMargin = nextMargin(SETTINGS.screenMargin, CrossPointSettings::SCREEN_MARGIN_STEP);
           break;
-        case 2: {
+        case 2:
+          SETTINGS.screenMarginTop = nextMargin(SETTINGS.screenMarginTop, 0);
+          break;
+        case 3:
+          SETTINGS.screenMarginBottom = nextMargin(SETTINGS.screenMarginBottom, 0);
+          break;
+        case 4: {
           SliderPickerActivity::Config cfg{
               .titleId = StrId::STR_LINE_SPACING,
               .hintId = StrId::STR_SLIDER_STEP_HINT,
@@ -207,7 +218,7 @@ void TextSettingsActivity::activateRow(const int row) {
                                  });
           return;
         }
-        case 3:
+        case 5:
           SETTINGS.extraParagraphSpacing = !SETTINGS.extraParagraphSpacing;
           break;
       }
@@ -258,8 +269,8 @@ std::string TextSettingsActivity::rowTitle(const int row) const {
     case Tab::Size:
       return row == 0 ? tr(STR_NUMERIC_FONT_SIZES) : sizeLabel(row - 1);
     case Tab::Layout: {
-      constexpr StrId ids[] = {StrId::STR_PARA_ALIGNMENT, StrId::STR_SCREEN_MARGIN, StrId::STR_LINE_SPACING,
-                               StrId::STR_EXTRA_SPACING};
+      constexpr StrId ids[] = {StrId::STR_PARA_ALIGNMENT, StrId::STR_SCREEN_MARGIN, StrId::STR_SCREEN_MARGIN_TOP,
+                               StrId::STR_SCREEN_MARGIN_BOTTOM, StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING};
       return I18N.get(ids[row]);
     }
     case Tab::Style: {
@@ -293,8 +304,13 @@ std::string TextSettingsActivity::rowValue(const int row) const {
         case 1:
           return std::to_string(SETTINGS.screenMargin) + " px";
         case 2:
-          return std::to_string(SETTINGS.lineHeightPercent) + "%";
+          return SETTINGS.screenMarginTop ? std::to_string(SETTINGS.screenMarginTop) + " px" : tr(STR_DEFAULT_VALUE);
         case 3:
+          return SETTINGS.screenMarginBottom ? std::to_string(SETTINGS.screenMarginBottom) + " px"
+                                             : tr(STR_DEFAULT_VALUE);
+        case 4:
+          return std::to_string(SETTINGS.lineHeightPercent) + "%";
+        case 5:
           return state(SETTINGS.extraParagraphSpacing);
       }
       break;
@@ -360,10 +376,11 @@ void TextSettingsActivity::renderPreviewSample(const int top, const int height, 
   const int lineHeight = renderer.getTextHeight(previewFontId);
   const int lineAdvance = std::max(
       1, static_cast<int>(renderer.getLineHeight(previewFontId) * SETTINGS.getReaderLineCompression() + 0.5f));
-  const int textBottom = top + height - labelReserved;
-  const int maxLines = std::max(1, (textBottom - top - PREVIEW_PADDING) / lineAdvance);
+  const int textTop = top + PREVIEW_PADDING + SETTINGS.screenMarginTop;
+  const int textBottom = top + height - labelReserved - SETTINGS.screenMarginBottom;
+  const int maxLines = std::max(1, (textBottom - textTop) / lineAdvance);
   const auto lines = renderer.wrappedText(previewFontId, sample, textWidth, maxLines);
-  int y = top + PREVIEW_PADDING;
+  int y = textTop;
   for (const auto& line : lines) {
     if (y + lineHeight > textBottom) break;
     int x = textLeft;

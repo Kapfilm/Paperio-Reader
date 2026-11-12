@@ -48,13 +48,14 @@ class EpubReaderActivity final : public Activity {
       Percent,    // normalised 0.0–1.0 within spine
       Paragraph,  // KOReader paragraph LUT index
       ListItem,   // KOReader li-anchored LUT index
+      TextAnchor, // match stored text in the current layout
     };
     Kind kind = Kind::Page;
     union {
       int page;             // Kind::Page
       int tocIndex;         // Kind::TocIndex
       float spineProgress;  // Kind::Percent
-      uint16_t lutIndex;    // Kind::Paragraph / Kind::ListItem
+      uint16_t lutIndex;    // Kind::Paragraph / Kind::ListItem / Kind::TextAnchor fallback
     };
     std::string anchorStr;  // Kind::Anchor; empty for all others
     // Cross-font rescaling: page count of this spine at save time.
@@ -89,6 +90,14 @@ class EpubReaderActivity final : public Activity {
       t.anchorStr = std::move(a);
       t.fallbackPage = fallback;
       return t;
+    }
+    static NavigationTarget makeTextAnchor(std::string text, int fallback,
+                                         std::optional<uint16_t> paragraph = std::nullopt) {
+      if (text.empty()) return makePage(fallback);
+      auto target = makeAnchor(std::move(text), fallback);
+      target.kind = Kind::TextAnchor;
+      target.lutIndex = paragraph.value_or(UINT16_MAX);
+      return target;
     }
     static NavigationTarget makeTocIndex(int idx) {
       NavigationTarget t;
@@ -199,6 +208,7 @@ class EpubReaderActivity final : public Activity {
   // on the loop task without the render lock, so a turn arriving mid-render advances
   // currentPage before the summary is emitted and the render gets labelled with the page it is
   // about to be replaced by — which reads as the same page rendering twice.
+  int lastRenderedSpineIndex_ = -1;
   int lastRenderedPageIndex_ = 0;
   int lastRenderedPageCount_ = 0;
   // True when secondary display buffer allocation failed; while set we prefer
@@ -484,6 +494,7 @@ class EpubReaderActivity final : public Activity {
   int8_t bookFontSizeOverride = -1;
   uint8_t bookFontPointSizeOverride = 0;
   int16_t bookLineHeightPercentOverride = -1;
+  BookTextOverrides bookTextOverrides;
   int8_t bookBionicReadingOverride = -1;
   int8_t bookParagraphAlignmentOverride = -1;
   int8_t bookTextAntiAliasingOverride = -1;
@@ -517,9 +528,11 @@ class EpubReaderActivity final : public Activity {
   void openFootnoteMenu();
   void runFootnoteAction(uint8_t action);
   void toggleCurrentBookmark();
+  void remapBookmarksForSection();
   const std::string& annotationAnchor() const;
   bool isFullNoteView() const { return !footnoteHistory.empty() && pendingFootnotePreviewAnchor.empty(); }
-  void openAnnotation(int spine, int page, int pageCount, const std::string& anchor, bool fullNote);
+  void openAnnotation(int spine, int page, int pageCount, const std::string& anchor, bool fullNote,
+                      const std::string& textAnchor = {});
   void openFullFootnote();
   void switchFootnote(int delta);
   void resetNoteRenderState();
@@ -688,13 +701,14 @@ class EpubReaderActivity final : public Activity {
   mutable int lastStatusBarBattery = -1;
   mutable int lastStatusBarClockMinute = -1;
   bool maybeRestartForFragmentedHeap(uint32_t freeHeap, uint32_t contigHeap);
-  void saveProgress(int spineIndex, int currentPage, int pageCount);
-  // Writes the canonical EPUB progress.bin layout: spine(2) + page(2) + pageCount(2) + percent(1).
+  void saveProgress(int spineIndex, int currentPage, int pageCount, const std::string& textAnchor = {});
+  // Keep the existing 11-byte progress.bin prefix, optionally followed by a text anchor.
   // Used by the per-page saveProgress() and by transient writers (sync restore, bookmark jump) so
   // the on-disk format stays consistent regardless of caller. Static (and shared across the split
   // EpubReaderActivity/EpubReaderSync translation units) since it needs no instance state.
   static bool writeReaderProgressCache(const std::string& cachePath, int spineIndex, int currentPage, int pageCount,
-                                       uint8_t percent, int bookCurrentPage = 0, int bookTotalPages = 0);
+                                       uint8_t percent, int bookCurrentPage = 0, int bookTotalPages = 0,
+                                       const std::string& textAnchor = {});
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
@@ -718,7 +732,6 @@ class EpubReaderActivity final : public Activity {
   // reader startup path reads it.
   void applyPendingBookmarkJump();
   void applyOrientation(uint8_t orientation);
-  void applyTextDarkness(uint8_t textDarkness);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void stopAutomaticPageTurn();
   void applyBookReaderOverrides(int8_t embeddedStyleOverride, int8_t imageRenderingOverride, int8_t fontFamilyOverride,
@@ -732,7 +745,8 @@ class EpubReaderActivity final : public Activity {
                                 int8_t bionicReadingOverride, int8_t paragraphAlignmentOverride,
                                 int8_t textAntiAliasingOverride, int8_t hyphenationOverride,
                                 int8_t fontSizeNormalizationOverride, int8_t guideDotsOverride,
-                                int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride, uint8_t fontPointSizeOverride = 0);
+                                int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride,
+                                uint8_t fontPointSizeOverride = 0, const BookTextOverrides* textOverrides = nullptr);
   void openReaderMenu();
   void openQuickOverrides();
   bool getEffectiveEmbeddedStyle() const;

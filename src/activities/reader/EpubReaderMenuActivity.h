@@ -51,11 +51,11 @@ class EpubReaderMenuActivity final : public MenuListActivity {
       const int8_t initialEmbeddedStyleOverride, const int8_t initialImageRenderingOverride,
       const int8_t initialFontFamilyOverride, const std::string& initialSdFontFamilyOverride,
       const int8_t initialFontSizeOverride, const int16_t initialLineHeightPercentOverride,
-      const uint8_t initialTextDarkness, const bool initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
+      const int8_t initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
       const int8_t initialParagraphAlignmentOverride, const int8_t initialTextAntiAliasingOverride,
       const int8_t initialHyphenationOverride, const int8_t initialFontSizeNormalizationOverride,
       const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages, const bool isCurrentPageStarred,
-      const bool hasPrintedPages, const bool hasClippings, uint8_t initialFontPointSizeOverride = 0);
+      const bool hasPrintedPages, const bool hasClippings, uint8_t initialFontPointSizeOverride, const BookTextOverrides& initialTextOverrides);
 
   void onEnter() override;
   void loop() override;
@@ -68,6 +68,16 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   void prepareTabs();
   void showTab(Tab nextTab);
   void switchTab();
+  enum class TextTab : uint8_t { Font, Size, Layout, Style, Count };
+  TextTab textTab = TextTab::Count;
+  bool inTextOverrides() const { return textTab != TextTab::Count; }
+  void showTextTab(TextTab nextTab);
+  const char* currentTabLabel(size_t index) const;
+  int tabCount() const;
+  bool numericSizes() const;
+  std::string textChoiceTitle(int index) const;
+  void selectTextChoice(int index);
+  std::array<std::vector<SettingInfo>, static_cast<size_t>(TextTab::Count)> textTabItems;
   void renderTabBar(const Rect& rect) const;
   const char* tabLabel(Tab value) const;
 
@@ -96,6 +106,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   // Pending state (mutated locally, returned to parent on finish)
   uint8_t pendingOrientation = 0;
   uint8_t selectedPageTurnOption = 0;
+  BookTextOverrides pendingTextOverrides;
   int8_t pendingEmbeddedStyleOverride = -1;
   int8_t pendingImageRenderingOverride = -1;
   int8_t pendingFontFamilyOverride = -1;
@@ -103,8 +114,7 @@ class EpubReaderMenuActivity final : public MenuListActivity {
   int8_t pendingFontSizeOverride = -1;
   uint8_t pendingFontPointSizeOverride = 0;
   int16_t pendingLineHeightPercentOverride = -1;
-  uint8_t pendingTextDarkness = 1;
-  bool pendingBionicReading = false;
+  int8_t pendingBionicReading = -1;
   int8_t pendingGuideDotsOverride = -1;
   int8_t pendingParagraphAlignmentOverride = -1;
   int8_t pendingTextAntiAliasingOverride = -1;

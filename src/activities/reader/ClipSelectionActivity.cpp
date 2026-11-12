@@ -231,8 +231,8 @@ void ClipSelectionActivity::render(RenderLock&&) {
   }
   if (words[cursor].pageIndex == displayedRelativePage) drawWord(words[cursor], true);
 
-  const char* confirm = singleWordSelection ? tr(STR_LOOKUP) : (selectionStart < 0 ? tr(STR_SELECT) : tr(STR_DONE));
+  const char* confirm = singleWordSelection ? tr(STR_DICTIONARY) : (selectionStart < 0 ? tr(STR_SELECT) : tr(STR_DONE));
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirm, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, singleWordSelection);
   renderer.displayBuffer();
 }

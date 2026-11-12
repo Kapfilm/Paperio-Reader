@@ -105,7 +105,7 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
-      if (applyUiTextSize(renderer, SETTINGS.uiTextSize != 0, SETTINGS.uiFontStyle == 1)) {
+      if (applyUiTextSize(renderer, SETTINGS.uiTextSize, SETTINGS.uiFontStyle == 1)) {
         UITheme::getInstance().reload();
         UITheme::getInstance().getMutableTheme().invalidateFrameCache();
         renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
@@ -505,6 +505,17 @@ void ActivityManager::goToWeather() { replaceActivity(std::make_unique<WeatherAc
 void ActivityManager::goHome(std::string focusBookPath, int focusSelectorIndex) {
   hasReturnHint = false;
   replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, std::move(focusBookPath), focusSelectorIndex));
+}
+
+HomeSleepState ActivityManager::captureHomeForQuickSleep() const {
+  RenderLock lock;
+  if (!currentActivity || currentActivity->getName() != "Home") return {};
+  return static_cast<const HomeActivity&>(*currentActivity).getSleepState();
+}
+
+void ActivityManager::resumeHomeFromQuickSleep(const HomeSleepState& state) {
+  hasReturnHint = false;
+  replaceActivity(std::make_unique<HomeActivity>(renderer, mappedInput, state));
 }
 
 void ActivityManager::pushActivity(std::unique_ptr<Activity>&& activity) {

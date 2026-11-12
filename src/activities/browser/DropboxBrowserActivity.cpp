@@ -506,7 +506,7 @@ void DropboxBrowserActivity::render(RenderLock&&) {
     confirm = tr(STR_DROPBOX_SETUP);
   } else if (state_ == State::Error) {
     drawMessage(body, errorText());
-    confirm = tr(STR_RETRY);
+    confirm = tr(STR_DROPBOX_RETRY);
   } else if (state_ == State::Message) {
     drawMessage(body, status_.c_str(), detail_);
     confirm = tr(STR_DONE);

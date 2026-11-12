@@ -37,6 +37,7 @@ class TocNavParser final : public Print {
 
   // Track nesting depth for <ol> elements to determine TOC depth
   uint8_t olDepth = 0;
+  unsigned labelSpanDepth = 0;
   // Current entry data being collected
   std::string currentLabel;
   std::string currentHref;

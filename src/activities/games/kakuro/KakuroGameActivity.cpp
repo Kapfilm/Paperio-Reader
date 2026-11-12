@@ -427,7 +427,7 @@ void KakuroGameActivity::drawFooter() {
   const char* back = focus == Focus::Grid ? tr(STR_KAKURO_MENU) : tr(STR_KAKURO_CANCEL);
   const char* confirm = focus == Focus::Grid ? tr(STR_KAKURO_PICK_NUMBER) : tr(STR_KAKURO_PLACE);
   const auto labels = mappedInput.mapLabels(back, confirm, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void KakuroGameActivity::renderGameMenu() {
@@ -443,7 +443,7 @@ void KakuroGameActivity::renderGameMenu() {
   GUI.drawList(renderer, Rect{0, listY, width, listHeight}, MENU_ITEM_COUNT, gameMenuIndex,
                [&](int index) { return std::string(I18N.get(items[index])); });
   const auto labels = mappedInput.mapLabels(tr(STR_GAME_RESUME), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void KakuroGameActivity::renderWon() {
@@ -482,6 +482,6 @@ void KakuroGameActivity::renderWon() {
   const int totalWidth = renderer.getTextWidth(NOTOSANS_16_FONT_ID, completed);
   renderer.drawText(NOTOSANS_16_FONT_ID, width - 48 - totalWidth, blockTop + 224, completed);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_GAME_HOME), tr(STR_KAKURO_PLAY_AGAIN), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  const auto labels = mappedInput.mapLabels(tr(STR_GAME_HOME), tr(STR_GAME_PLAY_AGAIN), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }

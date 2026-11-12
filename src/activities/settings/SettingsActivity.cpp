@@ -31,7 +31,8 @@ bool isUnifiedTextSetting(const SettingInfo& setting) {
       "fontFamily",         "fontSize",           "textAntiAliasing",
       "fastAntiAliasingV2", "textDarkness",       "paragraphAlignment",
       "embeddedStyle",      "hyphenationEnabled", "fontSizeNormalization",
-      "screenMargin",       "lineHeightPercent",  "extraParagraphSpacing",
+      "screenMargin",       "screenMarginTop",    "screenMarginBottom",
+      "lineHeightPercent",  "extraParagraphSpacing",
       "bionicReading",      "guideDots",
   };
   for (const char* key : keys) {

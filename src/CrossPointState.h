@@ -30,12 +30,14 @@ struct PendingBookmarkJumpState {
   uint16_t pageNumber = 0;  // page within spine (EPUB) or global page (TXT)
 
   std::string previewAnchor;
+  std::string textAnchor;
   bool fullNote = false;
 
   void clear() {
     active = false;
     bookPath.clear();
     previewAnchor.clear();
+    textAnchor.clear();
     fullNote = false;
     spineIndex = 0;
     pageNumber = 0;
@@ -91,6 +93,12 @@ struct KOReaderSyncSessionState {
   }
 };
 
+struct HomeSleepState {
+  int selectorIndex = -1;
+  int carouselBookIndex = 0;
+  int minimalMenuIndex = -1;
+};
+
 class CrossPointState {
   // Static instance
   static CrossPointState instance;
@@ -104,6 +112,7 @@ class CrossPointState {
   // When false, setup() skips the boot screen on wake and instead restores the
   // saved framebuffer overlaid with a loading icon (Quick Resume).
   bool showBootScreen = true;
+  HomeSleepState quickSleepHome;
   KOReaderSyncSessionState koReaderSyncSession;
   PendingBookmarkJumpState pendingBookmarkJump;
   ~CrossPointState() = default;

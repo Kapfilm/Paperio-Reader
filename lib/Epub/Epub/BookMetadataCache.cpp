@@ -12,7 +12,7 @@
 #include "FsHelpers.h"
 
 namespace {
-constexpr uint8_t BOOK_CACHE_VERSION = 11;
+constexpr uint8_t BOOK_CACHE_VERSION = 12;
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
 constexpr char tmpTocBinFile[] = "/toc.bin.tmp";
@@ -505,7 +505,9 @@ void BookMetadataCache::createTocEntry(const std::string& title, const std::stri
 
   int16_t spineIndex = -1;
 
-  if (sequentialSpineReader_) {
+  if (href.empty()) {
+    // Unlinked EPUB 3 TOC group.
+  } else if (sequentialSpineReader_) {
     // Exact comparison also handles repeated targets. A backwards target wraps
     // once; missing targets scan at most one full spine, never loop forever.
     if (sequentialSpineIndex_ >= 0 && sequentialSpineEntry_.href == href) {
@@ -646,6 +648,24 @@ BookMetadataCache::TocEntry BookMetadataCache::getTocEntry(const int index) {
   serialization::readPod(bookFile, tocEntryPos);
   bookFile.seek(tocEntryPos);
   return readTocEntry(bookFile);
+}
+
+std::deque<uint8_t> BookMetadataCache::readTocLevels() {
+  std::deque<uint8_t> levels;
+  if (!loaded || tocCount == 0) return levels;
+
+  // TOC entries are written contiguously. Read the first offset once to avoid
+  // jumping between the lookup table and the data for every chapter.
+  bookFile.seek(lutOffset + sizeof(uint32_t) * spineCount);
+  uint32_t firstEntry = 0;
+  serialization::readPod(bookFile, firstEntry);
+  bookFile.seek(firstEntry);
+  TocEntry entry;
+  for (int i = 0; i < tocCount; ++i) {
+    readTocEntry(bookFile, entry);
+    levels.push_back(entry.level);
+  }
+  return levels;
 }
 
 void BookMetadataCache::readSpineEntry(FsFile& file, SpineEntry& out) const {

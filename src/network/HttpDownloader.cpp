@@ -81,6 +81,7 @@ struct Sink {
   HttpDownloader::ProgressCallback progress;
   size_t total = 0;
   size_t downloaded = 0;
+  uint32_t timeoutMs = HTTP_TIMEOUT_MS;
 };
 
 bool isRedirect(int status) {
@@ -114,7 +115,7 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   http.setCACert(CROSSPOINT_ROOTS_PEM);
   http.setAllowInsecureFallback(allowInsecureFallback);
   http.setAllowCertificateDateErrors(!clockReady);
-  http.setTimeout(HTTP_TIMEOUT_MS);
+  http.setTimeout(sink.timeoutMs);
   http.setUserAgent("PaperioReader-ESP32-" CROSSPOINT_VERSION);
   if (!username.empty() && !password.empty()) {
     http.setBasicAuth(username, password);
@@ -282,10 +283,11 @@ bool HttpDownloader::fetchUrlVerified(const std::string& url, const DataCallback
 }
 
 bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, const std::string& username,
-                              const std::string& password) {
+                              const std::string& password, uint32_t timeoutMs) {
   LOG_DBG("HTTP", "Fetching: %s", url.c_str());
   outContent.clear();  // start clean; the sink appends, so don't carry prior content
   Sink sink;
+  sink.timeoutMs = timeoutMs;
   sink.write = [&outContent](const uint8_t* data, size_t len) {
     outContent.append(reinterpret_cast<const char*>(data), len);
     return true;

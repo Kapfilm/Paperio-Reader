@@ -20,16 +20,20 @@ TEST_F(GlobalBookmarkIndexTest, RoundTripsNoteBookmarksFromBookStore) {
   Storage.mkdir("/cache");
   BookmarkStore store;
   store.load("/cache");
-  ASSERT_TRUE(store.toggle(5, 1));
+  ASSERT_TRUE(store.toggle(5, 1, {}, false, "текстзакладки"));
   ASSERT_TRUE(store.toggle(5, 1, "ps112v05"));
   ASSERT_TRUE(store.toggle(5, 1, "ps112v05", true));
-  store.save();
+  ASSERT_TRUE(store.save());
+  store.load("/cache");
+  ASSERT_EQ(store.getAll().size(), 3u);
+  EXPECT_EQ(store.getAll().front().textAnchor, "текстзакладки");
   GLOBAL_BOOKMARKS.syncFromStore(store, "/bible.epub", "/cache", "Bible", false);
   GLOBAL_BOOKMARKS.load();
   ASSERT_EQ(GLOBAL_BOOKMARKS.getEntries().size(), 1u);
   const auto& saved = GLOBAL_BOOKMARKS.getEntries().front().bookmarks;
   ASSERT_EQ(saved.size(), 3u);
   EXPECT_TRUE(saved[0].previewAnchor.empty());
+  EXPECT_EQ(saved[0].textAnchor, "текстзакладки");
   EXPECT_EQ(saved[1].previewAnchor, "ps112v05");
   EXPECT_FALSE(saved[1].fullNote);
   EXPECT_EQ(saved[2].previewAnchor, "ps112v05");
@@ -62,4 +66,31 @@ TEST_F(GlobalBookmarkIndexTest, ReadsStableIndexWithoutAddingNoteContext) {
   EXPECT_EQ(saved[0].name, "Old bookmark");
   EXPECT_TRUE(saved[0].previewAnchor.empty());
   EXPECT_FALSE(saved[0].fullNote);
+}
+
+TEST_F(GlobalBookmarkIndexTest, MigratesVersionThreeBookBookmark) {
+  Storage.mkdir("/cache");
+  std::ofstream file(Storage.path("/cache/bookmarks.bin"), std::ios::binary);
+  const auto pod = [&](auto value) { file.write(reinterpret_cast<const char*>(&value), sizeof(value)); };
+  pod(uint8_t{3});
+  pod(uint16_t{1});
+  pod(uint16_t{5});
+  pod(uint16_t{14});
+  pod(uint16_t{3});
+  file.write("Old", 3);
+  pod(uint16_t{0});
+  pod(uint8_t{0});
+  file.close();
+
+  BookmarkStore store;
+  store.load("/cache");
+  ASSERT_EQ(store.getAll().size(), 1u);
+  EXPECT_TRUE(store.getAll()[0].textAnchor.empty());
+  ASSERT_TRUE(store.setTextAnchor(0, "retainedtext"));
+  ASSERT_TRUE(store.save());
+  store.load("/cache");
+  ASSERT_EQ(store.getAll().size(), 1u);
+  EXPECT_EQ(store.getAll()[0].name, "Old");
+  EXPECT_EQ(store.getAll()[0].pageNumber, 14);
+  EXPECT_EQ(store.getAll()[0].textAnchor, "retainedtext");
 }

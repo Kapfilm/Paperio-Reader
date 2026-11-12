@@ -103,6 +103,11 @@ void GlobalBookmarkIndex::load() {
         }
         bm.fullNote = fullNote != 0;
       }
+      if (version >= 3 && !readString(f, bm.textAnchor, BookmarkStore::MAX_TEXT_ANCHOR_LENGTH)) {
+        entries.clear();
+        f.close();
+        return;
+      }
       e.bookmarks.push_back(std::move(bm));
     }
     entries.push_back(std::move(e));
@@ -140,6 +145,7 @@ void GlobalBookmarkIndex::save() const {
       writeString(f, bm.previewAnchor);
       const uint8_t fullNote = bm.fullNote ? 1 : 0;
       f.write(&fullNote, 1);
+      writeString(f, bm.textAnchor);
     }
   }
   f.close();

@@ -10,12 +10,15 @@ class WeatherClient {
   /// If forceRefresh is true, always fetches from the API.
   static WeatherData getWeather(const WeatherSettingsStore& settings, bool forceRefresh = false);
 
+  /// Refresh the configured location once with a short HTTP timeout before sleep.
+  static void refreshBeforeSleep(const WeatherSettingsStore& settings);
+
   /// Search for cities by name via Open-Meteo geocoding API.
   /// Returns up to 5 results.
   static std::vector<GeocodingResult> searchCity(const std::string& query, bool* requestSucceeded = nullptr);
 
  private:
-  static WeatherData fetchFromApi(const WeatherSettingsStore& settings);
+  static WeatherData fetchFromApi(const WeatherSettingsStore& settings, bool quick = false);
   static bool parseWeatherJson(const std::string& json, WeatherData& data);
   static std::string buildRequestSignature(const WeatherSettingsStore& settings);
   static bool saveCache(const WeatherData& data);

@@ -9,4 +9,5 @@ struct Bookmark {
   std::string name;           // optional user-provided label (empty = use default)
   std::string previewAnchor;  // empty for ordinary pages; preview pages are anchor-relative
   bool fullNote = false;
+  std::string textAnchor;
 };

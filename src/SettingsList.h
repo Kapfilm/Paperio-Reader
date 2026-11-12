@@ -107,7 +107,8 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
 
   // --- Display ---
   add(SettingInfo::Enum(StrId::STR_UI_TEXT_SIZE, &CrossPointSettings::uiTextSize,
-                        {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_TEXT_LARGE}, "uiTextSize", StrId::STR_CAT_DISPLAY));
+                        {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_TEXT_LARGE, StrId::STR_UI_TEXT_MEDIUM},
+                        "uiTextSize", StrId::STR_CAT_DISPLAY));
   add(SettingInfo::Enum(StrId::STR_UI_FONT_STYLE, &CrossPointSettings::uiFontStyle,
                         {StrId::STR_UI_TEXT_NORMAL, StrId::STR_UI_FONT_DARK}, "uiFontStyle", StrId::STR_CAT_DISPLAY));
   add(SettingInfo::Enum(StrId::STR_DARK_MODE, &CrossPointSettings::darkMode,
@@ -120,7 +121,8 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
   add(SettingInfo::Enum(
           StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen,
           {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER, StrId::STR_NONE_OPT,
-           StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY, StrId::STR_QUICK_RESUME, StrId::STR_RANDOM_HIGHLIGHT},
+           StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY, StrId::STR_QUICK_RESUME, StrId::STR_RANDOM_HIGHLIGHT,
+           StrId::STR_SLEEP_CALENDAR, StrId::STR_SLEEP_CALENDAR_WEATHER},
           "sleepScreen", StrId::STR_CAT_DISPLAY)
           .withSubcategory(StrId::STR_MENU_DISP_SLEEP)
           .withSelectorActivity());
@@ -227,9 +229,17 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
   add(SettingInfo::Toggle(StrId::STR_LARGE_IMAGE_PLACEHOLDER, &CrossPointSettings::largeImagePlaceholder,
                           "largeImagePlaceholder", StrId::STR_CAT_READER)
           .withSubmenu(StrId::STR_IMAGES));
-  add(SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin, {5, 40, 5}, "screenMargin",
+  add(SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin,
+                         {CrossPointSettings::SCREEN_MARGIN_STEP, CrossPointSettings::MAX_SCREEN_MARGIN,
+                          CrossPointSettings::SCREEN_MARGIN_STEP}, "screenMargin",
                          StrId::STR_CAT_READER)
           .withSubmenu(StrId::STR_MENU_READER_SPACING));
+  add(SettingInfo::Value(StrId::STR_SCREEN_MARGIN_TOP, &CrossPointSettings::screenMarginTop,
+                         {0, CrossPointSettings::MAX_SCREEN_MARGIN, CrossPointSettings::SCREEN_MARGIN_STEP},
+                         "screenMarginTop", StrId::STR_CAT_READER));
+  add(SettingInfo::Value(StrId::STR_SCREEN_MARGIN_BOTTOM, &CrossPointSettings::screenMarginBottom,
+                         {0, CrossPointSettings::MAX_SCREEN_MARGIN, CrossPointSettings::SCREEN_MARGIN_STEP},
+                         "screenMarginBottom", StrId::STR_CAT_READER));
   add(SettingInfo::Value(StrId::STR_LINE_SPACING, &CrossPointSettings::lineHeightPercent,
                          {CrossPointSettings::MIN_LINE_HEIGHT_PERCENT, CrossPointSettings::MAX_LINE_HEIGHT_PERCENT,
                           CrossPointSettings::LINE_HEIGHT_PERCENT_STEP},
@@ -411,7 +421,8 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
                         {StrId::STR_TZ_UTC, StrId::STR_TZ_CET, StrId::STR_TZ_EET, StrId::STR_TZ_MSK,
                          StrId::STR_TZ_UTC_PLUS4, StrId::STR_TZ_IST, StrId::STR_TZ_UTC_PLUS7, StrId::STR_TZ_UTC_PLUS8,
                          StrId::STR_TZ_UTC_PLUS9, StrId::STR_TZ_AEST, StrId::STR_TZ_NZST, StrId::STR_TZ_UTC_MINUS3,
-                         StrId::STR_TZ_EST, StrId::STR_TZ_CST, StrId::STR_TZ_MST, StrId::STR_TZ_PST},
+                         StrId::STR_TZ_EST, StrId::STR_TZ_CST, StrId::STR_TZ_MST, StrId::STR_TZ_PST,
+                         StrId::STR_TZ_AST_ADT, StrId::STR_TZ_ACST_ACDT, StrId::STR_TZ_AKST_AKDT, StrId::STR_TZ_UTC_PLUS5},
                         "timeZone", StrId::STR_CLOCK)
           .withSelectorActivity());
   add(SettingInfo::String(StrId::STR_NTP_SERVER, SETTINGS.ntpServer, sizeof(SETTINGS.ntpServer), "ntpServer",

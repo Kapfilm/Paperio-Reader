@@ -157,7 +157,7 @@ class BaseTheme {
   virtual void drawBatteryRight(const GfxRenderer& renderer, Rect rect,
                                 bool showPercentage = true) const;  // Right aligned (UI headers)
   virtual void drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
-                               const char* btn4, bool fitLabels = false) const;
+                               const char* btn4, bool equalWidths = false) const;
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;
   virtual void drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                         const std::function<std::string(int index)>& rowTitle,
@@ -239,8 +239,6 @@ class BaseTheme {
   static void drawBatteryLightningBolt(const GfxRenderer& renderer, int boltX, int boltY);
 
  protected:
-  // Only callers that request full captions opt into scaling; existing screens
-  // retain their normal truncation behavior.
-  void drawButtonHintLabel(const GfxRenderer& renderer, int fontId, const char* label, int x, int y, int buttonWidth,
-                           bool fitLabel) const;
+  void drawCapsuleButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
+                             const char* btn4, int fontId, int reservedHeight, bool equalWidths) const;
 };

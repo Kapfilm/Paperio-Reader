@@ -16,6 +16,7 @@
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
+#include "UiFonts.h"
 #include "fontIds.h"
 #include "util/BookArchiveUtils.h"
 #include "util/TabBarLayout.h"
@@ -175,31 +176,9 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, cons
 }
 
 void MinimalTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
-                                   const char* btn4, const bool fitLabels) const {
-  const auto originalOrientation = renderer.getOrientation();
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-
-  const int pageHeight = renderer.getScreenHeight();
-  const int screenWidth = renderer.getScreenWidth();
-  constexpr int buttonWidth = 80;
-  constexpr int smallButtonHeight = 15;
-  constexpr int textYOffset = 7;
-  constexpr int x4Positions[] = {58, 146, 254, 342};
-  constexpr int x3Positions[] = {65, 157, 291, 383};
-  const int* positions = screenWidth > 500 ? x3Positions : x4Positions;
-  const char* labels[] = {btn1, btn2, btn3, btn4};
-
-  for (int i = 0; i < 4; ++i) {
-    const bool hasLabel = labels[i] != nullptr && labels[i][0] != '\0';
-    const int height = hasLabel ? MinimalMetrics::values.buttonHintsHeight : smallButtonHeight;
-    const int y = pageHeight - height;
-    renderer.fillRoundedRect(positions[i], y, buttonWidth, height, kButtonCornerRadius, Color::White);
-    renderer.drawRoundedRect(positions[i], y, buttonWidth, height, 1, kButtonCornerRadius, true);
-    if (hasLabel) {
-      drawButtonHintLabel(renderer, SMALL_FONT_ID, labels[i], positions[i], y + textYOffset, buttonWidth, fitLabels);
-    }
-  }
-  renderer.setOrientation(originalOrientation);
+                                   const char* btn4, bool equalWidths) const {
+  drawCapsuleButtonHints(renderer, btn1, btn2, btn3, btn4, COMPACT_BUTTON_FONT_ID, MinimalMetrics::values.buttonHintsHeight,
+                         equalWidths);
 }
 
 void MinimalTheme::drawRecentBookCover(GfxRenderer& renderer, const Rect rect,

@@ -144,6 +144,7 @@ void GlobalBookmarksActivity::openSelected() {
   jump.pageNumber = bm.pageNumber;
   jump.previewAnchor = bm.previewAnchor;
   jump.fullNote = bm.fullNote;
+  jump.textAnchor = bm.textAnchor;
   APP_STATE.saveToFile();
 
   LOG_DBG("GBA", "Jumping to bookmark in %s at %u/%u", entry.sourcePath.c_str(), bm.spineIndex, bm.pageNumber);
@@ -279,8 +280,9 @@ void GlobalBookmarksActivity::render(RenderLock&&) {
   }
 
   const bool hasBookmarks = !rows.empty() && !isSeparatorRow(selectorIndex);
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), hasBookmarks ? tr(STR_OPEN) : "",
-                                            hasBookmarks ? tr(STR_RENAME) : "", hasBookmarks ? tr(STR_DELETE) : "");
+  const char* homeLabel = renderer.isX3() ? tr(STR_HOME) : tr(STR_RECENT_HOME_FULL);
+  const auto labels = mappedInput.mapLabels(homeLabel, hasBookmarks ? tr(STR_OPEN) : "",
+                                            hasBookmarks ? tr(STR_BOOKMARK_RENAME_SHORT) : "", hasBookmarks ? tr(STR_DELETE) : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   GUI.drawSideButtonHints(renderer, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
 

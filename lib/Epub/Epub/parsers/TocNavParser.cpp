@@ -105,6 +105,11 @@ void TocNavParser::startElement(void* userData, const char* name, const char** a
     return;
   }
 
+  if (self->state == IN_LI && strcmp(name, "span") == 0) {
+    ++self->labelSpanDepth;
+    return;
+  }
+
   if (strcmp(name, "ol") == 0) {
     self->olDepth++;
     self->state = IN_OL;
@@ -135,7 +140,7 @@ void TocNavParser::characterData(void* userData, const char* s, const int len) {
   auto* self = static_cast<TocNavParser*>(userData);
 
   // Collect text inside the anchor of either nav (TOC or page-list).
-  if (self->state == IN_ANCHOR) {
+  if (self->state == IN_ANCHOR || self->labelSpanDepth > 0) {
     self->currentLabel.append(s, len);
   } else if (self->state == IN_PL_ANCHOR) {
     self->currentPageLabel.append(s, len);
@@ -188,6 +193,17 @@ void TocNavParser::endElement(void* userData, const char* name) {
   }
 
   // ---- TOC nav close handlers
+  if (strcmp(name, "span") == 0 && self->labelSpanDepth > 0) {
+    if (--self->labelSpanDepth == 0) {
+      // EPUB 3 allows an unlinked span as the title of a group of chapters.
+      if (self->cache && self->currentLabel.find_first_not_of(" \t\r\n") != std::string::npos) {
+        self->cache->createTocEntry(self->currentLabel, "", "", self->olDepth);
+      }
+      self->currentLabel.clear();
+    }
+    return;
+  }
+
   if (strcmp(name, "a") == 0 && self->state == IN_ANCHOR) {
     // Create TOC entry when closing anchor tag (we have all data now)
     if (!self->currentLabel.empty() && !self->currentHref.empty()) {

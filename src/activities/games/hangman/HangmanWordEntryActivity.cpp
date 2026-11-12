@@ -161,7 +161,7 @@ void HangmanWordEntryActivity::renderEntry() {
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void HangmanWordEntryActivity::renderReady() {
@@ -173,5 +173,5 @@ void HangmanWordEntryActivity::renderReady() {
   renderer.drawCenteredText(UI_12_FONT_ID, top + titleH + 26, tr(STR_HANGMAN_WORD_HIDDEN));
   renderer.drawCenteredText(UI_12_FONT_ID, top + titleH + bodyH + 42, tr(STR_HANGMAN_PRESS_START));
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_HANGMAN_START), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }

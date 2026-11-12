@@ -1,5 +1,7 @@
 #pragma once
 
+#include "BookTextOverrides.h"
+
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -49,6 +51,7 @@ struct MenuResult {
   int16_t lineHeightPercentOverride = -1;
   // Appended to preserve positional initializers in legacy reader menus.
   uint8_t fontPointSizeOverride = 0;  // 0 inherits named/global size; otherwise exact point size.
+  BookTextOverrides textOverrides;
 };
 
 struct ChapterResult {
@@ -97,6 +100,7 @@ struct StarredPageResult {
   int pageNumber = 0;
   std::string previewAnchor;
   bool fullNote = false;
+  std::string textAnchor;
 };
 
 struct ClippingResult {

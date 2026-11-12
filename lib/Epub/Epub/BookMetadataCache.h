@@ -148,6 +148,7 @@ class BookMetadataCache {
   bool load();
   SpineEntry getSpineEntry(int index);
   TocEntry getTocEntry(int index);
+  std::deque<uint8_t> readTocLevels();
   int getSpineCount() const { return spineCount; }
   int getTocCount() const { return tocCount; }
   bool isTocReliable() const { return tocReliable; }

@@ -28,7 +28,7 @@ class MinimalTheme final : public LyraTheme {
   void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
                   const char* subtitle = nullptr) const override;
   void drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3, const char* btn4,
-                       bool fitLabels = false) const override;
+                       bool equalWidths = false) const override;
   void drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std::vector<RecentBook>& recentBooks,
                            int selectorIndex, bool& coverRendered, bool& coverBufferStored, bool& bufferRestored,
                            std::function<bool()> storeCoverBuffer) const override;

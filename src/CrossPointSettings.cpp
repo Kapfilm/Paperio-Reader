@@ -9,6 +9,7 @@
 #include <string>
 
 #include "SdCardFontGlobals.h"
+#include "UiFonts.h"
 #include "fontIds.h"
 
 // Font ID 0 is reserved as the SD card font "not found" sentinel
@@ -37,7 +38,7 @@ void enforceFixedShortActions(CrossPointSettings& settings) {
 
 void CrossPointSettings::normalizeDependentSettings(CrossPointSettings& settings) {
   if (settings.powerWakeMode >= POWER_WAKE_MODE_COUNT) settings.powerWakeMode = POWER_WAKE_SHORT;
-  if (settings.uiTextSize > 1) settings.uiTextSize = 0;
+  if (settings.uiTextSize > UiTextSize::Medium) settings.uiTextSize = UiTextSize::Normal;
   if (settings.uiFontStyle > 1) settings.uiFontStyle = 0;
   if (settings.tiltPageTurn == 2) {
     settings.tiltPageTurn = 1;
@@ -154,6 +155,14 @@ uint8_t CrossPointSettings::clampedLineHeightPercent(const uint8_t value) {
   if (value < MIN_LINE_HEIGHT_PERCENT) return MIN_LINE_HEIGHT_PERCENT;
   if (value > MAX_LINE_HEIGHT_PERCENT) return MAX_LINE_HEIGHT_PERCENT;
   return value;
+}
+
+int CrossPointSettings::getTopTextPadding(int reservedHeight) const {
+  return screenMarginTop ? reservedHeight + screenMarginTop : std::max<int>(screenMargin, reservedHeight);
+}
+
+int CrossPointSettings::getBottomTextPadding(int reservedHeight) const {
+  return screenMarginBottom ? reservedHeight + screenMarginBottom : std::max<int>(screenMargin, reservedHeight);
 }
 
 float CrossPointSettings::getReaderLineCompression() const {

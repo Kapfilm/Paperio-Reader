@@ -181,8 +181,8 @@ void FifteenGameActivity::renderPlaying() {
                       EpdFontFamily::BOLD);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_GAME_NEW_GAME), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_GAME_NEW_SHORT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void FifteenGameActivity::renderWon() {
@@ -194,6 +194,6 @@ void FifteenGameActivity::renderWon() {
   char status[64];
   snprintf(status, sizeof(status), "%s: %lu", tr(STR_FIFTEEN_MOVES), static_cast<unsigned long>(moves));
   renderer.drawCenteredText(UI_12_FONT_ID, top + titleH + 26, status);
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_GAME_NEW_GAME), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  const auto labels = mappedInput.mapLabels(tr(STR_GAME_HOME), tr(STR_GAME_NEW_SHORT), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }

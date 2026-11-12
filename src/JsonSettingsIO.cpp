@@ -98,6 +98,12 @@ bool JsonSettingsIO::saveState(const CrossPointState& s, const char* path) {
   doc["lastSleepFromReader"] = s.lastSleepFromReader;
   doc["recentBooksGridView"] = s.recentBooksGridView;
   doc["showBootScreen"] = s.showBootScreen;
+  if (s.quickSleepHome.selectorIndex >= 0) {
+    JsonObject home = doc["quickSleepHome"].to<JsonObject>();
+    home["selectorIndex"] = s.quickSleepHome.selectorIndex;
+    home["carouselBookIndex"] = s.quickSleepHome.carouselBookIndex;
+    home["minimalMenuIndex"] = s.quickSleepHome.minimalMenuIndex;
+  }
   // Information about a pending KOReader sync session
   JsonObject sync = doc["koReaderSyncSession"].to<JsonObject>();
   sync["active"] = s.koReaderSyncSession.active;
@@ -125,6 +131,7 @@ bool JsonSettingsIO::saveState(const CrossPointState& s, const char* path) {
   jump["spineIndex"] = s.pendingBookmarkJump.spineIndex;
   jump["pageNumber"] = s.pendingBookmarkJump.pageNumber;
   jump["previewAnchor"] = s.pendingBookmarkJump.previewAnchor;
+  jump["textAnchor"] = s.pendingBookmarkJump.textAnchor;
   jump["fullNote"] = s.pendingBookmarkJump.fullNote;
 
   if (doc.overflowed()) {
@@ -160,6 +167,8 @@ bool JsonSettingsIO::loadState(CrossPointState& s, const char* json) {
   s.lastSleepFromReader = doc["lastSleepFromReader"] | false;
   s.recentBooksGridView = doc["recentBooksGridView"] | false;
   s.showBootScreen = doc["showBootScreen"] | true;
+  const JsonObjectConst home = doc["quickSleepHome"].as<JsonObjectConst>();
+  s.quickSleepHome = {home["selectorIndex"] | -1, home["carouselBookIndex"] | 0, home["minimalMenuIndex"] | -1};
   JsonObject sync = doc["koReaderSyncSession"].as<JsonObject>();
   s.koReaderSyncSession.active = sync["active"] | false;
   s.koReaderSyncSession.epubPath = sync["epubPath"] | std::string("");
@@ -191,6 +200,7 @@ bool JsonSettingsIO::loadState(CrossPointState& s, const char* json) {
   s.pendingBookmarkJump.spineIndex = jump["spineIndex"] | (uint16_t)0;
   s.pendingBookmarkJump.pageNumber = jump["pageNumber"] | (uint16_t)0;
   s.pendingBookmarkJump.fullNote = jump["fullNote"] | false;
+  s.pendingBookmarkJump.textAnchor = jump["textAnchor"] | std::string("");
   const char* previewAnchor = jump["previewAnchor"] | "";
   if (strlen(previewAnchor) <= 191) {
     s.pendingBookmarkJump.previewAnchor = previewAnchor;
@@ -738,6 +748,16 @@ bool JsonSettingsIO::saveRecentBooks(const RecentBooksStore& store, const char* 
     obj["guideDotsOverride"] = book.guideDotsOverride;
     obj["inlineFootnotePreviewsOverride"] = book.inlineFootnotePreviewsOverride;
     obj["lineHeightPercentOverride"] = book.lineHeightPercentOverride;
+    if (book.textOverrides != BookTextOverrides{}) {
+      auto text = obj["textOverrides"].to<JsonObject>();
+      text["sideMargin"] = book.textOverrides.sideMargin;
+      text["topMargin"] = book.textOverrides.topMargin;
+      text["bottomMargin"] = book.textOverrides.bottomMargin;
+      text["paragraphSpacing"] = book.textOverrides.paragraphSpacing;
+      text["numericSizes"] = book.textOverrides.numericSizes;
+      text["darkness"] = book.textOverrides.darkness;
+      text["fastAa"] = book.textOverrides.fastAa;
+    }
     if (!book.sourceFormat.empty()) {
       obj["sourceFormat"] = book.sourceFormat;
     }
@@ -799,6 +819,14 @@ bool JsonSettingsIO::loadRecentBooks(RecentBooksStore& store, const char* json) 
                                       lineHeightOverride <= CrossPointSettings::MAX_LINE_HEIGHT_PERCENT))
             ? static_cast<int16_t>(lineHeightOverride)
             : -1;
+    const auto text = obj["textOverrides"].as<JsonObjectConst>();
+    book.textOverrides.sideMargin = clampInt8(text["sideMargin"] | -1, -1, 40, -1);
+    book.textOverrides.topMargin = clampInt8(text["topMargin"] | -1, -1, 40, -1);
+    book.textOverrides.bottomMargin = clampInt8(text["bottomMargin"] | -1, -1, 40, -1);
+    book.textOverrides.paragraphSpacing = clampInt8(text["paragraphSpacing"] | -1, -1, 1, -1);
+    book.textOverrides.numericSizes = clampInt8(text["numericSizes"] | -1, -1, 1, -1);
+    book.textOverrides.darkness = clampInt8(text["darkness"] | -1, -1, CrossPointSettings::TEXT_DARKNESS_COUNT - 1, -1);
+    book.textOverrides.fastAa = clampInt8(text["fastAa"] | -1, -1, 1, -1);
     book.sourceFormat = obj["sourceFormat"] | std::string("");
     if (book.sourceFormat != "FB2" && book.sourceFormat != "EPUB") book.sourceFormat.clear();
     store.recentBooks.push_back(book);

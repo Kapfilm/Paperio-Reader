@@ -27,6 +27,8 @@ class CrossPointSettings {
     OVERLAY = 6,
     QUICK_RESUME = 7,
     QUOTE = 8,
+    CALENDAR = 9,
+    CALENDAR_WEATHER = 10,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -213,6 +215,7 @@ class CrossPointSettings {
     TZ_AST_ADT = 16,
     TZ_ACST_ACDT = 17,
     TZ_AKST_AKDT = 18,
+    TZ_UTC_PLUS5 = 19,
     TIMEZONE_COUNT
   };
 
@@ -232,7 +235,7 @@ class CrossPointSettings {
   // X4-only output inversion. X3 remains forced to the light theme until the
   // panel behavior can be validated on physical hardware.
   uint8_t darkMode = DARK_MODE_OFF;
-  uint8_t uiTextSize = 0;   // X3/X4: 0 normal, 1 enlarged.
+  uint8_t uiTextSize = 0;   // X3/X4: 0 normal, 1 enlarged, 2 medium.
   uint8_t uiFontStyle = 0;  // 0 regular, 1 bold; independent of interface text size.
   // Status bar settings (statusBar, statusBarProgressBar, statusBarProgressBarThickness retained for migration only)
   uint8_t statusBar = FULL;
@@ -310,7 +313,14 @@ class CrossPointSettings {
   uint8_t fontSizeNormalization = 1;
 
   // Reader screen margin settings
-  uint8_t screenMargin = 5;
+  static constexpr uint8_t MAX_SCREEN_MARGIN = 40;
+  static constexpr uint8_t SCREEN_MARGIN_STEP = 5;
+  uint8_t screenMargin = SCREEN_MARGIN_STEP;
+  uint8_t screenMarginTop = 0;     // Auto: use the original screen-margin behavior.
+  uint8_t screenMarginBottom = 0;
+
+  int getTopTextPadding(int reservedHeight) const;
+  int getBottomTextPadding(int reservedHeight) const;
   // OPDS browser settings
   char opdsServerUrl[128] = "";
   char opdsUsername[64] = "";

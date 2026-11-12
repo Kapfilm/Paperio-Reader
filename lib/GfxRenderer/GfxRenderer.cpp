@@ -1450,6 +1450,73 @@ void GfxRenderer::drawTextScaled(const int fontId, const int x, const int y, con
   }
 }
 
+void GfxRenderer::drawFittedCaption(const int fontId, const int x, const int y, const int width, const int height,
+                                   const char* text) const {
+  constexpr auto style = EpdFontFamily::REGULAR;
+  const int naturalWidth = getTextWidth(fontId, text, style);
+  if (naturalWidth <= width) {
+    drawText(fontId, x + (width - naturalWidth) / 2, y + (height - getLineHeight(fontId)) / 2, text);
+    return;
+  }
+
+  const auto fontIt = fontMap.find(fontId);
+  if (fontIt == fontMap.end() || width <= 0) return;
+  const auto& font = fontIt->second;
+  struct InkBounds {
+    int left = 0;
+    int right = 0;
+    int width() const { return right - left; }
+  };
+  const auto measureInk = [&](float scale) {
+    // Match the per-glyph rounding in drawTextScaled() and renderCharAtScale().
+    InkBounds bounds;
+    int32_t cursorFP = 0;
+    uint32_t previous = 0;
+    const char* cursor = text;
+    while (const uint32_t cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor))) {
+      const EpdGlyph* glyph = font.getGlyph(cp, style);
+      if (glyph) {
+        if (previous) {
+          cursorFP += static_cast<int>(font.getKerning(previous, cp, style) * scale + 0.5f);
+        }
+        const int glyphWidth = static_cast<int>(glyph->width * scale + 0.5f);
+        if (glyphWidth > 0 && glyph->height > 0) {
+          const int glyphLeft = ((cursorFP + 8) >> 4) + static_cast<int>(glyph->left * scale + 0.5f);
+          bounds.left = std::min(bounds.left, glyphLeft);
+          bounds.right = std::max(bounds.right, glyphLeft + glyphWidth);
+        }
+        cursorFP += static_cast<int>(glyph->advanceX * scale + 0.5f);
+      }
+      previous = cp;
+    }
+    return bounds;
+  };
+
+  // drawTextScaled() uses the unscaled path above 0.99.
+  float scale = std::min(0.99f, static_cast<float>(width) / naturalWidth);
+  auto bounds = measureInk(scale);
+  if (bounds.width() > width) {
+    float upper = scale;
+    scale = 0.0f;
+    bounds = {};
+    for (int i = 0; i < 10; ++i) {
+      const float candidate = (scale + upper) / 2.0f;
+      const auto measured = measureInk(candidate);
+      if (measured.width() <= width) {
+        scale = candidate;
+        bounds = measured;
+      } else {
+        upper = candidate;
+      }
+    }
+  }
+  if (scale > 0.0f) {
+    const int textX = x + (width - bounds.width()) / 2 - bounds.left;
+    const int textY = y + (height - getLineHeightScaled(fontId, scale)) / 2;
+    drawTextScaled(fontId, textX, textY, text, true, style, scale);
+  }
+}
+
 int GfxRenderer::getTextWidthScaled(const int fontId, const char* text, const EpdFontFamily::Style style,
                                     const float scale) const {
   return static_cast<int>(getTextWidth(fontId, text, style) * scale + 0.5f);

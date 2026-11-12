@@ -17,6 +17,7 @@
 
 class Activity;    // forward declaration
 class RenderLock;  // forward declaration
+struct HomeSleepState;
 
 // Where a "child" activity (launched via one of the replaceWith* helpers) should route
 // control when it exits successfully. See ActivityManager::returnFromChild().
@@ -145,6 +146,8 @@ class ActivityManager {
   void goToWeather();
   void goToGames();
   void goHome(std::string focusBookPath = {}, int focusSelectorIndex = -1);
+  HomeSleepState captureHomeForQuickSleep() const;
+  void resumeHomeFromQuickSleep(const HomeSleepState& state);
 
   // Replace-with-hint helpers: destroy the current activity before launching the new
   // one (freeing its memory) and record where to route control when the new activity

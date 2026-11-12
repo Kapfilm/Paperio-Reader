@@ -16,6 +16,7 @@
 #include "components/UITheme.h"
 #include "components/icons/dropbox24.h"
 #include "fontIds.h"
+#include "util/ButtonHintLayout.h"
 #include "util/TabBarLayout.h"
 
 // Internal constants
@@ -157,47 +158,57 @@ void BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const si
   renderer.drawCenteredText(UI_10_FONT_ID, rect.y + rect.height + 15, percentText.c_str());
 }
 
-void BaseTheme::drawButtonHintLabel(const GfxRenderer& renderer, const int fontId, const char* label, const int x,
-                                    const int y, const int buttonWidth, const bool fitLabel) const {
-  const int availableWidth = buttonWidth - 8;
-  const std::string text = fitLabel ? label : renderer.truncatedText(fontId, label, availableWidth);
-  const int textWidth = renderer.getTextWidth(fontId, text.c_str());
-  if (fitLabel && textWidth > availableWidth) {
-    const float scale = static_cast<float>(availableWidth) / textWidth;
-    renderer.drawTextScaled(fontId, x + 4, y, text.c_str(), true, EpdFontFamily::REGULAR, scale);
-    return;
+void BaseTheme::drawCapsuleButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
+                                       const char* btn4, int fontId, int reservedHeight, bool equalWidths) const {
+  const auto orientation = renderer.getOrientation();
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+
+  constexpr int bottom = 3;
+  constexpr int emptyHeight = 10;
+  const int buttonHeight = reservedHeight - bottom;
+  const int bottomY = renderer.getScreenHeight() - bottom;
+  const char* labels[] = {btn1, btn2, btn3, btn4};
+  constexpr auto style = EpdFontFamily::REGULAR;
+  std::array<int, 4> textWidths{};
+  for (int i = 0; i < 4; ++i) {
+    if (labels[i] && *labels[i]) textWidths[i] = renderer.getTextWidth(fontId, labels[i], style);
   }
-  renderer.drawText(fontId, x + (buttonWidth - 1 - textWidth) / 2, y, text.c_str());
+  const int screenWidth = renderer.getScreenWidth();
+  const auto widths = button_hint_layout::capsuleWidths(screenWidth, buttonHeight, textWidths, equalWidths);
+  const int widestCaption = *std::max_element(textWidths.begin(), textWidths.end());
+  const int textPadding = equalWidths
+                              ? std::clamp((widths[0] - widestCaption) / 2, 1, button_hint_layout::maxTextPadding)
+                              : button_hint_layout::captionPadding(screenWidth, textWidths);
+  const int rowWidth = std::accumulate(widths.begin(), widths.end(), 3 * button_hint_layout::gap);
+  int x = (screenWidth - rowWidth) / 2;
+  for (int i = 0; i < 4; ++i) {
+    const char* label = labels[i];
+    const bool hasLabel = label && *label;
+    const int width = widths[i];
+    if (hasLabel) {
+      const int height = buttonHeight;
+      const int y = bottomY - height;
+      renderer.fillRoundedRect(x, y, width, height, height / 2, Color::White);
+      renderer.drawRoundedRect(x, y, width, height, 1, height / 2, true);
+      renderer.drawFittedCaption(fontId, x + textPadding, y, width - 2 * textPadding, height, label);
+    } else {
+      const int screenBottom = renderer.getScreenHeight();
+      const int y = screenBottom - emptyHeight;
+      constexpr int radius = emptyHeight / 2;
+      renderer.fillRoundedRect(x, y, width, emptyHeight, radius, true, true, false, false, Color::White);
+      renderer.drawRoundedRect(x, y, width, emptyHeight, 1, radius, true, true, false, false, true);
+      renderer.drawLine(x, y + radius, x, screenBottom - 1);
+      renderer.drawLine(x + width - 1, y + radius, x + width - 1, screenBottom - 1);
+    }
+    x += width + button_hint_layout::gap;
+  }
+
+  renderer.setOrientation(orientation);
 }
 
 void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
-                                const char* btn4, const bool fitLabels) const {
-  const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-
-  const int pageHeight = renderer.getScreenHeight();
-  constexpr int buttonWidth = 106;
-  constexpr int buttonHeight = BaseMetrics::values.buttonHintsHeight;
-  constexpr int buttonY = BaseMetrics::values.buttonHintsHeight;  // Distance from bottom
-  constexpr int textYOffset = 7;                                  // Distance from top of button to text baseline
-  // X3 has wider screen in portrait (528 vs 480), use more spacing
-  constexpr int x4ButtonPositions[] = {25, 130, 245, 350};
-  constexpr int x3ButtonPositions[] = {38, 154, 268, 384};
-  const int* buttonPositions = gpio.deviceIsX3() ? x3ButtonPositions : x4ButtonPositions;
-  const char* labels[] = {btn1, btn2, btn3, btn4};
-
-  for (int i = 0; i < 4; i++) {
-    // Only draw if the label is non-empty
-    if (labels[i] != nullptr && labels[i][0] != '\0') {
-      const int x = buttonPositions[i];
-      renderer.fillRect(x, pageHeight - buttonY, buttonWidth, buttonHeight, false);
-      renderer.drawRect(x, pageHeight - buttonY, buttonWidth, buttonHeight);
-      drawButtonHintLabel(renderer, UI_10_FONT_ID, labels[i], x, pageHeight - buttonY + textYOffset, buttonWidth,
-                          fitLabels);
-    }
-  }
-
-  renderer.setOrientation(orig_orientation);
+                                const char* btn4, bool equalWidths) const {
+  drawCapsuleButtonHints(renderer, btn1, btn2, btn3, btn4, UI_10_FONT_ID, BaseMetrics::values.buttonHintsHeight, equalWidths);
 }
 
 void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const {

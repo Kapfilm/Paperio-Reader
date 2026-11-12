@@ -342,7 +342,7 @@ void HangmanGameActivity::renderPlaying() {
   drawAlphabet(figureTop + 282);
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void HangmanGameActivity::drawGallows(const int x, const int y, const int width, const int height) const {
@@ -444,6 +444,6 @@ void HangmanGameActivity::renderResult() {
     renderer.drawCenteredText(UI_10_FONT_ID, top + titleHeight + bodyHeight * 2 + 44, score);
   }
   const auto labels =
-      mappedInput.mapLabels(tr(STR_BACK), multiplayer ? tr(STR_HANGMAN_NEW_WORD) : tr(STR_GAME_NEW_GAME), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+      mappedInput.mapLabels(tr(STR_GAME_HOME), multiplayer ? tr(STR_HANGMAN_NEW_WORD) : tr(STR_GAME_PLAY_AGAIN), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }

@@ -1,4 +1,6 @@
 #include <GfxRenderer.h>
+#include <builtinFonts/inter_ui_9_bold.h>
+#include <builtinFonts/inter_ui_9_regular.h>
 #include <gtest/gtest.h>
 
 #include "UiFonts.h"
@@ -22,6 +24,39 @@ TEST(UiTextSize, EnlargesAllInterfaceLevelsAndRestoresThem) {
   EXPECT_EQ(r.fonts.at(SMALL_FONT_ID).getData()->advanceY, small);
   EXPECT_EQ(r.fonts.at(UI_10_FONT_ID).getData()->advanceY, text);
   EXPECT_EQ(r.fonts.at(UI_12_FONT_ID).getData()->advanceY, header);
+}
+TEST(UiTextSize, MediumUsesInter11ForMainInterfaceText) {
+  GfxRenderer renderer;
+  registerUiFonts(renderer);
+  const auto* normal = renderer.fonts.at(UI_10_FONT_ID).getData();
+  EXPECT_TRUE(applyUiTextSize(renderer, UiTextSize::Medium));
+  const auto& medium = renderer.fonts.at(UI_10_FONT_ID);
+  const auto* mediumRegular = medium.getData();
+  const auto* mediumBold = medium.getData(EpdFontFamily::BOLD);
+  EXPECT_GT(mediumRegular->advanceY, normal->advanceY);
+  EXPECT_NE(mediumRegular, mediumBold);
+  EXPECT_NE(medium.getGlyph(0x416), nullptr);
+  EXPECT_FALSE(applyUiTextSize(renderer, UiTextSize::Medium));
+  EXPECT_TRUE(applyUiTextSize(renderer, UiTextSize::Medium, true));
+  EXPECT_EQ(renderer.fonts.at(UI_10_FONT_ID).getData(), mediumBold);
+  EXPECT_TRUE(applyUiTextSize(renderer, UiTextSize::Enlarged));
+  EXPECT_GT(renderer.fonts.at(UI_10_FONT_ID).getData()->advanceY, mediumRegular->advanceY);
+}
+TEST(UiTextSize, CompactCapsulesUseEightNineAndTenPointFonts) {
+  GfxRenderer renderer;
+  for (bool bold : {false, true}) {
+    registerUiFonts(renderer);
+    applyUiTextSize(renderer, UiTextSize::Normal, bold);
+    const auto* normalBody = renderer.fonts.at(UI_10_FONT_ID).getData();
+    EXPECT_EQ(renderer.fonts.at(COMPACT_BUTTON_FONT_ID).getData(), renderer.fonts.at(SMALL_FONT_ID).getData());
+
+    applyUiTextSize(renderer, UiTextSize::Medium, bold);
+    EXPECT_EQ(renderer.fonts.at(COMPACT_BUTTON_FONT_ID).getData()->advanceY,
+              (bold ? inter_ui_9_bold : inter_ui_9_regular).advanceY);
+
+    applyUiTextSize(renderer, UiTextSize::Enlarged, bold);
+    EXPECT_EQ(renderer.fonts.at(COMPACT_BUTTON_FONT_ID).getData(), normalBody);
+  }
 }
 TEST(UiTextSize, ReregisterCanEnlargeAgain) {
   GfxRenderer r;
@@ -82,9 +117,9 @@ TEST(UiTextSize, InstructionFontRemainsSmallAcrossSizeAndStyleChanges) {
   registerUiFonts(r);
   const auto* fixed = r.fonts.at(UI_HINT_FONT_ID).getData();
   const int height = fixed->advanceY;
-  for (bool enlarged : {false, true}) {
+  for (uint8_t size : {UiTextSize::Normal, UiTextSize::Medium, UiTextSize::Enlarged}) {
     for (bool bold : {false, true}) {
-      applyUiTextSize(r, enlarged, bold);
+      applyUiTextSize(r, size, bold);
       EXPECT_EQ(r.fonts.at(UI_HINT_FONT_ID).getData(), fixed);
       EXPECT_EQ(r.fonts.at(UI_HINT_FONT_ID).getData()->advanceY, height);
       EXPECT_NE(r.fonts.at(UI_HINT_FONT_ID).getGlyph(0x416), nullptr);

@@ -67,14 +67,16 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
     const int8_t initialEmbeddedStyleOverride, const int8_t initialImageRenderingOverride,
     const int8_t initialFontFamilyOverride, const std::string& initialSdFontFamilyOverride,
     const int8_t initialFontSizeOverride, const int16_t initialLineHeightPercentOverride,
-    const uint8_t initialTextDarkness, const bool initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
+    const int8_t initialBionicReadingOverride, const int8_t initialGuideDotsOverride,
     const int8_t initialParagraphAlignmentOverride, const int8_t initialTextAntiAliasingOverride,
     const int8_t initialHyphenationOverride, const int8_t initialFontSizeNormalizationOverride,
     const int8_t initialInlineFootnotePreviewsOverride, const bool hasStarredPages, const bool isCurrentPageStarred,
-    const bool hasPrintedPages, const bool hasClippings, const uint8_t initialFontPointSizeOverride)
+    const bool hasPrintedPages, const bool hasClippings, const uint8_t initialFontPointSizeOverride,
+    const BookTextOverrides& initialTextOverrides)
     : MenuListActivity("EpubReaderMenu", renderer, mappedInput),
       currentPageStarred(isCurrentPageStarred),
       pendingOrientation(currentOrientation),
+      pendingTextOverrides(initialTextOverrides),
       pendingEmbeddedStyleOverride(initialEmbeddedStyleOverride),
       pendingImageRenderingOverride(initialImageRenderingOverride),
       pendingFontFamilyOverride(initialFontFamilyOverride),
@@ -82,7 +84,6 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(
       pendingFontSizeOverride(initialFontSizeOverride),
       pendingFontPointSizeOverride(initialFontPointSizeOverride),
       pendingLineHeightPercentOverride(initialLineHeightPercentOverride),
-      pendingTextDarkness(initialTextDarkness),
       pendingBionicReading(initialBionicReadingOverride),
       pendingGuideDotsOverride(initialGuideDotsOverride),
       pendingParagraphAlignmentOverride(initialParagraphAlignmentOverride),
@@ -249,22 +250,25 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   // Text darkness: straightforward 0-3 cycle
   menuItems.push_back(
       SettingInfo::DynamicEnumCtx(
-          StrId::STR_TEXT_DARKNESS, {StrId::STR_NORMAL, StrId::STR_DARK, StrId::STR_EXTRA_DARK, StrId::STR_MAX_DARK},
+          StrId::STR_TEXT_DARKNESS,
+          {StrId::STR_DEFAULT_VALUE, StrId::STR_NORMAL, StrId::STR_DARK, StrId::STR_EXTRA_DARK, StrId::STR_MAX_DARK},
           self,
           [](const void* ctx) -> uint8_t {
-            return static_cast<const EpubReaderMenuActivity*>(ctx)->pendingTextDarkness;
+            return static_cast<const EpubReaderMenuActivity*>(ctx)->pendingTextOverrides.darkness + 1;
           },
-          [](void* ctx, uint8_t v) { static_cast<EpubReaderMenuActivity*>(ctx)->pendingTextDarkness = v; })
+          [](void* ctx, uint8_t v) { static_cast<EpubReaderMenuActivity*>(ctx)->pendingTextOverrides.darkness = v - 1; })
           .withSubmenu(StrId::STR_READER_OVERRIDES)
           .withSelectorActivity());
 
   menuItems.push_back(
       SettingInfo::DynamicEnumCtx(
-          StrId::STR_BIONIC_READING, {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, self,
+          StrId::STR_BIONIC_READING, {StrId::STR_DEFAULT_VALUE, StrId::STR_STATE_ON, StrId::STR_STATE_OFF}, self,
           [](const void* ctx) -> uint8_t {
-            return static_cast<const EpubReaderMenuActivity*>(ctx)->pendingBionicReading ? 1 : 0;
+            return threeStateSlotFromOverride(static_cast<const EpubReaderMenuActivity*>(ctx)->pendingBionicReading);
           },
-          [](void* ctx, uint8_t v) { static_cast<EpubReaderMenuActivity*>(ctx)->pendingBionicReading = (v != 0); })
+          [](void* ctx, uint8_t v) {
+            static_cast<EpubReaderMenuActivity*>(ctx)->pendingBionicReading = threeStateOverrideFromSlot(v);
+          })
           .withSubmenu(StrId::STR_READER_OVERRIDES));
 
   // Guide dots: default / on / off (mirrors QuickOverrides)
@@ -351,6 +355,25 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
                                 threeStateOverrideFromSlot(v);
                           })
                           .withSubmenu(StrId::STR_READER_OVERRIDES));
+
+  for (auto id : {StrId::STR_SCREEN_MARGIN, StrId::STR_SCREEN_MARGIN_TOP, StrId::STR_SCREEN_MARGIN_BOTTOM}) {
+    menuItems.push_back(SettingInfo::Action(id, SettingAction::None).withSubmenu(StrId::STR_READER_OVERRIDES));
+  }
+
+  const auto addTextToggle = [this]<int8_t BookTextOverrides::* Field>(StrId label) {
+    menuItems.push_back(SettingInfo::DynamicEnumCtx(
+        label, {StrId::STR_DEFAULT_VALUE, StrId::STR_STATE_ON, StrId::STR_STATE_OFF}, this,
+        [](const void* ctx) -> uint8_t {
+          return threeStateSlotFromOverride(static_cast<const EpubReaderMenuActivity*>(ctx)->pendingTextOverrides.*Field);
+        },
+        [](void* ctx, uint8_t slot) {
+          static_cast<EpubReaderMenuActivity*>(ctx)->pendingTextOverrides.*Field = threeStateOverrideFromSlot(slot);
+        }).withSubmenu(StrId::STR_READER_OVERRIDES));
+  };
+  addTextToggle.operator()<&BookTextOverrides::paragraphSpacing>(StrId::STR_EXTRA_SPACING);
+  if (renderer.isX3()) {
+    addTextToggle.operator()<&BookTextOverrides::fastAa>(StrId::STR_FAST_AA);
+  }
 
   // --- Synchronisation (only if credentials are set) ---
   if (KOREADER_STORE.hasCredentials()) {
@@ -465,7 +488,7 @@ void EpubReaderMenuActivity::finishWithAction(MenuAction action) {
                      pendingFontFamilyOverride,
                      pendingSdFontFamilyOverride,
                      pendingFontSizeOverride,
-                     pendingTextDarkness,
+                     SETTINGS.textDarkness,
                      static_cast<uint8_t>(pendingBionicReading),
                      pendingParagraphAlignmentOverride,
                      pendingTextAntiAliasingOverride,
@@ -476,12 +499,29 @@ void EpubReaderMenuActivity::finishWithAction(MenuAction action) {
   payload.inlineFootnotePreviewsOverride = pendingInlineFootnotePreviewsOverride;
   payload.lineHeightPercentOverride = pendingLineHeightPercentOverride;
   payload.fontPointSizeOverride = pendingFontPointSizeOverride;
+  payload.textOverrides = pendingTextOverrides;
   setResult(std::move(payload));
   finish();
 }
 
 void EpubReaderMenuActivity::onActionSelected(int index) {
   const auto& item = menuItems[index];
+
+  if (item.nameId == StrId::STR_READER_OVERRIDES) {
+    showTextTab(TextTab::Font);
+    return;
+  }
+  int8_t* margin = nullptr;
+  if (item.nameId == StrId::STR_SCREEN_MARGIN) margin = &pendingTextOverrides.sideMargin;
+  if (item.nameId == StrId::STR_SCREEN_MARGIN_TOP) margin = &pendingTextOverrides.topMargin;
+  if (item.nameId == StrId::STR_SCREEN_MARGIN_BOTTOM) margin = &pendingTextOverrides.bottomMargin;
+  if (margin) {
+    const int first = item.nameId == StrId::STR_SCREEN_MARGIN ? CrossPointSettings::SCREEN_MARGIN_STEP : 0;
+    *margin = *margin < 0 ? first : *margin >= CrossPointSettings::MAX_SCREEN_MARGIN
+                                      ? -1 : *margin + CrossPointSettings::SCREEN_MARGIN_STEP;
+    requestUpdate();
+    return;
+  }
 
   if (item.nameId == StrId::STR_FONT_SIZE) {
     openFontSizeOverridePicker();
@@ -508,6 +548,12 @@ void EpubReaderMenuActivity::onSettingToggled(int /*index*/) {
 }
 
 void EpubReaderMenuActivity::onBackPressed() {
+  if (inTextOverrides()) {
+    textTab = TextTab::Count;
+    showTab(Tab::Settings);
+    selectedIndex = 0;
+    return;
+  }
   ActivityResult result;
   result.isCancelled = true;
   MenuResult payload{-1,
@@ -519,7 +565,7 @@ void EpubReaderMenuActivity::onBackPressed() {
                      pendingFontFamilyOverride,
                      pendingSdFontFamilyOverride,
                      pendingFontSizeOverride,
-                     pendingTextDarkness,
+                     SETTINGS.textDarkness,
                      static_cast<uint8_t>(pendingBionicReading),
                      pendingParagraphAlignmentOverride,
                      pendingTextAntiAliasingOverride,
@@ -530,6 +576,7 @@ void EpubReaderMenuActivity::onBackPressed() {
   payload.inlineFootnotePreviewsOverride = pendingInlineFootnotePreviewsOverride;
   payload.lineHeightPercentOverride = pendingLineHeightPercentOverride;
   payload.fontPointSizeOverride = pendingFontPointSizeOverride;
+  payload.textOverrides = pendingTextOverrides;
   result.data = std::move(payload);
   setResult(std::move(result));
   finish();
@@ -538,6 +585,17 @@ void EpubReaderMenuActivity::onBackPressed() {
 std::string EpubReaderMenuActivity::getItemValueString(int index) const {
   const auto& item = menuItems[index];
   if (item.nameId == StrId::STR_FONT_SIZE) return fontSizeValueLabel();
+  int margin = -1;
+  switch (item.nameId) {
+    case StrId::STR_SCREEN_MARGIN: margin = pendingTextOverrides.sideMargin; break;
+    case StrId::STR_SCREEN_MARGIN_TOP: margin = pendingTextOverrides.topMargin; break;
+    case StrId::STR_SCREEN_MARGIN_BOTTOM: margin = pendingTextOverrides.bottomMargin; break;
+    default: break;
+  }
+  if (item.nameId == StrId::STR_SCREEN_MARGIN || item.nameId == StrId::STR_SCREEN_MARGIN_TOP ||
+      item.nameId == StrId::STR_SCREEN_MARGIN_BOTTOM) {
+    return margin < 0 ? tr(STR_DEFAULT_VALUE) : std::to_string(margin) + " px";
+  }
 
   // Auto page turn: custom labels
   if (item.nameId == StrId::STR_AUTO_TURN_PAGES_PER_MIN) {
@@ -705,7 +763,7 @@ void EpubReaderMenuActivity::openSubmenu(const SettingInfo& submenuEntry) {
 }
 
 std::vector<uint8_t> EpubReaderMenuActivity::availableFontSizes() const {
-  if (SETTINGS.numericFontSizes && pendingFontFamilyOverride < 0) {
+  if (numericSizes() && pendingFontFamilyOverride < 0) {
     const char* familyName =
         pendingSdFontFamilyOverride.empty() ? SETTINGS.sdFontFamilyName : pendingSdFontFamilyOverride.c_str();
     if (const auto* family = sdFontSystem.registry().findFamily(familyName)) {
@@ -719,7 +777,7 @@ std::vector<uint8_t> EpubReaderMenuActivity::availableFontSizes() const {
 std::string EpubReaderMenuActivity::fontSizeValueLabel() const {
   const bool inherited = pendingFontSizeOverride < 0 && !pendingFontPointSizeOverride;
   std::string label;
-  if (SETTINGS.numericFontSizes) {
+  if (numericSizes()) {
     const auto sizes = availableFontSizes();
     const uint8_t point = inherited ? SETTINGS.readerFontPointSize : pendingFontPointSizeOverride;
     const int8_t named = inherited ? static_cast<int8_t>(SETTINGS.fontSize) : pendingFontSizeOverride;
@@ -744,15 +802,15 @@ void EpubReaderMenuActivity::openFontSizeOverridePicker() {
       [](const void* ctx) -> uint8_t {
         const auto* self = static_cast<const EpubReaderMenuActivity*>(ctx);
         return reader_font_size::overrideSizeSlot(self->pendingFontSizeOverride, self->pendingFontPointSizeOverride,
-                                                  SETTINGS.numericFontSizes, self->fontSizePoints);
+                                                  self->numericSizes(), self->fontSizePoints);
       },
       [](void* ctx, uint8_t slot) {
         auto* self = static_cast<EpubReaderMenuActivity*>(ctx);
-        const auto choice = reader_font_size::choiceForSlot(slot, SETTINGS.numericFontSizes, self->fontSizePoints);
+        const auto choice = reader_font_size::choiceForSlot(slot, self->numericSizes(), self->fontSizePoints);
         self->pendingFontSizeOverride = choice.named;
         self->pendingFontPointSizeOverride = choice.point;
       }));
-  if (SETTINGS.numericFontSizes) {
+  if (numericSizes()) {
     fontSizePickerSetting->enumLabels.emplace_back(tr(STR_DEFAULT_VALUE));
     for (uint8_t point : fontSizePoints) fontSizePickerSetting->enumLabels.push_back(std::to_string(point) + " pt");
   }
@@ -862,29 +920,101 @@ void EpubReaderMenuActivity::prepareTabs() {
     if (item.submenu == StrId::STR_READER_TOOLS) item.submenu = StrId::STR_NONE_OPT;
   }
 
-  // Keep the familiar "Per-book overrides" section, but expose its contents
-  // directly on the Appearance page instead of requiring another menu entry.
   auto& appearance = tabItems[static_cast<size_t>(Tab::Settings)];
-  std::vector<SettingInfo> expandedAppearance;
-  expandedAppearance.reserve(appearance.size() + 1);
-  bool overrideHeadingInserted = false;
+  std::vector<SettingInfo> textMenu{SettingInfo::Action(StrId::STR_READER_OVERRIDES, SettingAction::None)};
   for (auto& item : appearance) {
-    if (item.submenu == StrId::STR_READER_OVERRIDES) {
-      if (!overrideHeadingInserted) {
-        expandedAppearance.push_back(SettingInfo::Separator(StrId::STR_READER_OVERRIDES));
-        overrideHeadingInserted = true;
-      }
-      item.submenu = StrId::STR_NONE_OPT;
+    if (item.nameId == StrId::STR_READING_PROFILES || item.nameId == StrId::STR_ORIENTATION) {
+      textMenu.push_back(std::move(item));
+      continue;
     }
-    expandedAppearance.push_back(std::move(item));
+    TextTab destination = TextTab::Style;
+    switch (item.nameId) {
+      case StrId::STR_FONT_FAMILY: destination = TextTab::Font; break;
+      case StrId::STR_FONT_SIZE: destination = TextTab::Size; break;
+      case StrId::STR_PARA_ALIGNMENT:
+      case StrId::STR_SCREEN_MARGIN:
+      case StrId::STR_SCREEN_MARGIN_TOP:
+      case StrId::STR_SCREEN_MARGIN_BOTTOM:
+      case StrId::STR_LINE_SPACING:
+      case StrId::STR_EXTRA_SPACING: destination = TextTab::Layout; break;
+      default: break;
+    }
+    item.submenu = StrId::STR_NONE_OPT;
+    textTabItems[static_cast<size_t>(destination)].push_back(std::move(item));
   }
-  appearance = std::move(expandedAppearance);
+  const auto sortSettings = [this](TextTab destination, std::initializer_list<StrId> order) {
+    auto& items = textTabItems[static_cast<size_t>(destination)];
+    std::stable_sort(items.begin(), items.end(), [order](const SettingInfo& a, const SettingInfo& b) {
+      return std::find(order.begin(), order.end(), a.nameId) < std::find(order.begin(), order.end(), b.nameId);
+    });
+  };
+  sortSettings(TextTab::Layout, {StrId::STR_PARA_ALIGNMENT, StrId::STR_SCREEN_MARGIN, StrId::STR_SCREEN_MARGIN_TOP,
+                                StrId::STR_SCREEN_MARGIN_BOTTOM, StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING});
+  sortSettings(TextTab::Style, {StrId::STR_BIONIC_READING, StrId::STR_HYPHENATION, StrId::STR_EMBEDDED_STYLE,
+                               StrId::STR_TEXT_AA, StrId::STR_TEXT_DARKNESS, StrId::STR_FONT_SIZE_NORMALIZATION,
+                               StrId::STR_GUIDE_DOTS, StrId::STR_FAST_AA});
+  appearance = std::move(textMenu);
 
   for (auto& items : tabItems) {
     SettingInfo::prepareSubmenus(items, submenuData);
     SettingInfo::insertSubcategorySeparators(items);
   }
   submenusPrepared = true;
+}
+
+bool EpubReaderMenuActivity::numericSizes() const {
+  return BookTextOverrides::value(pendingTextOverrides.numericSizes, SETTINGS.numericFontSizes);
+}
+
+int EpubReaderMenuActivity::tabCount() const {
+  return inTextOverrides() ? static_cast<int>(TextTab::Count) : static_cast<int>(Tab::Count);
+}
+
+const char* EpubReaderMenuActivity::currentTabLabel(size_t index) const {
+  constexpr StrId textLabels[] = {StrId::STR_FONT_TAB, StrId::STR_SIZE_TAB, StrId::STR_LAYOUT_TAB, StrId::STR_STYLE_TAB};
+  return inTextOverrides() ? I18N.get(textLabels[index]) : tabLabel(static_cast<Tab>(index));
+}
+
+void EpubReaderMenuActivity::showTextTab(TextTab nextTab) {
+  textTab = nextTab;
+  menuItems = textTabItems[static_cast<size_t>(textTab)];
+  if (textTab == TextTab::Font) {
+    const auto count = menuItems.front().enumLabels.size();
+    menuItems.resize(count, SettingInfo::Action(StrId::STR_FONT_FAMILY, SettingAction::None));
+  } else if (textTab == TextTab::Size) {
+    fontSizePoints = availableFontSizes();
+    menuItems.resize(2 + (numericSizes() ? fontSizePoints.size() : 4),
+                     SettingInfo::Action(StrId::STR_FONT_SIZE, SettingAction::None));
+  }
+  initMenuList();
+  selectedIndex = -1;
+  requestUpdate();
+}
+
+std::string EpubReaderMenuActivity::textChoiceTitle(int index) const {
+  if (textTab == TextTab::Font) {
+    return textTabItems[static_cast<size_t>(TextTab::Font)].front().enumLabels[index];
+  }
+  if (index == 0) return tr(STR_NUMERIC_FONT_SIZES);
+  if (index == 1) return tr(STR_DEFAULT_VALUE);
+  constexpr StrId sizes[] = {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE};
+  return numericSizes() ? std::to_string(fontSizePoints[index - 2]) + " pt" : I18N.get(sizes[index - 2]);
+}
+
+void EpubReaderMenuActivity::selectTextChoice(int index) {
+  if (textTab == TextTab::Font) {
+    textTabItems[static_cast<size_t>(TextTab::Font)].front().callValueSetter(static_cast<uint8_t>(index));
+  } else if (index == 0) {
+    const auto slot = threeStateSlotFromOverride(pendingTextOverrides.numericSizes);
+    pendingTextOverrides.numericSizes = threeStateOverrideFromSlot((slot + 1) % 3);
+    showTextTab(TextTab::Size);
+    selectedIndex = 0;
+  } else {
+    const auto choice = reader_font_size::choiceForSlot(index - 1, numericSizes(), fontSizePoints);
+    pendingFontSizeOverride = choice.named;
+    pendingFontPointSizeOverride = choice.point;
+  }
+  requestUpdate();
 }
 
 void EpubReaderMenuActivity::showTab(const Tab nextTab) {
@@ -896,13 +1026,17 @@ void EpubReaderMenuActivity::showTab(const Tab nextTab) {
 }
 
 void EpubReaderMenuActivity::switchTab() {
+  if (inTextOverrides()) {
+    showTextTab(static_cast<TextTab>((static_cast<int>(textTab) + 1) % tabCount()));
+    return;
+  }
   const auto next = (static_cast<size_t>(tab) + 1) % static_cast<size_t>(Tab::Count);
   showTab(static_cast<Tab>(next));
 }
 
 void EpubReaderMenuActivity::renderTabBar(const Rect& rect) const {
-  constexpr int count = static_cast<int>(Tab::Count);
-  const int sidePadding = UITheme::getInstance().getMetrics().contentSidePadding;
+  const int count = tabCount();
+  const int sidePadding = inTextOverrides() ? 0 : UITheme::getInstance().getMetrics().contentSidePadding;
   const int tabsX = rect.x + sidePadding;
   const int tabsWidth = std::max(count, rect.width - sidePadding * 2);
   const int cellWidth = tabsWidth / count;
@@ -912,21 +1046,26 @@ void EpubReaderMenuActivity::renderTabBar(const Rect& rect) const {
   for (int i = 0; i < count; i++) {
     const int x = tabsX + i * cellWidth;
     const int width = (i == count - 1) ? tabsX + tabsWidth - x : cellWidth;
-    const bool active = i == static_cast<int>(tab);
+    const bool active = i == (inTextOverrides() ? static_cast<int>(textTab) : static_cast<int>(tab));
     const bool focused = active && selectedIndex == -1;
-    if (focused) {
+    if (focused && inTextOverrides()) {
+      renderer.fillRect(x + 1, rect.y + 1, width - 2, rect.height - 2);
+    } else if (focused) {
       renderer.fillRoundedRect(x + 3, rect.y + 1, width - 6, rect.height - 4, 6, Color::Black);
     } else if (active) {
-      renderer.fillRoundedRect(x + 3, rect.y + 1, width - 6, rect.height - 4, 6, Color::LightGray);
+      if (!inTextOverrides()) {
+        renderer.fillRoundedRect(x + 3, rect.y + 1, width - 6, rect.height - 4, 6, Color::LightGray);
+      }
       renderer.drawLine(x + 3, rect.y + rect.height - 3, x + width - 4, rect.y + rect.height - 3, 2, true);
     }
 
-    const char* label = tabLabel(static_cast<Tab>(i));
+    const char* label = currentTabLabel(i);
     const std::string fitted = renderer.truncatedText(fontId, label, width - 8);
     const int textWidth = renderer.getTextWidth(fontId, fitted.c_str());
     const int textX = x + std::max(0, (width - textWidth) / 2);
     const int textY = rect.y + std::max(0, (rect.height - textHeight) / 2);
     renderer.drawText(fontId, textX, textY, fitted.c_str(), !focused);
+    if (inTextOverrides() && i > 0) renderer.drawLine(x, rect.y + 4, x, rect.y + rect.height - 5);
   }
   renderer.drawLine(rect.x, rect.y + rect.height - 1, rect.x + rect.width - 1, rect.y + rect.height - 1);
 }
@@ -945,6 +1084,8 @@ void EpubReaderMenuActivity::loop() {
   if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
     if (selectedIndex < 0) {
       switchTab();
+    } else if (textTab == TextTab::Font || textTab == TextTab::Size) {
+      selectTextChoice(selectedIndex);
     } else {
       toggleCurrentItem();
     }
@@ -985,13 +1126,14 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   contentRect.height = std::max(0, contentBottom - contentRect.y);
 
   // Title
+  const char* heading = inTextOverrides() ? tr(STR_TEXT_SETTINGS) : title.c_str();
   const std::string truncTitle =
-      renderer.truncatedText(UI_12_FONT_ID, title.c_str(), contentRect.width - 40, EpdFontFamily::BOLD);
+      renderer.truncatedText(UI_12_FONT_ID, heading, contentRect.width - 40, EpdFontFamily::BOLD);
   const int titleX =
       contentRect.x +
       (contentRect.width - renderer.getTextWidth(UI_12_FONT_ID, truncTitle.c_str(), EpdFontFamily::BOLD)) / 2;
 
-  const int tabTop = 86 + contentRect.y;
+  const int tabTop = (inTextOverrides() ? renderer.getLineHeight(UI_12_FONT_ID) + 27 : 86) + contentRect.y;
   const auto drawPanel = [&](int top, int headingHeight) {
     renderer.fillRoundedRect(0, top, screenWidth, screenHeight - top, 12, true, true, false, false, Color::White);
     renderer.fillRoundedRect(0, top, screenWidth, headingHeight, 12, true, true, false, false, Color::LightGray);
@@ -1021,7 +1163,7 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
                    std::to_string(totalPages) + std::string(tr(STR_PAGES_SEPARATOR));
   }
   progressLine += std::string(tr(STR_BOOK_PREFIX)) + std::to_string(bookProgressPercent) + "%";
-  renderer.drawCenteredText(UI_10_FONT_ID, 48 + contentRect.y, progressLine.c_str());
+  if (!inTextOverrides()) renderer.drawCenteredText(UI_10_FONT_ID, 48 + contentRect.y, progressLine.c_str());
 
   const auto& metrics = UITheme::getInstance().getMetrics();
   // Match the main Settings header: one 3 px separator immediately before the tabs.
@@ -1036,12 +1178,32 @@ void EpubReaderMenuActivity::render(RenderLock&&) {
   const int rowHeight =
       SettingsDisplayLayout::rowHeight(listHeight, static_cast<int>(menuItems.size()), metrics.listRowHeight,
                                        renderer.getLineHeight(UI_10_FONT_ID), BaseTheme::toggleSwitchHeight);
-  drawMenuList(Rect{contentRect.x, startY, contentRect.width, listHeight}, rowHeight);
+  const Rect list{contentRect.x, startY, contentRect.width, listHeight};
+  if (textTab == TextTab::Font || textTab == TextTab::Size) {
+    GUI.drawList(renderer, list, static_cast<int>(menuItems.size()), selectedIndex,
+                 [this](int index) { return textChoiceTitle(index); }, nullptr, nullptr,
+                 [this](int index) -> std::string {
+                   if (textTab == TextTab::Font) {
+                     const auto& font = textTabItems[static_cast<size_t>(TextTab::Font)].front();
+                     return index == font.callValueGetter() ? tr(STR_SELECTED) : "";
+                   }
+                   if (index == 0) {
+                     if (pendingTextOverrides.numericSizes < 0) return tr(STR_DEFAULT_VALUE);
+                     return numericSizes() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+                   }
+                   const auto slot = reader_font_size::overrideSizeSlot(
+                       pendingFontSizeOverride, pendingFontPointSizeOverride, numericSizes(), fontSizePoints);
+                   return index - 1 == slot ? tr(STR_SELECTED) : "";
+                 }, true, rowHeight);
+  } else {
+    drawMenuList(list, rowHeight);
+  }
 
   // Footer / Hints
   const char* confirm = tr(STR_SELECT);
   if (selectedIndex == -1) {
-    confirm = tabLabel(static_cast<Tab>((static_cast<size_t>(tab) + 1) % static_cast<size_t>(Tab::Count)));
+    const int activeTab = inTextOverrides() ? static_cast<int>(textTab) : static_cast<int>(tab);
+    confirm = currentTabLabel((activeTab + 1) % tabCount());
   }
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirm, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

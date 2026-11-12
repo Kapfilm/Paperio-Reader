@@ -57,7 +57,7 @@ class GlobalBookmarkIndex {
   std::vector<Entry> entries;
   bool loaded = false;
 
-  static constexpr uint8_t FILE_VERSION = 2;
+  static constexpr uint8_t FILE_VERSION = 3;
   static constexpr const char* FILE_PATH = "/.crosspoint/global_bookmarks.bin";
 
   std::vector<Entry>::iterator findBySourcePath(const std::string& sourcePath);

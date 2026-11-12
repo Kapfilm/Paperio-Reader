@@ -342,6 +342,8 @@ class GfxRenderer {
   int getFontAscenderSizeScaled(int fontId, float scale) const;
   void drawTextScaled(int fontId, int x, int y, const char* text, bool black, EpdFontFamily::Style style,
                       float scale) const;
+  // Center a regular caption in the box, scaling it down only when necessary.
+  void drawFittedCaption(int fontId, int x, int y, int width, int height, const char* text) const;
   void drawCenteredText(int fontId, int y, const char* text, bool black = true,
                         EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   void drawText(int fontId, int x, int y, const char* text, bool black = true,

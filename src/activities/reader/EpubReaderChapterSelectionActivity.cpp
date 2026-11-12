@@ -7,7 +7,22 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-int EpubReaderChapterSelectionActivity::getTotalItems() const { return epub->getTocItemsCount(); }
+bool EpubReaderChapterSelectionActivity::hasChildren(const int tocIndex) const {
+  return tocIndex + 1 < static_cast<int>(tocLevels.size()) && tocLevels[tocIndex + 1] > tocLevels[tocIndex];
+}
+
+void EpubReaderChapterSelectionActivity::updateVisibleRows(const int selectedTocIndex) {
+  visibleRows.clear();
+  selectorIndex = 0;
+  int foldedLevel = -1;
+  for (int i = 0; i < static_cast<int>(tocLevels.size()); ++i) {
+    const int level = tocLevels[i];
+    if (foldedLevel >= 0 && level > foldedLevel) continue;
+    foldedLevel = !expandedRows[i] && hasChildren(i) ? level : -1;
+    if (i == selectedTocIndex) selectorIndex = static_cast<int>(visibleRows.size());
+    visibleRows.push_back(i);
+  }
+}
 
 int EpubReaderChapterSelectionActivity::getPageItems() const {
   constexpr int lineHeight = 30;
@@ -25,12 +40,23 @@ void EpubReaderChapterSelectionActivity::onEnter() {
     return;
   }
 
-  selectorIndex = (currentTocIndex >= 0 && currentTocIndex < epub->getTocItemsCount())
-                      ? currentTocIndex
-                      : epub->getTocIndexForSpineIndex(currentSpineIndex);
-  if (selectorIndex == -1) {
-    selectorIndex = 0;
+  tocLevels = epub->readTocLevels();
+  expandedRows.assign(tocLevels.size(), false);
+  const int tocCount = static_cast<int>(tocLevels.size());
+  const int selectedTocIndex = currentTocIndex >= 0 && currentTocIndex < tocCount
+                                   ? currentTocIndex
+                                   : epub->getTocIndexForSpineIndex(currentSpineIndex);
+  if (selectedTocIndex >= 0 && selectedTocIndex < tocCount) {
+    // Open just the ancestors of the current chapter.
+    auto level = tocLevels[selectedTocIndex];
+    for (int i = selectedTocIndex - 1; i >= 0 && level > 0; --i) {
+      if (tocLevels[i] < level) {
+        expandedRows[i] = true;
+        level = tocLevels[i];
+      }
+    }
   }
+  updateVisibleRows(selectedTocIndex);
 
   // Trigger first update
   requestUpdate();
@@ -39,7 +65,7 @@ void EpubReaderChapterSelectionActivity::onEnter() {
 void EpubReaderChapterSelectionActivity::onExit() { Activity::onExit(); }
 
 void EpubReaderChapterSelectionActivity::loop() {
-  const int totalItems = getTotalItems();
+  const int totalItems = static_cast<int>(visibleRows.size());
 
   ButtonEventManager::ButtonEvent ev;
   while (buttonEvents.consumeEvent(ev)) {
@@ -51,15 +77,19 @@ void EpubReaderChapterSelectionActivity::loop() {
       requestUpdate();
       continue;
     }
-    if (ev.button == MappedInputManager::Button::Confirm && ev.type == ButtonEventManager::PressType::Short) {
-      const auto newSpineIndex = epub->getSpineIndexForTocIndex(selectorIndex);
-      if (newSpineIndex == -1) {
-        ActivityResult result;
-        result.isCancelled = true;
-        setResult(std::move(result));
-        finish();
-      } else {
-        setResult(ChapterResult{newSpineIndex, selectorIndex});
+    if (ev.button == MappedInputManager::Button::Confirm && totalItems > 0) {
+      const int tocIndex = visibleRows[selectorIndex];
+      const bool branch = hasChildren(tocIndex);
+      if (branch && ev.type == ButtonEventManager::PressType::Short) {
+        expandedRows[tocIndex] = !expandedRows[tocIndex];
+        updateVisibleRows(tocIndex);
+        requestUpdate();
+        return;
+      }
+      if (ev.type != (branch ? ButtonEventManager::PressType::Long : ButtonEventManager::PressType::Short)) continue;
+      const int spineIndex = epub->getTocItem(tocIndex).spineIndex;
+      if (spineIndex >= 0) {
+        setResult(ChapterResult{spineIndex, tocIndex});
         finish();
       }
       return;
@@ -84,7 +114,7 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
 
   const Rect contentRect = UITheme::getContentRect(renderer, true, false);
   const int pageItems = getPageItems();
-  const int totalItems = getTotalItems();
+  const int totalItems = static_cast<int>(visibleRows.size());
 
   // Manual centering to honor content gutters.
   const int titleX =
@@ -94,8 +124,10 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
 
   const auto pageStartIndex = selectorIndex / pageItems * pageItems;
   // Highlight only the content area, not the hint gutters.
-  renderer.fillRect(contentRect.x, 60 + contentRect.y + (selectorIndex % pageItems) * 30 - 2, contentRect.width - 1,
-                    30);
+  if (totalItems > 0) {
+    renderer.fillRect(contentRect.x, 60 + contentRect.y + (selectorIndex % pageItems) * 30 - 2, contentRect.width - 1,
+                      30);
+  }
 
   for (int i = 0; i < pageItems; i++) {
     int itemIndex = pageStartIndex + i;
@@ -103,17 +135,27 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
     const int displayY = 60 + contentRect.y + i * 30;
     const bool isSelected = (itemIndex == selectorIndex);
 
-    auto item = epub->getTocItem(itemIndex);
+    const int tocIndex = visibleRows[itemIndex];
+    const auto item = epub->getTocItem(tocIndex);
 
     // Indent per TOC level while keeping content within the gutter-safe region.
-    const int indentSize = contentRect.x + 20 + (item.level - 1) * 15;
+    const int indent = 20 + std::clamp(static_cast<int>(item.level) - 1, 0, 6) * 15;
+    const int textX = contentRect.x + indent;
     const std::string chapterName =
-        renderer.truncatedText(UI_10_FONT_ID, item.title.c_str(), contentRect.width - 40 - indentSize);
+        renderer.truncatedText(UI_10_FONT_ID, item.title.c_str(), contentRect.width - indent - 20);
 
-    renderer.drawText(UI_10_FONT_ID, indentSize, displayY, chapterName.c_str(), !isSelected);
+    if (hasChildren(tocIndex)) {
+      renderer.drawText(UI_10_FONT_ID, textX - 14, displayY, expandedRows[tocIndex] ? "-" : "+", !isSelected);
+    }
+    renderer.drawText(UI_10_FONT_ID, textX, displayY, chapterName.c_str(), !isSelected);
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const char* confirm = "";
+  if (totalItems > 0) {
+    const int tocIndex = visibleRows[selectorIndex];
+    confirm = hasChildren(tocIndex) ? (expandedRows[tocIndex] ? tr(STR_HIDE) : tr(STR_SHOW)) : tr(STR_SELECT);
+  }
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirm, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
   renderer.displayBuffer();

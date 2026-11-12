@@ -1,6 +1,7 @@
 #pragma once
 #include <Epub.h>
 
+#include <deque>
 #include <memory>
 
 #include "../Activity.h"
@@ -13,13 +14,15 @@ class EpubReaderChapterSelectionActivity final : public Activity {
   int currentSpineIndex = 0;
   int currentTocIndex = 0;
   int selectorIndex = 0;
+  std::deque<uint8_t> tocLevels;
+  std::deque<bool> expandedRows;
+  std::deque<uint16_t> visibleRows;
+  bool hasChildren(int tocIndex) const;
+  void updateVisibleRows(int selectedTocIndex);
 
   // Number of items that fit on a page, derived from logical screen height.
   // This adapts automatically when switching between portrait and landscape.
   int getPageItems() const;
-
-  // Total TOC items count
-  int getTotalItems() const;
 
  public:
   explicit EpubReaderChapterSelectionActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,

@@ -536,18 +536,8 @@ void RecentBooksActivity::drawControls() {
   }
 
   const bool hasBooks = !recentBooks.empty();
-  // Keep every caption at the same native font size as Info. Abbreviating a
-  // wide word is more legible than shrinking just that button's lettering.
-  const int captionFont = usesCompactCoverGrid() ? SMALL_FONT_ID : UI_10_FONT_ID;
-  const int captionWidth = (usesCompactCoverGrid() ? 80 : 106) - 8;
-  const auto caption = [&](StrId full, StrId shortLabel) {
-    const char* label = I18N.get(full);
-    return renderer.getTextWidth(captionFont, label) <= captionWidth ? label : I18N.get(shortLabel);
-  };
-  const auto labels = mappedInput.mapLabels(caption(StrId::STR_HOME, StrId::STR_RECENT_HOME_SHORT),
-                                            hasBooks ? caption(StrId::STR_OPEN, StrId::STR_RECENT_OPEN_SHORT) : "",
-                                            hasBooks ? caption(StrId::STR_REMOVE, StrId::STR_RECENT_REMOVE_SHORT) : "",
-                                            hasBooks ? tr(STR_INFO) : "");
+  const auto labels = mappedInput.mapLabels(tr(STR_RECENT_HOME_FULL), hasBooks ? tr(STR_OPEN) : "",
+                                            hasBooks ? tr(STR_REMOVE) : "", hasBooks ? tr(STR_INFO) : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   GUI.drawSideButtonHints(renderer, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
 }

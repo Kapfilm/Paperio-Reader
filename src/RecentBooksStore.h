@@ -1,4 +1,6 @@
 #pragma once
+#include "BookTextOverrides.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -36,6 +38,7 @@ struct RecentBook {
   int8_t inlineFootnotePreviewsOverride = -1;
   // -1 = use global setting, otherwise explicit 70-200 percent line height.
   int16_t lineHeightPercentOverride = -1;
+  BookTextOverrides textOverrides;
   // Stable source format recorded when the reader opens the book. Generic
   // .zip names do not reveal whether they contain EPUB or FB2, and probing the
   // SD archive during every Home redraw can fail while cover work owns the
@@ -119,7 +122,8 @@ class RecentBooksStore {
                           int8_t bionicReadingOverride, int8_t paragraphAlignmentOverride,
                           int8_t textAntiAliasingOverride, int8_t hyphenationOverride,
                           int8_t fontSizeNormalizationOverride, int8_t guideDotsOverride,
-                          int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride, uint8_t fontPointSizeOverride = 0);
+                          int8_t inlineFootnotePreviewsOverride, int16_t lineHeightPercentOverride, uint8_t fontPointSizeOverride = 0,
+                          const BookTextOverrides* textOverrides = nullptr);
 };
 
 // Helper macro to access recent books store

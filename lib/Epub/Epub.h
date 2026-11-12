@@ -207,6 +207,7 @@ class Epub {
   bool getSpineItemInflatedSize(int spineIndex, size_t* size) const;
   BookMetadataCache::SpineEntry getSpineItem(int spineIndex) const;
   BookMetadataCache::TocEntry getTocItem(int tocIndex) const;
+  std::deque<uint8_t> readTocLevels() const;
   int getSpineItemsCount() const;
   int getTocItemsCount() const;
   int getSpineIndexForTocIndex(int tocIndex) const;

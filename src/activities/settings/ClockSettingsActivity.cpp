@@ -28,7 +28,8 @@ void ClockSettingsActivity::buildMenuItems() {
         {StrId::STR_TZ_UTC, StrId::STR_TZ_CET, StrId::STR_TZ_EET, StrId::STR_TZ_MSK, StrId::STR_TZ_UTC_PLUS4,
          StrId::STR_TZ_IST, StrId::STR_TZ_UTC_PLUS7, StrId::STR_TZ_UTC_PLUS8, StrId::STR_TZ_UTC_PLUS9,
          StrId::STR_TZ_AEST, StrId::STR_TZ_NZST, StrId::STR_TZ_UTC_MINUS3, StrId::STR_TZ_EST, StrId::STR_TZ_CST,
-         StrId::STR_TZ_MST, StrId::STR_TZ_PST, StrId::STR_TZ_AST_ADT, StrId::STR_TZ_ACST_ACDT, StrId::STR_TZ_AKST_AKDT},
+         StrId::STR_TZ_MST, StrId::STR_TZ_PST, StrId::STR_TZ_AST_ADT, StrId::STR_TZ_ACST_ACDT, StrId::STR_TZ_AKST_AKDT,
+         StrId::STR_TZ_UTC_PLUS5},
         "timeZone", StrId::STR_CAT_SYSTEM);
     menuItems.push_back(std::move(tzSetting));
   }

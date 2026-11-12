@@ -42,9 +42,11 @@
 #include "SdCardFontSystem.h"
 #include "SilentRestart.h"
 #include "UiFonts.h"
-#include "WeatherSettingsStore.h"
+#include "WeatherClient.h"
+#include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/NetworkMemoryTrim.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -102,6 +104,9 @@ EpdFontFamily notosans18FontFamily(&notosans18RegularFont, &notosans18BoldFont, 
 RTC_NOINIT_ATTR uint32_t silentRebootMagic;
 RTC_NOINIT_ATTR uint32_t silentRebootTarget;
 RTC_NOINIT_ATTR uint32_t heapRecoveryRestartLatch;
+constexpr uint32_t SLEEP_CALENDAR_SYNC_MAGIC = 0x53434e57;
+RTC_NOINIT_ATTR uint32_t sleepCalendarSyncMarker;
+static bool skipSleepCalendarSync = false;
 // Single-shot latch for the boot-time heap integrity recovery restart.
 // Prevents an infinite reset loop if the heap is still corrupt after one clean restart.
 RTC_NOINIT_ATTR uint32_t heapCorruptionBootLatch;
@@ -447,6 +452,76 @@ static void serviceBootPowerRelease() {
   }
 }
 
+static void refreshSleepCalendar() {
+  const bool withWeather = SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER &&
+                           WEATHER_SETTINGS.hasLocation();
+  if (gpio.deviceIsX3() && !HalClock::hasCurrentDate()) {
+    HalClock::restoreExternalDate();
+  }
+  const bool needsDate = !HalClock::hasCurrentDate();
+
+  time_t weatherFetchedAt = 0;
+  if (withWeather) {
+    const auto cached = WeatherClient::getWeather(WEATHER_SETTINGS);
+    if (cached.valid) weatherFetchedAt = cached.fetchedAt;
+  }
+  const auto needsWeather = [withWeather, weatherFetchedAt]() {
+    const time_t now = HalClock::now();
+    return withWeather && (weatherFetchedAt <= 0 || now < weatherFetchedAt || now - weatherFetchedAt >= 30 * 60);
+  };
+  if (!needsDate && !needsWeather()) {
+    return;
+  }
+
+  const WifiCredential* credential = nullptr;
+  if (WiFi.status() != WL_CONNECTED) {
+    // A disconnected station can reconnect. Leave an active hotspot alone.
+    const auto mode = WiFi.getMode();
+    if ((mode != WIFI_OFF && mode != WIFI_STA) || !WIFI_STORE.loadFromFile()) {
+      return;
+    }
+    credential = WIFI_STORE.findCredential(WIFI_STORE.getLastConnectedSsid());
+    if (!credential && !WIFI_STORE.getCredentials().empty()) {
+      credential = &WIFI_STORE.getCredentials().back();
+    }
+    if (!credential) {
+      return;
+    }
+  }
+
+  // Like the Weather screen, release the secondary buffer before starting Wi-Fi
+  // or TLS. X4 can still draw the final sleep frame in single-buffer mode.
+  {
+    RenderLock lock;
+    trimMemoryForNetworkSession(renderer, "SLP");
+  }
+
+  if (credential) {
+    WiFi.persistent(false);
+    if (!WiFi.mode(WIFI_STA)) {
+      return;
+    }
+    WiFi.setAutoReconnect(false);
+    WiFi.config(IPAddress(), IPAddress(), IPAddress(), IPAddress());
+    WiFi.begin(credential->ssid.c_str(), credential->password.empty() ? nullptr : credential->password.c_str());
+    const auto started = millis();
+    const unsigned long connectTimeout = needsDate ? 5000 : 2500;
+    while (WiFi.status() != WL_CONNECTED && millis() - started < connectTimeout) {
+      delay(50);
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      return;
+    }
+  }
+
+  if (needsDate && !HalClock::syncNtp(SETTINGS.ntpServer)) {
+    return;
+  }
+  if (needsWeather()) {
+    WeatherClient::refreshBeforeSleep(WEATHER_SETTINGS);
+  }
+}
+
 // Enter deep sleep mode. fromTimeout=true marks an auto-sleep (gates "Quick Resume on Timeout").
 void enterDeepSleep(bool fromTimeout = false) {
   if (!gaugeSleepRetryDue()) return;
@@ -492,7 +567,19 @@ void enterDeepSleep(bool fromTimeout = false) {
   // On X3 the DS3231 keeps time independently, so there's no need to keep the MCU
   // powered during deep sleep for LP timer preservation.
   const bool keepLpAlive = SETTINGS.useClock && !gpio.deviceIsX3();
-  if (SETTINGS.useClock && WiFi.status() == WL_CONNECTED) {
+  const bool isQuickResumeSleep = quick_wake::isQuickSleep(
+      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME, fromTimeout,
+      SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+  APP_STATE.quickSleepHome = isQuickResumeSleep ? activityManager.captureHomeForQuickSleep() : HomeSleepState{};
+  const bool calendarSleep = !isQuickResumeSleep &&
+                             (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR ||
+                              SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER);
+  if (calendarSleep) {
+    if (!skipSleepCalendarSync) {
+      sleepCalendarSyncMarker = SLEEP_CALENDAR_SYNC_MAGIC;
+      refreshSleepCalendar();
+    }
+  } else if (SETTINGS.useClock && WiFi.status() == WL_CONNECTED) {
     HalClock::syncNtpIfDue(SETTINGS.ntpServer);
   }
   HalClock::saveBeforeSleep(keepLpAlive);
@@ -503,9 +590,6 @@ void enterDeepSleep(bool fromTimeout = false) {
     APP_STATE.readerActivityLoadCount = 0;
   }
 
-  const bool isQuickResumeSleep = quick_wake::isQuickSleep(
-      SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME, fromTimeout,
-      SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
   APP_STATE.showBootScreen = !isQuickResumeSleep;
 
   APP_STATE.saveToFile();
@@ -538,6 +622,7 @@ void enterDeepSleep(bool fromTimeout = false) {
   if (!writeQuickWakeMarker(power_button::markerForSleep(SETTINGS.powerWakeMode, gpio.deviceIsX4()))) {
     LOG_ERR("SLP", "Could not save short-wake provenance; an already-released tap may be rejected");
   }
+  sleepCalendarSyncMarker = 0;
   powerManager.startDeepSleep(gpio, keepLpAlive);
 }
 
@@ -558,7 +643,7 @@ void setupDisplayAndFonts(bool seamless = false, bool skipSdFontDiscovery = fals
   renderer.insertFont(NOTOSANS_16_FONT_ID, notosans16FontFamily);
   renderer.insertFont(NOTOSANS_18_FONT_ID, notosans18FontFamily);
   registerUiFonts(renderer);
-  applyUiTextSize(renderer, SETTINGS.uiTextSize != 0, SETTINGS.uiFontStyle == 1);
+  applyUiTextSize(renderer, SETTINGS.uiTextSize, SETTINGS.uiFontStyle == 1);
 
   // Discover SD card fonts (under /.crosspoint/fonts/) and load the family
   // currently selected in settings (if any). Safe to call without an SD card.
@@ -660,7 +745,12 @@ void setup() {
   // GPIO3 is the same active-low power input on both supported C3 boards.
   pinMode(InputManager::POWER_BUTTON_PIN, INPUT_PULLUP);
   const bool earlyPowerWasPressed = digitalRead(InputManager::POWER_BUTTON_PIN) == LOW;
+  skipSleepCalendarSync = sleepCalendarSyncMarker == SLEEP_CALENDAR_SYNC_MAGIC;
+  sleepCalendarSyncMarker = 0;
   boot_health::begin();
+  if (skipSleepCalendarSync) {
+    LOG_ERR("SLP", "Previous calendar sleep preparation reset the device; skipping network refresh this boot");
+  }
   markBootPhase(BootPhase::SetupEntry);
   // Load wake preference before any other init; this decision cannot require SD.
   SETTINGS.loadStartupFromNvs();
@@ -915,6 +1005,7 @@ void setup() {
   const BootResume resume = isSilentReboot              ? BootResume::Silent
                             : !APP_STATE.showBootScreen ? BootResume::QuickResume
                                                         : BootResume::Splash;
+  const HomeSleepState quickSleepHome = APP_STATE.quickSleepHome;
   if (resume == BootResume::QuickResume && SETTINGS.darkMode == CrossPointSettings::DARK_MODE_READER_ONLY) {
     // The saved framebuffer is logical; restore its previous page polarity before painting it.
     display.setDarkMode(APP_STATE.lastSleepFromReader);
@@ -942,6 +1033,7 @@ void setup() {
       // before any painting so a hang in the blocking paint path can't strand
       // us in a quick-resume-with-no-frame loop on the next boot.
       APP_STATE.showBootScreen = true;
+      APP_STATE.quickSleepHome = {};
       APP_STATE.saveToFile();
       if (loadSleepFrameBuffer()) {
         // Frame restored: swap the sleep moon for the loading icon.
@@ -1012,7 +1104,11 @@ void setup() {
     activityManager.goHome();
   } else if (APP_STATE.openEpubPath.empty() || !APP_STATE.lastSleepFromReader ||
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
-    activityManager.goHome();
+    if (resume == BootResume::QuickResume && quickSleepHome.selectorIndex >= 0) {
+      activityManager.resumeHomeFromQuickSleep(quickSleepHome);
+    } else {
+      activityManager.goHome();
+    }
   } else {
     // Clear app state to avoid getting into a boot loop if the epub doesn't load
     const auto path = APP_STATE.openEpubPath;

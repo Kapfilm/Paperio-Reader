@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <ctime>
+#include <iterator>
 
 #include "../../src/network/HttpDownloader.h"
 
@@ -119,7 +120,13 @@ WeatherData WeatherClient::getWeather(const WeatherSettingsStore& settings, bool
   return fetchFromApi(settings);
 }
 
-WeatherData WeatherClient::fetchFromApi(const WeatherSettingsStore& settings) {
+void WeatherClient::refreshBeforeSleep(const WeatherSettingsStore& settings) {
+  if (settings.hasLocation()) {
+    fetchFromApi(settings, true);
+  }
+}
+
+WeatherData WeatherClient::fetchFromApi(const WeatherSettingsStore& settings, bool quick) {
   WeatherData data;
   data.requestSignature = buildRequestSignature(settings);
   LOG_DBG("WEA", "fetchFromApi[1] start");
@@ -127,11 +134,11 @@ WeatherData WeatherClient::fetchFromApi(const WeatherSettingsStore& settings) {
 
   std::string response;
   bool fetched = false;
-  for (size_t apiIndex = 0; apiIndex < sizeof(FORECAST_API_BASES) / sizeof(FORECAST_API_BASES[0]); apiIndex++) {
+  for (size_t apiIndex = 0; apiIndex < (quick ? 1 : std::size(FORECAST_API_BASES)); apiIndex++) {
     const std::string url = buildForecastUrl(settings, FORECAST_API_BASES[apiIndex]);
     LOG_DBG("WEA", "fetchFromApi[2] source=%zu url length=%zu", apiIndex + 1, url.size());
     response.clear();
-    if (HttpDownloader::fetchUrl(url, response)) {
+    if (quick ? HttpDownloader::fetchUrl(url, response, "", "", 4000) : HttpDownloader::fetchUrl(url, response)) {
       fetched = true;
       break;
     }

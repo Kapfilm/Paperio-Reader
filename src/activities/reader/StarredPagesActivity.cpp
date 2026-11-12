@@ -93,7 +93,7 @@ void StarredPagesActivity::loop() {
     if (totalItems > 0 && ev.button == MappedInputManager::Button::Confirm &&
         ev.type == ButtonEventManager::PressType::Short) {
       const auto& bm = bookmarkStore.getAll()[selectorIndex];
-      setResult(StarredPageResult{bm.spineIndex, bm.pageNumber, bm.previewAnchor, bm.fullNote});
+      setResult(StarredPageResult{bm.spineIndex, bm.pageNumber, bm.previewAnchor, bm.fullNote, bm.textAnchor});
       finish();
       return;
     }
@@ -146,7 +146,7 @@ void StarredPagesActivity::render(RenderLock&&) {
 
   const bool hasItems = totalItems > 0;
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), hasItems ? tr(STR_SELECT) : "",
-                                            hasItems ? tr(STR_RENAME) : "", hasItems ? tr(STR_DELETE) : "");
+                                            hasItems ? tr(STR_BOOKMARK_RENAME_SHORT) : "", hasItems ? tr(STR_DELETE) : "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   GUI.drawSideButtonHints(renderer, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
 

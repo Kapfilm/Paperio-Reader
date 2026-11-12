@@ -32,6 +32,7 @@
 #include <esp_system.h>
 
 #include <algorithm>
+#include <string_view>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -77,6 +78,81 @@
 static FontSizeLadder buildReaderFontSizeLadder(int bodyFontId);
 
 namespace {
+constexpr uint8_t PROGRESS_TEXT_ANCHOR_MARKER = 0xA1;
+constexpr size_t PROGRESS_BASE_SIZE = 11;
+
+std::string bookmarkPageText(const Page& page) {
+  std::string text;
+  for (const auto& element : page.elements) {
+    if (element->getTag() != TAG_PageLine) continue;
+    const auto& line = static_cast<const PageLine&>(*element);
+    if (!line.getBlock()) continue;
+    const auto& block = *line.getBlock();
+    for (uint16_t i = 0; i < block.wordCount(); ++i) {
+      for (const unsigned char c : std::string_view(block.wordText(i))) {
+        if (c > ' ' && c != '-') text.push_back(static_cast<char>(c));
+      }
+    }
+  }
+  return text;
+}
+
+std::string capturePageTextAnchor(Section& section, int page) {
+  if (page < 0 || page >= section.pageCount || section.hasActiveBuild()) return {};
+  const int previousPage = section.currentPage;
+  section.currentPage = page;
+  const auto content = section.loadPageFromSectionFile();
+  section.currentPage = previousPage;
+  if (!content) return {};
+  auto text = bookmarkPageText(*content);
+  size_t length = std::min<size_t>(text.size(), BookmarkStore::MAX_TEXT_ANCHOR_LENGTH);
+  while (length < text.size() && (static_cast<unsigned char>(text[length]) & 0xC0) == 0x80) --length;
+  text.resize(length);
+  return text;
+}
+
+std::optional<uint16_t> findTextAnchorPage(Section& section, const std::string& anchor, int fallback) {
+  if (anchor.empty() || anchor.size() > BookmarkStore::MAX_TEXT_ANCHOR_LENGTH || section.hasActiveBuild()) {
+    return std::nullopt;
+  }
+  const int previousPage = section.currentPage;
+  // The usual case is reopening the same layout. Check the recorded page
+  // first so ordinary book opens never scan the chapter for an unchanged mark.
+  if (fallback >= 0 && fallback < section.pageCount) {
+    section.currentPage = fallback;
+    const auto content = section.loadPageFromSectionFile();
+    if (content && bookmarkPageText(*content).find(anchor) != std::string::npos) {
+      section.currentPage = previousPage;
+      return static_cast<uint16_t>(fallback);
+    }
+  }
+  std::optional<uint16_t> best;
+  std::string tail;
+  int tailPage = 0;
+  for (int page = 0; page < section.pageCount; ++page) {
+    section.currentPage = page;
+    const auto content = section.loadPageFromSectionFile();
+    if (!content) {
+      tail.clear();
+      continue;
+    }
+    const size_t previousLength = tail.size();
+    auto text = bookmarkPageText(*content);
+    if (text.empty()) continue;
+    auto combined = tail + text;
+    for (auto at = combined.find(anchor); at != std::string::npos; at = combined.find(anchor, at + 1)) {
+      const int found = at < previousLength ? tailPage : page;
+      if (!best || std::abs(found - fallback) < std::abs(static_cast<int>(*best) - fallback)) {
+        best = static_cast<uint16_t>(found);
+      }
+    }
+    if (best && *best == fallback) break;
+    tail = text.substr(text.size() - std::min(text.size(), anchor.size() - 1));
+    tailPage = page;
+  }
+  section.currentPage = previousPage;
+  return best;
+}
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
 
 std::string sourceBookPath(const Epub& epub) { return Fb2::resolveOriginalPath(epub.getPath()); }
@@ -452,6 +528,18 @@ void EpubReaderActivity::onEnter() {
     }
     if (dataSize == 6) {
       navTarget.cachedPageCount = data[4] + (data[5] << 8);
+      uint8_t header[2];
+      if (f.size() > PROGRESS_BASE_SIZE && f.seek(PROGRESS_BASE_SIZE) &&
+          f.read(header, sizeof(header)) == sizeof(header) && header[0] == PROGRESS_TEXT_ANCHOR_MARKER &&
+          header[1] > 0 && header[1] <= BookmarkStore::MAX_TEXT_ANCHOR_LENGTH) {
+        std::string text(header[1], '\0');
+        if (f.read(reinterpret_cast<uint8_t*>(text.data()), text.size()) == static_cast<int>(text.size())) {
+          const int pageCount = navTarget.cachedPageCount;
+          navTarget = NavigationTarget::makeTextAnchor(std::move(text), navTarget.page);
+          navTarget.cachedPageCount = pageCount;
+          navTarget.cachedSpineIdx = currentSpineIndex;
+        }
+      }
     }
     f.close();
   }
@@ -514,6 +602,7 @@ void EpubReaderActivity::onEnter() {
   bookFontSizeOverride = currentBook.fontSizeOverride;
   bookFontPointSizeOverride = currentBook.fontPointSizeOverride;
   bookLineHeightPercentOverride = currentBook.lineHeightPercentOverride;
+  bookTextOverrides = currentBook.textOverrides;
   bookBionicReadingOverride = currentBook.bionicReadingOverride;
   bookParagraphAlignmentOverride = currentBook.paragraphAlignmentOverride;
   bookTextAntiAliasingOverride = currentBook.textAntiAliasingOverride;
@@ -544,9 +633,16 @@ void EpubReaderActivity::onEnter() {
 void EpubReaderActivity::onExit() {
   Activity::onExit();
   logReaderMemSnapshot("onExit_before_release");
-  // A queued sleep skips input processing, but must still save the last
-  // completed render before destroying the section.
-  if (pendingProgressSave.pending.load(std::memory_order_acquire)) {
+  // Save a text anchor when leaving the book, before global settings can
+  // change the layout. Never replace a pending reflow target with an unfinished page.
+  if (section && readerPhase_ == ReaderPhase::READING && !section->hasActiveBuild() &&
+      footnoteHistory.empty() && !isFullNoteView() && annotationAnchor().empty() &&
+      currentSpineIndex == lastRenderedSpineIndex_ && section->currentPage == lastRenderedPageIndex_ &&
+      section->pageCount == lastRenderedPageCount_) {
+    const int page = section->currentPage;
+    saveProgress(currentSpineIndex, page, section->pageCount, capturePageTextAnchor(*section, page));
+    pendingProgressSave.pending.store(false, std::memory_order_relaxed);
+  } else if (pendingProgressSave.pending.load(std::memory_order_acquire)) {
     pendingProgressSave.pending.store(false, std::memory_order_relaxed);
     saveProgress(pendingProgressSave.spineIndex, pendingProgressSave.page, pendingProgressSave.pageCount);
   }
@@ -559,6 +655,8 @@ void EpubReaderActivity::onExit() {
   // next activity (notably SleepActivity's OVERLAY mode) sees what the user was looking at.
   // Must run before section.reset() and the orientation reset below.
   restoreCurrentPageToBufferIfPreRendered();
+
+  renderer.setTextDarkness(SETTINGS.textDarkness);
 
   // Save bookmarks before exit
   bookmarkStore.save();
@@ -941,7 +1039,7 @@ Section::BuildParams EpubReaderActivity::makeSectionBuildParams() const {
   Section::BuildParams p;
   p.fontId = getEffectiveReaderFontId();
   p.lineCompression = getEffectiveReaderLineCompression();
-  p.extraParagraphSpacing = SETTINGS.extraParagraphSpacing;
+  p.extraParagraphSpacing = BookTextOverrides::value(bookTextOverrides.paragraphSpacing, SETTINGS.extraParagraphSpacing);
   p.paragraphAlignment = getEffectiveParagraphAlignment();
   p.viewportWidth = layout.viewportWidth;
   p.viewportHeight = layout.viewportHeight;
@@ -1514,6 +1612,7 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
   } else {
     navTarget.resolveInto(*section, currentSpineIndex);
   }
+  remapBookmarksForSection();
   anchorNavTargetToCurrentPage();
   forceLoadLargeImages = false;
   pageHasPlaceholders = false;
@@ -1747,7 +1846,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
                                if (!result.isCancelled) {
                                  const auto& starred = std::get<StarredPageResult>(result.data);
                                  openAnnotation(starred.spineIndex, starred.pageNumber, 0, starred.previewAnchor,
-                                                starred.fullNote);
+                                                starred.fullNote, starred.textAnchor);
                                }
                              });
       break;
@@ -1888,14 +1987,16 @@ void EpubReaderActivity::applyPendingBookmarkJump() {
     LOG_ERR("ERS", "Invalid bookmark jump spine index %u, resetting to 0", jump.spineIndex);
     jump.spineIndex = 0;
     jump.pageNumber = 0;
+    jump.textAnchor.clear();
   }
   if (!jump.previewAnchor.empty() || jump.fullNote) {
-    openAnnotation(jump.spineIndex, jump.pageNumber, 0, jump.previewAnchor, jump.fullNote);
+    openAnnotation(jump.spineIndex, jump.pageNumber, 0, jump.previewAnchor, jump.fullNote, jump.textAnchor);
   } else {
     currentSpineIndex = jump.spineIndex;
-    navTarget = NavigationTarget::makePage(jump.pageNumber);
+    navTarget = NavigationTarget::makeTextAnchor(jump.textAnchor, jump.pageNumber);
     navTarget.cachedSpineIdx = jump.spineIndex;
-    if (!writeReaderProgressCache(epub->getCachePath(), jump.spineIndex, jump.pageNumber, 0, 0)) {
+    if (jump.textAnchor.empty() &&
+        !writeReaderProgressCache(epub->getCachePath(), jump.spineIndex, jump.pageNumber, 0, 0)) {
       LOG_ERR("ERS", "Failed to persist bookmark jump to progress.bin; live state still seeded");
     }
   }
@@ -1928,17 +2029,6 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
     // Reset section to force re-layout in the new orientation.
     section.reset();
   }
-}
-
-void EpubReaderActivity::applyTextDarkness(const uint8_t textDarkness) {
-  if (SETTINGS.textDarkness == textDarkness) {
-    return;
-  }
-  SETTINGS.textDarkness = textDarkness;
-  SETTINGS.saveToFile();
-  renderer.setTextDarkness(textDarkness);
-  // Force a re-render so the new darkness is visible immediately.
-  requestUpdate();
 }
 
 void EpubReaderActivity::stopAutomaticPageTurn() {
@@ -2009,7 +2099,7 @@ void EpubReaderActivity::applyBookReaderOverrides(
     const int8_t paragraphAlignmentOverride, const int8_t textAntiAliasingOverride, const int8_t hyphenationOverride,
     const int8_t fontSizeNormalizationOverride, const int8_t guideDotsOverride,
     const int8_t inlineFootnotePreviewsOverride, const int16_t lineHeightPercentOverride,
-    const uint8_t fontPointSizeOverride) {
+    const uint8_t fontPointSizeOverride, const BookTextOverrides* textOverrides) {
   if (!epub) {
     return;
   }
@@ -2026,7 +2116,11 @@ void EpubReaderActivity::applyBookReaderOverrides(
   // Guide dots are excluded from this comparison on purpose: they are render-time
   // only (see TextBlock::setGuideDots), so a guide-dots-only change must not fall
   // through to the section relayout below.
+  const auto& newText = textOverrides ? *textOverrides : bookTextOverrides;
   const bool layoutOverridesUnchanged =
+      bookTextOverrides.sideMargin == newText.sideMargin && bookTextOverrides.topMargin == newText.topMargin &&
+      bookTextOverrides.bottomMargin == newText.bottomMargin &&
+      bookTextOverrides.paragraphSpacing == newText.paragraphSpacing &&
       bookEmbeddedStyleOverride == embeddedStyleOverride && bookImageRenderingOverride == imageRenderingOverride &&
       bookFontFamilyOverride == normalizedFontFamilyOverride &&
       bookSdFontFamilyOverride == normalizedSdFontFamilyOverride && bookFontSizeOverride == fontSizeOverride &&
@@ -2037,7 +2131,7 @@ void EpubReaderActivity::applyBookReaderOverrides(
       bookInlineFootnotePreviewsOverride == inlineFootnotePreviewsOverride &&
       bookLineHeightPercentOverride == lineHeightPercentOverride;
 
-  if (layoutOverridesUnchanged && bookGuideDotsOverride == guideDotsOverride) {
+  if (layoutOverridesUnchanged && bookGuideDotsOverride == guideDotsOverride && bookTextOverrides == newText) {
     return;
   }
 
@@ -2055,11 +2149,12 @@ void EpubReaderActivity::applyBookReaderOverrides(
   bookGuideDotsOverride = guideDotsOverride;
   bookInlineFootnotePreviewsOverride = inlineFootnotePreviewsOverride;
   bookLineHeightPercentOverride = lineHeightPercentOverride;
+  bookTextOverrides = newText;
   RECENT_BOOKS.setReaderOverrides(
       sourceBookPath(*epub), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
       bookSdFontFamilyOverride, bookFontSizeOverride, bookBionicReadingOverride, bookParagraphAlignmentOverride,
       bookTextAntiAliasingOverride, bookHyphenationOverride, bookFontSizeNormalizationOverride, bookGuideDotsOverride,
-      bookInlineFootnotePreviewsOverride, bookLineHeightPercentOverride, bookFontPointSizeOverride);
+      bookInlineFootnotePreviewsOverride, bookLineHeightPercentOverride, bookFontPointSizeOverride, &bookTextOverrides);
 
   if (layoutOverridesUnchanged) {
     // Only guide dots changed: persisted above, and the repaint on resume picks
@@ -2083,7 +2178,29 @@ void EpubReaderActivity::applyBookReaderOverrides(
   if (section) {
     const int currentPage = section->currentPage;
     if (!section->hasActiveBuild()) {
-      if (const auto paragraphIndex = section->getParagraphIndexForPage(currentPage)) {
+      const auto& bookmarks = bookmarkStore.getAll();
+      bool migrated = false;
+      for (size_t index = 0; index < bookmarks.size(); ++index) {
+        const auto& bookmark = bookmarks[index];
+        if (bookmark.spineIndex == currentSpineIndex && bookmark.textAnchor.empty() &&
+            bookmark.previewAnchor == annotationAnchor() && bookmark.fullNote == isFullNoteView()) {
+          migrated |= bookmarkStore.setTextAnchor(index, capturePageTextAnchor(*section, bookmark.pageNumber));
+        }
+      }
+      if (migrated && bookmarkStore.save()) {
+        GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, sourceBookPath(*epub), epub->getCachePath(), epub->getTitle(),
+                                       false);
+      }
+      const auto paragraphIndex = section->getParagraphIndexForPage(currentPage);
+      auto text = capturePageTextAnchor(*section, currentPage);
+      if (!text.empty()) {
+        if (footnoteHistory.empty() && !isFullNoteView() && annotationAnchor().empty()) {
+          // A memory-recovery restart during indexing must resume from this same anchor.
+          saveProgress(currentSpineIndex, currentPage, section->pageCount, text);
+          pendingProgressSave.pending.store(false, std::memory_order_relaxed);
+        }
+        navTarget = NavigationTarget::makeTextAnchor(std::move(text), currentPage, paragraphIndex);
+      } else if (paragraphIndex) {
         navTarget = NavigationTarget::makeParagraph(*paragraphIndex, currentPage);
       } else {
         navTarget = NavigationTarget::makePage(currentPage);
@@ -2280,6 +2397,16 @@ void EpubReaderActivity::NavigationTarget::resolveInto(Section& sec, int spineIn
         sec.currentPage = fallbackPage;
         isEstimate = true;
       }
+      break;
+    }
+
+    case Kind::TextAnchor: {
+      auto resolvedPage = findTextAnchorPage(sec, anchorStr, fallbackPage);
+      if (!resolvedPage && lutIndex != UINT16_MAX) {
+        resolvedPage = sec.getPageForParagraphIndex(lutIndex);
+      }
+      sec.currentPage = resolvedPage ? *resolvedPage : fallbackPage;
+      isEstimate = !resolvedPage;
       break;
     }
 
@@ -2753,16 +2880,20 @@ EpubReaderActivity::RenderLayout EpubReaderActivity::computeRenderLayout() const
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
                                    &orientedMarginLeft);
+  const int side = BookTextOverrides::value(bookTextOverrides.sideMargin, SETTINGS.screenMargin);
+  const int top = BookTextOverrides::value(bookTextOverrides.topMargin, SETTINGS.screenMarginTop);
+  const int bottom = BookTextOverrides::value(bookTextOverrides.bottomMargin, SETTINGS.screenMarginBottom);
   if (!footnoteHistory.empty()) {
     const Rect content = UITheme::getContentRect(renderer, true, false);
     RenderLayout layout;
     // The front-button hint strip rotates with the device; reserve its actual edge.
-    layout.marginTop = std::max(orientedMarginTop, content.y) + 32;
-    layout.marginLeft = std::max(orientedMarginLeft, content.x) + SETTINGS.screenMargin;
+    layout.marginTop = std::max(orientedMarginTop, content.y) + 32 + top;
+    layout.marginLeft = std::max(orientedMarginLeft, content.x) + side;
     layout.marginRight =
-        std::max(orientedMarginRight, renderer.getScreenWidth() - content.x - content.width) + SETTINGS.screenMargin;
+        std::max(orientedMarginRight, renderer.getScreenWidth() - content.x - content.width) + side;
     layout.marginBottom =
-        std::max(orientedMarginBottom, renderer.getScreenHeight() - content.y - content.height) + SETTINGS.screenMargin;
+        std::max(orientedMarginBottom, renderer.getScreenHeight() - content.y - content.height) +
+        (bottom ? bottom : side);
     layout.viewportWidth = renderer.getScreenWidth() - layout.marginLeft - layout.marginRight;
     layout.viewportHeight = renderer.getScreenHeight() - layout.marginTop - layout.marginBottom;
     return layout;
@@ -2770,10 +2901,10 @@ EpubReaderActivity::RenderLayout EpubReaderActivity::computeRenderLayout() const
   const int statusBarTopHeight = UITheme::getStatusBarTopHeight(automaticPageTurnActive);
   const int statusBarBottomHeight = UITheme::getStatusBarBottomHeight(automaticPageTurnActive);
 
-  orientedMarginTop += std::max(static_cast<int>(SETTINGS.screenMargin), statusBarTopHeight);
-  orientedMarginLeft += SETTINGS.screenMargin;
-  orientedMarginRight += SETTINGS.screenMargin;
-  orientedMarginBottom += std::max(static_cast<int>(SETTINGS.screenMargin), statusBarBottomHeight);
+  orientedMarginTop += BookTextOverrides::verticalPadding(top, side, statusBarTopHeight);
+  orientedMarginLeft += side;
+  orientedMarginRight += side;
+  orientedMarginBottom += BookTextOverrides::verticalPadding(bottom, side, statusBarBottomHeight);
 
   RenderLayout layout;
   layout.marginTop = orientedMarginTop;
@@ -2850,6 +2981,7 @@ bool EpubReaderActivity::renderBufferDisplayPass(const RenderLayout& layout) {
     return false;
   }
   // Same reason as in renderContents(): pin the page identity before the pass does any work.
+  lastRenderedSpineIndex_ = currentSpineIndex;
   lastRenderedPageIndex_ = section->currentPage;
   lastRenderedPageCount_ = section->pageCount;
   currentPageFootnotes = std::move(p->footnotes);
@@ -3480,6 +3612,7 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
   forceBlockingBuildSpine_ = -1;
   forceReleasedBuildSpine_ = -1;
 
+  remapBookmarksForSection();
   LOG_DBG("ERS", "resolveInto: navTarget.kind=%d pageCount=%d", (int)navTarget.kind, (int)section->pageCount);
   navTarget.resolveInto(*section, currentSpineIndex);
   LOG_DBG("ERS", "resolveInto result: currentPage=%d", (int)section->currentPage);
@@ -3679,6 +3812,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     return;
   }
 
+  renderer.setTextDarkness(BookTextOverrides::value(bookTextOverrides.darkness, SETTINGS.textDarkness));
+
   if (fb2MigrationNotice || fb2MigrationFailed) {
     renderer.clearScreen();
     const char* lines[] = {fb2MigrationFailed ? "Ошибка переноса отметок FB2" : "FB2: цельные главы",
@@ -3866,14 +4001,15 @@ bool EpubReaderActivity::maybeRestartForFragmentedHeap(const uint32_t freeHeap, 
 
 bool EpubReaderActivity::writeReaderProgressCache(const std::string& cachePath, const int spineIndex,
                                                   const int currentPage, const int pageCount, const uint8_t percent,
-                                                  const int bookCurrentPage, const int bookTotalPages) {
+                                                  const int bookCurrentPage, const int bookTotalPages,
+                                                  const std::string& textAnchor) {
   FsFile f;
   if (!Storage.openFileForWrite("ERS", cachePath + "/progress.bin", f)) {
     LOG_ERR("ERS", "Failed to open progress cache: %s", cachePath.c_str());
     return false;
   }
 
-  uint8_t data[11];
+  uint8_t data[PROGRESS_BASE_SIZE];
   data[0] = spineIndex & 0xFF;
   data[1] = (spineIndex >> 8) & 0xFF;
   data[2] = currentPage & 0xFF;
@@ -3885,19 +4021,23 @@ bool EpubReaderActivity::writeReaderProgressCache(const std::string& cachePath, 
   data[8] = (bookCurrentPage >> 8) & 0xFF;
   data[9] = bookTotalPages & 0xFF;
   data[10] = (bookTotalPages >> 8) & 0xFF;
-  f.write(data, sizeof(data));
-  f.close();
-  return true;
+  bool ok = f.write(data, sizeof(data)) == sizeof(data);
+  if (ok && !textAnchor.empty() && textAnchor.size() <= BookmarkStore::MAX_TEXT_ANCHOR_LENGTH) {
+    const uint8_t header[] = {PROGRESS_TEXT_ANCHOR_MARKER, static_cast<uint8_t>(textAnchor.size())};
+    ok = f.write(header, sizeof(header)) == sizeof(header) &&
+         f.write(reinterpret_cast<const uint8_t*>(textAnchor.data()), textAnchor.size()) == textAnchor.size();
+  }
+  return f.close() && ok;
 }
 
-void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
+void EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount, const std::string& textAnchor) {
   if (!footnoteHistory.empty()) return;
   const uint8_t percent = epubProgressPercentByte(*epub, spineIndex, currentPage, pageCount);
   int bookCurrentPage = 0;
   int bookTotalPages = 0;
   epubBookPageEstimate(*epub, spineIndex, currentPage, pageCount, bookCurrentPage, bookTotalPages);
   if (!writeReaderProgressCache(epub->getCachePath(), spineIndex, currentPage, pageCount, percent, bookCurrentPage,
-                                bookTotalPages)) {
+                                bookTotalPages, textAnchor)) {
     LOG_ERR("ERS", "Could not save progress!");
     return;
   }
@@ -3916,6 +4056,7 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   logReaderMemSnapshot("render_start");
   // Pin the page identity now, while it still describes what this pass is about to draw.
   if (section) {
+    lastRenderedSpineIndex_ = currentSpineIndex;
     lastRenderedPageIndex_ = section->currentPage;
     lastRenderedPageCount_ = section->pageCount;
   }
@@ -4118,7 +4259,7 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     // window, so after the wait only the LSB SPI write, the MSB plane and the
     // short gray flush remain. The AA touch-up then reads as the tail of the
     // page refresh instead of a separate later update (issue #71).
-    renderer.setFastGrayscaleLut(SETTINGS.fastAntiAliasing);
+    renderer.setFastGrayscaleLut(BookTextOverrides::value(bookTextOverrides.fastAa, SETTINGS.fastAntiAliasing));
     const int aaFontId = getEffectiveReaderFontId();
     const Page* pagePtr = page.get();
     // The per-element abort buys no wall-clock here — this plane render is overlapped with the
@@ -4154,7 +4295,7 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
     pendingGrayscale_.fontId = getEffectiveReaderFontId();
     pendingGrayscale_.marginLeft = orientedMarginLeft;
     pendingGrayscale_.contentTop = contentTop;
-    pendingGrayscale_.fastLut = SETTINGS.fastAntiAliasing;
+    pendingGrayscale_.fastLut = BookTextOverrides::value(bookTextOverrides.fastAa, SETTINGS.fastAntiAliasing);
     lastRenderStats.usedGrayscale = true;
     lastRenderStats.phases = {tPrewarm - t0, tBwRender - tPrewarm, tDisplay - tBwRender, 0, 0, 0, 0, 0, tDisplay - t0};
   }
@@ -4349,7 +4490,7 @@ void EpubReaderActivity::displayPreRenderedPage(const Page& page, const int orie
       page.renderTextOnly(renderer, fontId, orientedMarginLeft, contentTop);  // scan pass
       scope.endScanAndPrewarm();
     }
-    renderer.setFastGrayscaleLut(SETTINGS.fastAntiAliasing);
+    renderer.setFastGrayscaleLut(BookTextOverrides::value(bookTextOverrides.fastAa, SETTINGS.fastAntiAliasing));
     // No waveform to hide behind on this path (displayBuffer() above already returned), so the
     // per-element abort translates directly into saved wall-clock on both devices.
     bool planeAborted = false;
@@ -4398,8 +4539,9 @@ void EpubReaderActivity::renderStatusBar() const {
     snprintf(title, sizeof(title), "%s %s  %d/%d", tr(STR_FOOTNOTES), label, section ? section->currentPage + 1 : 0,
              section ? section->pageCount : 0);
     renderer.drawCenteredText(UI_10_FONT_ID, layout.marginTop - 30, title);
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_MENU), tr(STR_PREV_PAGE), tr(STR_NEXT_PAGE));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_MENU), tr(STR_NOTE_PREV_PAGE_SHORT),
+                                              tr(STR_NOTE_NEXT_PAGE_SHORT));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
     return;
   }
   // Calculate progress in book. During an active section build pageCount only reflects pages
@@ -4639,7 +4781,7 @@ const std::string& EpubReaderActivity::annotationAnchor() const {
 }
 
 void EpubReaderActivity::openAnnotation(const int spine, const int page, const int pageCount, const std::string& anchor,
-                                        const bool fullNote) {
+                                        const bool fullNote, const std::string& textAnchor) {
   RenderLock lock(*this);
   if (!epub || spine < 0 || spine >= epub->getSpineItemsCount()) return;
   const bool note = fullNote || !anchor.empty();
@@ -4665,11 +4807,26 @@ void EpubReaderActivity::openAnnotation(const int spine, const int page, const i
   footnoteAnchor_ = anchor;
   activeFootnotePreview = false;
   currentSpineIndex = spine;
-  navTarget = NavigationTarget::makePage(page);
+  navTarget = NavigationTarget::makeTextAnchor(textAnchor, page);
   navTarget.cachedPageCount = pageCount;
   navTarget.cachedSpineIdx = spine;
   section.reset();
   requestUpdate();
+}
+
+void EpubReaderActivity::remapBookmarksForSection() {
+  if (!section || section->hasActiveBuild()) return;
+  const auto& bookmarks = bookmarkStore.getAll();
+  for (size_t index = 0; index < bookmarks.size(); ++index) {
+    const auto& bookmark = bookmarks[index];
+    if (bookmark.spineIndex != currentSpineIndex || bookmark.previewAnchor != annotationAnchor() ||
+        bookmark.fullNote != isFullNoteView()) {
+      continue;
+    }
+    if (const auto page = findTextAnchorPage(*section, bookmark.textAnchor, bookmark.pageNumber)) {
+      bookmarkStore.remapPage(index, *page);
+    }
+  }
 }
 
 void EpubReaderActivity::toggleCurrentBookmark() {
@@ -4678,7 +4835,8 @@ void EpubReaderActivity::toggleCurrentBookmark() {
       section->currentPage >= section->pageCount)
     return;
   bookmarkStore.toggle(static_cast<uint16_t>(currentSpineIndex), static_cast<uint16_t>(section->currentPage),
-                       annotationAnchor(), isFullNoteView());
+                       annotationAnchor(), isFullNoteView(),
+                       capturePageTextAnchor(*section, section->currentPage));
   if (bookmarkStore.save()) {
     GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, sourceBookPath(*epub), epub->getCachePath(), epub->getTitle(), false);
   } else {
@@ -4836,13 +4994,17 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
   // Apply the reader orientation so margins match what the reader would produce
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
-  // Compute margins exactly as render() does
+  // Use the same per-book margins as the reader when loading a sleep overlay.
+  const auto& text = currentBook.textOverrides;
+  const int side = BookTextOverrides::value(text.sideMargin, SETTINGS.screenMargin);
+  const int top = BookTextOverrides::value(text.topMargin, SETTINGS.screenMarginTop);
+  const int bottom = BookTextOverrides::value(text.bottomMargin, SETTINGS.screenMarginBottom);
   int marginTop, marginRight, marginBottom, marginLeft;
   renderer.getOrientedViewableTRBL(&marginTop, &marginRight, &marginBottom, &marginLeft);
-  marginTop += std::max(static_cast<int>(SETTINGS.screenMargin), UITheme::getStatusBarTopHeight());
-  marginLeft += SETTINGS.screenMargin;
-  marginRight += SETTINGS.screenMargin;
-  marginBottom += std::max(static_cast<int>(SETTINGS.screenMargin), UITheme::getStatusBarBottomHeight());
+  marginTop += BookTextOverrides::verticalPadding(top, side, UITheme::getStatusBarTopHeight());
+  marginLeft += side;
+  marginRight += side;
+  marginBottom += BookTextOverrides::verticalPadding(bottom, side, UITheme::getStatusBarBottomHeight());
 
   const uint16_t viewportWidth = renderer.getScreenWidth() - marginLeft - marginRight;
   const uint16_t viewportHeight = renderer.getScreenHeight() - marginTop - marginBottom;
@@ -4886,7 +5048,7 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
   Section::BuildParams p;
   p.fontId = effectiveFontId;
   p.lineCompression = effectiveLineCompression;
-  p.extraParagraphSpacing = SETTINGS.extraParagraphSpacing;
+  p.extraParagraphSpacing = BookTextOverrides::value(currentBook.textOverrides.paragraphSpacing, SETTINGS.extraParagraphSpacing);
   p.paragraphAlignment = effectiveParagraphAlignment;
   p.viewportWidth = viewportWidth;
   p.viewportHeight = viewportHeight;
@@ -5343,22 +5505,21 @@ void EpubReaderActivity::openReaderMenu() {
       std::make_unique<EpubReaderMenuActivity>(
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
           !currentPageFootnotes.empty(), bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
-          bookSdFontFamilyOverride, bookFontSizeOverride, bookLineHeightPercentOverride, SETTINGS.textDarkness,
-          getEffectiveBionicReading(), bookGuideDotsOverride, bookParagraphAlignmentOverride,
+          bookSdFontFamilyOverride, bookFontSizeOverride, bookLineHeightPercentOverride,
+          bookBionicReadingOverride, bookGuideDotsOverride, bookParagraphAlignmentOverride,
           bookTextAntiAliasingOverride, bookHyphenationOverride, bookFontSizeNormalizationOverride,
           bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages,
-          !clippingStore.empty(), bookFontPointSizeOverride),
+          !clippingStore.empty(), bookFontPointSizeOverride, bookTextOverrides),
       [this](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
-        applyOrientation(menu.orientation);
-        applyTextDarkness(menu.textDarkness);
-        toggleAutoPageTurn(menu.pageTurnOption);
         applyBookReaderOverrides(
             menu.embeddedStyleOverride, menu.imageRenderingOverride, menu.fontFamilyOverride, menu.sdFontFamilyOverride,
-            menu.fontSizeOverride, static_cast<bool>(menu.bionicReadingOverride), menu.paragraphAlignmentOverride,
+            menu.fontSizeOverride, static_cast<int8_t>(menu.bionicReadingOverride), menu.paragraphAlignmentOverride,
             menu.textAntiAliasingOverride, menu.hyphenationOverride, menu.fontSizeNormalizationOverride,
             menu.guideDotsOverride, menu.inlineFootnotePreviewsOverride, menu.lineHeightPercentOverride,
-            menu.fontPointSizeOverride);
+            menu.fontPointSizeOverride, &menu.textOverrides);
+        applyOrientation(menu.orientation);
+        toggleAutoPageTurn(menu.pageTurnOption);
         if (!result.isCancelled) {
           onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
         }
@@ -5475,12 +5636,19 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
         RenderLock lock(*this);
         if (section && section->pageCount > 0) {
           const int curTocIndex = section->getTocIndexForPage(section->currentPage);
-          const int nextTocIndex = forward ? curTocIndex + 1 : curTocIndex - 1;
+          const int tocCount = epub->getTocItemsCount();
+          const int step = forward ? 1 : -1;
+          int nextTocIndex = curTocIndex + step;
+          while (curTocIndex >= 0 && nextTocIndex >= 0 && nextTocIndex < tocCount) {
+            const auto entry = epub->getTocItem(nextTocIndex);
+            if (!entry.href.empty() || entry.spineIndex >= 0) break;
+            nextTocIndex += step;
+          }
           if (curTocIndex < 0) {
             navTarget = NavigationTarget::makePage(0);
             currentSpineIndex = forward ? currentSpineIndex + 1 : currentSpineIndex - 1;
             section.reset();
-          } else if (nextTocIndex >= 0 && nextTocIndex < epub->getTocItemsCount()) {
+          } else if (nextTocIndex >= 0 && nextTocIndex < tocCount) {
             const int newSpineIndex = epub->getSpineIndexForTocIndex(nextTocIndex);
             if (newSpineIndex == currentSpineIndex) {
               if (const auto resolvedPage = section->getPageForTocIndex(nextTocIndex)) {

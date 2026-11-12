@@ -417,7 +417,7 @@ void SudokuGameActivity::renderGameMenu() {
   GUI.drawList(renderer, Rect{0, listY, screenWidth, listH}, MENU_ITEM_COUNT, gameMenuIndex,
                [&](int index) { return std::string(I18N.get(items[index])); });
   const auto labels = mappedInput.mapLabels(tr(STR_GAME_RESUME), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void SudokuGameActivity::renderGenerating() {
@@ -603,11 +603,11 @@ void SudokuGameActivity::drawFooter() {
     rightLabel = tr(STR_DIR_RIGHT);
   } else if (state == State::Won) {
     backLabel = tr(STR_GAME_HOME);
-    confirmLabel = tr(STR_SUDOKU_PLAY_AGAIN);
+    confirmLabel = tr(STR_GAME_PLAY_AGAIN);
   }
 
   const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, leftLabel, rightLabel);
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void SudokuGameActivity::renderWon() {

@@ -57,12 +57,18 @@ void saveBeforeSleep(bool keepLpAlive);
 /// to NVS for cold boot (stale, but better than nothing).
 void restore();
 
+/// Read the X3 hardware RTC once without enabling automatic clock maintenance.
+bool restoreExternalDate();
+
 /// Returns the current best-effort wall-clock epoch, or 0 if the clock was
 /// never set.
 time_t now();
 
 /// True if the clock has been set at least once (NTP or restore).
 bool isSynced();
+
+/// True if time comes from a live source or elapsed-time restoration, rather than a saved epoch alone.
+bool hasCurrentDate();
 
 /// Periodic callback (called from main loop) to compensate temperature-induced
 /// RTC drift while the device is awake. Runs at a 10-minute interval. When

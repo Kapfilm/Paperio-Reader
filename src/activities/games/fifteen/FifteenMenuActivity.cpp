@@ -90,7 +90,7 @@ void FifteenMenuActivity::render(RenderLock&&) {
           case ItemKind::Continue:
             return std::string(tr(STR_GAME_CONTINUE));
           case ItemKind::NewGame:
-            return std::string(tr(STR_GAME_NEW_GAME));
+            return std::string(tr(STR_GAME_NEW_SHORT));
           case ItemKind::Controls:
             return std::string(tr(STR_FIFTEEN_CONTROLS));
         }
@@ -110,6 +110,6 @@ void FifteenMenuActivity::render(RenderLock&&) {
       });
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }

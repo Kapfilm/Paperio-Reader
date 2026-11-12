@@ -13,6 +13,7 @@
 
 #include "../Activity.h"
 #include "./FileBrowserActivity.h"
+#include "CrossPointState.h"
 #include "ReadingStats.h"
 #include "activities/reader/ReaderActivity.h"
 #include "components/UITheme.h"
@@ -92,6 +93,7 @@ class HomeActivity final : public Activity {
 
   std::string focusBookPath;
   int focusSelectorIndex = -1;
+  HomeSleepState sleepState;
 
   void onSelectBook(const std::string& path);
   void dispatchMenuAction(MenuAction action);
@@ -125,6 +127,13 @@ class HomeActivity final : public Activity {
       : Activity("Home", renderer, mappedInput),
         focusBookPath(std::move(focusBookPath)),
         focusSelectorIndex(focusSelectorIndex) {}
+  HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const HomeSleepState& state)
+      : HomeActivity(renderer, mappedInput, std::string{}, state.selectorIndex) {
+    sleepState = state;
+  }
+  HomeSleepState getSleepState() const {
+    return {selectorIndex, lastCarouselBookIndex, minimalMenuOpen ? minimalMenuIndex : -1};
+  }
   void onEnter() override;
   void onExit() override;
 

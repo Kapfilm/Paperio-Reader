@@ -200,7 +200,7 @@ void SokobanGameActivity::drawPlaying() {
                  std::max(0, boardBottom - boardTop)});
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SOKOBAN_LEVEL), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void SokobanGameActivity::drawBoard(const Rect& content) {
@@ -263,8 +263,8 @@ void SokobanGameActivity::drawWon() {
   renderer.drawLine((width - dividerWidth) / 2, dividerY, (width + dividerWidth) / 2, dividerY, dividerThickness, true);
   renderer.drawCenteredText(UI_12_FONT_ID, dividerY + dividerThickness + lineToStatsGap, result);
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_NEXT), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  const auto labels = mappedInput.mapLabels(tr(STR_GAME_HOME), tr(STR_NEXT), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }
 
 void SokobanGameActivity::drawLevelSelect() {
@@ -281,5 +281,5 @@ void SokobanGameActivity::drawLevelSelect() {
     return std::string(label);
   });
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
 }

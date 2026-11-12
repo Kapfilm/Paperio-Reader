@@ -15,7 +15,19 @@ compact = source.split("if (usesCompactCoverGrid()) {", 1)[1].split("const int s
 values = {}
 for language, suffix in [("russian", "Ru"), ("english", "En")]:
     text = (root / f"lib/I18n/translations/{language}.yaml").read_text()
-    for key, name in [("STR_RECENT_VIEW_HINT", "hint"), ("STR_HOME", "home"), ("STR_OPEN", "open"), ("STR_REMOVE", "remove"), ("STR_INFO", "info"), ("STR_RECENT_HOME_SHORT", "homeShort"), ("STR_RECENT_OPEN_SHORT", "openShort"), ("STR_RECENT_REMOVE_SHORT", "removeShort")]:
+    captions = [
+        ("STR_RECENT_VIEW_HINT", "hint"),
+        ("STR_RECENT_HOME_FULL", "homeFull"),
+        ("STR_HOME", "home"),
+        ("STR_BACK", "back"),
+        ("STR_OPEN", "open"),
+        ("STR_REMOVE", "remove"),
+        ("STR_INFO", "info"),
+        ("STR_SELECT", "select"),
+        ("STR_DELETE", "delete"),
+        ("STR_BOOKMARK_RENAME_SHORT", "renameShort"),
+    ]
+    for key, name in captions:
         value = json.loads(re.search(rf"^{key}:\s*(.+)$", text, re.M).group(1))
         values[name + suffix] = value
 numbers = {}

@@ -9,18 +9,22 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
+#include <HalClock.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
 #include <PngStreamDecoder.h>
 #include <Serialization.h>
 #include <Txt.h>
+#include <WeatherClient.h>
+#include <WeatherIcons.h>
 #include <Xtc.h>
 #include <esp_system.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <new>
@@ -562,6 +566,9 @@ void SleepActivity::onEnter() {
     renderer.setOrientation(GfxRenderer::Portrait);
   }
   switch (SETTINGS.sleepScreen) {
+    case CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER:
+    case CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR:
+      return renderCalendarSleepScreen();
     case CrossPointSettings::SLEEP_SCREEN_MODE::QUOTE:
       if (renderQuoteSleepScreen()) return;
       return renderDefaultSleepScreen();
@@ -698,6 +705,116 @@ bool SleepActivity::renderQuoteSleepScreen() const {
   }
   renderer.displayBuffer(finalSleepRefreshMode(renderer));
   return true;
+}
+
+void SleepActivity::renderCalendarSleepScreen() const {
+  // Network refresh may have freed the previous-frame buffer. Repaint both
+  // panel planes on X4 instead of diffing against a potentially stale image.
+  const auto refreshMode =
+      renderer.hasSecondaryBuffer() ? finalSleepRefreshMode(renderer) : HalDisplay::HALF_REFRESH;
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  const time_t now = HalClock::hasCurrentDate() ? HalClock::now() : 0;
+  tm date{};
+  renderer.clearScreen();
+
+  if (!now || !localtime_r(&now, &date)) {
+    renderer.drawCenteredText(UI_12_FONT_ID, height / 2 - 40, tr(STR_SLEEP_CALENDAR), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(SMALL_FONT_ID, height / 2 + 8, tr(STR_SLEEPING));
+    renderer.displayBuffer(refreshMode);
+    return;
+  }
+
+  constexpr StrId monthNames[] = {
+      StrId::STR_SLEEP_CALENDAR_MONTH_JAN, StrId::STR_SLEEP_CALENDAR_MONTH_FEB, StrId::STR_SLEEP_CALENDAR_MONTH_MAR,
+      StrId::STR_SLEEP_CALENDAR_MONTH_APR, StrId::STR_SLEEP_CALENDAR_MONTH_MAY, StrId::STR_SLEEP_CALENDAR_MONTH_JUN,
+      StrId::STR_SLEEP_CALENDAR_MONTH_JUL, StrId::STR_SLEEP_CALENDAR_MONTH_AUG, StrId::STR_SLEEP_CALENDAR_MONTH_SEP,
+      StrId::STR_SLEEP_CALENDAR_MONTH_OCT, StrId::STR_SLEEP_CALENDAR_MONTH_NOV, StrId::STR_SLEEP_CALENDAR_MONTH_DEC,
+  };
+  constexpr StrId weekdayNames[] = {
+      StrId::STR_WEATHER_DAY_MON, StrId::STR_WEATHER_DAY_TUE, StrId::STR_WEATHER_DAY_WED, StrId::STR_WEATHER_DAY_THU,
+      StrId::STR_WEATHER_DAY_FRI, StrId::STR_WEATHER_DAY_SAT, StrId::STR_WEATHER_DAY_SUN,
+  };
+  constexpr int daysPerMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  const int year = date.tm_year + 1900;
+  const bool leapYear = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+  const int days = daysPerMonth[date.tm_mon] + (date.tm_mon == 1 && leapYear);
+  const int firstColumn = (date.tm_wday + 6 - (date.tm_mday - 1) % 7) % 7;
+  const int cell = (width - 48) / 7;
+  const int left = (width - 7 * cell) / 2;
+  const int top = (height - 7 * cell) / 2;
+
+  const std::string title = std::string(I18N.get(monthNames[date.tm_mon])) + " " + std::to_string(year);
+  renderer.drawCenteredText(UI_12_FONT_ID, top - 56, title.c_str(), true, EpdFontFamily::BOLD);
+  for (int col = 0; col < 7; ++col) {
+    const char* label = I18N.get(weekdayNames[col]);
+    const int x = left + col * cell + (cell - renderer.getTextWidth(SMALL_FONT_ID, label)) / 2;
+    renderer.drawText(SMALL_FONT_ID, x, top + (cell - renderer.getLineHeight(SMALL_FONT_ID)) / 2, label);
+  }
+  for (int day = 1; day <= days; ++day) {
+    const int index = firstColumn + day - 1;
+    const int x = left + (index % 7) * cell;
+    const int y = top + (1 + index / 7) * cell;
+    const bool today = day == date.tm_mday;
+    const auto style = today ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+    if (today) {
+      renderer.fillRect(x + 5, y + 5, cell - 10, cell - 10);
+    }
+    char number[4];
+    snprintf(number, sizeof(number), "%d", day);
+    renderer.drawText(UI_12_FONT_ID, x + (cell - renderer.getTextWidth(UI_12_FONT_ID, number, style)) / 2,
+                      y + (cell - renderer.getLineHeight(UI_12_FONT_ID)) / 2, number, !today, style);
+  }
+  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER) {
+    renderCalendarWeather(now, top + 7 * cell);
+  }
+  renderer.displayBuffer(refreshMode);
+}
+
+void SleepActivity::renderCalendarWeather(time_t now, int calendarBottom) const {
+  // The default WeatherClient path only reads the saved forecast.
+  const auto weather = WeatherClient::getWeather(WEATHER_SETTINGS);
+  if (!weather.valid) return;
+
+  constexpr time_t secondsPerDay = 24 * 60 * 60;
+  const auto localDay = (now + weather.utcOffsetSeconds) / secondsPerDay;
+  const auto forecast = std::find_if(weather.daily.begin(), weather.daily.end(), [&](const DailyForecast& day) {
+    return day.date > 0 && (day.date + weather.utcOffsetSeconds) / secondsPerDay == localDay;
+  });
+  if (forecast == weather.daily.end()) return;
+
+  const char unit = WEATHER_SETTINGS.getTempUnit() == WeatherTempUnit::CELSIUS ? 'C' : 'F';
+  const bool currentIsFresh = weather.fetchedAt > 0 && now >= weather.fetchedAt && now - weather.fetchedAt <= 30 * 60;
+  char temperature[64];
+  if (currentIsFresh) {
+    snprintf(temperature, sizeof(temperature), "%+.0f °%c  ·  %+.0f / %+.0f °%c",
+             weather.current.temperature, unit, forecast->tempMin, forecast->tempMax, unit);
+  } else {
+    snprintf(temperature, sizeof(temperature), "%+.0f / %+.0f °%c", forecast->tempMin, forecast->tempMax, unit);
+  }
+  const auto iconType = currentIsFresh ? getWeatherIconType(weather.current.weatherCode, weather.current.isDay)
+                                      : getWeatherIconType(forecast->weatherCode, true);
+  const auto* icon = getWeatherIconLarge(iconType);
+  constexpr int iconSize = 32;
+  constexpr int iconGap = 12;
+  const int width = renderer.getScreenWidth();
+  const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, temperature);
+  const int x = (width - iconSize - iconGap - textWidth) / 2;
+  const int y = (calendarBottom + renderer.getScreenHeight() - iconSize) / 2;
+  for (int row = 0; row < iconSize; ++row) {
+    for (int col = 0; col < iconSize; ++col) {
+      const int srcX = col * WEATHER_ICON_SIZE / iconSize;
+      const int srcY = row * WEATHER_ICON_SIZE / iconSize;
+      const auto byte = icon[srcY * (WEATHER_ICON_SIZE / 8) + srcX / 8];
+      if ((byte & (0x80 >> (srcX % 8))) == 0) renderer.drawPixel(x + col, y + row);
+    }
+  }
+  renderer.drawText(UI_12_FONT_ID, x + iconSize + iconGap,
+                    y + (iconSize - renderer.getLineHeight(UI_12_FONT_ID)) / 2, temperature);
+
+  const auto& location = WEATHER_SETTINGS.getLocationName();
+  const auto fitted = renderer.truncatedText(SMALL_FONT_ID, location.c_str(), width - 48);
+  renderer.drawCenteredText(SMALL_FONT_ID, y - renderer.getLineHeight(SMALL_FONT_ID) - 4, fitted.c_str());
 }
 
 void SleepActivity::renderDefaultSleepScreen() const {

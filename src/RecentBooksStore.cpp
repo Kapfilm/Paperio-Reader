@@ -45,6 +45,7 @@ void RecentBooksStore::addBook(const std::string& path, const std::string& title
     newBook.guideDotsOverride = it->guideDotsOverride;
     newBook.inlineFootnotePreviewsOverride = it->inlineFootnotePreviewsOverride;
     newBook.lineHeightPercentOverride = it->lineHeightPercentOverride;
+    newBook.textOverrides = it->textOverrides;
     if (newBook.sourceFormat.empty()) newBook.sourceFormat = it->sourceFormat;
     recentBooks.erase(it);
   }
@@ -211,7 +212,8 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
                                           const int8_t textAntiAliasingOverride, const int8_t hyphenationOverride,
                                           const int8_t fontSizeNormalizationOverride, const int8_t guideDotsOverride,
                                           const int8_t inlineFootnotePreviewsOverride,
-                                          const int16_t lineHeightPercentOverride, const uint8_t fontPointSizeOverride) {
+                                          const int16_t lineHeightPercentOverride, const uint8_t fontPointSizeOverride,
+                                          const BookTextOverrides* textOverrides) {
   auto it =
       std::find_if(recentBooks.begin(), recentBooks.end(), [&](const RecentBook& book) { return book.path == path; });
   if (it == recentBooks.end()) {
@@ -232,6 +234,7 @@ bool RecentBooksStore::setReaderOverrides(const std::string& path, const int8_t 
   it->guideDotsOverride = guideDotsOverride;
   it->inlineFootnotePreviewsOverride = inlineFootnotePreviewsOverride;
   it->lineHeightPercentOverride = lineHeightPercentOverride;
+  if (textOverrides) it->textOverrides = *textOverrides;
   return saveToFile();
 }
 

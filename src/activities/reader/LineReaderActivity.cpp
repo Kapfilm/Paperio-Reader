@@ -152,10 +152,10 @@ LineReaderActivity::TextLayout LineReaderActivity::computeTextLayout(const GfxRe
                                                                      const uint8_t screenMargin) {
   TextLayout layout;
   renderer.getOrientedViewableTRBL(&layout.marginTop, &layout.marginRight, &layout.marginBottom, &layout.marginLeft);
-  layout.marginTop += std::max(static_cast<int>(screenMargin), UITheme::getStatusBarTopHeight());
+  layout.marginTop += SETTINGS.getTopTextPadding(UITheme::getStatusBarTopHeight());
   layout.marginLeft += screenMargin;
   layout.marginRight += screenMargin;
-  layout.marginBottom += std::max(static_cast<int>(screenMargin), UITheme::getStatusBarBottomHeight());
+  layout.marginBottom += SETTINGS.getBottomTextPadding(UITheme::getStatusBarBottomHeight());
   layout.viewportWidth = renderer.getScreenWidth() - layout.marginLeft - layout.marginRight;
   layout.viewportHeight = renderer.getScreenHeight() - layout.marginTop - layout.marginBottom;
   layout.linesPerPage = std::max(1, layout.viewportHeight / renderer.getLineHeight(fontId));

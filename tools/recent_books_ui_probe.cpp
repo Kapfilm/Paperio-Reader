@@ -16,6 +16,7 @@
 #include "components/themes/BaseTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "fontIds.h"
+#include "util/ButtonHintLayout.h"
 
 namespace {
 void require(bool condition, const char* message) {
@@ -51,10 +52,10 @@ int main() {
   int cases = 0;
   registerUiFonts(renderer);
   const auto* fixedHint = renderer.fonts.at(UI_HINT_FONT_ID).getData();
-  for (bool enlarged : {false, true}) {
+  for (uint8_t size : {UiTextSize::Normal, UiTextSize::Medium, UiTextSize::Enlarged}) {
     for (bool bold : {false, true}) {
       registerUiFonts(renderer);
-      applyUiTextSize(renderer, enlarged, bold);
+      applyUiTextSize(renderer, size, bold);
       for (bool x3 : {false, true}) {
         for (bool compact : {false, true}) {
           const ThemeMetrics metrics = compact ? LyraMetrics::values : BaseMetrics::values;
@@ -64,7 +65,8 @@ int main() {
           const int hintWidth = contentWidth - metrics.contentSidePadding * 2;
           const auto& small = renderer.fonts.at(UI_HINT_FONT_ID);
           require(small.getData() == fixedHint, "hint font changes with interface size or style");
-          const auto& caption = renderer.fonts.at(compact ? SMALL_FONT_ID : UI_10_FONT_ID);
+          const int captionFontId = compact ? COMPACT_BUTTON_FONT_ID : UI_10_FONT_ID;
+          const auto& caption = renderer.fonts.at(captionFontId);
           for (bool russian : {false, true}) {
             const int lines = wrappedLines(small, russian ? recent_probe::hintRu : recent_probe::hintEn, hintWidth);
             require(lines <= 2, "view gesture hint would be truncated at two lines");
@@ -88,19 +90,40 @@ int main() {
             require(footerTop + 6 + (lines - 1) * lineHeight + small.getData()->advanceY <=
                         screenHeight - metrics.buttonHintsHeight,
                     "gesture footer overlaps the bottom buttons");
-            const int buttonWidth = compact ? 80 : 106;
-            const int available = buttonWidth - 8;
-            const char* full[] = {russian ? recent_probe::homeRu : recent_probe::homeEn,
-                                  russian ? recent_probe::openRu : recent_probe::openEn,
-                                  russian ? recent_probe::removeRu : recent_probe::removeEn,
-                                  russian ? recent_probe::infoRu : recent_probe::infoEn};
-            const char* abbreviated[] = {russian ? recent_probe::homeShortRu : recent_probe::homeShortEn,
-                                         russian ? recent_probe::openShortRu : recent_probe::openShortEn,
-                                         russian ? recent_probe::removeShortRu : recent_probe::removeShortEn, full[3]};
-            for (int i = 0; i < 4; ++i) {
-              const char* label = textWidth(caption, full[i]) <= available ? full[i] : abbreviated[i];
-              require(textWidth(caption, label) <= available,
-                      "a native-size caption needs more shortening (scaling is forbidden)");
+            const std::array<const char*, 4> recentCaptions = {
+                russian ? recent_probe::homeFullRu : recent_probe::homeFullEn,
+                russian ? recent_probe::openRu : recent_probe::openEn,
+                russian ? recent_probe::removeRu : recent_probe::removeEn,
+                russian ? recent_probe::infoRu : recent_probe::infoEn,
+            };
+            const char* globalBookmarkHome = x3 ? (russian ? recent_probe::homeRu : recent_probe::homeEn)
+                                                : recentCaptions[0];
+            const std::array<const char*, 4> globalBookmarkCaptions = {
+                globalBookmarkHome,
+                russian ? recent_probe::openRu : recent_probe::openEn,
+                russian ? recent_probe::renameShortRu : recent_probe::renameShortEn,
+                russian ? recent_probe::deleteRu : recent_probe::deleteEn,
+            };
+            const std::array<const char*, 4> bookBookmarkCaptions = {
+                russian ? recent_probe::backRu : recent_probe::backEn,
+                russian ? recent_probe::selectRu : recent_probe::selectEn,
+                russian ? recent_probe::renameShortRu : recent_probe::renameShortEn,
+                russian ? recent_probe::deleteRu : recent_probe::deleteEn,
+            };
+            for (const auto& labels : {recentCaptions, globalBookmarkCaptions, bookBookmarkCaptions}) {
+              std::array<int, 4> textWidths{};
+              for (size_t i = 0; i < labels.size(); ++i) {
+                textWidths[i] = textWidth(caption, labels[i]);
+              }
+              const auto widths = button_hint_layout::capsuleWidths(screenWidth, metrics.buttonHintsHeight - 3,
+                                                                    textWidths);
+              int rowWidth = 2 * button_hint_layout::edge + 3 * button_hint_layout::gap;
+              const int padding = button_hint_layout::captionPadding(screenWidth, textWidths);
+              for (size_t i = 0; i < widths.size(); ++i) {
+                require(textWidths[i] + 2 * padding <= widths[i], "a capsule caption would need scaling");
+                rowWidth += widths[i];
+              }
+              require(rowWidth == screenWidth, "capsules and gaps do not span the screen");
             }
             // Centering is computed from the same fixed-size measured text.
             for (const char* hint : {recent_probe::hintRu, recent_probe::hintEn}) {
@@ -112,7 +135,7 @@ int main() {
             }
             ++cases;
             std::cout << (x3 ? "X3" : "X4") << (compact ? " Mini/Lyra" : " Classic") << (russian ? " RU" : " EN")
-                      << " enlarged=" << enlarged << " bold=" << bold << " hintLines=" << lines
+                      << " size=" << static_cast<int>(size) << " bold=" << bold << " hintLines=" << lines
                       << " fixedHintHeight=" << static_cast<int>(small.getData()->advanceY)
                       << " captionScale=1 cellFooterGap=" << footerTop - lastCellBottom << '\n';
           }

@@ -51,6 +51,7 @@ static time_t timegm_compat(const struct tm* tm) {
 
 static constexpr uint32_t CLOCK_RTC_MAGIC = 0xC10C4B1D;
 static constexpr uint32_t CLOCK_RTC_FLAG_LP_VALID = 0x00000001u;
+static constexpr uint32_t CLOCK_RTC_FLAG_DATE_KNOWN = 0x00000002u;
 
 // Temperature drift model for ESP32 RTC-based timekeeping.
 //
@@ -77,6 +78,7 @@ RTC_NOINIT_ATTR static float rtcTemperatureC;  // captured chip temperature at s
 RTC_NOINIT_ATTR static uint32_t rtcStateChecksum;
 
 static bool clockApproximate = true;
+static std::atomic<bool> currentDateKnown{false};
 static std::atomic<bool> maintenanceEnabled{false};
 
 // Drift correction scale factor (learned from NTP sync results).
@@ -121,6 +123,7 @@ static constexpr TimeZoneEntry TIMEZONES[] = {
     {"AST4ADT,M3.2.0/2,M11.1.0/2"},
     {"ACST-9:30ACDT,M10.1.0/2,M4.1.0/3"},
     {"AKST9AKDT,M3.2.0/2,M11.1.0/2"},
+    {"UTC-5"},
 };
 
 // ---- NVS helpers ----------------------------------------------------------
@@ -283,6 +286,10 @@ static time_t readExternalRTC() {
   timeinfo.tm_mon = bcd2bin(Wire.read()) - 1;
   timeinfo.tm_year = bcd2bin(Wire.read()) + 100;
   timeinfo.tm_isdst = 0;
+  if (timeinfo.tm_mon < 0 || timeinfo.tm_mon >= 12 || timeinfo.tm_mday < 1 || timeinfo.tm_mday > 31 ||
+      timeinfo.tm_hour >= 24 || timeinfo.tm_min >= 60 || timeinfo.tm_sec >= 60) {
+    return 0;
+  }
 
   return timegm_compat(&timeinfo);
 }
@@ -424,6 +431,9 @@ static void capture(bool lpValid) {
   rtcTemperatureC = readChipTemperatureC();
   rtcClockMagic = CLOCK_RTC_MAGIC;
   rtcClockFlags = lpValid ? CLOCK_RTC_FLAG_LP_VALID : 0;
+  if (currentDateKnown) {
+    rtcClockFlags |= CLOCK_RTC_FLAG_DATE_KNOWN;
+  }
   rtcStateChecksum = computeRtcStateChecksum();
   nvsWrite(rtcEpoch);
 }
@@ -533,6 +543,7 @@ bool syncNtp(char* errorBuf, size_t errorBufSize, const char* preferredServer) {
   }
 
   clockApproximate = false;
+  currentDateKnown = true;
   // Explicit sync and TLS can still obtain time without leaving a poller
   // running or updating clock calibration and snapshots.
   if (!maintenanceEnabled) {
@@ -628,18 +639,21 @@ void saveBeforeSleep(bool keepLpAlive) {
   LOG_DBG("CLK", "Saved epoch %lld before sleep (driftScale=%.3f)", (long long)rtcEpoch, rtcDriftScale);
 }
 
+bool restoreExternalDate() {
+  if (!initExternalRTC()) return false;
+  const time_t rtcTime = readExternalRTC();
+  if (rtcTime <= 1577836800) return false;
+
+  setSystemClock(rtcTime);
+  rtcEpoch = rtcTime;
+  clockApproximate = false;
+  currentDateKnown = true;
+  LOG_INF("CLK", "Got time from DS3231.");
+  return true;
+}
+
 void restore() {
-  // PRIORITY 1: DS3231 (Hardware-RTC)
-  if (initExternalRTC()) {
-    time_t rtcTime = readExternalRTC();
-    if (rtcTime > 1577836800) {  // Check if time is after 2020 (plausible timestamp)
-      setSystemClock(rtcTime);
-      rtcEpoch = rtcTime;
-      clockApproximate = false;
-      LOG_INF("CLK", "Got time from DS3231.");
-      return;
-    }
-  }
+  if (restoreExternalDate()) return;
 
   rtcDriftScale = nvsReadDriftScale();
   const bool lpValid = (rtcClockFlags & CLOCK_RTC_FLAG_LP_VALID) != 0;
@@ -672,6 +686,7 @@ void restore() {
       // 157680000 s = 5 years.
       if (std::isfinite(correctedSec) && correctedSec >= 0.0 && correctedSec <= 157680000.0) {
         estimated += static_cast<time_t>(correctedSec);
+        currentDateKnown = (rtcClockFlags & CLOCK_RTC_FLAG_DATE_KNOWN) != 0;
       } else {
         LOG_ERR("CLK", "Discarding implausible LP elapsed time: %.3fs", correctedSec);
       }
@@ -747,6 +762,7 @@ void updatePeriodic(const char* preferredServer) {
     time_t rtcTime = readExternalRTC();
     if (rtcTime > 1577836800) {  // Check if time is after 2020 (plausible timestamp)
       setSystemClock(rtcTime);
+      currentDateKnown = true;
       LOG_DBG("CLK", "Systemtime has been taken from DS3231");
     }
     return;
@@ -795,6 +811,8 @@ bool isSynced() {
 }
 
 bool isApproximate() { return clockApproximate; }
+
+bool hasCurrentDate() { return currentDateKnown && isSynced(); }
 
 time_t lastSyncTime() { return nvsReadSyncTime(); }
 
@@ -876,6 +894,7 @@ bool applyClientTime(time_t timestamp) {
 
   setSystemClock(timestamp);
   clockApproximate = false;
+  currentDateKnown = true;
   rtcEpoch = timestamp;
   LOG_INF("CLK", "Applied client time: %lld", (long long)timestamp);
 
