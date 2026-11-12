@@ -186,6 +186,12 @@ void OtaUpdateActivity::render(RenderLock&&) {
     if (reason[0] != '\0') {
       renderer.drawCenteredText(SMALL_FONT_ID, top + height + metrics.verticalSpacing, reason);
     }
+    const auto& details = updater.getDownloadErrorDetails();
+    if (failureReason == OtaUpdater::HTTP_ERROR && !details.empty()) {
+      renderer.drawCenteredText(SMALL_FONT_ID,
+                                top + height + renderer.getLineHeight(SMALL_FONT_ID) + 2 * metrics.verticalSpacing,
+                                details.c_str());
+    }
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   } else if (state == FINISHED) {

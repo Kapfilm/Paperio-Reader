@@ -81,6 +81,7 @@ class SecureHttpClient {
 
   const std::string& getBody() const { return _body; }
   int lastStatus() const { return _status; }
+  int lastTlsConnectError() const { return _secure.lastConnectError(); }
   bool lastConnectionWasInsecure() const { return _lastInsecure; }
   // Heap trough sampled across the last TLS handshake (see SecureClient). Only
   // meaningful for https requests; SIZE_MAX if no https handshake occurred.
@@ -140,7 +141,7 @@ class SecureHttpClient {
   // or a negative SecureHttpError.
   int readBody(const BodySink& sink, const ProgressFn& progress, long contentLength, bool chunked, bool keepAlive);
 
-  bool readLine(std::string& line, uint32_t deadline);
+  bool readLine(std::string& line, uint32_t deadline, bool* truncated = nullptr);
 
   // Transport: one of these is active per connection depending on scheme.
   SecureClient _secure;

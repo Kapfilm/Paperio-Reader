@@ -49,6 +49,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   updateAvailable = false;
   latestVersion.clear();
   otaUrl.clear();
+  downloadErrorDetails.clear();
   otaSize = 0;
   processedSize = 0;
   totalSize = 0;
@@ -224,6 +225,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::beginInstallUpdate() {
   installDone = false;
   installResult = OK;
   processedSize = 0;
+  downloadErrorDetails.clear();
 
   // Open the next OTA partition for streaming writes. The actual firmware
   // download runs in performInstallUpdateStep() via the wolfSSL HttpDownloader,
@@ -347,6 +349,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
   const esp_ota_handle_t handle = reinterpret_cast<esp_ota_handle_t>(otaWriteHandle);
   bool writeOk = true;
   bool userCancelled = false;
+  HttpDownloader::VerifiedFetchStatus downloadStatus;
 
   // Verify-only (fail closed): a MITM must not be able to downgrade the firmware
   // download to an unverified connection by presenting a bad cert.
@@ -370,7 +373,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
         }
         return true;
       },
-      /*treatAbortAsSuccess=*/false);
+      /*treatAbortAsSuccess=*/false, "", "", &downloadStatus);
 
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
   installDone = true;
@@ -388,6 +391,10 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
     return installResult;
   }
   if (!fetchOk) {
+    char details[84];
+    snprintf(details, sizeof(details), "HTTP %d / %d | TLS %d | %zu B", downloadStatus.result,
+             downloadStatus.responseStatus, downloadStatus.tlsError, processedSize);
+    downloadErrorDetails = details;
     LOG_ERR("OTA", "firmware download failed");
     cleanupUpdate();
     installResult = HTTP_ERROR;

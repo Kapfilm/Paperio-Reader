@@ -146,8 +146,9 @@ int SecureHttpClient::transact(const char* method, const Url& u, const uint8_t* 
   return ERR_SEND;  // unreachable: the second attempt always returns above
 }
 
-bool SecureHttpClient::readLine(std::string& line, uint32_t deadline) {
+bool SecureHttpClient::readLine(std::string& line, uint32_t deadline, bool* truncated) {
   line.clear();
+  if (truncated) *truncated = false;
   while (static_cast<int32_t>(millis() - deadline) < 0) {
     while (_client->available() > 0) {
       const int ch = _client->read();
@@ -156,7 +157,12 @@ bool SecureHttpClient::readLine(std::string& line, uint32_t deadline) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         return true;
       }
-      if (line.size() >= MAX_LINE) return false;
+      if (line.size() >= MAX_LINE) {
+        if (!truncated) return false;
+        *truncated = true;
+        if (static_cast<int32_t>(millis() - deadline) >= 0) return false;
+        continue;
+      }
       line += static_cast<char>(ch);
     }
     if (!_client->connected() && _client->available() == 0) return false;
@@ -183,11 +189,21 @@ bool SecureHttpClient::readHeaders(int& status, long& contentLength, bool& chunk
   // Connection: keep-alive header (parsed below) overrides that.
   if (line.compare(0, 9, "HTTP/1.0 ") == 0) keepAlive = false;
 
-  while (readLine(line, deadline)) {
+  bool truncated = false;
+  while (readLine(line, deadline, &truncated)) {
     if (line.empty()) return true;  // end of headers
     const size_t colon = line.find(':');
-    if (colon == std::string::npos) continue;
+    if (colon == std::string::npos) {
+      if (truncated) return false;
+      continue;
+    }
     std::string name = toLowerAscii(line.substr(0, colon));
+    if (name != "content-length" && name != "transfer-encoding" && name != "connection" && name != "location") {
+      continue;
+    }
+    // Ignore long headers we don't use (for example GitHub's CSP), but
+    // never parse an incomplete framing value or redirect target.
+    if (truncated) return false;
     std::string value = line.substr(colon + 1);
     while (!value.empty() && value.front() == ' ') value.erase(value.begin());
     if (name == "content-length") {

@@ -82,6 +82,7 @@ struct Sink {
   size_t total = 0;
   size_t downloaded = 0;
   uint32_t timeoutMs = HTTP_TIMEOUT_MS;
+  HttpDownloader::VerifiedFetchStatus* verifiedStatus = nullptr;
 };
 
 bool isRedirect(int status) {
@@ -141,6 +142,10 @@ HttpDownloader::DownloadError runGetSecure(const std::string& url, const std::st
   };
 
   const int rc = http.get(url, bodySink, progress);
+  if (sink.verifiedStatus) {
+    *sink.verifiedStatus = {rc, http.lastStatus(),
+                            rc == crosspoint::SecureHttpClient::ERR_CONNECT ? http.lastTlsConnectError() : 0};
+  }
   // Log the handshake heap trough on EVERY path (incl. early abort via
   // treatAbortAsSuccess) so the TLS-specific low-water is always captured,
   // distinct from the all-time ESP.getMinFreeHeap() figure.
@@ -267,12 +272,14 @@ bool HttpDownloader::fetchUrl(const std::string& url, const DataCallback& onData
 }
 
 bool HttpDownloader::fetchUrlVerified(const std::string& url, const DataCallback& onData, bool treatAbortAsSuccess,
-                                      const std::string& username, const std::string& password) {
+                                      const std::string& username, const std::string& password,
+                                      VerifiedFetchStatus* status) {
   LOG_DBG("HTTP", "Fetching (stream, verify-only): %s", url.c_str());
   if (!onData) {
     return false;
   }
   Sink sink;
+  sink.verifiedStatus = status;
   sink.write = [&onData](const uint8_t* data, size_t len) { return onData(data, len); };
   // allowInsecureFallback=false: fail closed on cert-verify failure (OTA).
   const DownloadError result = runGetDispatch(url, username, password, sink, /*allowInsecureFallback=*/false);

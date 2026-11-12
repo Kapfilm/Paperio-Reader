@@ -26,6 +26,12 @@ class HttpDownloader {
     ABORTED,
   };
 
+  struct VerifiedFetchStatus {
+    int result = 0;
+    int responseStatus = 0;
+    int tlsError = 0;
+  };
+
   /**
    * Reusable HTTP+TLS session. Holding one of these across multiple
    * downloadToFile() calls keeps a single SecureHttpClient (and its wolfSSL
@@ -86,7 +92,8 @@ class HttpDownloader {
    * to force a downgrade by presenting a bad certificate.
    */
   static bool fetchUrlVerified(const std::string& url, const DataCallback& onData, bool treatAbortAsSuccess = false,
-                               const std::string& username = "", const std::string& password = "");
+                               const std::string& username = "", const std::string& password = "",
+                               VerifiedFetchStatus* status = nullptr);
 
   /**
    * Download a file to the SD card with optional credentials.

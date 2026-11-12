@@ -52,6 +52,7 @@ class SecureClient : public Client {
   void setAllowCertificateDateErrors(bool allow) { _allowCertificateDateErrors = allow; }
   // True if the last successful connect() fell back to an unverified handshake.
   bool lastConnectWasInsecure() const { return _lastWasInsecure; }
+  int lastConnectError() const { return _lastConnectErr; }
 
   // Heap low-water sampled ACROSS the last handshake (free bytes / largest
   // contiguous block). Distinct from ESP.getMinFreeHeap() (all-time since boot):

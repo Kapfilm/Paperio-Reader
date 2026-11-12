@@ -11,6 +11,7 @@ class OtaUpdater {
   bool updateAvailable = false;
   std::string latestVersion;
   std::string otaUrl;
+  std::string downloadErrorDetails;
   size_t otaSize = 0;
   size_t processedSize = 0;
   size_t totalSize = 0;
@@ -37,6 +38,7 @@ class OtaUpdater {
   size_t getProcessedSize() const { return processedSize; }
 
   size_t getTotalSize() const { return totalSize; }
+  const std::string& getDownloadErrorDetails() const { return downloadErrorDetails; }
 
   bool getRender() const { return render; }
   void clearRender() { render = false; }
