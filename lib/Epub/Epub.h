@@ -143,7 +143,7 @@ class Epub {
   // whether to show a progress popup before calling load().
   bool needsFirstOpenIndexing(bool skipLoadingCss = false) const;
 
-  bool clearCache(bool preserveThumbs = false) const;
+  bool clearCache(bool preserveThumbs = false, bool preserveUserState = false) const;
   void setupCacheDir() const;
   const std::string& getCachePath() const;
   const std::string& getPath() const;

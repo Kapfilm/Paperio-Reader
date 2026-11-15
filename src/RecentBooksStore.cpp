@@ -69,6 +69,24 @@ void RecentBooksStore::removeBook(const std::string& path) {
   }
 }
 
+void RecentBooksStore::renameBook(const std::string& oldPath, const std::string& newPath) {
+  if (oldPath == newPath) return;
+  auto oldBook = std::find_if(recentBooks.begin(), recentBooks.end(),
+                              [&](const RecentBook& book) { return book.path == oldPath; });
+  if (oldBook == recentBooks.end()) return;
+  const auto duplicate = std::find_if(recentBooks.begin(), recentBooks.end(),
+                                      [&](const RecentBook& book) { return book.path == newPath; });
+  if (duplicate != recentBooks.end()) {
+    const auto oldIndex = oldBook - recentBooks.begin();
+    const auto duplicateIndex = duplicate - recentBooks.begin();
+    recentBooks.erase(duplicate);
+    oldBook = recentBooks.begin() + oldIndex - (duplicateIndex < oldIndex ? 1 : 0);
+  }
+  oldBook->path = newPath;
+  oldBook->coverBmpPath.clear();
+  saveToFile();
+}
+
 bool RecentBooksStore::isMissing(const RecentBook& book) { return !Storage.exists(book.path.c_str()); }
 
 bool RecentBooksStore::pruneMissing() {

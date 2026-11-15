@@ -21,6 +21,7 @@ RTC_NOINIT_ATTR uint32_t panicRegistersMagic;
 constexpr uint32_t PANIC_REGISTERS_MAGIC = 0x50465231;
 
 
+#if defined(__riscv)
 extern "C" {
 
 void __real_panic_abort(const char* message);
@@ -72,6 +73,8 @@ void IRAM_ATTR __wrap_panic_print_backtrace(const void* frame, int core) {
   __real_panic_print_backtrace(frame, core);
 }
 }
+
+#endif
 
 namespace HalSystem {
 

@@ -49,7 +49,11 @@ class HalPowerManager {
   bool waveformLowPower_ = false;
 
  public:
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+  static constexpr int LOW_POWER_FREQ = 80;                    // ESP32-S3 radio/APB floor
+#else
   static constexpr int LOW_POWER_FREQ = 10;                    // MHz
+#endif
   static constexpr unsigned long IDLE_POWER_SAVING_MS = 3000;  // ms
   static constexpr unsigned long BATTERY_POLL_MS = 1500;       // ms
 

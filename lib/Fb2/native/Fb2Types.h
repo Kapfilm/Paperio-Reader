@@ -79,6 +79,7 @@ struct Fb2SectionIndexEntry {
     // Some Calibre FB2 exports flatten a chapter heading into the first
     // <p><strong>...</strong></p> instead of using the standard <title>.
     bool fallbackTitle = false;
+    bool replayAnchors = false; // special title markup needs the rendering parser
 };
 
 // Optional seekable scratch storage. Firmware uses SD; host callers may keep

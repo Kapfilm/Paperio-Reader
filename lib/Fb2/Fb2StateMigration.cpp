@@ -50,6 +50,51 @@ bool copyIfAbsent(const std::string& from, const std::string& to) {
 template<typename T> bool readPod(FsFile& file, T& value) {
   return file.read(reinterpret_cast<uint8_t*>(&value), sizeof(value)) == sizeof(value);
 }
+
+bool readLayoutVersion(FsFile& file, uint8_t& version) {
+  char magic[6];
+  return file.read(magic, sizeof(magic)) == sizeof(magic) && !std::memcmp(magic, "FB2IDX", sizeof(magic)) &&
+         readPod(file, version);
+}
+
+bool preserveNativeLayout(const std::string& cachePath) {
+  const std::string path = cachePath + "/" + Fb2StateMigration::NATIVE_LAYOUT_FILE;
+  if (Storage.exists(path.c_str()) || Storage.exists((cachePath + Fb2StateMigration::NATIVE_LAYOUT_BACKUP_SUFFIX).c_str()))
+    return true;
+  FsFile marker;
+  return Storage.openFileForWrite("FB2M", path, marker) && marker.close();
+}
+
+bool canRebuildWithoutIndex(const std::string& cachePath) {
+  // The separate package header identifies the chapter layout when the
+  // section index itself is lost or truncated.
+  FsFile package;
+  uint8_t version;
+  uint64_t sourceSize;
+  uint16_t chapterCount;
+  if (Storage.openFileForRead("FB2M", cachePath + "/" + Fb2StateMigration::PACKAGE_STATE_FILE, package) &&
+      readLayoutVersion(package, version) && readPod(package, sourceSize) && sourceSize > 0 &&
+      readPod(package, chapterCount) && chapterCount > 0) {
+    return version >= 30 && preserveNativeLayout(cachePath);
+  }
+  // A previously verified native layout survives an interrupted cache rebuild.
+  return Storage.exists((cachePath + "/" + Fb2StateMigration::NATIVE_LAYOUT_FILE).c_str()) ||
+         Storage.exists((cachePath + Fb2StateMigration::NATIVE_LAYOUT_BACKUP_SUFFIX).c_str());
+}
+
+bool hasChapterPosition(const std::string& cachePath) {
+  if (Storage.exists((cachePath + "/bookmarks.bin").c_str())) return true;
+  const std::string path = cachePath + "/progress.bin";
+  if (!Storage.exists(path.c_str())) return false;
+  FsFile progress;
+  uint8_t bytes[7];
+  if (!Storage.openFileForRead("FB2M", path, progress) || progress.size() != sizeof(bytes) ||
+      progress.read(bytes, sizeof(bytes)) != sizeof(bytes)) return true;
+  // The file-browser mark-as-read action writes a 7-byte record with no
+  // chapter coordinates, so it remains valid even before the first index.
+  return bytes[0] || bytes[1] || bytes[2] || bytes[3] || bytes[4] || bytes[5] || bytes[6] != 100;
+}
+
 bool skip(FsFile& file, uint32_t length) {
   if (length > file.size() - file.position()) return false;
   return file.seek(file.position() + length);
@@ -121,21 +166,21 @@ bool prepare(const std::string& cachePath) {
     }
     return restoreBaseline(cachePath, record);
   }
-  const bool hasUnversionedState = Storage.exists((cachePath + "/progress.bin").c_str()) ||
-                                   Storage.exists((cachePath + "/bookmarks.bin").c_str());
+  const bool hasUnversionedState = hasChapterPosition(cachePath);
   FsFile index;
-  if (!Storage.openFileForRead("FB2M", cachePath + "/.fb2_sections.bin", index)) return !hasUnversionedState;
-  uint8_t header[7];
-  if (index.read(header, sizeof(header)) != sizeof(header) || std::memcmp(header, "FB2IDX", 6))
-    return !hasUnversionedState;
+  uint8_t version;
+  if (!Storage.openFileForRead("FB2M", cachePath + "/.fb2_sections.bin", index) ||
+      !readLayoutVersion(index, version)) {
+    return !hasUnversionedState || canRebuildWithoutIndex(cachePath);
+  }
   // v29 is the only layout that used artificial chapter slices and needs its
   // position translated. Every newer package keeps one spine per native FB2
   // section, so style/cache-version bumps (v30, v31, v32, ...) may rebuild in
   // place while preserving progress and bookmarks. Treating only exactly v30
   // as safe made a v31 book with saved progress abort immediately when v32
   // started indexing.
-  if (header[6] >= 30) return true;
-  if (header[6] != 29) return !hasUnversionedState;
+  if (version >= 30) return !hasUnversionedState || preserveNativeLayout(cachePath);
+  if (version != 29) return !hasUnversionedState || canRebuildWithoutIndex(cachePath);
   // Never overwrite an existing archive, including after a firmware rollback.
   if (Storage.exists(backup.c_str())) return false;
   FsFile progress;

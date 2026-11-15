@@ -52,6 +52,35 @@ TEST_F(BookMetadataCacheRecovery, RejectsStringOutsideMetadataAndMissingLookupTa
   write(bytes);
   { BookMetadataCache cache(dir); EXPECT_FALSE(cache.load()); }
 }
+
+TEST_F(BookMetadataCacheRecovery, NavResolvesFragmentsAndScopedEpubNamespace) {
+  BookMetadataCache cache(dir);
+  ASSERT_TRUE(cache.beginWrite());
+  ASSERT_TRUE(cache.beginContentOpfPass());
+  cache.createSpineEntry("OPS/nav.xhtml");
+  ASSERT_TRUE(cache.endContentOpfPass());
+  ASSERT_TRUE(cache.beginTocPass());
+
+  const std::string navPath = "OPS/nav.xhtml";
+  const std::string xml = R"(<html xmlns:book="http://www.idpf.org/2007/ops"><body>
+      <div xmlns:book="https://example.invalid"><nav book:type="toc"><ol>
+        <li><a href="#ignored">Wrong namespace</a></li>
+      </ol></nav></div>
+      <nav book:type="toc"><ol><li><a href="#target">Self reference</a></li></ol></nav>
+      </body></html>)";
+  TocNavParser parser(navPath, xml.size(), &cache, nullptr);
+  ASSERT_TRUE(parser.setup());
+  ASSERT_EQ(parser.write(reinterpret_cast<const uint8_t*>(xml.data()), xml.size()), xml.size());
+  ASSERT_TRUE(cache.endTocPass());
+  ASSERT_TRUE(cache.endWrite());
+  ASSERT_TRUE(cache.buildBookBin(dir, {}, true));
+  ASSERT_TRUE(cache.load());
+  ASSERT_EQ(cache.getTocCount(), 1);
+  const auto entry = cache.getTocEntry(0);
+  EXPECT_EQ(entry.href, navPath);
+  EXPECT_EQ(entry.anchor, "target");
+  EXPECT_EQ(entry.spineIndex, 0);
+}
 // FB2 chapters are split into virtual spines; note sections also count as spines
 // but deliberately do not appear in the generated TOC. Conclave has 145 spines
 // and only 22 named main-text entries, below the generic EPUB 25% heuristic.

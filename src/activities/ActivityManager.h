@@ -74,6 +74,7 @@ class ActivityManager {
 
   // Set by requestUpdateAndWait(); read and cleared by the render task after render completes.
   // Note: only one waiting task is supported at a time
+  portMUX_TYPE waitingTaskMux = portMUX_INITIALIZER_UNLOCKED;
   TaskHandle_t waitingTaskHandle = nullptr;
 
   // Mutex to protect rendering operations from race conditions
@@ -94,7 +95,7 @@ class ActivityManager {
 
   // Whether to trigger a render after the current loop()
   // This variable must only be set by the main loop, to avoid race conditions
-  volatile bool requestedUpdate = false;
+  std::atomic<bool> requestedUpdate{false};
 
   // When true, input events are consumed (discarded) until all buttons are released
   // and no press/release events remain.  Armed automatically on activity transitions

@@ -1,5 +1,6 @@
 #include "HalPowerManager.h"
 
+#include <BoardConfig.h>
 #include <Logging.h>
 #include <PowerManager.h>
 #include <Preferences.h>
@@ -71,7 +72,11 @@ void logGaugeCapacity(const Bq27220Capacity& load) {
 }  // namespace
 
 void HalPowerManager::begin() {
-  if (gpio.deviceIsX3()) {
+  if (gpio.deviceIsX4Classic()) {
+    const auto& bus = BoardConfig::ACTIVE.sensors;
+    Wire.begin(bus.i2cSda, bus.i2cScl, bus.i2cHz);
+    Wire.setTimeOut(4);
+  } else if (gpio.deviceIsX3()) {
     // X3 uses an I2C fuel gauge for battery monitoring.
     // I2C init must come AFTER gpio.begin() so early hardware detection/probes are finished.
     Wire.begin(X3_I2C_SDA, X3_I2C_SCL, X3_I2C_FREQ);
@@ -224,6 +229,23 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio, bool keepClockAlive) const {
   // (which doesn't expose end()).
   logSerial.end();
 #endif
+#if FREEINK_DEVICE_X4CLASSIC
+  freeink::PowerManager::powerDownRailsForSleep();
+  const auto rail = static_cast<gpio_num_t>(BoardConfig::ACTIVE.power.latch0);
+  gpio_hold_dis(rail);
+  gpio_set_direction(rail, GPIO_MODE_OUTPUT);
+  gpio_set_level(rail, 1);
+  gpio_hold_en(rail);
+  pinMode(InputManager::POWER_BUTTON_PIN, INPUT_PULLUP);
+  gpio.waitForStablePowerRelease();
+  const auto wakeResult = esp_sleep_enable_ext1_wakeup(1ULL << InputManager::POWER_BUTTON_PIN, ESP_EXT1_WAKEUP_ANY_LOW);
+  if (wakeResult != ESP_OK) {
+    LOG_ERR("PWR", "Could not arm Classic power-button wake: %s", esp_err_to_name(wakeResult));
+    esp_restart();
+    return;
+  }
+  freeink::PowerManager::deepSleep();
+#else
   // Perform all hardware preparation immediately (while the button may still be held)
   // so the user gets instant visual feedback (display already off). Only block for
   // button release at the very end, right before entering sleep.
@@ -273,6 +295,7 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio, bool keepClockAlive) const {
   esp_deep_sleep_enable_gpio_wakeup(1ULL << InputManager::POWER_BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
   // Enter Deep Sleep
   esp_deep_sleep_start();
+#endif
 }
 
 void HalPowerManager::pollBatteryPercentage() {
@@ -281,6 +304,14 @@ void HalPowerManager::pollBatteryPercentage() {
   if (_batteryPolled && now - _batteryLastPollMs < BATTERY_POLL_MS) return;
   _batteryPolled = true;
   _batteryLastPollMs = now;
+  if (gpio.deviceIsX4Classic()) {
+    static const BatteryMonitor battery;
+    uint16_t soc = 0;
+    if (battery.readPercentageChecked(soc) && soc <= 100) {
+      _batteryCachedPercent.store(soc, std::memory_order_relaxed);
+    }
+    return;
+  }
   if (_batteryUseI2C) {
     uint16_t soc = 0;
     if (X3GPIO::readI2CReg16LE(I2C_ADDR_BQ27220, BQ27220_SOC_REG, &soc) && soc <= 100) {

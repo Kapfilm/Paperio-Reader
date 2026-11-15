@@ -51,7 +51,7 @@ bool HalTiltSensor::readGyro(float& gx, float& gy, float& gz) const {
 }
 
 void HalTiltSensor::begin() {
-  if (!gpio.deviceIsX3()) {
+  if (!gpio.deviceIsX3() && !gpio.deviceIsX4Classic()) {
     _available = false;
     return;
   }

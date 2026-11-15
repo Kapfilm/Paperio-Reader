@@ -115,6 +115,14 @@ HalGPIO::DeviceType detectDeviceTypeWithFingerprint() {
 }  // namespace
 
 void HalGPIO::begin() {
+#if FREEINK_DEVICE_X4CLASSIC
+  _deviceType = DeviceType::X4Classic;
+  BoardConfig::selectDevice(BoardConfig::Board::XteinkX4Classic);
+  BoardConfig::holdPowerRails();
+  freeink::applyXteinkDisplayController();
+  pinMode(BoardConfig::ACTIVE.batteryChargeStatus, INPUT);
+  inputMgr.begin();
+#else
   _deviceType = detectDeviceTypeWithFingerprint();
   BoardConfig::selectDevice(deviceIsX3() ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);
 
@@ -134,6 +142,7 @@ void HalGPIO::begin() {
     pinMode(BAT_GPIO0, INPUT);
     pinMode(UART0_RXD, INPUT);
   }
+#endif
 }
 
 // Push one debounced edge into the loop-drained FIFO. Caller holds inputMux_.
@@ -334,6 +343,14 @@ bool HalGPIO::isHeldNow(uint8_t buttonIndex, uint8_t confirmSamples) {
       }
       continue;
     }
+#if FREEINK_DEVICE_X4CLASSIC
+    const auto& pins = BoardConfig::ACTIVE.input;
+    const int buttons[] = {pins.back, pins.confirm, pins.left, pins.right, pins.up, pins.down};
+    if (buttonIndex >= BTN_POWER || digitalRead(buttons[buttonIndex]) != LOW) {
+      held = false;
+      break;
+    }
+#else
     InputManager::ButtonAdcSample group1{};
     InputManager::ButtonAdcSample group2{};
     inputMgr.readButtonAdc(group1, group2);
@@ -345,6 +362,7 @@ bool HalGPIO::isHeldNow(uint8_t buttonIndex, uint8_t confirmSamples) {
       held = false;
       break;
     }
+#endif
   }
 
   if (buttonIndex != BTN_POWER) {
@@ -473,6 +491,9 @@ HalGPIO::PowerStatus HalGPIO::getPowerStatus() const {
     const uint8_t snapshot = x3PowerSnapshot_.load(std::memory_order_relaxed);
     return {false, false, (snapshot & 1) != 0, (snapshot & 2) != 0};
   }
+#if FREEINK_DEVICE_X4CLASSIC
+  return {false, false, true, digitalRead(BoardConfig::ACTIVE.batteryChargeStatus) == HIGH};
+#endif
   // X4: U0RXD/GPIO20 detects VBUS, not the charger's active/full phase.
   return {true, digitalRead(UART0_RXD) == HIGH, false, false};
 }
@@ -485,6 +506,13 @@ bool HalGPIO::isUsbConnected() const {
 HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
   const auto wakeupCause = esp_sleep_get_wakeup_cause();
   const auto resetReason = esp_reset_reason();
+#if FREEINK_DEVICE_X4CLASSIC
+  if (wakeupCause == ESP_SLEEP_WAKEUP_EXT1) return WakeupReason::PowerButton;
+  if (resetReason == ESP_RST_POWERON && digitalRead(InputManager::POWER_BUTTON_PIN) == LOW) {
+    return WakeupReason::PowerButton;
+  }
+  return WakeupReason::Other;
+#endif
 
   // X3: a POWERON reset can come from either a power-button press (battery-latch
   // MOSFET closes) OR from USB VBUS supplying power to the MCU through a path

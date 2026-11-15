@@ -52,7 +52,10 @@ class Fb2 {
   bool load(const ProgressFn& onProgress = nullptr);
   // Read-only disk probe; no conversion, repairs or cache writes.
   bool needsPreparation();
+  // Reuse a successful needsPreparation() check during the same reader open.
+  bool loadAfterProbe();
   bool clearCache() const;
+  bool clearGeneratedCache() const;
   void setupCacheDir() const;
 
   [[nodiscard]] const std::string& getPath() const { return filepath; }
@@ -173,7 +176,10 @@ class Fb2 {
   std::string language = "und";
   std::string coverImageId;
   uint64_t sourceSize = 0;
+  uint64_t sourceFingerprint = 0;
+  bool legacySourceSignature = false;
   bool loaded = false;
+  bool preparedCacheChecked = false;
 
   int chapterCount = 0;
   std::deque<ImageInfoPublic> images;
@@ -187,10 +193,13 @@ class Fb2 {
   bool prepareSource(const ProgressFn& onProgress);
   static bool ensurePreparedSource(const std::string& packageCachePath, std::string& outSourcePath);
   bool isCompressedFb2() const;
+  bool readSourceIdentity(HalFile& file);
   bool cacheIsCurrent();
   bool loadMetadataCache();
   void saveMetadataCache() const;
   void saveCacheSignature() const;
+  void adoptLegacySourceSignature() const;
+  void writeSourceFingerprint() const;
   void maintainCacheBudget() const;
 
   bool persistImageIndex(const Fb2ScanResult& scan);

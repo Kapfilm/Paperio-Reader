@@ -77,13 +77,32 @@ int main(int argc, char** argv) {
   const auto bookmarks=std::filesystem::path(cache)/"bookmarks.bin";
   {std::ofstream out(bookmarks); out << "test-bookmark-preserve";}
   const auto index=std::filesystem::path(cache)/".fb2_sections.bin";
-  {std::fstream out(index, std::ios::binary|std::ios::in|std::ios::out); out.seekp(6); out.put(28);}
+  const auto packageState=std::filesystem::path(cache)/"fb2_package.bin";
+  const auto setVersion = [&](uint8_t version) {
+    for (const auto& path : {index, packageState}) {
+      std::fstream out(path, std::ios::binary | std::ios::in | std::ios::out);
+      out.seekp(6);
+      out.put(static_cast<char>(version));
+      if (!out) return false;
+    }
+    return true;
+  };
+  if (!setVersion(28)) return 36;
+  {
+    Fb2 legacy(argv[1], argv[2]);
+    if (!legacy.needsPreparation() || legacy.load()) return 37;
+    std::ifstream in(bookmarks);
+    std::string value;
+    if (!(in >> value) || value != "test-bookmark-preserve") return 38;
+  }
+  std::cout << "PASS unknown legacy layout preserves bookmarks and requires recovery" << std::endl;
+  if (!setVersion(34)) return 36;
   Fb2 book(argv[1],argv[2]);
   if(!book.needsPreparation()) return 31;
   if(!book.load()) return 9;
   std::ifstream in(bookmarks); std::string value; in >> value;
   if(value!="test-bookmark-preserve") return 10;
-  std::cout << "PASS bookmarks preserved during version 28 upgrade" << std::endl;
+  std::cout << "PASS bookmarks preserved during native-layout cache rebuild" << std::endl;
  }
  {
   // Missing generated navigation needs a real rebuild, not a silent warm open.

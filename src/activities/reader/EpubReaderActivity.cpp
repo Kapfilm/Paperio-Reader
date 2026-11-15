@@ -32,10 +32,12 @@
 #include <esp_system.h>
 
 #include <algorithm>
-#include <string_view>
+#include <array>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
+#include <string_view>
 
 #include "ClipSelectionActivity.h"
 #include "CrossPointSettings.h"
@@ -81,7 +83,7 @@ namespace {
 constexpr uint8_t PROGRESS_TEXT_ANCHOR_MARKER = 0xA1;
 constexpr size_t PROGRESS_BASE_SIZE = 11;
 
-std::string bookmarkPageText(const Page& page) {
+std::string bookmarkPageText(const Page& page, size_t limit = std::string::npos) {
   std::string text;
   for (const auto& element : page.elements) {
     if (element->getTag() != TAG_PageLine) continue;
@@ -90,7 +92,10 @@ std::string bookmarkPageText(const Page& page) {
     const auto& block = *line.getBlock();
     for (uint16_t i = 0; i < block.wordCount(); ++i) {
       for (const unsigned char c : std::string_view(block.wordText(i))) {
-        if (c > ' ' && c != '-') text.push_back(static_cast<char>(c));
+        if (c > ' ' && c != '-') {
+          if (text.size() == limit) return text;
+          text.push_back(static_cast<char>(c));
+        }
       }
     }
   }
@@ -104,54 +109,98 @@ std::string capturePageTextAnchor(Section& section, int page) {
   const auto content = section.loadPageFromSectionFile();
   section.currentPage = previousPage;
   if (!content) return {};
-  auto text = bookmarkPageText(*content);
+  auto text = bookmarkPageText(*content, BookmarkStore::MAX_TEXT_ANCHOR_LENGTH + 1);
   size_t length = std::min<size_t>(text.size(), BookmarkStore::MAX_TEXT_ANCHOR_LENGTH);
   while (length < text.size() && (static_cast<unsigned char>(text[length]) & 0xC0) == 0x80) --length;
   text.resize(length);
   return text;
 }
 
+struct TextAnchorMatch {
+  std::string_view text;
+  int fallbackPage;
+  size_t bookmarkIndex = 0;
+  std::optional<uint16_t> page = std::nullopt;
+};
+
+void findTextAnchorPages(Section& section, std::span<TextAnchorMatch> matches) {
+  const int previousPage = section.currentPage;
+  const auto loadText = [&section](int page) -> std::optional<std::string> {
+    section.currentPage = page;
+    const auto content = section.loadPageFromSectionFile();
+    if (!content) return std::nullopt;
+    return bookmarkPageText(*content);
+  };
+
+  // On an unchanged layout most marks still match their recorded page. Sort so
+  // multiple bookmarks on the same page share one read.
+  std::sort(matches.begin(), matches.end(),
+            [](const TextAnchorMatch& a, const TextAnchorMatch& b) { return a.fallbackPage < b.fallbackPage; });
+  size_t unresolved = matches.size();
+  int loadedPage = -1;
+  std::optional<std::string> loadedText;
+  for (auto& match : matches) {
+    if (match.fallbackPage < 0 || match.fallbackPage >= section.pageCount) continue;
+    if (loadedPage != match.fallbackPage) {
+      loadedPage = match.fallbackPage;
+      loadedText.reset();
+      loadedText = loadText(loadedPage);
+    }
+    if (loadedText && loadedText->find(match.text) != std::string::npos) {
+      match.page = static_cast<uint16_t>(loadedPage);
+      --unresolved;
+    }
+  }
+  loadedText.reset();
+
+  // One chapter pass serves all unmatched queries in this batch. Keep the
+  // page number for every byte of the suffix so anchors can span several
+  // short pages. A failed page read breaks the stream, an empty page does not.
+  constexpr size_t maxTailLength = BookmarkStore::MAX_TEXT_ANCHOR_LENGTH - 1;
+  std::array<uint16_t, maxTailLength> tailPages;
+  std::string tail;
+  for (uint16_t page = 0; unresolved && page < section.pageCount; ++page) {
+    auto text = loadText(page);
+    if (!text) {
+      tail.clear();
+      continue;
+    }
+    if (text->empty()) continue;
+    const size_t previousLength = tail.size();
+    text->insert(0, tail);
+    for (auto& match : matches) {
+      if (match.page == match.fallbackPage) continue;
+      // Matches ending entirely in the retained suffix were already visited.
+      const size_t start = previousLength >= match.text.size() ? previousLength - match.text.size() + 1 : 0;
+      for (auto at = text->find(match.text, start); at != std::string::npos; at = text->find(match.text, at + 1)) {
+        const uint16_t found = at < previousLength ? tailPages[at] : page;
+        if (!match.page || std::abs(found - match.fallbackPage) < std::abs(*match.page - match.fallbackPage)) {
+          match.page = found;
+        }
+        if (match.page == match.fallbackPage) {
+          --unresolved;
+          break;
+        }
+      }
+    }
+    const size_t tailStart = text->size() > maxTailLength ? text->size() - maxTailLength : 0;
+    tail.assign(*text, tailStart, std::string::npos);
+    const size_t retained = tailStart < previousLength ? previousLength - tailStart : 0;
+    if (tailStart && retained) {
+      std::move(tailPages.begin() + tailStart, tailPages.begin() + previousLength, tailPages.begin());
+    }
+    std::fill(tailPages.begin() + retained, tailPages.begin() + tail.size(), page);
+  }
+  section.currentPage = previousPage;
+}
+
 std::optional<uint16_t> findTextAnchorPage(Section& section, const std::string& anchor, int fallback) {
   if (anchor.empty() || anchor.size() > BookmarkStore::MAX_TEXT_ANCHOR_LENGTH || section.hasActiveBuild()) {
     return std::nullopt;
   }
-  const int previousPage = section.currentPage;
-  // The usual case is reopening the same layout. Check the recorded page
-  // first so ordinary book opens never scan the chapter for an unchanged mark.
-  if (fallback >= 0 && fallback < section.pageCount) {
-    section.currentPage = fallback;
-    const auto content = section.loadPageFromSectionFile();
-    if (content && bookmarkPageText(*content).find(anchor) != std::string::npos) {
-      section.currentPage = previousPage;
-      return static_cast<uint16_t>(fallback);
-    }
-  }
-  std::optional<uint16_t> best;
-  std::string tail;
-  int tailPage = 0;
-  for (int page = 0; page < section.pageCount; ++page) {
-    section.currentPage = page;
-    const auto content = section.loadPageFromSectionFile();
-    if (!content) {
-      tail.clear();
-      continue;
-    }
-    const size_t previousLength = tail.size();
-    auto text = bookmarkPageText(*content);
-    if (text.empty()) continue;
-    auto combined = tail + text;
-    for (auto at = combined.find(anchor); at != std::string::npos; at = combined.find(anchor, at + 1)) {
-      const int found = at < previousLength ? tailPage : page;
-      if (!best || std::abs(found - fallback) < std::abs(static_cast<int>(*best) - fallback)) {
-        best = static_cast<uint16_t>(found);
-      }
-    }
-    if (best && *best == fallback) break;
-    tail = text.substr(text.size() - std::min(text.size(), anchor.size() - 1));
-    tailPage = page;
-  }
-  section.currentPage = previousPage;
-  return best;
+  TextAnchorMatch match{anchor, fallback};
+  findTextAnchorPages(section, {&match, 1});
+  return match.page;
 }
 // pagesPerRefresh now comes from SETTINGS.getRefreshFrequency()
 
@@ -1526,6 +1575,8 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     readerPhase_ = ReaderPhase::READING;
     buildingPopupShown_ = false;
     buildDisplayedPage_ = -1;
+    buildLastPaintedPage_ = -1;
+    buildResolvedAnchor_ = false;
     backgroundBuildPercent_ = -1;
     requestUpdate();  // -> BuildSection -> released (incremental or blocking) build
   };
@@ -1562,9 +1613,8 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     }
     backgroundBuildPercent_ = static_cast<int8_t>(section->activeBuildPercent());
     // If the page the user is waiting on just became readable, ask the render task to draw it.
-    const int want = section->currentPage;
-    if (navTarget.kind == NavigationTarget::Kind::Page && want >= 0 &&
-        want < static_cast<int>(section->activeBuildPageCount()) && want != buildDisplayedPage_) {
+    const int want = sectionBuildDisplayTarget();
+    if (want >= 0 && want < static_cast<int>(section->activeBuildPageCount()) && want != buildDisplayedPage_) {
       requestUpdate();
     }
     return;
@@ -1589,11 +1639,11 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
   epub->persistImageManifest();
   readerPhase_ = ReaderPhase::READING;
 
-  // Resolve the display position. For a Page target, section->currentPage already tracked the
-  // user's position through any mid-build page turns, so DON'T resolveInto (it would reset to the
-  // original page). Clamp it; if they ran past the end while building, cross into the next spine.
+  // A page turn during the build can run past the end and cross into the next
+  // spine. A saved page that no longer fits the new layout must instead
+  // resolve proportionally and stay within the original chapter.
   const int spineCount = epub->getSpineItemsCount();
-  if (navTarget.kind == NavigationTarget::Kind::Page) {
+  if (navTarget.kind == NavigationTarget::Kind::Page && buildPageTurned_) {
     if (section->currentPage >= section->pageCount) {
       if (currentSpineIndex + 1 < spineCount) {
         navTarget = NavigationTarget::makePage(0);
@@ -1609,15 +1659,18 @@ void EpubReaderActivity::stepCurrentSectionBuild() {
     } else if (section->currentPage < 0) {
       section->currentPage = 0;
     }
-  } else {
+  } else if (!buildResolvedAnchor_) {
     navTarget.resolveInto(*section, currentSpineIndex);
   }
+  completedBuildDisplayPage_ = renderer.isX3() && section && !buildingPopupShown_ ? buildLastPaintedPage_ : -1;
   remapBookmarksForSection();
   anchorNavTargetToCurrentPage();
   forceLoadLargeImages = false;
   pageHasPlaceholders = false;
   buildingPopupShown_ = false;
   buildDisplayedPage_ = -1;
+  buildLastPaintedPage_ = -1;
+  buildResolvedAnchor_ = false;
   requestUpdate();  // -> Normal pass renders the resolved page (with AA)
 }
 
@@ -1681,6 +1734,36 @@ void EpubReaderActivity::jumpToPercent(int percent) {
   }
 }
 
+void EpubReaderActivity::openChapterSelection() {
+  if (!epub) return;
+  const int tocIndex = section ? section->getTocIndexForPage(section->currentPage)
+                               : epub->getTocIndexForSpineIndex(currentSpineIndex);
+  startActivityForResult(std::make_unique<EpubReaderChapterSelectionActivity>(
+                             renderer, mappedInput, epub, sourceBookPath(*epub), currentSpineIndex, tocIndex),
+                         [this](const ActivityResult& result) {
+                           if (!result.isCancelled) selectChapter(std::get<ChapterResult>(result.data));
+                         });
+}
+
+void EpubReaderActivity::selectChapter(const ChapterResult& chapter) {
+  RenderLock lock(*this);
+  ReaderUtils::requestReaderTransitionRefresh(renderer);
+  const auto page = chapter.tocIndex && chapter.spineIndex == currentSpineIndex && section &&
+                            !section->hasActiveBuild()
+                        ? section->getPageForTocIndex(*chapter.tocIndex)
+                        : std::nullopt;
+  if (page) {
+    section->currentPage = *page;
+    anchorNavTargetToCurrentPage();
+    forceLoadLargeImages = false;
+    pageHasPlaceholders = false;
+    return;
+  }
+  navTarget = chapter.tocIndex ? NavigationTarget::makeTocIndex(*chapter.tocIndex) : NavigationTarget::makePage(0);
+  currentSpineIndex = chapter.spineIndex;
+  section.reset();
+}
+
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
   switch (action) {
     case EpubReaderMenuActivity::MenuAction::DICTIONARY:
@@ -1689,39 +1772,9 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::SELECT_DICTIONARY:
       openDictionarySelection();
       break;
-    case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
-      const int spineIdx = currentSpineIndex;
-      const int tocIdx = section ? section->getTocIndexForPage(section->currentPage)
-                                 : epub->getTocIndexForSpineIndex(currentSpineIndex);
-      const std::string path = sourceBookPath(*epub);
-      startActivityForResult(
-          std::make_unique<EpubReaderChapterSelectionActivity>(renderer, mappedInput, epub, path, spineIdx, tocIdx),
-          [this](const ActivityResult& result) {
-            if (result.isCancelled) return;
-            // The chapter list's own paint consumed the override armed before it launched
-            // (one-shot, see consumeRefreshOverride); arm a fresh one here so the resumed
-            // reader page gets a clean HALF_REFRESH instead of a FAST diff against RED RAM
-            // that still holds the chapter list's last frame.
-            ReaderUtils::enforceExitFullRefresh(renderer);
-            RenderLock lock(*this);
-            const auto& chapter = std::get<ChapterResult>(result.data);
-            auto resolvedPage = (chapter.tocIndex && chapter.spineIndex == currentSpineIndex && section)
-                                    ? section->getPageForTocIndex(*chapter.tocIndex)
-                                    : std::nullopt;
-            if (resolvedPage) {
-              section->currentPage = *resolvedPage;
-              anchorNavTargetToCurrentPage();
-              forceLoadLargeImages = false;
-              pageHasPlaceholders = false;
-            } else {
-              navTarget =
-                  chapter.tocIndex ? NavigationTarget::makeTocIndex(*chapter.tocIndex) : NavigationTarget::makePage(0);
-              currentSpineIndex = chapter.spineIndex;
-              section.reset();
-            }
-          });
+    case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER:
+      openChapterSelection();
       break;
-    }
     case EpubReaderMenuActivity::MenuAction::READING_PROFILES:
       startActivityForResult(
           std::make_unique<ReadingProfilesActivity>(renderer, mappedInput), [this](const ActivityResult& result) {
@@ -1925,19 +1978,19 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::DELETE_CACHE: {
       {
         RenderLock lock(*this);
-        if (epub && section) {
-          uint16_t backupSpine = currentSpineIndex;
-          uint16_t backupPage = section->currentPage;
-          uint16_t backupPageCount = section->pageCount;
+        if (epub) {
+          if (section && !section->hasActiveBuild() && section->currentPage >= 0 &&
+              section->currentPage < section->pageCount && footnoteHistory.empty() && !isFullNoteView() &&
+              annotationAnchor().empty()) {
+            const int page = section->currentPage;
+            saveProgress(currentSpineIndex, page, section->pageCount, capturePageTextAnchor(*section, page));
+            pendingProgressSave.pending.store(false, std::memory_order_relaxed);
+          }
+          resetBackgroundBuild();
           section.reset();
-          epub->clearCache(true);
-          epub->setupCacheDir();
-          saveProgress(backupSpine, backupPage, backupPageCount);
-          if (!bookmarkStore.isEmpty()) {
-            bookmarkStore.markDirty();
-            bookmarkStore.save();
-            GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, sourceBookPath(*epub), epub->getCachePath(), epub->getTitle(),
-                                           false);
+          if (!epub->clearCache(/*preserveThumbs=*/true, /*preserveUserState=*/true)) {
+            GUI.drawPopup(renderer, tr(STR_ERROR_GENERAL_FAILURE));
+            delay(900);
           }
         }
       }
@@ -2013,11 +2066,7 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
   // Preserve current reading position so we can restore after reflow.
   {
     RenderLock lock(*this);
-    if (section) {
-      navTarget = NavigationTarget::makePage(section->currentPage);
-      navTarget.cachedPageCount = section->pageCount;
-      navTarget.cachedSpineIdx = currentSpineIndex;
-    }
+    preservePositionForRelayout();
 
     // Persist the selection so the reader keeps the new orientation on next launch.
     SETTINGS.orientation = orientation;
@@ -2044,11 +2093,7 @@ void EpubReaderActivity::stopAutomaticPageTurn() {
 
   // Preserve current reading position so we can restore after reflow.
   RenderLock lock(*this);
-  if (section) {
-    navTarget = NavigationTarget::makePage(section->currentPage);
-    navTarget.cachedPageCount = section->pageCount;
-    navTarget.cachedSpineIdx = currentSpineIndex;
-  }
+  preservePositionForRelayout();
   pendingPreRender = false;
   usePreRenderedBuffer = false;
   preRenderedPage.ready = false;
@@ -2071,13 +2116,33 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
   if (UITheme::getStatusBarHeight(true) != UITheme::getStatusBarHeight()) {
     // Preserve current reading position so we can restore after reflow.
     RenderLock lock(*this);
-    if (section) {
-      navTarget = NavigationTarget::makePage(section->currentPage);
-      navTarget.cachedPageCount = section->pageCount;
-      navTarget.cachedSpineIdx = currentSpineIndex;
-    }
+    preservePositionForRelayout();
     section.reset();
   }
+}
+
+void EpubReaderActivity::preservePositionForRelayout() {
+  if (!section || section->hasActiveBuild() || section->currentPage < 0 ||
+      section->currentPage >= section->pageCount) {
+    return;
+  }
+  const int page = section->currentPage;
+  const auto paragraph = section->getParagraphIndexForPage(page);
+  auto text = capturePageTextAnchor(*section, page);
+  if (!text.empty()) {
+    if (footnoteHistory.empty() && !isFullNoteView() && annotationAnchor().empty()) {
+      // Preserve the anchor even if reindexing restarts the reader under memory pressure.
+      saveProgress(currentSpineIndex, page, section->pageCount, text);
+      pendingProgressSave.pending.store(false, std::memory_order_relaxed);
+    }
+    navTarget = NavigationTarget::makeTextAnchor(std::move(text), page, paragraph);
+  } else if (paragraph) {
+    navTarget = NavigationTarget::makeParagraph(*paragraph, page);
+  } else {
+    navTarget = NavigationTarget::makePage(page);
+  }
+  navTarget.cachedPageCount = section->pageCount;
+  navTarget.cachedSpineIdx = currentSpineIndex;
 }
 
 void EpubReaderActivity::applyBookReaderOverrides(const int8_t embeddedStyleOverride,
@@ -2175,45 +2240,21 @@ void EpubReaderActivity::applyBookReaderOverrides(
   renderer.setNextDisplayRefreshMode(HalDisplay::FAST_REFRESH);
 
   RenderLock lock(*this);
-  if (section) {
-    const int currentPage = section->currentPage;
-    if (!section->hasActiveBuild()) {
-      const auto& bookmarks = bookmarkStore.getAll();
-      bool migrated = false;
-      for (size_t index = 0; index < bookmarks.size(); ++index) {
-        const auto& bookmark = bookmarks[index];
-        if (bookmark.spineIndex == currentSpineIndex && bookmark.textAnchor.empty() &&
-            bookmark.previewAnchor == annotationAnchor() && bookmark.fullNote == isFullNoteView()) {
-          migrated |= bookmarkStore.setTextAnchor(index, capturePageTextAnchor(*section, bookmark.pageNumber));
-        }
+  if (section && !section->hasActiveBuild()) {
+    const auto& bookmarks = bookmarkStore.getAll();
+    bool migrated = false;
+    for (size_t index = 0; index < bookmarks.size(); ++index) {
+      const auto& bookmark = bookmarks[index];
+      if (bookmark.spineIndex == currentSpineIndex && bookmark.textAnchor.empty() &&
+          bookmark.previewAnchor == annotationAnchor() && bookmark.fullNote == isFullNoteView()) {
+        migrated |= bookmarkStore.setTextAnchor(index, capturePageTextAnchor(*section, bookmark.pageNumber));
       }
-      if (migrated && bookmarkStore.save()) {
-        GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, sourceBookPath(*epub), epub->getCachePath(), epub->getTitle(),
-                                       false);
-      }
-      const auto paragraphIndex = section->getParagraphIndexForPage(currentPage);
-      auto text = capturePageTextAnchor(*section, currentPage);
-      if (!text.empty()) {
-        if (footnoteHistory.empty() && !isFullNoteView() && annotationAnchor().empty()) {
-          // A memory-recovery restart during indexing must resume from this same anchor.
-          saveProgress(currentSpineIndex, currentPage, section->pageCount, text);
-          pendingProgressSave.pending.store(false, std::memory_order_relaxed);
-        }
-        navTarget = NavigationTarget::makeTextAnchor(std::move(text), currentPage, paragraphIndex);
-      } else if (paragraphIndex) {
-        navTarget = NavigationTarget::makeParagraph(*paragraphIndex, currentPage);
-      } else {
-        navTarget = NavigationTarget::makePage(currentPage);
-      }
-      navTarget.cachedPageCount = section->pageCount;
-    } else {
-      // pageCount is only the number of pages produced so far. Treating it as a
-      // completed layout count would proportionally jump forward after relayout.
-      navTarget = NavigationTarget::makePage(currentPage);
-      LOG_DBG("ERS", "Preserving page %d without rescale during active section build", currentPage);
     }
-    navTarget.cachedSpineIdx = currentSpineIndex;
+    if (migrated && bookmarkStore.save()) {
+      GLOBAL_BOOKMARKS.syncFromStore(bookmarkStore, sourceBookPath(*epub), epub->getCachePath(), epub->getTitle(), false);
+    }
   }
+  preservePositionForRelayout();
   resetBackgroundBuild();
   preRenderedPage.ready = false;
   section.reset();
@@ -2477,7 +2518,9 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
     if (!epub || !section) return false;
     // A note never changes chapters, including while its full text is being built.
     if (!footnoteHistory.empty()) {
-      if (section->hasActiveBuild() && navTarget.kind != NavigationTarget::Kind::Page) return false;
+      if (section->hasActiveBuild() && navTarget.kind != NavigationTarget::Kind::Page && !buildResolvedAnchor_) {
+        return false;
+      }
       const int available = section->hasActiveBuild() ? section->activeBuildPageCount() : section->pageCount;
       if (isForwardTurn && section->currentPage + 1 < available)
         ++section->currentPage;
@@ -2486,6 +2529,7 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
       else
         return false;
       anchorNavTargetToCurrentPage();
+      if (section->hasActiveBuild()) buildPageTurned_ = true;
       lastPageTurnTime = millis();
       forceLoadLargeImages = false;
       pageHasPlaceholders = false;
@@ -2497,21 +2541,20 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
   }
 
   // Background-C in progress: the final page count isn't known yet, so navigate optimistically.
-  // Only an explicit Page target has a meaningful position before completion (other targets are
-  // resolved when the build finishes); for those, swallow the turn. Forward advances the display
+  // An explicit Page or confirmed text anchor has a meaningful position before completion.
+  // Other targets are resolved when the build finishes. Forward advances the display
   // cursor (the SectionBuilding pass shows the page once C builds it, or the popup until then);
   // running past the real end is reconciled at completion (clamp / cross to the next spine). Back
   // past page 0 leaves the chapter, aborting the in-flight build via ~Section.
   if (section->hasActiveBuild()) {
-    if (navTarget.kind != NavigationTarget::Kind::Page) {
-      return false;
-    }
     // The lock must cover the GUARDS, not just the mutation: the PreRender pass temporarily
     // sets section->currentPage to the page it is laying out, so a guard evaluated unlocked
     // can pass on that transient value and the mutation then lands on the restored one —
     // observed on-device as a back turn at page 0 reading a transient 1, then decrementing
     // the restored 0 to -1 (a visible "out of bounds" frame).
     RenderLock lock(*this);
+    if (!section || !section->hasActiveBuild()) return false;
+    if (navTarget.kind != NavigationTarget::Kind::Page && !buildResolvedAnchor_) return false;
     if (isForwardTurn) {
       section->currentPage++;
     } else if (section->currentPage > 0) {
@@ -2530,6 +2573,7 @@ bool EpubReaderActivity::stepPageState(const bool isForwardTurn) {
     // reset the section (position resolves when the previous spine loads).
     if (section) {
       anchorNavTargetToCurrentPage();
+      buildPageTurned_ = true;
       pendingProgressSave.spineIndex = currentSpineIndex;
       pendingProgressSave.page = section->currentPage;
       pendingProgressSave.pageCount = 0;
@@ -3319,6 +3363,7 @@ EpubReaderActivity::BuildOutcome EpubReaderActivity::compileSectionCache(const R
 }
 
 bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
+  completedBuildDisplayPage_ = -1;
   const int spineCount = epub->getSpineItemsCount();
   if (currentSpineIndex < 0 || currentSpineIndex >= spineCount) {
     LOG_ERR("ERS", "Render rejected invalid spine index %d (valid 0..%d)", currentSpineIndex, spineCount - 1);
@@ -3520,16 +3565,28 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
       }
       renderer.clearFontAccumulation();
       readerPhase_ = ReaderPhase::PRECOMPILING;
-      // Seed the display cursor so the SectionBuilding pass knows which page to show first. For a
-      // Page target it's the requested page (usually 0); other targets show the popup until the
-      // build completes and the position is resolved, so the exact value doesn't matter there.
+      // A page target starts at its requested position. A saved text anchor
+      // gets a chance to confirm its recorded page when that page is built.
       section->currentPage = (navTarget.kind == NavigationTarget::Kind::Page) ? navTarget.page : 0;
       buildDisplayedPage_ = -1;
+      buildLastPaintedPage_ = -1;
+      buildResolvedAnchor_ = false;
+      buildPageTurned_ = false;
       buildingPopupShown_ = true;
       // Kick the build off so hasActiveBuild() is true (a resumed B build already is). One slice
       // may already finish a tiny section, in which case we fall through to a normal render.
       Section::BuildStep step = Section::BuildStep::More;
       if (!section->hasActiveBuild()) {
+        if (epub->isFb2Package() && navTarget.kind == NavigationTarget::Kind::TocIndex) {
+          auto entry = epub->getTocItem(navTarget.tocIndex);
+          if (entry.spineIndex == currentSpineIndex) {
+            if (entry.anchor.empty()) {
+              navTarget = NavigationTarget::makePage(0);
+            } else {
+              section->watchBuildAnchor(std::move(entry.anchor));
+            }
+          }
+        }
         step = section->stepSectionBuild(makeSectionBuildParams(), BG_BUILD_BUDGET_MS);
       }
       if (step == Section::BuildStep::More) {
@@ -3767,6 +3824,21 @@ void EpubReaderActivity::renderNormalPass(RenderLock& lock, const RenderLayout& 
   }
 }
 
+int EpubReaderActivity::sectionBuildDisplayTarget() const {
+  if (navTarget.kind == NavigationTarget::Kind::Page || buildResolvedAnchor_) return section->currentPage;
+  // Deserializing an anchor target while the parser is live is optional.
+  // Do not wake the render task for it on every slice if heap is too tight.
+  if (esp_get_free_heap_size() < PRE_RENDER_MIN_FREE_HEAP_BYTES) return -1;
+  if (navTarget.kind == NavigationTarget::Kind::TocIndex) {
+    if (const auto page = section->getBuiltAnchorPage()) return *page;
+  }
+  if (navTarget.kind == NavigationTarget::Kind::TextAnchor &&
+      navTarget.anchorStr.size() <= BookmarkStore::MAX_TEXT_ANCHOR_LENGTH) {
+    return navTarget.fallbackPage;
+  }
+  return -1;
+}
+
 void EpubReaderActivity::renderSectionBuildingPass(RenderLock& lock, const RenderLayout& layout) {
   if (!section || !section->hasActiveBuild()) {
     // Build finished or was aborted between classifyRenderPass() and here — re-dispatch so the
@@ -3775,13 +3847,12 @@ void EpubReaderActivity::renderSectionBuildingPass(RenderLock& lock, const Rende
     return;
   }
 
-  // Draw the requested page if Background-C has already written it. Only for an explicit Page
-  // target (other targets resolve at completion). buildDisplayedPage_ records the target we've
-  // already acted on so we neither redraw it every tick nor (via the C step's nudge gate) get
-  // pinged every slice.
-  const int target = section->currentPage;
+  // Draw a built page target, or confirm a saved text anchor on its recorded
+  // page. A text match elsewhere must wait for the complete layout so the
+  // closest occurrence wins even when several pages repeat the same text.
+  const int target = sectionBuildDisplayTarget();
   const int built = static_cast<int>(section->activeBuildPageCount());
-  if (navTarget.kind == NavigationTarget::Kind::Page && target >= 0 && target < built) {
+  if (target >= 0 && target < built) {
     if (target == buildDisplayedPage_) {
       return;  // already handled this target (drawn, or an image page we're waiting out)
     }
@@ -3790,12 +3861,16 @@ void EpubReaderActivity::renderSectionBuildingPass(RenderLock& lock, const Rende
     // still marked handled so the C step stops nudging us about it.
     auto page = section->loadPageFromActiveBuild(static_cast<uint16_t>(target));
     buildDisplayedPage_ = target;
-    if (page && !page->hasImages()) {
+    if (page && !page->hasImages() &&
+        (navTarget.kind != NavigationTarget::Kind::TextAnchor ||
+         bookmarkPageText(*page).find(navTarget.anchorStr) != std::string::npos)) {
+      buildResolvedAnchor_ = navTarget.kind != NavigationTarget::Kind::Page;
+      section->currentPage = target;
+      buildLastPaintedPage_ = target;
       buildingPopupShown_ = false;
       displayBuildPage(lock, *page, layout);  // releases the lock before the waveform wait
       return;
     }
-    // Image page or load failure: fall through to the popup until the build completes.
   }
 
   // Requested page not built yet (or it's an image page / non-Page target): show the indexing
@@ -4182,12 +4257,15 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   // With AA enabled on X4 the refresh goes out async so the grayscale planes
   // can render during the waveform (inline AA below); everywhere else the
   // trigger blocks through the waveform exactly as before.
+  const bool repaintBuiltPage = completedBuildDisplayPage_ >= 0 && completedBuildDisplayPage_ == section->currentPage;
+  completedBuildDisplayPage_ = -1;
   HalDisplay::RefreshMode pageRefreshMode;
   if (secondaryBufferDegraded_) {
     // The controller retains the previous frame in RED RAM, so X4 can continue
     // normal FAST turns in single-buffer mode. Keep the user's periodic HALF
     // cadence for ghost clearing instead of flashing FULL on every action.
-    pageRefreshMode = ReaderUtils::nextRefreshCycleMode(renderer, pagesUntilFullRefresh);
+    pageRefreshMode = repaintBuiltPage ? HalDisplay::FAST_REFRESH
+                                       : ReaderUtils::nextRefreshCycleMode(renderer, pagesUntilFullRefresh);
   } else if (forceRefreshModeNextRender_ >= 0) {
     // Manual force-refresh button: apply the requested mode for this one render. A manual refresh
     // gives its own clean baseline, so consume any armed post-popup HALF too rather than letting it
@@ -4206,6 +4284,8 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   } else if (forceHalfRefreshThisPage) {
     pageRefreshMode = HalDisplay::HALF_REFRESH;
     pagesUntilFullRefresh = SETTINGS.getRefreshFrequency();
+  } else if (repaintBuiltPage) {
+    pageRefreshMode = HalDisplay::FAST_REFRESH;
   } else {
     pageRefreshMode = ReaderUtils::nextRefreshCycleMode(renderer, pagesUntilFullRefresh);
   }
@@ -4816,17 +4896,31 @@ void EpubReaderActivity::openAnnotation(const int spine, const int page, const i
 
 void EpubReaderActivity::remapBookmarksForSection() {
   if (!section || section->hasActiveBuild()) return;
+  // Bound the stack use even when a book has hundreds of bookmarks.
+  std::array<TextAnchorMatch, 32> matches;
+  size_t count = 0;
+  const auto remapBatch = [&]() {
+    findTextAnchorPages(*section, {matches.data(), count});
+    for (size_t i = 0; i < count; ++i) {
+      if (matches[i].page) bookmarkStore.remapPage(matches[i].bookmarkIndex, *matches[i].page);
+    }
+    count = 0;
+  };
+
   const auto& bookmarks = bookmarkStore.getAll();
+  const auto& preview = annotationAnchor();
+  const bool fullNote = isFullNoteView();
   for (size_t index = 0; index < bookmarks.size(); ++index) {
     const auto& bookmark = bookmarks[index];
-    if (bookmark.spineIndex != currentSpineIndex || bookmark.previewAnchor != annotationAnchor() ||
-        bookmark.fullNote != isFullNoteView()) {
+    if (bookmark.spineIndex != currentSpineIndex || bookmark.previewAnchor != preview ||
+        bookmark.fullNote != fullNote || bookmark.textAnchor.empty() ||
+        bookmark.textAnchor.size() > BookmarkStore::MAX_TEXT_ANCHOR_LENGTH) {
       continue;
     }
-    if (const auto page = findTextAnchorPage(*section, bookmark.textAnchor, bookmark.pageNumber)) {
-      bookmarkStore.remapPage(index, *page);
-    }
+    matches[count++] = {bookmark.textAnchor, bookmark.pageNumber, index};
+    if (count == matches.size()) remapBatch();
   }
+  if (count) remapBatch();
 }
 
 void EpubReaderActivity::toggleCurrentBookmark() {
@@ -5087,7 +5181,7 @@ bool EpubReaderActivity::drawCurrentPageToBuffer(const std::string& filePath, Gf
 }
 
 void EpubReaderActivity::openQuickOverrides() {
-  ReaderUtils::enforceExitFullRefresh(renderer);
+  ReaderUtils::requestReaderTransitionRefresh(renderer);
   startActivityForResult(
       std::make_unique<QuickOverridesActivity>(
           renderer, mappedInput, bookEmbeddedStyleOverride, bookImageRenderingOverride, bookFontFamilyOverride,
@@ -5589,49 +5683,13 @@ void EpubReaderActivity::onButtonAction(const CrossPointSettings::BUTTON_ACTION 
       openFootnotes();
       break;
     case BA::BTN_OPEN_TOC:
-      if (epub) {
-        const int spineIdx = currentSpineIndex;
-        const int tocIdx = section ? section->getTocIndexForPage(section->currentPage)
-                                   : epub->getTocIndexForSpineIndex(currentSpineIndex);
-        ReaderUtils::enforceExitFullRefresh(renderer);
-        startActivityForResult(std::make_unique<EpubReaderChapterSelectionActivity>(
-                                   renderer, mappedInput, epub, sourceBookPath(*epub), spineIdx, tocIdx),
-                               [this](const ActivityResult& result) {
-                                 if (result.isCancelled) return;
-                                 // See the matching comment in onReaderMenuConfirm's SELECT_CHAPTER
-                                 // case: the override armed before launch was already consumed by
-                                 // the chapter list's own paint, so arm a fresh one for the resumed page.
-                                 ReaderUtils::enforceExitFullRefresh(renderer);
-                                 RenderLock lock(*this);
-                                 const auto& chapter = std::get<ChapterResult>(result.data);
-                                 auto resolvedPage =
-                                     (chapter.tocIndex && chapter.spineIndex == currentSpineIndex && section)
-                                         ? section->getPageForTocIndex(*chapter.tocIndex)
-                                         : std::nullopt;
-                                 if (resolvedPage) {
-                                   section->currentPage = *resolvedPage;
-                                   anchorNavTargetToCurrentPage();
-                                   forceLoadLargeImages = false;
-                                   pageHasPlaceholders = false;
-                                 } else {
-                                   navTarget = chapter.tocIndex ? NavigationTarget::makeTocIndex(*chapter.tocIndex)
-                                                                : NavigationTarget::makePage(0);
-                                   currentSpineIndex = chapter.spineIndex;
-                                   section.reset();
-                                 }
-                               });
-      }
+      if (epub) ReaderUtils::requestReaderTransitionRefresh(renderer);
+      openChapterSelection();
       break;
     case BA::BTN_NEXT_SECTION:
     case BA::BTN_PREV_SECTION: {
       const bool forward = (action == BA::BTN_NEXT_SECTION);
-      // Deliberate chapter jump: arm a HALF refresh for the next displayed screen, exactly like the
-      // other deliberate jumps (percent / TOC / footnote / reader exit). The indexing popup consumes
-      // this override so hasRefreshOverridePending() reads true there, which arms
-      // forceHalfRefreshAfterPopup_; the first page of the target chapter then paints HALF instead of
-      // a FAST differential. Without it, the dramatic previous-chapter -> new-chapter transition
-      // under-drives on X4 and the previous chapter's text ghosts through the new page.
-      ReaderUtils::enforceExitFullRefresh(renderer);
+      ReaderUtils::requestReaderTransitionRefresh(renderer);
       {
         RenderLock lock(*this);
         if (section && section->pageCount > 0) {

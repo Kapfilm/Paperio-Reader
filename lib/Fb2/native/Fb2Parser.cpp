@@ -290,7 +290,8 @@ bool findCoverForFirstSection(IByteReader& reader, uint32_t expectedInnerStartOf
 }
 }  // namespace
 
-bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSize) {
+bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSize,
+                     const AnchorVisitor& visitAnchor) {
     if (reader.size() > UINT32_MAX) return false;
     auto storage = out.sections.storage;
     out = Fb2ScanResult{};
@@ -323,10 +324,18 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
         bool firstMeaningfulParagraphSeen = false;
         bool sawStyledText = false;
         bool sawPlainText = false;
+        bool titleBlocked = false;
+        bool sawTitle = false;
         int styleDepth = 0;
         std::string text;
     };
     std::vector<FallbackHeadingState> fallbackHeadingStack;
+    // The section renderer stops its title pass at the first title or body
+    // content. If titles are repeated or occur later, let it decide which IDs
+    // are visible instead of recording all title IDs during this scan.
+    constexpr auto blocksSectionTitle = [](const std::string& name) {
+        return name == "section" || name == "p" || name == "epigraph" || name == "poem" || name == "cite";
+    };
 
     for (;;) {
         if (!out.storageGood || !out.sections.healthy() || cancellationRequested(nullptr)) return false;
@@ -346,6 +355,19 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
 
         const std::string& name = xml.name();
         if (tok == Fb2Token::StartTag || tok == Fb2Token::SelfClosing) {
+            // Ordinary section IDs have the same ownership as the body renderer:
+            // markup within a child section belongs to the child, not its parent.
+            if (visitAnchor && !sectionStack.empty()) {
+                auto& heading = fallbackHeadingStack.back();
+                if (!heading.sawTitle && blocksSectionTitle(name)) {
+                    heading.titleBlocked = true;
+                }
+                if (name != "section") {
+                    if (const char* id = xml.attr("id"); id && *id) {
+                        visitAnchor(static_cast<uint16_t>(sectionStack.back()), id);
+                    }
+                }
+            }
             if (name == "description") inDescription = true;
             else if (name == "title-info" && inDescription) inTitleInfo = true;
             else if (name == "author" && inTitleInfo) { inAuthorTag = true; curAuthor = Fb2Author{}; }
@@ -385,13 +407,24 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
                 Fb2SectionIndexEntry e;
                 e.level = static_cast<uint16_t>(sectionStack.size());
                 e.bodyIndex = currentBodyIndex;
-                if (const char* id = xml.attr("id")) storePoolCString(out, id, kMaxFb2SectionIdBytes, e.idPoolOffset, e.idLength);
+                if (const char* id = xml.attr("id")) {
+                    storePoolCString(out, id, kMaxFb2SectionIdBytes, e.idPoolOffset, e.idLength);
+                    if (visitAnchor && e.idLength) {
+                        visitAnchor(static_cast<uint16_t>(out.sections.size()), std::string_view(id, e.idLength));
+                    }
+                }
+                e.replayAnchors = tok == Fb2Token::SelfClosing;
                 out.sections.push_back(e);
                 sectionStack.push_back(static_cast<int>(out.sections.size()) - 1);
                 fallbackHeadingStack.emplace_back();
                 out.sections.back().innerStartOffset = xml.streamPos();
             } else if (name == "title" && !sectionStack.empty()) {
-                fallbackHeadingStack.back().firstMeaningfulParagraphSeen = true;
+                auto& heading = fallbackHeadingStack.back();
+                if (visitAnchor && (heading.titleBlocked || heading.sawTitle)) {
+                    out.sections[sectionStack.back()].replayAnchors = true;
+                }
+                heading.sawTitle = true;
+                heading.firstMeaningfulParagraphSeen = true;
                 inTitle = true; titleBuf.clear(); titleNeedsSep = false;
             } else if (name == "p" && inTitle) {
                 if (titleNeedsSep) titleBuf += " ";
@@ -475,7 +508,11 @@ bool Fb2Parser::scan(IByteReader& reader, Fb2ScanResult& out, size_t xmlBufferSi
                 if (!fallbackHeadingStack.empty()) fallbackHeadingStack.pop_back();
             }
             else if (name == "title") {
-                if (!sectionStack.empty()) { auto& section = out.sections[sectionStack.back()]; storePoolTitle(out, titleBuf, section.titlePoolOffset, section.titleLength); }
+                if (!sectionStack.empty()) {
+                    auto& section = out.sections[sectionStack.back()];
+                    storePoolTitle(out, titleBuf, section.titlePoolOffset, section.titleLength);
+                    if (visitAnchor && !section.titleLength) section.replayAnchors = true;
+                }
                 inTitle = false;
             } else if (name == "binary") {
                 curBinary.payloadEndOffset = xml.tokenStartOffset();

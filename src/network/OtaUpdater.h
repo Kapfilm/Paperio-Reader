@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <functional>
 #include <string>
 
@@ -12,6 +14,8 @@ class OtaUpdater {
   std::string latestVersion;
   std::string otaUrl;
   std::string downloadErrorDetails;
+  std::array<uint8_t, 32> otaDigest{};
+  bool hasOtaDigest = false;
   size_t otaSize = 0;
   size_t processedSize = 0;
   size_t totalSize = 0;

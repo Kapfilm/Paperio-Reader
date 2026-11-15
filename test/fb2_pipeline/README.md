@@ -9,7 +9,7 @@ build/fb2-pipeline/fb2_pipeline test/fixtures/fb2_split_anchors.fb2 /tmp/new-fb2
 # A local .fb2 or .fb2.zip book may also be supplied.
 ```
 
-The exit code must be zero. Checks include cold package creation, EPUB metadata loading, TOC targets, section-size count, truncated-index rejection, version-28 rebuild preserving bookmarks, warm reopening, and streaming the first chapter. Filesystem operation counters and wall-clock timings are reported by stage. This does not emulate ESP32 heap limits, physical SD latency, or display/page-layout behavior.
+The exit code must be zero. Checks include cold package creation, EPUB metadata loading, TOC targets, section-size count, truncated-index rejection, preservation of bookmarks on an unknown legacy layout and during a native-layout cache rebuild, warm reopening, and streaming the first chapter. Filesystem operation counters and wall-clock timings are reported by stage. This does not emulate ESP32 heap limits, physical SD latency, or display/page-layout behavior.
 
 ## Footnote navigation regression
 

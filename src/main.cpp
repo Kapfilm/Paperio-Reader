@@ -273,7 +273,8 @@ static bool writeQuickWakeMarker(quick_wake::MarkerMode mode) {
 
 static quick_wake::BootCause earlyWakeCause() {
   if (esp_reset_reason() == ESP_RST_POWERON) return quick_wake::BootCause::PowerOn;
-  if (esp_reset_reason() == ESP_RST_DEEPSLEEP && esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO) {
+  if (esp_reset_reason() == ESP_RST_DEEPSLEEP && (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO ||
+      (FREEINK_DEVICE_X4CLASSIC && esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1))) {
     return quick_wake::BootCause::ButtonDeepSleep;
   }
   return quick_wake::BootCause::Other;
@@ -455,7 +456,7 @@ static void serviceBootPowerRelease() {
 static void refreshSleepCalendar() {
   const bool withWeather = SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER &&
                            WEATHER_SETTINGS.hasLocation();
-  if (gpio.deviceIsX3() && !HalClock::hasCurrentDate()) {
+  if ((gpio.deviceIsX3() || gpio.deviceIsX4Classic()) && !HalClock::hasCurrentDate()) {
     HalClock::restoreExternalDate();
   }
   const bool needsDate = !HalClock::hasCurrentDate();
@@ -566,7 +567,7 @@ void enterDeepSleep(bool fromTimeout = false) {
   APP_STATE.lastSleepFromReader = activityManager.isReaderActivity();
   // On X3 the DS3231 keeps time independently, so there's no need to keep the MCU
   // powered during deep sleep for LP timer preservation.
-  const bool keepLpAlive = SETTINGS.useClock && !gpio.deviceIsX3();
+  const bool keepLpAlive = SETTINGS.useClock && !gpio.deviceIsX3() && !gpio.deviceIsX4Classic();
   const bool isQuickResumeSleep = quick_wake::isQuickSleep(
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME, fromTimeout,
       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
@@ -619,7 +620,7 @@ void enterDeepSleep(bool fromTimeout = false) {
   // Commit a one-shot gesture marker for every intentional short-wake sleep,
   // independently of whether the selected artwork preserves a framebuffer.
   // Long-wake sleep removes an older marker instead of borrowing its fast gate.
-  if (!writeQuickWakeMarker(power_button::markerForSleep(SETTINGS.powerWakeMode, gpio.deviceIsX4()))) {
+  if (!writeQuickWakeMarker(power_button::markerForSleep(SETTINGS.powerWakeMode, gpio.deviceIsX4() || gpio.deviceIsX4Classic()))) {
     LOG_ERR("SLP", "Could not save short-wake provenance; an already-released tap may be rejected");
   }
   sleepCalendarSyncMarker = 0;
@@ -837,7 +838,7 @@ void setup() {
     wakeupReason = HalGPIO::WakeupReason::PowerButton;
   }
 
-  if (wakeupReason == HalGPIO::WakeupReason::AfterUSBPower) {
+  if (!FREEINK_DEVICE_X4CLASSIC && wakeupReason == HalGPIO::WakeupReason::AfterUSBPower) {
     // If USB power caused a cold boot, go back to sleep immediately without initializing subsystems
     LOG_DBG("MAIN", "Wakeup reason: After USB Power => Deep sleep");
     halTiltSensor.deepSleep();
@@ -846,7 +847,7 @@ void setup() {
   }
 
 #ifdef ENABLE_SERIAL_LOG
-  if (gpio.isUsbConnected()) {
+  if (gpio.deviceIsX4Classic() || gpio.isUsbConnected()) {
     // Enlarge the USB-CDC RX buffer from the 256-byte default before begin().
     // The serial file-transfer protocol receives 2048-byte chunks in bursts; a
     // 256-byte ring drops bytes whenever the byte-by-byte drain stalls briefly,
@@ -868,7 +869,7 @@ void setup() {
   }
 #endif
 
-  LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? "X3" : "X4");
+  LOG_INF("MAIN", "Hardware detect: %s", FREEINK_DEVICE_X4CLASSIC ? "X4 Classic" : gpio.deviceIsX3() ? "X3" : "X4");
   // The gate ran before Serial was open, so this is the first chance to report it. INF
   // level: a rejected wake leaves no other trace, and release builds must be able to
   // answer "why did nothing happen when I pressed power".
@@ -948,9 +949,11 @@ void setup() {
       gpio.update();
       delay(10);
     }
-    if (gpio.isHeldNow(HalGPIO::BTN_UP)) {
+    const auto recoveryButton = FREEINK_DEVICE_X4CLASSIC ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP;
+    if (gpio.isHeldNow(recoveryButton)) {
       recoveryFirmwareMode = true;
-      LOG_INF("MAIN", "Recovery firmware mode (UP + POWER held at boot)");
+      LOG_INF("MAIN", "Recovery firmware mode (%s + POWER held at boot)",
+              FREEINK_DEVICE_X4CLASSIC ? "DOWN" : "UP");
     }
     markBootPhase(BootPhase::RecoverySettle);
   }
@@ -1165,7 +1168,7 @@ void loop() {
                        static_cast<CrossPointOrientation::Value>(SETTINGS.orientation),
                        activityManager.isReaderActivity(), SETTINGS.tiltDirection);
 
-  renderer.setFadingFix(SETTINGS.fadingFix);
+  renderer.setFadingFix(SETTINGS.fadingFix && !gpio.deviceIsX4Classic());
   renderer.setTextDarkness(SETTINGS.textDarkness);
 
   // Re-emit the boot summary when the serial link comes up. A power-up from deep sleep

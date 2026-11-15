@@ -63,7 +63,7 @@ class HalGPIO {
   std::atomic<uint8_t> x3PowerSnapshot_{0};
 
  public:
-  enum class DeviceType : uint8_t { X4, X3 };
+  enum class DeviceType : uint8_t { X4, X3, X4Classic };
 
   // A single debounced button transition captured by the background sampler.
   // `button` is a raw BTN_* index; `pressed` is true for a press edge, false for
@@ -114,7 +114,9 @@ class HalGPIO {
 
   // Inline device type helpers for cleaner downstream checks
   inline bool deviceIsX3() const { return _deviceType == DeviceType::X3; }
+  inline bool deviceIsX4Classic() const { return _deviceType == DeviceType::X4Classic; }
   inline bool deviceIsX4() const { return _deviceType == DeviceType::X4; }
+  inline bool hasEdgeSideButtons() const { return deviceIsX3() || deviceIsX4Classic(); }
 
   // Start button GPIO and setup SPI for screen and SD card
   void begin();

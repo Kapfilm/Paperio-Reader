@@ -154,8 +154,10 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
                           "halfRefreshAfterImagePage", StrId::STR_CAT_DISPLAY)
           .withSubmenu(StrId::STR_MENU_DISP_REFRESH)
           .withSubcategory(StrId::STR_MENU_DISP_REFRESH));
-  add(SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
-                          StrId::STR_CAT_DISPLAY));
+  if (!gpio.deviceIsX4Classic()) {
+    add(SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
+                            StrId::STR_CAT_DISPLAY));
+  }
   add(SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
                         {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
                          StrId::STR_THEME_LYRA_CAROUSEL, StrId::STR_THEME_MINIMAL},

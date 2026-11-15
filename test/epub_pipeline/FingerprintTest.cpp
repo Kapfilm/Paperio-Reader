@@ -59,6 +59,12 @@ TEST_F(FingerprintFixture, ContentSwapAtSamePathRebuildsCache) {
   fs::copy_file(kBookA, bookPath);
   ASSERT_EQ(loadTitle(), "Heading Font Size Test");
   plantCanary();
+  const auto cache = epubCacheRoot();
+  for (const auto* name : {"progress.bin", "bookmarks.bin", "reader_settings.bin", "stats.bin"}) {
+    std::ofstream(cache / name) << "reader state";
+  }
+  fs::create_directory(cache / "sections");
+  std::ofstream(cache / "sections" / "old-layout.bin") << "derived";
 
   fs::remove(bookPath);
   fs::copy_file(kBookB, bookPath);
@@ -66,6 +72,12 @@ TEST_F(FingerprintFixture, ContentSwapAtSamePathRebuildsCache) {
   // the title MUST come from the new book, not the cached old one.
   EXPECT_EQ(loadTitle(), "Inline Font Size Test");
   EXPECT_FALSE(canaryAlive()) << "cache dir was not wiped on content change";
+  EXPECT_FALSE(fs::exists(cache / "sections" / "old-layout.bin"));
+  for (const auto* name : {"progress.bin", "bookmarks.bin", "reader_settings.bin", "stats.bin"}) {
+    std::ifstream state(cache / name);
+    const std::string contents{std::istreambuf_iterator<char>(state), {}};
+    EXPECT_EQ(contents, "reader state") << name;
+  }
 }
 
 TEST_F(FingerprintFixture, MtimeTouchKeepsCache) {

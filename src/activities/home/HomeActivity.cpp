@@ -1053,7 +1053,7 @@ void HomeActivity::onSelectBook(const std::string& path) {
   // — this home frame — and a FAST diff of a dramatic home->page change leaves the home screen
   // ghosting through. The reader's onEnter expects the launching activity to arm this (FileBrowser
   // does via enforceExitFullRefresh; Home didn't, so books opened from Home ghosted on entry).
-  renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
+  if (!renderer.isX3()) renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
   ReturnHint hint;
   hint.target = ReturnTo::Home;
   hint.selectName = path;  // used to re-focus the book in the recents strip after return

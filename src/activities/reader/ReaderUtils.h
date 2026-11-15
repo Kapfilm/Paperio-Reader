@@ -176,4 +176,10 @@ inline void enforceExitFullRefresh(const GfxRenderer& renderer) {
   renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
 }
 
+inline void requestReaderTransitionRefresh(const GfxRenderer& renderer) {
+  // X3 retains the displayed frame in the controller. A HALF override on its
+  // next menu, popup or page would explicitly resync from a white baseline.
+  if (!renderer.isX3()) enforceExitFullRefresh(renderer);
+}
+
 }  // namespace ReaderUtils

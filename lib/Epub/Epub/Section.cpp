@@ -761,6 +761,7 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
   // spine open (the compile's dominant cost, measured). uncompressedSize doubles as the
   // inflated size — no separate getSpineItemInflatedSize scan.
   const uint32_t phaseSetupStart = millis();
+  watchedBuildPage_.reset();
   st.inflatedSize = 0;
   if (epub->isFb2Package()) {
     // Paperio's parser is resumable and expects a seekable source. Materialise
@@ -768,16 +769,39 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
     // cache, then feed it through the unchanged sliced parser/arena pipeline.
     const std::string htmlCachePath = getSectionHtmlCachePath();
     if (!Storage.exists(htmlCachePath.c_str())) {
+      // The FB2 converter emits many small tags and text fragments. Buffer them
+      // before SD writes and publish the file only after rendering and close succeed.
+      class ChapterOutput final : public Print {
+       public:
+        explicit ChapterOutput(FsFile& file) : writer_(file, 2048) {}
+        size_t write(uint8_t byte) override { return write(&byte, 1); }
+        size_t write(const uint8_t* data, size_t size) override {
+          good_ = good_ && writer_.write(data, size);
+          return good_ ? size : 0;
+        }
+        bool finish() { return good_ && writer_.flush(); }
+
+       private:
+        serialization::BufferedFileWriter writer_;
+        bool good_ = true;
+      };
+
+      const std::string stagingPath = htmlCachePath + ".part";
       FsFile rendered;
-      if (!Storage.openFileForWrite("SCT", htmlCachePath, rendered) ||
-          !Fb2::renderChapterOnDemand(epub->getCachePath(), spineIndex, rendered, nullptr)) {
-        rendered.close();
-        Storage.remove(htmlCachePath.c_str());
+      if (!Storage.openFileForWrite("SCT", stagingPath, rendered)) {
+        return BuildPhaseResult::Failed;
+      }
+      bool complete;
+      {
+        ChapterOutput output(rendered);
+        complete = Fb2::renderChapterOnDemand(epub->getCachePath(), spineIndex, output, nullptr) && output.finish();
+      }
+      const bool closed = rendered.close();
+      if (!complete || !closed || !Storage.rename(stagingPath.c_str(), htmlCachePath.c_str())) {
+        Storage.remove(stagingPath.c_str());
         LOG_ERR("SCT", "Failed to render FB2 chapter %d", spineIndex);
         return BuildPhaseResult::Failed;
       }
-      rendered.flush();
-      rendered.close();
     }
     FsFile rendered;
     if (!Storage.openFileForRead("SCT", htmlCachePath, rendered) || rendered.isDirectory()) {
@@ -907,13 +931,18 @@ Section::BuildPhaseResult Section::runBuildSetup(BuildState& st) {
           if (st.indexOk) ++st.paragraphCount;
           return st.indexOk;
         },
-        [&st](const std::string& anchor, uint16_t page) {
+        [this, &st](const std::string& anchor, uint16_t page) {
           const uint32_t size = anchor.size();
           st.indexOk = st.indexOk && st.anchorCount < UINT16_MAX &&
                        size <= serialization::MAX_STRING_LENGTH &&
                        st.anchorIndex.append(size) && st.anchorIndex.appendBytes(anchor) &&
                        st.anchorIndex.append(page);
-          if (st.indexOk) ++st.anchorCount;
+          if (st.indexOk) {
+            ++st.anchorCount;
+            if (!watchedBuildPage_ && !watchedBuildAnchor_.empty() && anchor == watchedBuildAnchor_) {
+              watchedBuildPage_ = page;
+            }
+          }
           return st.indexOk;
         });
   }
@@ -1664,6 +1693,17 @@ std::unique_ptr<Page> Section::loadPageFromSectionFile() {
 uint16_t Section::activeBuildPageCount() const {
   if (!buildState_) return 0;
   return pageCount;  // pageCount is incremented by onPageComplete() as each page is written
+}
+
+void Section::watchBuildAnchor(std::string anchor) {
+  if (hasActiveBuild()) return;
+  watchedBuildAnchor_ = std::move(anchor);
+  watchedBuildPage_.reset();
+}
+
+std::optional<uint16_t> Section::getBuiltAnchorPage() const {
+  if (buildState_ && watchedBuildPage_ && *watchedBuildPage_ < pageCount) return watchedBuildPage_;
+  return std::nullopt;
 }
 
 uint16_t Section::estimatedTotalPages() const {

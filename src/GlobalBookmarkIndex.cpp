@@ -197,6 +197,23 @@ void GlobalBookmarkIndex::removeBySourcePath(const std::string& sourcePath) {
   }
 }
 
+void GlobalBookmarkIndex::renameBook(const std::string& oldPath, const std::string& newPath,
+                                     const std::string& cacheDir) {
+  if (!loaded) load();
+  auto entry = findBySourcePath(oldPath);
+  if (entry == entries.end()) return;
+  const auto duplicate = findBySourcePath(newPath);
+  if (duplicate != entries.end() && duplicate != entry) {
+    const auto oldIndex = entry - entries.begin();
+    const auto duplicateIndex = duplicate - entries.begin();
+    entries.erase(duplicate);
+    entry = entries.begin() + oldIndex - (duplicateIndex < oldIndex ? 1 : 0);
+  }
+  entry->sourcePath = newPath;
+  entry->cacheDir = cacheDir;
+  save();
+}
+
 bool GlobalBookmarkIndex::reconcile() {
   if (!loaded) load();
   const size_t before = entries.size();

@@ -371,7 +371,7 @@ bool ZipFile::getInflatedFileSize(const char* filename, size_t* size) {
   return true;
 }
 
-int ZipFile::fillUncompressedSizes(const std::deque<SizeTarget>& targets, std::deque<uint32_t>& sizes) {
+int ZipFile::fillUncompressedSizes(std::span<const SizeTarget> targets, std::span<uint32_t> sizes) {
   if (targets.empty()) {
     return 0;
   }
@@ -381,35 +381,24 @@ int ZipFile::fillUncompressedSizes(const std::deque<SizeTarget>& targets, std::d
 
   if (!loadZipDetails()) return 0;
 
-  file.seek(zipDetails.centralDirOffset);
+  if (!file.seek(zipDetails.centralDirOffset)) return 0;
+  serialization::BufferedFileReader reader(file);
 
   int matched = 0;
   const int targetCount = static_cast<int>(targets.size());
   uint32_t sig;
   char itemName[256];
 
-  while (file.available()) {
-    file.read(&sig, 4);
-    if (sig != 0x02014b50) break;
-
-    file.seekCur(6);
-    uint16_t method;
-    file.read(&method, 2);
-    file.seekCur(8);
-    uint32_t compressedSize, uncompressedSize;
-    file.read(&compressedSize, 4);
-    file.read(&uncompressedSize, 4);
-    uint16_t nameLen, m, k;
-    file.read(&nameLen, 2);
-    file.read(&m, 2);
-    file.read(&k, 2);
-    file.seekCur(8);
-    uint32_t localHeaderOffset;
-    file.read(&localHeaderOffset, 4);
+  while (reader.readPod(sig) && sig == 0x02014b50) {
+    reader.seek(reader.position() + 20);  // version, flags, method, time, CRC and compressed size
+    uint32_t uncompressedSize;
+    uint16_t nameLen, extraLen, commentLen;
+    if (!reader.readPod(uncompressedSize) || !reader.readPod(nameLen) || !reader.readPod(extraLen) ||
+        !reader.readPod(commentLen)) break;
+    reader.seek(reader.position() + 12);  // disk, attributes and local header offset
 
     if (nameLen < 256) {
-      file.read(itemName, nameLen);
-      itemName[nameLen] = '\0';
+      if (!reader.read(itemName, nameLen)) break;
 
       uint64_t hash = HashUtils::fnvHash64(itemName, nameLen);
       SizeTarget key = {hash, nameLen, 0};
@@ -420,8 +409,8 @@ int ZipFile::fillUncompressedSizes(const std::deque<SizeTarget>& targets, std::d
 
       while (it != targets.end() && it->hash == hash && it->len == nameLen) {
         if (it->index < sizes.size()) {
+          if (sizes[it->index] == UINT32_MAX) ++matched;
           sizes[it->index] = uncompressedSize;
-          matched++;
         }
         ++it;
       }
@@ -430,10 +419,10 @@ int ZipFile::fillUncompressedSizes(const std::deque<SizeTarget>& targets, std::d
         break;
       }
     } else {
-      file.seekCur(nameLen);
+      reader.seek(reader.position() + nameLen);
     }
 
-    file.seekCur(m + k);
+    reader.seek(reader.position() + extraLen + commentLen);
   }
 
   return matched;

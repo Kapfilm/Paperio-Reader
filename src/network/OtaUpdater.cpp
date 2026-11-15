@@ -7,6 +7,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 // clang-format off
 // HttpDownloader.h pulls Arduino/SdFat, whose macros collide with lwip's
@@ -14,6 +15,7 @@
 // friends transitively include lwip). Pin this order; clang-format would
 // otherwise sort the local headers last and break the build.
 #include "CrossPointSettings.h"
+#include "FirmwareFlasher.h"
 #include "HttpDownloader.h"
 #include <bootloader_common.h>
 #include <esp_flash_partitions.h>
@@ -21,6 +23,7 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_wifi.h>
+#include <wolfssl/wolfcrypt/sha256.h>
 // clang-format on
 
 namespace {
@@ -29,6 +32,33 @@ constexpr char releaseListUrl[] = "https://api.github.com/repos/" CROSSPOINT_GIT
 constexpr int otaHttpMaxAttempts = 3;
 constexpr unsigned long otaInitialRetryDelayMs = 1000;
 constexpr size_t releaseMetadataMaxBytes = 128 * 1024;
+
+bool parseSha256(std::string_view value, std::array<uint8_t, 32>& digest) {
+  constexpr std::string_view prefix = "sha256:";
+  if (!value.starts_with(prefix) || value.size() != prefix.size() + 2 * digest.size()) return false;
+  value.remove_prefix(prefix.size());
+  const auto nibble = [](const char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < digest.size(); ++i) {
+    const int hi = nibble(value[2 * i]);
+    const int lo = nibble(value[2 * i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    digest[i] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+  return true;
+}
+
+struct DownloadSha256 {
+  wc_Sha256 context;
+  bool initialized = wc_InitSha256(&context) == 0;
+  ~DownloadSha256() {
+    if (initialized) wc_Sha256Free(&context);
+  }
+};
 
 const char* getReleaseApiUrl() { return SETTINGS.includeBetaUpdates ? releaseListUrl : latestReleaseUrl; }
 
@@ -51,6 +81,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   otaUrl.clear();
   downloadErrorDetails.clear();
   otaSize = 0;
+  hasOtaDigest = false;
   processedSize = 0;
   totalSize = 0;
   render = false;
@@ -69,7 +100,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   for (int attempt = 1; attempt <= otaHttpMaxAttempts; ++attempt) {
     ReleaseJsonParser releaseParser;
     size_t bytesSeen = 0;
-    const bool ok = HttpDownloader::fetchUrl(
+    const bool ok = HttpDownloader::fetchUrlVerified(
         releaseApiUrl,
         [&releaseParser, &bytesSeen](const uint8_t* data, size_t len) {
           bytesSeen += len;
@@ -113,6 +144,12 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
     latestVersion = releaseParser.getTagName();
     otaUrl = releaseParser.getFirmwareUrl();
     otaSize = releaseParser.getFirmwareSize();
+    const std::string_view digest = releaseParser.getFirmwareDigest();
+    hasOtaDigest = parseSha256(digest, otaDigest);
+    if (!otaUrl.starts_with("https://") || otaSize == 0 || (!digest.empty() && !hasOtaDigest)) {
+      LOG_ERR("OTA", "Invalid firmware asset metadata");
+      return JSON_PARSE_ERROR;
+    }
     totalSize = otaSize;
     updateAvailable = true;
 
@@ -235,6 +272,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::beginInstallUpdate() {
     LOG_ERR("OTA", "no next OTA partition");
     return INTERNAL_UPDATE_ERROR;
   }
+  if (otaSize == 0 || otaSize > updatePartition->size) return VALIDATE_FAILED;
 
   esp_wifi_set_ps(WIFI_PS_NONE);
   esp_ota_handle_t handle = 0;
@@ -336,19 +374,26 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
     cleanupUpdate();
     return UPDATE_CANCELLED;
   }
-  if (!otaWriteHandle) {
-    return INTERNAL_UPDATE_ERROR;
-  }
   // The whole streaming download happens in this single call; the DataCallback
   // drives progress/cancel via installProgressCb so the UI stays responsive.
   // Idempotent guard: once done, don't re-enter.
   if (installDone) {
     return installResult;
   }
+  if (!otaWriteHandle) {
+    return INTERNAL_UPDATE_ERROR;
+  }
 
   const esp_ota_handle_t handle = reinterpret_cast<esp_ota_handle_t>(otaWriteHandle);
   bool writeOk = true;
   bool userCancelled = false;
+  bool invalidSize = false;
+  DownloadSha256 hash;
+  if (hasOtaDigest && !hash.initialized) {
+    cleanupUpdate();
+    installDone = true;
+    return installResult = VALIDATE_FAILED;
+  }
   HttpDownloader::VerifiedFetchStatus downloadStatus;
 
   // Verify-only (fail closed): a MITM must not be able to downgrade the firmware
@@ -358,6 +403,14 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
       [&](const uint8_t* data, size_t len) -> bool {
         if (cancelRequested) {
           userCancelled = true;
+          return false;
+        }
+        if (len > otaSize - processedSize) {
+          invalidSize = true;
+          return false;
+        }
+        if (hasOtaDigest && wc_Sha256Update(&hash.context, data, static_cast<word32>(len)) != 0) {
+          writeOk = false;
           return false;
         }
         if (esp_ota_write(handle, data, len) != ESP_OK) {
@@ -384,6 +437,11 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
     installResult = UPDATE_CANCELLED;
     return installResult;
   }
+  if (invalidSize) {
+    LOG_ERR("OTA", "Download exceeds declared firmware size (%zu bytes)", otaSize);
+    cleanupUpdate();
+    return installResult = VALIDATE_FAILED;
+  }
   if (!writeOk) {
     LOG_ERR("OTA", "esp_ota_write failed");
     cleanupUpdate();
@@ -400,19 +458,38 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
     installResult = HTTP_ERROR;
     return installResult;
   }
+  if (processedSize != otaSize) {
+    LOG_ERR("OTA", "Wrong firmware size: received %zu, expected %zu", processedSize, otaSize);
+    cleanupUpdate();
+    return installResult = VALIDATE_FAILED;
+  }
+  std::array<uint8_t, 32> digest{};
+  if (hasOtaDigest && (wc_Sha256Final(&hash.context, digest.data()) != 0 || digest != otaDigest)) {
+    LOG_ERR("OTA", "Firmware SHA-256 differs from release metadata");
+    cleanupUpdate();
+    return installResult = VALIDATE_FAILED;
+  }
 
   esp_err_t finish_err = esp_ota_end(handle);
   otaWriteHandle = nullptr;
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+  if (finish_err == ESP_ERR_OTA_VALIDATE_FAILED) return installResult = VALIDATE_FAILED;
+#endif
   if (finish_err != ESP_OK && finish_err != ESP_ERR_OTA_VALIDATE_FAILED) {
     LOG_ERR("OTA", "esp_ota_end failed: %s", esp_err_to_name(finish_err));
     installResult = INTERNAL_UPDATE_ERROR;
     return installResult;
   }
 
-  // Set the new partition as boot. Arduino unsigned builds fail image_validate()
-  // in esp_ota_set_boot_partition (and esp_ota_end returns VALIDATE_FAILED), so
-  // fall back to writing otadata directly — same bypass as before.
+  // Check the image on flash independently before the factory-bootloader
+  // compatibility path can bypass the ESP-IDF revision check.
   const esp_partition_t* updatePartition = esp_ota_get_next_update_partition(nullptr);
+  size_t imageSize = 0;
+  if (firmware_flash::validateImagePartition(updatePartition, &imageSize) != firmware_flash::Result::OK ||
+      imageSize != processedSize) {
+    LOG_ERR("OTA", "Stored firmware image failed verification (image=%zu, download=%zu)", imageSize, processedSize);
+    return installResult = VALIDATE_FAILED;
+  }
   if (!boot_health::stageUpdate(updatePartition)) {
     LOG_ERR("OTA", "Cannot persist update recovery record");
     installResult = INTERNAL_UPDATE_ERROR;
@@ -421,6 +498,9 @@ OtaUpdater::OtaUpdaterError OtaUpdater::performInstallUpdateStep() {
   esp_err_t boot_err = (finish_err == ESP_ERR_OTA_VALIDATE_FAILED) ? ESP_ERR_OTA_VALIDATE_FAILED
                                                                    : esp_ota_set_boot_partition(updatePartition);
   if (boot_err == ESP_ERR_OTA_VALIDATE_FAILED) {
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+    return installResult = VALIDATE_FAILED;
+#endif
     LOG_INF("OTA", "Validation failed (expected for unsigned Arduino builds) - forcing boot partition");
     boot_err = static_cast<esp_err_t>(forceSetOtaBootPartition());
     if (boot_err != ESP_OK) {

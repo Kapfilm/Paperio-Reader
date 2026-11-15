@@ -7,6 +7,8 @@
 #include <esp_heap_caps.h>
 #include <esp_system.h>
 
+#include <algorithm>
+#include <memory>
 #include <vector>
 
 #include "FsHelpers.h"
@@ -278,110 +280,64 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
     tocFile.close();
     return false;
   }
-  // NOTE: We intentionally skip calling loadAllFileStatSlims() here.
-  // For large EPUBs (2000+ chapters), pre-loading all ZIP central directory entries
-  // into memory causes OOM crashes on ESP32-C3's limited ~380KB RAM.
-  // Instead, for large books we use a one-pass batch lookup that scans the ZIP
-  // central directory once and matches against spine targets using hash comparison.
-  // This is O(n*log(m)) instead of O(n*m) while avoiding memory exhaustion.
-  // See: https://github.com/crosspoint-reader/crosspoint-reader/issues/134
-
-  // Deques, not vectors: at 1732 spines `targets` alone is ~28 KB, and a vector demands that as
-  // one contiguous block — observed aborting here at 51 KB free / 30 KB contig before the
-  // first-open framebuffer release widened the headroom. Chunked storage removes the CONTIGUITY
-  // failure class, but deque still allocates through the throwing path, so total exhaustion would
-  // abort() under -fno-exceptions — which is what the heap probe below guards.
-  std::deque<uint32_t> spineSizes;
-  bool useBatchSizes = false;
+  // Match bounded groups of spine entries against the buffered ZIP directory.
+  // Each group gets one sequential scan even when a full-book table would not fit.
+  constexpr size_t maxBatch = 256;
+  constexpr size_t bytesPerEntry = sizeof(ZipFile::SizeTarget) + sizeof(uint32_t);
+  const size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t contiguousHeap = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  size_t batchSize = !unpackedPackage && spineCount >= LARGE_SPINE_THRESHOLD
+                         ? std::min({maxBatch, static_cast<size_t>(spineCount), freeHeap / (4 * bytesPerEntry),
+                                     contiguousHeap / (2 * sizeof(ZipFile::SizeTarget))})
+                         : 0;
+  std::unique_ptr<ZipFile::SizeTarget[]> targets;
+  std::unique_ptr<uint32_t[]> spineSizes;
+  while (batchSize >= LARGE_SPINE_THRESHOLD) {
+    targets.reset(new (std::nothrow) ZipFile::SizeTarget[batchSize]);
+    spineSizes.reset(new (std::nothrow) uint32_t[batchSize]);
+    if (targets && spineSizes) break;
+    targets.reset();
+    spineSizes.reset();
+    batchSize /= 2;
+  }
+  if (!targets) batchSize = 0;
   std::deque<uint32_t> fb2ApproxSizes;
   const bool fb2SizesAvailable = unpackedPackage && Fb2::loadApproxChapterSizes(cachePath, fb2ApproxSizes);
-
-  // Batch tables cost ~20 B/spine (16 B SizeTarget + 4 B size): 35 KB at 1732 spines, against
-  // ~122 KB free here (device-measured on King's Avatar). Skip the batch path only when the heap
-  // genuinely cannot hold them, leaving 32 KB for the ZIP scan and the rest of the build.
-  //
-  // Sized against what ACTUALLY allocates, deliberately: an earlier 2x-plus-16KB version demanded
-  // 216 KB at 5000 spines — more than this device ever has free — so it would have silently
-  // dropped plausible ~3000-spine books to the per-item ZIP lookup, i.e. one central-directory
-  // scan PER SPINE. That is the O(n) cost the per-book spine-stat cache exists to eliminate, so an
-  // over-eager probe here is a performance regression, not a safety net. The fallback is correct
-  // (it is the small-book path), just slow — it should trigger only when the alternative is death.
-  const size_t batchTableBytes = static_cast<size_t>(spineCount) * (sizeof(ZipFile::SizeTarget) + sizeof(uint32_t));
-  const size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-  const bool heapAllowsBatchSizes = freeHeap > batchTableBytes + 32 * 1024;
-
-  if (!unpackedPackage && spineCount >= LARGE_SPINE_THRESHOLD && heapAllowsBatchSizes) {
-    LOG_DBG("BMC", "Using batch size lookup for %d spine items", spineCount);
-
-    std::deque<ZipFile::SizeTarget> targets;
-    targets.resize(spineCount);
-
-    std::string pathScratch;
-    spineReader.seek(0);
-    for (int i = 0; i < spineCount; i++) {
-      readSpineEntry(spineReader, spineScratch);
-      // Cached hrefs are already decoded (see ContentOpfParser); decoding again would corrupt
-      // filenames that legitimately contain '%' sequences.
-      FsHelpers::normalisePath(spineScratch.href, pathScratch);
-
-      ZipFile::SizeTarget t;
-      t.hash = HashUtils::fnvHash64(pathScratch.c_str(), pathScratch.size());
-      t.len = static_cast<uint16_t>(pathScratch.size());
-      t.index = static_cast<uint16_t>(i);
-      targets[i] = t;
-    }
-
-    std::sort(targets.begin(), targets.end(), [](const ZipFile::SizeTarget& a, const ZipFile::SizeTarget& b) {
-      return a.hash < b.hash || (a.hash == b.hash && a.len < b.len);
-    });
-
-    spineSizes.resize(spineCount, 0);
-    const int matched = zip.fillUncompressedSizes(targets, spineSizes);
-    LOG_DBG("BMC", "Batch lookup matched %d/%d spine items", matched, spineCount);
-    (void)matched;  // only read by LOG_DBG, which compiles out at lower log levels
-
-    targets.clear();
-    targets.shrink_to_fit();
-
-    useBatchSizes = true;
-  } else if (!unpackedPackage && spineCount >= LARGE_SPINE_THRESHOLD) {
-    // Should be rare — see the sizing note above. If this shows up on an ordinary book, the
-    // threshold is too conservative and is costing a central-directory scan per spine.
-    LOG_INF("BMC", "Skipping batch size lookup for %d spine items (free %u < %u needed); using per-item lookup",
-            spineCount, static_cast<unsigned>(freeHeap), static_cast<unsigned>(batchTableBytes + 32 * 1024));
-  }
 
   uint32_t cumSize = 0;
   spineReader.seek(0);
   int lastSpineTocIndex = -1;
   std::string pathScratch;
-  for (int i = 0; i < spineCount; i++) {
-    readSpineEntry(spineReader, spineScratch);
-
-    spineScratch.tocIndex = spineToTocIndex[i];
-
-    // Not a huge deal if we don't fine a TOC entry for the spine entry, this is expected behaviour for EPUBs
-    // Logging here is for debugging
-    if (spineScratch.tocIndex == -1) {
-      LOG_DBG("BMC", "Warning: Could not find TOC entry for spine item %d: %s, using title from last section", i,
-              spineScratch.href.c_str());
-      spineScratch.tocIndex = lastSpineTocIndex;
+  size_t nextBatch = 0;
+  for (size_t i = 0; i < spineCount; i++) {
+    if (batchSize && i == nextBatch) {
+      const uint32_t offset = spineReader.position();
+      const size_t count = std::min(batchSize, spineCount - i);
+      for (size_t j = 0; j < count; ++j) {
+        readSpineEntry(spineReader, spineScratch);
+        FsHelpers::normalisePath(spineScratch.href, pathScratch);
+        targets[j] = {HashUtils::fnvHash64(pathScratch.c_str(), pathScratch.size()),
+                      static_cast<uint16_t>(pathScratch.size()), static_cast<uint16_t>(j)};
+      }
+      std::sort(targets.get(), targets.get() + count, [](const auto& a, const auto& b) {
+        return a.hash < b.hash || (a.hash == b.hash && a.len < b.len);
+      });
+      std::fill_n(spineSizes.get(), count, UINT32_MAX);
+      zip.fillUncompressedSizes({targets.get(), count}, {spineSizes.get(), count});
+      spineReader.seek(offset);
+      nextBatch += count;
     }
+    readSpineEntry(spineReader, spineScratch);
+    spineScratch.tocIndex = spineToTocIndex[i];
+    if (spineScratch.tocIndex == -1) spineScratch.tocIndex = lastSpineTocIndex;
     lastSpineTocIndex = spineScratch.tocIndex;
 
     size_t itemSize = 0;
     if (unpackedPackage) {
-      itemSize = fb2SizesAvailable && i < static_cast<int>(fb2ApproxSizes.size())
-                     ? fb2ApproxSizes[i]
-                     : Fb2::getApproxChapterSize(cachePath, i);
-    } else if (useBatchSizes) {
-      itemSize = spineSizes[i];
-      if (itemSize == 0) {
-        FsHelpers::normalisePath(spineScratch.href, pathScratch);
-        if (!zip.getInflatedFileSize(pathScratch.c_str(), &itemSize)) {
-          LOG_ERR("BMC", "Warning: Could not get size for spine item: %s", pathScratch.c_str());
-        }
-      }
+      itemSize = fb2SizesAvailable && i < fb2ApproxSizes.size() ? fb2ApproxSizes[i]
+                                                              : Fb2::getApproxChapterSize(cachePath, i);
+    } else if (batchSize && spineSizes[i % batchSize] != UINT32_MAX) {
+      itemSize = spineSizes[i % batchSize];
     } else {
       FsHelpers::normalisePath(spineScratch.href, pathScratch);
       if (!zip.getInflatedFileSize(pathScratch.c_str(), &itemSize)) {

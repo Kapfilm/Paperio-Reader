@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 
 // Disposable SD index for anchors inside virtual chapters. Lookup uses constant RAM.
 class Fb2AnchorIndex {
@@ -24,7 +25,7 @@ class Fb2AnchorIndexWriter {
   Fb2AnchorIndexWriter(const Fb2AnchorIndexWriter&) = delete;
   Fb2AnchorIndexWriter& operator=(const Fb2AnchorIndexWriter&) = delete;
   bool begin(const std::string& sectionsPath, const std::string& indexPath, uint8_t version);
-  bool add(const std::string& id, uint32_t chapter);
+  bool add(std::string_view id, uint32_t chapter);
   bool finish();
   bool good() const;
  private:

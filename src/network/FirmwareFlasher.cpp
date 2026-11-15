@@ -132,6 +132,10 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
     file.close();
     return Result::BAD_MAGIC;
   }
+  if (!detail::matchesTargetChip(header)) {
+    file.close();
+    return Result::BAD_CHIP;
+  }
   const uint8_t segCount = header[1];
   const bool hashAppended = header[23] != 0;
 

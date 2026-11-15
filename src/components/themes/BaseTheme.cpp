@@ -217,27 +217,27 @@ void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
   constexpr int buttonHeight = 80;                                       // Height on screen (width when rotated)
   constexpr int buttonMargin = 4;
 
-  if (gpio.deviceIsX3()) {
-    // X3 layout: Up on left side, Down on right side, positioned higher
-    constexpr int x3ButtonY = 155;
+  if (gpio.hasEdgeSideButtons()) {
+    // Up is on the left edge and Down is on the right edge.
+    constexpr int edgeButtonY = 155;
 
     if (topBtn != nullptr && topBtn[0] != '\0') {
       const int leftX = buttonMargin;
-      renderer.drawRect(leftX, x3ButtonY, buttonWidth, buttonHeight);
+      renderer.drawRect(leftX, edgeButtonY, buttonWidth, buttonHeight);
       const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, topBtn);
       const int textHeight = renderer.getTextHeight(SMALL_FONT_ID);
       const int textX = leftX + (buttonWidth - textHeight) / 2;
-      const int textY = x3ButtonY + (buttonHeight + textWidth) / 2;
+      const int textY = edgeButtonY + (buttonHeight + textWidth) / 2;
       renderer.drawTextRotated90CW(SMALL_FONT_ID, textX, textY, topBtn);
     }
 
     if (bottomBtn != nullptr && bottomBtn[0] != '\0') {
       const int rightX = screenWidth - buttonMargin - buttonWidth;
-      renderer.drawRect(rightX, x3ButtonY, buttonWidth, buttonHeight);
+      renderer.drawRect(rightX, edgeButtonY, buttonWidth, buttonHeight);
       const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, bottomBtn);
       const int textHeight = renderer.getTextHeight(SMALL_FONT_ID);
       const int textX = rightX + (buttonWidth - textHeight) / 2;
-      const int textY = x3ButtonY + (buttonHeight + textWidth) / 2;
+      const int textY = edgeButtonY + (buttonHeight + textWidth) / 2;
       renderer.drawTextRotated90CW(SMALL_FONT_ID, textX, textY, bottomBtn);
     }
   } else {

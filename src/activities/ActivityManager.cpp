@@ -162,10 +162,10 @@ void ActivityManager::renderTaskLoop() {
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;
-    taskENTER_CRITICAL(nullptr);
+    taskENTER_CRITICAL(&waitingTaskMux);
     waiter = waitingTaskHandle;
     waitingTaskHandle = nullptr;
-    taskEXIT_CRITICAL(nullptr);
+    taskEXIT_CRITICAL(&waitingTaskMux);
     if (waiter) {
       xTaskNotify(waiter, 1, eIncrement);
     }
@@ -332,10 +332,7 @@ void ActivityManager::loop() {
     }
   }
 
-  if (requestedUpdate) {
-    taskENTER_CRITICAL(nullptr);
-    requestedUpdate = false;
-    taskEXIT_CRITICAL(nullptr);
+  if (requestedUpdate.exchange(false, std::memory_order_acq_rel)) {
     // Using direct notification to signal the render task to update
     // Increment counter so multiple rapid calls won't be lost
     if (renderTaskHandle) {
@@ -581,9 +578,7 @@ void ActivityManager::requestUpdate(bool immediate) {
   } else {
     // Deferring the update until current loop is finished
     // This is to avoid multiple updates being requested in the same loop
-    taskENTER_CRITICAL(nullptr);
-    requestedUpdate = true;
-    taskEXIT_CRITICAL(nullptr);
+    requestedUpdate.store(true, std::memory_order_release);
   }
 }
 void ActivityManager::requestUpdateAndWait() {
@@ -592,7 +587,7 @@ void ActivityManager::requestUpdateAndWait() {
   }
 
   // Atomic section to perform checks
-  taskENTER_CRITICAL(nullptr);
+  taskENTER_CRITICAL(&waitingTaskMux);
   auto currTaskHandler = xTaskGetCurrentTaskHandle();
   auto mutexHolder = xSemaphoreGetMutexHolder(renderingMutex);
   bool isRenderTask = (currTaskHandler == renderTaskHandle);
@@ -601,7 +596,7 @@ void ActivityManager::requestUpdateAndWait() {
   if (!alreadyWaiting && !isRenderTask && !holdingRenderLock) {
     waitingTaskHandle = currTaskHandler;
   }
-  taskEXIT_CRITICAL(nullptr);
+  taskEXIT_CRITICAL(&waitingTaskMux);
 
   // Render task cannot call requestUpdateAndWait() or it will cause a deadlock
   assert(!isRenderTask && "Render task cannot call requestUpdateAndWait()");

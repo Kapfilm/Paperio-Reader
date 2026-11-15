@@ -125,34 +125,45 @@ void clearBookCacheIfNeeded(const String& filePath) {
   }
 }
 
-// Recursively clear book caches for all ebooks inside a directory
-void clearBookCachesInDirectory(const String& dirPath) {
-  esp_task_wdt_reset();
-  yield();
-  FsFile dir = Storage.open(dirPath.c_str());
-  if (!dir || !dir.isDirectory()) {
-    if (dir) dir.close();
-    return;
-  }
-  char name[500];
-  FsFile entry = dir.openNextFile();
-  while (entry) {
+bool transferMovedBookStates(const std::string& oldPath, const std::string& newPath, bool isDirectory) {
+  if (!isDirectory) return transferBookStateAfterMove(oldPath, newPath);
+
+  // Traverse the new directory only after the SD card confirmed the move.
+  // Use an explicit stack so nested folders cannot exhaust the web task stack.
+  std::vector<std::string> directories{newPath};
+  bool success = true;
+  while (!directories.empty()) {
     esp_task_wdt_reset();
     yield();
-    entry.getName(name, sizeof(name));
-    String childPath = dirPath;
-    if (!childPath.endsWith("/")) childPath += "/";
-    childPath += name;
-    if (entry.isDirectory()) {
-      entry.close();
-      clearBookCachesInDirectory(childPath);
-    } else {
-      entry.close();
-      clearBookCacheIfNeeded(childPath);
+    const std::string current = std::move(directories.back());
+    directories.pop_back();
+    FsFile dir = Storage.open(current.c_str());
+    if (!dir || !dir.isDirectory()) {
+      success = false;
+      continue;
     }
-    entry = dir.openNextFile();
+    char name[500];
+    for (auto entry = dir.openNextFile(); entry; entry = dir.openNextFile()) {
+      esp_task_wdt_reset();
+      yield();
+      const auto length = entry.getName(name, sizeof(name));
+      const bool isChildDirectory = entry.isDirectory();
+      entry.close();
+      if (length == 0 || length >= sizeof(name) - 1) {
+        success = false;
+        continue;
+      }
+      if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
+      std::string child = current + "/" + name;
+      if (isChildDirectory) {
+        directories.push_back(std::move(child));
+      } else if (!transferBookStateAfterMove(oldPath + child.substr(newPath.size()), child)) {
+        success = false;
+      }
+    }
+    dir.close();
   }
-  dir.close();
+  return success;
 }
 
 String normalizeWebPath(const String& inputPath) {
@@ -1413,16 +1424,15 @@ void CrossPointWebServer::handleRename() const {
     return;
   }
 
-  if (isDir) {
-    clearBookCachesInDirectory(itemPath);
-  } else {
-    clearBookCacheIfNeeded(itemPath);
-  }
   const bool success = file.rename(newPath.c_str());
   file.close();
 
   if (success) {
     LOG_DBG("WEB", "Renamed: %s -> %s", itemPath.c_str(), newPath.c_str());
+    if (!transferMovedBookStates(itemPath.c_str(), newPath.c_str(), isDir)) {
+      server->send(500, "text/plain", "Renamed, but reading state remains at the old path");
+      return;
+    }
     server->send(200, "text/plain", "Renamed successfully");
   } else {
     LOG_ERR("WEB", "Failed to rename: %s -> %s", itemPath.c_str(), newPath.c_str());
@@ -1511,16 +1521,15 @@ void CrossPointWebServer::handleMove() const {
     return;
   }
 
-  if (isDir) {
-    clearBookCachesInDirectory(itemPath);
-  } else {
-    clearBookCacheIfNeeded(itemPath);
-  }
   const bool success = file.rename(newPath.c_str());
   file.close();
 
   if (success) {
     LOG_DBG("WEB", "Moved: %s -> %s", itemPath.c_str(), newPath.c_str());
+    if (!transferMovedBookStates(itemPath.c_str(), newPath.c_str(), isDir)) {
+      server->send(500, "text/plain", "Moved, but some reading state remains at the old path");
+      return;
+    }
     server->send(200, "text/plain", "Moved successfully");
   } else {
     LOG_ERR("WEB", "Failed to move: %s -> %s", itemPath.c_str(), newPath.c_str());

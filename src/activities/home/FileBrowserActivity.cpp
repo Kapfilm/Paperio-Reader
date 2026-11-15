@@ -817,8 +817,11 @@ void FileBrowserActivity::doDeleteCache(const std::string& fullPath, const std::
       std::make_unique<ConfirmationActivity>(renderer, mappedInput, tr(STR_DELETE_CACHE) + std::string("?"), entry),
       [this, fullPath](const ActivityResult& res) {
         if (!res.isCancelled) {
-          clearFileMetadata(fullPath);
-          LOG_INF("FBR", "Cache deleted for: %s", fullPath.c_str());
+          if (clearGeneratedBookCacheForPath(fullPath)) {
+            LOG_INF("FBR", "Cache deleted for: %s", fullPath.c_str());
+          } else {
+            LOG_ERR("FBR", "Could not delete generated cache for: %s", fullPath.c_str());
+          }
         }
         requestUpdate();
       });

@@ -4,6 +4,8 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
@@ -360,7 +362,7 @@ void KeyboardEntryActivity::loop() {
 void KeyboardEntryActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
-  const Rect contentRect = UITheme::getContentRect(renderer, true, gpio.deviceIsX3());
+  const Rect contentRect = UITheme::getContentRect(renderer, true, gpio.hasEdgeSideButtons());
   const int pageWidth = contentRect.width;
   const int pageHeight = contentRect.height;
   const int contentX = contentRect.x;
@@ -520,31 +522,6 @@ void KeyboardEntryActivity::render(RenderLock&&) {
     }
   }
 
-  if (hintVisible && !text.empty()) {
-    const int hintLh = renderer.getLineHeight(SMALL_FONT_ID);
-    const int underlineY = inputStartY + inputHeight + lineHeight + metrics.verticalSpacing;
-    const int hintY = underlineY + 4;
-    if (cursorMode) {
-      int hintLineY = hintY;
-      if (inputType == InputType::Password && togglePos) {
-        renderer.drawCenteredText(
-            SMALL_FONT_ID, hintLineY,
-            passwordVisible ? tr(STR_KB_HINT_TOGGLE_HIDE_PASSWORD) : tr(STR_KB_HINT_TOGGLE_SHOW_PASSWORD), true);
-        hintLineY += hintLh;
-        renderer.drawCenteredText(SMALL_FONT_ID, hintLineY, tr(STR_KB_HINT_RETURN_CURSOR), true);
-      } else {
-        renderer.drawCenteredText(SMALL_FONT_ID, hintLineY, tr(STR_KB_HINT_MOVE_CURSOR), true);
-        hintLineY += hintLh;
-        if (inputType == InputType::Password) {
-          const char* passTip = passwordVisible ? tr(STR_KB_HINT_HIDE_PASSWORD) : tr(STR_KB_HINT_SHOW_PASSWORD);
-          renderer.drawCenteredText(SMALL_FONT_ID, hintLineY, passTip, true);
-        }
-      }
-    } else {
-      renderer.drawCenteredText(SMALL_FONT_ID, hintY, tr(STR_KB_HINT_EDIT_ENTRY), true);
-    }
-  }
-
   const int keyHeight = metrics.keyboardKeyHeight;
   const int bottomKeyHeight = metrics.keyboardBottomKeyHeight;
   const int keySpacing = metrics.keyboardKeySpacing;
@@ -560,56 +537,64 @@ void KeyboardEntryActivity::render(RenderLock&&) {
                                        bottomRowGap + metrics.keyboardVerticalOffset
                                  : inputStartY + inputHeight + lineHeight + metrics.verticalSpacing;
 
-  const int tipsLh = renderer.getLineHeight(SMALL_FONT_ID);
-  const int underlineBottom = inputStartY + inputHeight + lineHeight + metrics.verticalSpacing + 4;
-  auto drawTip = [&](const char* tip, int y) { renderer.drawCenteredText(SMALL_FONT_ID, y, tip, true); };
-
-  int tipCount = 0;
-  if (cursorMode) {
-    tipCount = 1;
-  } else if (urlMode) {
-    tipCount = 1 + (!text.empty() ? 1 : 0);
-  } else if (symMode) {
-    tipCount = !text.empty() ? 1 : 0;
-  } else {
-    tipCount = 1 + (inputType == InputType::Url ? 1 : 0) + (!text.empty() ? 1 : 0);
-  }
-
-  if (tipCount > 0) {
-    int y = (underlineBottom + keyboardStartY) / 2 - (tipCount + 1) * tipsLh / 2;
-    drawTip(tr(STR_KB_TIPS), y);
-    y += tipsLh;
-    if (cursorMode) {
-      drawTip(tr(STR_KB_HINT_RETURN_KEYBOARD), y);
-    } else if (urlMode) {
-      drawTip(tr(STR_KB_HINT_EXIT_URL_MODE), y);
-      y += tipsLh;
-      if (!text.empty()) {
-        drawTip(tr(STR_KB_HINT_CLEAR_TEXT), y);
-      }
-    } else if (symMode) {
-      if (!text.empty()) {
-        drawTip(tr(STR_KB_HINT_CLEAR_TEXT), y);
-      }
-    } else {
-      const char* altCharTip;
-      if (inputType == InputType::Url) {
-        altCharTip = tr(STR_KB_HINT_SECONDARY_CHAR);
-      } else if (shiftState > 0) {
-        altCharTip = tr(STR_KB_HINT_LOWER_SECONDARY);
-      } else {
-        altCharTip = tr(STR_KB_HINT_UPPER_SECONDARY);
-      }
-      drawTip(altCharTip, y);
-      y += tipsLh;
-      if (inputType == InputType::Url) {
-        drawTip(tr(STR_KB_HINT_URL_SNIPPETS), y);
-        y += tipsLh;
-      }
-      if (!text.empty()) {
-        drawTip(tr(STR_KB_HINT_CLEAR_TEXT), y);
+  const int tipLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const int tipsTop = inputStartY + inputHeight + lineHeight + metrics.verticalSpacing + 4;
+  const int tipWidth = std::min(pageWidth, renderer.getScreenWidth() -
+                                              2 * (metrics.sideButtonHintsWidth + metrics.contentSidePadding));
+  const int tipRows = std::max(0, (keyboardStartY - metrics.verticalSpacing - tipsTop) / tipLineHeight);
+  std::vector<std::string> tipLines;
+  auto appendTip = [&](StrId id) {
+    const int remaining = tipRows - static_cast<int>(tipLines.size());
+    if (remaining > 0) {
+      for (auto& line : renderer.wrappedText(SMALL_FONT_ID, I18N.get(id), tipWidth, remaining)) {
+        tipLines.push_back(std::move(line));
       }
     }
+  };
+
+  if (hintVisible && !text.empty()) {
+    if (!cursorMode) {
+      appendTip(StrId::STR_KB_HINT_EDIT_ENTRY);
+    } else if (inputType == InputType::Password && togglePos) {
+      appendTip(passwordVisible ? StrId::STR_KB_HINT_TOGGLE_HIDE_PASSWORD : StrId::STR_KB_HINT_TOGGLE_SHOW_PASSWORD);
+      appendTip(StrId::STR_KB_HINT_RETURN_CURSOR);
+    } else {
+      appendTip(StrId::STR_KB_HINT_MOVE_CURSOR);
+      if (inputType == InputType::Password) {
+        appendTip(passwordVisible ? StrId::STR_KB_HINT_HIDE_PASSWORD : StrId::STR_KB_HINT_SHOW_PASSWORD);
+      }
+    }
+  }
+
+  int tipY = tipsTop;
+  for (const auto& line : tipLines) {
+    renderer.drawCenteredText(SMALL_FONT_ID, tipY, line.c_str());
+    tipY += tipLineHeight;
+  }
+
+  const int editRows = static_cast<int>(tipLines.size());
+  if (cursorMode) {
+    appendTip(StrId::STR_KB_HINT_RETURN_KEYBOARD);
+  } else {
+    if (urlMode) {
+      appendTip(StrId::STR_KB_HINT_EXIT_URL_MODE);
+    } else if (!symMode) {
+      if (inputType == InputType::Url) {
+        appendTip(StrId::STR_KB_HINT_SECONDARY_CHAR);
+        appendTip(StrId::STR_KB_HINT_URL_SNIPPETS);
+      } else {
+        appendTip(shiftState > 0 ? StrId::STR_KB_HINT_LOWER_SECONDARY : StrId::STR_KB_HINT_UPPER_SECONDARY);
+      }
+    }
+    if (!text.empty()) {
+      appendTip(StrId::STR_KB_HINT_CLEAR_TEXT);
+    }
+  }
+
+  tipY += (tipRows - static_cast<int>(tipLines.size())) * tipLineHeight / 2;
+  for (size_t row = editRows; row < tipLines.size(); ++row) {
+    renderer.drawCenteredText(SMALL_FONT_ID, tipY, tipLines[row].c_str());
+    tipY += tipLineHeight;
   }
 
   const int bkSpacing = metrics.keyboardBottomKeySpacing;

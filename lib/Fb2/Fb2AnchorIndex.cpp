@@ -10,7 +10,7 @@ namespace {
 constexpr uint32_t HEADER = 32, BUCKETS = 4096, START = HEADER + BUCKETS * 4, NODE = 18;
 constexpr uint32_t NONE = UINT32_MAX;
 const uint8_t MAGIC[8] = {'F','B','2','A','N','C','0','1'};
-uint64_t hashId(const std::string& id) {
+uint64_t hashId(std::string_view id) {
   uint64_t h = 14695981039346656037ULL;
   for (unsigned char c : id) { h ^= c; h *= 1099511628211ULL; }
   return h;
@@ -72,7 +72,7 @@ bool Fb2AnchorIndexWriter::begin(const std::string& sections, const std::string&
   return s.ok;
 }
 
-bool Fb2AnchorIndexWriter::add(const std::string& id, uint32_t chapter) {
+bool Fb2AnchorIndexWriter::add(std::string_view id, uint32_t chapter) {
   if (!good()) return false;
   auto& s = *state_;
   if (id.empty()) return true;

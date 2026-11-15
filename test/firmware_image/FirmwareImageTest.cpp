@@ -35,7 +35,7 @@ struct Sha {
 };
 std::vector<uint8_t> image(bool hashed = true, size_t payload = 65537) {
   std::vector<uint8_t> result(32 + payload);
-  result[0] = 0xE9; result[1] = 1; result[12] = 5; result[23] = hashed;
+  result[0] = 0xE9; result[1] = 1; result[12] = firmware_flash::detail::expectedChipId; result[23] = hashed;
   for (int i = 0; i < 4; ++i) result[28 + i] = (payload >> (8 * i)) & 255;
   uint8_t checksum = 0xEF;
   for (size_t i = 32; i < result.size(); ++i) {
@@ -79,8 +79,8 @@ TEST(FirmwareImage, ErasedPartition) {
 }
 TEST(FirmwareImage, HeaderTruncated) { EXPECT_EQ(validate(std::vector<uint8_t>(23)), Result::TOO_SMALL); }
 TEST(FirmwareImage, WrongChipAndHighChipByte) {
-  auto flash = image(); flash[12] = 9; EXPECT_EQ(validate(flash), Result::BAD_CHIP);
-  flash[12] = 5; flash[13] = 1; EXPECT_EQ(validate(flash), Result::BAD_CHIP);
+  auto flash = image(); flash[12] = firmware_flash::detail::expectedChipId == 9 ? 5 : 9; EXPECT_EQ(validate(flash), Result::BAD_CHIP);
+  flash[12] = firmware_flash::detail::expectedChipId; flash[13] = 1; EXPECT_EQ(validate(flash), Result::BAD_CHIP);
 }
 TEST(FirmwareImage, InvalidSegmentCount) {
   auto flash = image(); flash[1] = 0; EXPECT_EQ(validate(flash), Result::BAD_SEGMENTS);

@@ -3,6 +3,7 @@
 
 #include <deque>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -78,11 +79,8 @@ class ZipFile {
   bool getInflatedFileSize(const char* filename, size_t* size);
   // Batch lookup: scan ZIP central dir once and fill sizes for matching targets.
   // targets must be sorted by (hash, len). sizes[target.index] receives uncompressedSize.
-  // Returns number of targets matched. Deques, not vectors: a 1700-spine book needs ~28 KB of
-  // targets, and demanding that as ONE contiguous block aborts on a fragmented heap (bare
-  // operator new under -fno-exceptions) — deque's ~512-byte chunks drop the contiguity
-  // requirement while keeping the random-access iterators lower_bound needs.
-  int fillUncompressedSizes(const std::deque<SizeTarget>& targets, std::deque<uint32_t>& sizes);
+  // Returns number of distinct targets matched; caller fills sizes with UINT32_MAX.
+  int fillUncompressedSizes(std::span<const SizeTarget> targets, std::span<uint32_t> sizes);
   // Batch lookup of FULL entry stats in ONE central-directory walk (vs one linear scan per
   // loadFileStatSlim call). targets must be sorted by (hash, len) like fillUncompressedSizes;
   // stats[target.index] receives the entry's FileStatSlim. Returns number matched. Same deque

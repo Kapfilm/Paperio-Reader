@@ -1,3 +1,4 @@
+#include <BoardConfig.h>
 #include <BootHeapProbe.h>
 #include <HalDisplay.h>
 #include <HalGPIO.h>
@@ -14,7 +15,10 @@ static BootHeapProbe s_probePostDisplay(1);
 
 #define SD_SPI_MISO 7
 
-HalDisplay::HalDisplay() : einkDisplay(EPD_SCLK, EPD_MOSI, EPD_CS, EPD_DC, EPD_RST, EPD_BUSY) {}
+HalDisplay::HalDisplay()
+    : einkDisplay(BoardConfig::DEFAULT_DEVICE.display.sclk, BoardConfig::DEFAULT_DEVICE.display.mosi,
+                  BoardConfig::DEFAULT_DEVICE.display.cs, BoardConfig::DEFAULT_DEVICE.display.dc,
+                  BoardConfig::DEFAULT_DEVICE.display.rst, BoardConfig::DEFAULT_DEVICE.display.busy) {}
 
 HalDisplay::~HalDisplay() {}
 

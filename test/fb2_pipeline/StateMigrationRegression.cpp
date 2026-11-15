@@ -140,6 +140,31 @@ TEST_F(Fb2StateMigrationTest, MissingOrCorruptIndexDoesNotReinterpretUnversioned
   EXPECT_FALSE(Fb2StateMigration::prepare(cache));
   EXPECT_EQ(read(cache + "/bookmarks.bin"), "original-bookmarks");
 }
+TEST_F(Fb2StateMigrationTest, MissingNativeIndexUsesPackageHeaderAndSurvivesAnInterruptedRebuild) {
+  seed(3, 35);
+  const auto progress = read(cache + "/progress.bin");
+  std::ofstream package(cache + "/fb2_package.bin", std::ios::binary);
+  package.write("FB2IDX", 6);
+  pod<uint8_t>(package, 35);
+  pod<uint64_t>(package, 1000);
+  pod<uint16_t>(package, 5);
+  package.close();
+  fs::remove(cache + "/.fb2_sections.bin");
+  ASSERT_TRUE(Fb2StateMigration::prepare(cache));
+  const auto native = cache + "/" + Fb2StateMigration::NATIVE_LAYOUT_FILE;
+  ASSERT_TRUE(fs::exists(native));
+  fs::rename(native, cache + Fb2StateMigration::NATIVE_LAYOUT_BACKUP_SUFFIX);
+  fs::remove(cache + "/fb2_package.bin");
+  EXPECT_TRUE(Fb2StateMigration::prepare(cache));
+  EXPECT_EQ(read(cache + "/progress.bin"), progress);
+  EXPECT_EQ(read(cache + "/bookmarks.bin"), "original-bookmarks");
+}
+TEST_F(Fb2StateMigrationTest, MarkedAsReadBeforeIndexHasNoLegacyChapterPosition) {
+  const auto progress = std::string(6, '\0') + char(100);
+  write(cache + "/progress.bin", progress);
+  EXPECT_TRUE(Fb2StateMigration::prepare(cache));
+  EXPECT_EQ(read(cache + "/progress.bin"), progress);
+}
 TEST_F(Fb2StateMigrationTest, RollbackDuringPendingMigrationDoesNotReuseOldCoordinates) {
   seed(); ASSERT_TRUE(Fb2StateMigration::prepare(cache));
   seed(); // v29 reconstructed by an old firmware before migration acknowledgement

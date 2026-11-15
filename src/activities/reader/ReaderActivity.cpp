@@ -682,13 +682,13 @@ std::unique_ptr<PngDecodeSession> ReaderActivity::beginPngThumbSession(const std
   return beginPngThumbSessionImpl(bookPath, height * 6 / 10, height, name, filesOut, true);
 }
 
-std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
+std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path, std::unique_ptr<Epub> epub) {
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());
     return nullptr;
   }
 
-  auto epub = std::unique_ptr<Epub>(new Epub(path, "/.crosspoint"));
+  if (!epub) epub = std::make_unique<Epub>(path, "/.crosspoint");
   epub->setSyntheticTocFallbackEnabled(SETTINGS.syntheticTocFallback != 0);
   if (epub->load(true, SETTINGS.embeddedStyle == 0)) {
     return epub;
@@ -849,11 +849,10 @@ void ReaderActivity::onEnter() {
     onGoToTxtReader(std::move(txt));
   } else if (isFb2BookPath(initialBookPath) ||
              (isBookZipPath(initialBookPath) && detectBookArchiveType(initialBookPath) == BookArchiveType::Fb2)) {
-    const bool needsIndexing = [&]() {
-      Fb2 probe(initialBookPath, "/.crosspoint");
-      return probe.needsPreparation() ||
-             Epub(probe.getPackagePath(), "/.crosspoint").needsFirstOpenIndexing(SETTINGS.embeddedStyle == 0);
-    }();
+    auto fb2 = std::make_unique<Fb2>(initialBookPath, "/.crosspoint");
+    const bool needsIndexing = fb2->needsPreparation() ||
+                               Epub(fb2->getPackagePath(), "/.crosspoint").needsFirstOpenIndexing(
+                                   SETTINGS.embeddedStyle == 0);
     if (needsIndexing) {
       RenderLock lock;
       GUI.drawPopup(renderer, tr(STR_INDEXING));
@@ -869,13 +868,9 @@ void ReaderActivity::onEnter() {
         renderer.setSingleBufferFastDiff(true);
       }
     }
-    std::string packagePath;
-    bool prepared = false;
-    {
-      Fb2 fb2(initialBookPath, "/.crosspoint");
-      prepared = fb2.load();
-      if (prepared) packagePath = fb2.getPackagePath();
-    }  // Drop converter metadata before allocating Epub metadata.
+    const bool prepared = fb2->loadAfterProbe();
+    const std::string packagePath = prepared ? fb2->getPackagePath() : std::string{};
+    fb2.reset();  // Drop converter metadata before allocating Epub metadata.
     auto epub = prepared ? loadEpub(packagePath) : nullptr;
     if (releasedForFb2) {
       RenderLock lock;
@@ -897,9 +892,9 @@ void ReaderActivity::onEnter() {
     // The first open of a book runs a multi-second index build inside load()
     // (spine/TOC, content.opf, and the CSS compile). Show a popup so the wait
     // isn't a dead screen; skip it on a warm cache so cached re-opens don't add
-    // an extra e-ink flash. The throwaway Epub only computes paths + does a few
-    // file-existence checks (no parsing), so this is cheap.
-    const bool firstOpenIndexing = Epub(initialBookPath, "/.crosspoint").needsFirstOpenIndexing();
+    // an extra e-ink flash. Reuse the object so the load can reuse its ZIP fingerprint.
+    auto candidate = std::make_unique<Epub>(initialBookPath, "/.crosspoint");
+    const bool firstOpenIndexing = candidate->needsFirstOpenIndexing(SETTINGS.embeddedStyle == 0);
     if (firstOpenIndexing) {
       RenderLock lock;
       // drawPopup() overlays the indexing box on the displayed frame (it resyncs the write buffer
@@ -928,7 +923,7 @@ void ReaderActivity::onEnter() {
                 static_cast<unsigned long>(esp_get_free_heap_size()));
       }
     }
-    auto epub = loadEpub(initialBookPath);
+    auto epub = loadEpub(initialBookPath, std::move(candidate));
     if (releasedForIndexing) {
       RenderLock lock;
       bool restored = renderer.reallocSecondaryBuffer();

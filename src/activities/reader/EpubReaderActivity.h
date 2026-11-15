@@ -57,7 +57,7 @@ class EpubReaderActivity final : public Activity {
       float spineProgress;  // Kind::Percent
       uint16_t lutIndex;    // Kind::Paragraph / Kind::ListItem / Kind::TextAnchor fallback
     };
-    std::string anchorStr;  // Kind::Anchor; empty for all others
+    std::string anchorStr;  // Kind::Anchor / Kind::TextAnchor
     // Cross-font rescaling: page count of this spine at save time.
     // Non-zero for Kind::Page when loaded from progress.bin or written during reflow.
     // Also set for Kind::Paragraph / Kind::ListItem / Kind::Anchor so a LUT miss
@@ -398,6 +398,11 @@ class EpubReaderActivity final : public Activity {
   // Page last drawn by the SectionBuilding pass (-1 = none yet / popup showing). Stops the
   // pass redrawing the same page every idle tick.
   int buildDisplayedPage_ = -1;
+  int buildLastPaintedPage_ = -1;
+  // The current target was shown using a confirmed anchor during the build.
+  bool buildResolvedAnchor_ = false;
+  int completedBuildDisplayPage_ = -1;
+  bool buildPageTurned_ = false;
   // True once the "Indexing" popup has been drawn for the current pending page, so the pass
   // doesn't re-flush it every tick. Cleared whenever a real page is drawn or the build ends.
   bool buildingPopupShown_ = false;
@@ -529,6 +534,7 @@ class EpubReaderActivity final : public Activity {
   void runFootnoteAction(uint8_t action);
   void toggleCurrentBookmark();
   void remapBookmarksForSection();
+  int sectionBuildDisplayTarget() const;
   const std::string& annotationAnchor() const;
   bool isFullNoteView() const { return !footnoteHistory.empty() && pendingFootnotePreviewAnchor.empty(); }
   void openAnnotation(int spine, int page, int pageCount, const std::string& anchor, bool fullNote,
@@ -712,6 +718,8 @@ class EpubReaderActivity final : public Activity {
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
+  void openChapterSelection();
+  void selectChapter(const ChapterResult& chapter);
   void openClipStylePicker();
   void openDictionarySelection();
   void startClipSelection(ClippingHighlightStyle highlightStyle, bool dictionaryLookup = false);
@@ -732,6 +740,7 @@ class EpubReaderActivity final : public Activity {
   // reader startup path reads it.
   void applyPendingBookmarkJump();
   void applyOrientation(uint8_t orientation);
+  void preservePositionForRelayout();
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void stopAutomaticPageTurn();
   void applyBookReaderOverrides(int8_t embeddedStyleOverride, int8_t imageRenderingOverride, int8_t fontFamilyOverride,

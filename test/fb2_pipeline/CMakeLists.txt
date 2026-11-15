@@ -53,6 +53,12 @@ target_include_directories(fb2_chapter_continuity PRIVATE ${CMAKE_CURRENT_SOURCE
 target_compile_definitions(fb2_chapter_continuity PRIVATE ENABLE_SERIAL_LOG=1 LOG_LEVEL=1)
 target_link_libraries(fb2_chapter_continuity PRIVATE SaxParser)
 
+add_executable(fb2_anchor_scan AnchorScanRegression.cpp ${FB2_PIPELINE_SOURCES})
+target_include_directories(fb2_anchor_scan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${REPO_ROOT}/lib/Fb2 ${EPUB_INCLUDES})
+target_compile_definitions(fb2_anchor_scan PRIVATE ENABLE_SERIAL_LOG=1 LOG_LEVEL=1)
+target_link_libraries(fb2_anchor_scan PRIVATE SaxParser GTest::gtest_main)
+gtest_discover_tests(fb2_anchor_scan)
+
 add_executable(fb2_state_migration StateMigrationRegression.cpp ${REPO_ROOT}/lib/Fb2/Fb2StateMigration.cpp)
 target_include_directories(fb2_state_migration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${REPO_ROOT}/lib/Fb2 ${EPUB_INCLUDES})
 target_link_libraries(fb2_state_migration PRIVATE GTest::gtest_main)

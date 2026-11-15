@@ -7,6 +7,16 @@
 
 namespace firmware_flash::detail {
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || (defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC)
+inline constexpr uint16_t expectedChipId = 9;
+#else
+inline constexpr uint16_t expectedChipId = 5;
+#endif
+
+inline bool matchesTargetChip(const uint8_t* header) {
+  return (uint16_t(header[12]) | (uint16_t(header[13]) << 8)) == expectedChipId;
+}
+
 // Platform-independent core used by the flash-partition adapter. Reads are
 // bounded by partitionSize, and SHA failures must never produce a valid image.
 // Result is the firmware_flash::Result enum; injecting it keeps this header
@@ -21,9 +31,7 @@ Result validatePartitionImage(size_t partitionSize, Read&& read, Sha& sha, uint8
   uint8_t header[headerSize];
   if (!read(0, header, sizeof(header))) return Result::READ_FAIL;
   if (header[0] != 0xE9) return Result::BAD_MAGIC;
-  // ESP32-C3 uses little-endian chip ID 5. Revision minima are deliberately
-  // handled by the stock bootloader (Paperio supports patched X4 images).
-  if (header[12] != 5 || header[13] != 0) return Result::BAD_CHIP;
+  if (!matchesTargetChip(header)) return Result::BAD_CHIP;
   if (!header[1] || header[1] > 16) return Result::BAD_SEGMENTS;
   if (header[23] > 1) return Result::BAD_SIZE;
   if (!sha.update(header, sizeof(header))) return Result::BAD_SHA;

@@ -65,3 +65,15 @@ TEST(ReaderRefreshCycle, ShorterNewSettingClampsOutstandingCounter) {
   }
   EXPECT_EQ(remaining, 5);
 }
+
+TEST(ReaderRefreshCycle, ReaderTransitionsDoNotForceHalfRefreshOnX3) {
+  GfxRenderer x3;
+  ReaderUtils::requestReaderTransitionRefresh(x3);
+  EXPECT_TRUE(x3.overrides.empty());
+
+  GfxRenderer x4;
+  x4.x3 = false;
+  ReaderUtils::requestReaderTransitionRefresh(x4);
+  ASSERT_EQ(x4.overrides.size(), 1);
+  EXPECT_EQ(x4.overrides.front(), HalDisplay::HALF_REFRESH);
+}

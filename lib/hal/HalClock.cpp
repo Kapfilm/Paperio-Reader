@@ -5,6 +5,7 @@
 #include <Logging.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <BoardConfig.h>
 #include <Wire.h>  // Needed for I2C communication with the RTC
 #include <esp_private/esp_clk.h>
 #include <esp_sntp.h>
@@ -235,6 +236,18 @@ static bool initExternalRTC() {
   if (initialized) return exists;
   initialized = true;
 
+  if (gpio.deviceIsX4Classic()) {
+    const auto address = BoardConfig::ACTIVE.sensors.rtcAddr;
+    Wire.beginTransmission(address);
+    if (Wire.endTransmission() != 0) return false;
+    // BM8563 / PCF8563: disable unused 32kHz CLKOUT, preserving the clock.
+    Wire.beginTransmission(address);
+    Wire.write(0x0D);
+    Wire.write(0);
+    exists = Wire.endTransmission() == 0;
+    LOG_INF("CLK", "BM8563 RTC %s", exists ? "found" : "unavailable");
+    return exists;
+  }
   if (!gpio.deviceIsX3()) {
     LOG_DBG("CLK", "Skipping DS3231 init on non-X3 board");
     return false;
@@ -256,6 +269,19 @@ static void writeExternalRTC(time_t t) {
   struct tm timeinfo;
   gmtime_r(&t, &timeinfo);  // DS3231 is usually operated in UTC
 
+  if (gpio.deviceIsX4Classic()) {
+    Wire.beginTransmission(BoardConfig::ACTIVE.sensors.rtcAddr);
+    Wire.write(0x02);                      // seconds through year, BM8563 register order
+    Wire.write(bin2bcd(timeinfo.tm_sec));  // writing clears the low-voltage flag
+    Wire.write(bin2bcd(timeinfo.tm_min));
+    Wire.write(bin2bcd(timeinfo.tm_hour));
+    Wire.write(bin2bcd(timeinfo.tm_mday));
+    Wire.write(bin2bcd(timeinfo.tm_wday));
+    Wire.write(bin2bcd(timeinfo.tm_mon + 1));
+    Wire.write(bin2bcd(timeinfo.tm_year - 100));
+    Wire.endTransmission();
+    return;
+  }
   Wire.beginTransmission(DS3231_ADDRESS);
   Wire.write(0x00);                             // Start at register 0x00 (seconds)
   Wire.write(bin2bcd(timeinfo.tm_sec));         // 0x00: Seconds
@@ -270,6 +296,26 @@ static void writeExternalRTC(time_t t) {
 
 // Read time from DS3231
 static time_t readExternalRTC() {
+  if (gpio.deviceIsX4Classic()) {
+    const auto address = BoardConfig::ACTIVE.sensors.rtcAddr;
+    Wire.beginTransmission(address);
+    Wire.write(0x02);
+    if (Wire.endTransmission(false) != 0 || Wire.requestFrom(address, static_cast<uint8_t>(7)) != 7) return 0;
+    uint8_t data[7];
+    for (auto& value : data) value = Wire.read();
+    if (data[0] & 0x80) return 0;  // oscillator stopped / low voltage: do not trust time
+    struct tm value = {};
+    value.tm_sec = bcd2bin(data[0] & 0x7F);
+    value.tm_min = bcd2bin(data[1] & 0x7F);
+    value.tm_hour = bcd2bin(data[2] & 0x3F);
+    value.tm_mday = bcd2bin(data[3] & 0x3F);
+    value.tm_mon = bcd2bin(data[5] & 0x1F) - 1;
+    value.tm_year = bcd2bin(data[6]) + 100;
+    if (value.tm_mon < 0 || value.tm_mon > 11 || value.tm_mday < 1 || value.tm_mday > 31 || value.tm_hour > 23 ||
+        value.tm_min > 59 || value.tm_sec > 59)
+      return 0;
+    return timegm_compat(&value);
+  }
   Wire.beginTransmission(DS3231_ADDRESS);
   Wire.write(0x00);
   if (Wire.endTransmission() != 0) return 0;
@@ -296,6 +342,7 @@ static time_t readExternalRTC() {
 
 // Read temperature (Register 0x11)
 static float readExternalTemp() {
+  if (gpio.deviceIsX4Classic()) return temperatureRead();
   Wire.beginTransmission(DS3231_ADDRESS);
   Wire.write(0x11);
   if (Wire.endTransmission() != 0) {

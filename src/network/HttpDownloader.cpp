@@ -303,22 +303,48 @@ bool HttpDownloader::fetchUrl(const std::string& url, std::string& outContent, c
 }
 
 namespace {
-// Common file-sink plumbing used by both downloadToFile overloads.
+constexpr char downloadPartialSuffix[] = ".download.part";
+constexpr char downloadBackupSuffix[] = ".download.bak";
+
+bool openFileDownload(const std::string& destPath, FsFile& file) {
+  const std::string backup = destPath + downloadBackupSuffix;
+  if (Storage.exists(backup.c_str())) {
+    const bool recovered = Storage.exists(destPath.c_str()) ? Storage.remove(backup.c_str())
+                                                            : Storage.rename(backup.c_str(), destPath.c_str());
+    if (!recovered) return false;
+  }
+  return Storage.openFileForWrite("HTTP", destPath + downloadPartialSuffix, file);
+}
+
+// The original stays in place during transfer. The backup can be recovered if
+// power is lost between the two final renames on filesystems without replacement.
 HttpDownloader::DownloadError finishFileDownload(HttpDownloader::DownloadError result, const std::string& destPath,
                                                  FsFile& file, size_t downloaded) {
-  // Flush before any remove() on the same path; DESTRUCTOR_CLOSES_FILE would
-  // otherwise close only after the remove.
-  file.flush();
-  file.close();
+  const std::string partial = destPath + downloadPartialSuffix;
+  const bool complete = file.fileSize64() == downloaded;
+  const bool closed = file.close();
   if (result != HttpDownloader::OK) {
-    Storage.remove(destPath.c_str());
+    Storage.remove(partial.c_str());
     return result;
   }
-  if (downloaded == 0) {
-    LOG_ERR("HTTP", "no data received");
-    Storage.remove(destPath.c_str());
-    return HttpDownloader::HTTP_ERROR;
+  if (downloaded == 0 || !complete || !closed) {
+    Storage.remove(partial.c_str());
+    return downloaded == 0 ? HttpDownloader::HTTP_ERROR : HttpDownloader::FILE_ERROR;
   }
+  const std::string backup = destPath + downloadBackupSuffix;
+  const bool hadDestination = Storage.exists(destPath.c_str());
+  if (hadDestination && !Storage.rename(destPath.c_str(), backup.c_str())) {
+    Storage.remove(partial.c_str());
+    return HttpDownloader::FILE_ERROR;
+  }
+  if (!Storage.rename(partial.c_str(), destPath.c_str())) {
+    if (hadDestination && !Storage.rename(backup.c_str(), destPath.c_str())) {
+      LOG_ERR("HTTP", "Could not restore previous file from %s", backup.c_str());
+    }
+    Storage.remove(partial.c_str());
+    return HttpDownloader::FILE_ERROR;
+  }
+  if (hadDestination) Storage.remove(backup.c_str());
   LOG_DBG("HTTP", "Downloaded %zu bytes", downloaded);
   return HttpDownloader::OK;
 }
@@ -330,11 +356,8 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(const std::string& 
   LOG_DBG("HTTP", "Downloading: %s", url.c_str());
   LOG_DBG("HTTP", "Destination: %s", destPath.c_str());
 
-  if (Storage.exists(destPath.c_str())) {
-    Storage.remove(destPath.c_str());
-  }
   FsFile file;
-  if (!Storage.openFileForWrite("HTTP", destPath.c_str(), file)) {
+  if (!openFileDownload(destPath, file)) {
     LOG_ERR("HTTP", "Failed to open file for writing: %s", destPath.c_str());
     return FILE_ERROR;
   }
@@ -353,11 +376,8 @@ HttpDownloader::DownloadError HttpDownloader::downloadToFile(Session& session, c
   LOG_DBG("HTTP", "Downloading (session): %s", url.c_str());
   LOG_DBG("HTTP", "Destination: %s", destPath.c_str());
 
-  if (Storage.exists(destPath.c_str())) {
-    Storage.remove(destPath.c_str());
-  }
   FsFile file;
-  if (!Storage.openFileForWrite("HTTP", destPath.c_str(), file)) {
+  if (!openFileDownload(destPath, file)) {
     LOG_ERR("HTTP", "Failed to open file for writing: %s", destPath.c_str());
     return FILE_ERROR;
   }

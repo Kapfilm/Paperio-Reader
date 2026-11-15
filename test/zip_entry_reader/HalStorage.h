@@ -190,6 +190,7 @@ class HalStorage {
     return recursive ? std::filesystem::create_directories(path, ec) : std::filesystem::create_directory(path, ec);
   }
   bool remove(const char* path) { return std::filesystem::remove(path); }
+  bool rename(const char* from, const char* to) { return std::rename(from, to) == 0; }
   bool removeDir(const char* path) {
     std::error_code ec;
     std::filesystem::remove_all(path, ec);

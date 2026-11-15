@@ -2,6 +2,7 @@
 #include "Fb2NavigationIndex.h"
 #include "Fb2AnchorIndex.h"
 
+#include <BufferedFileIO.h>
 #include <CooperativeAbort.h>
 #include <Logging.h>
 #include <freertos/task.h>
@@ -16,6 +17,8 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <utility>
 #include "Fb2Encoding.h"
 #include "Fb2StateMigration.h"
 #include "native/Fb2ZipOpener.h"
@@ -70,6 +73,7 @@ constexpr Fb2PreservedStateFile FB2_PRESERVED_STATE_FILES[] = {
     {"stats.bin", ".preserve_stats.bin"},
     {"bookmarks.bin", ".preserve_bookmarks.bin"},
     {"reader_settings.bin", ".preserve_reader_settings.bin"},
+    {Fb2StateMigration::NATIVE_LAYOUT_FILE, Fb2StateMigration::NATIVE_LAYOUT_BACKUP_SUFFIX},
 };
 
 // FB2 package rebuilding normally wipes cachePath.  Keep user-owned state
@@ -87,8 +91,10 @@ bool clearFb2GeneratedCachePreservingUserState(const std::string& cachePath) {
     const auto& item = FB2_PRESERVED_STATE_FILES[i];
     const std::string finalPath = cachePath + "/" + item.name;
     const std::string tempPath = cachePath + item.tempSuffix;
-    if (!Storage.exists(finalPath.c_str()) && Storage.exists(tempPath.c_str())) {
-      Storage.rename(tempPath.c_str(), finalPath.c_str());
+    if (!Storage.exists(finalPath.c_str()) && Storage.exists(tempPath.c_str()) &&
+        !Storage.rename(tempPath.c_str(), finalPath.c_str())) {
+      LOG_ERR("FB2", "Could not recover user state after cache rebuild: %s", finalPath.c_str());
+      return false;
     }
   }
 
@@ -741,6 +747,7 @@ constexpr char LRU_INDEX_FILE[] = "/.fb2_lru_index";
 constexpr char METADATA_FILE[] = "/fb2_metadata.txt";
 constexpr char ANNOTATION_FILE[] = "/fb2_annotation.txt";
 constexpr char PACKAGE_STATE_FILE[] = "/fb2_package.bin";
+constexpr char SOURCE_IDENTITY_FILE[] = "/.fb2_identity";
 constexpr char SECTIONS_INDEX_FILE[] = "/.fb2_sections.bin";
 constexpr char SOURCE_PATHS_INDEX_FILE[] = "/.fb2_sourcepaths.bin";
 constexpr char NAVIGATION_INDEX_FILE[] = "/.fb2_nav.bin";
@@ -1556,6 +1563,117 @@ class TextRangeFilterSink : public Fb2ContentSink {
   bool linkEmitted_ = false;
 };
 
+class Fb2AnchorSink final : public Fb2ContentSink {
+ public:
+  Fb2AnchorSink(Fb2AnchorIndexWriter& writer, uint32_t chapter) : writer_(writer), chapter_(chapter) {}
+  bool streamsTableCells() const override { return true; }
+  void onAnchor(const std::string& id) override {
+    if (ok) ok = writer_.add(id, chapter_);
+  }
+  bool ok = true;
+
+ private:
+  Fb2AnchorIndexWriter& writer_;
+  uint32_t chapter_;
+};
+
+// On a cold open, keep the section/ID pairs from the metadata scan in a
+// sequential scratch file. The final hash index includes the size of the
+// completed section index, so it can only be committed after that file exists.
+class ScannedFb2Anchors {
+ public:
+  explicit ScannedFb2Anchors(const std::string& cachePath) : path_(cachePath + "/.fb2_scan_anchors.tmp") {}
+  ~ScannedFb2Anchors() { discard(); }
+
+  bool begin() {
+    if (!Storage.openFileForWrite("FB2ANC", path_, file_)) return false;
+    created_ = true;
+    output_.emplace(file_, 2048);
+    return true;
+  }
+
+  void add(uint16_t chapter, std::string_view id) {
+    if (!good_) return;
+    const auto length = static_cast<uint16_t>(id.size());
+    good_ = id.size() == length && length &&
+            output_->write(reinterpret_cast<const uint8_t*>(&chapter), sizeof(chapter)) == sizeof(chapter) &&
+            output_->write(reinterpret_cast<const uint8_t*>(&length), sizeof(length)) == sizeof(length) &&
+            output_->write(reinterpret_cast<const uint8_t*>(id.data()), length) == length;
+  }
+
+  void finishScan() {
+    if (!output_) return;
+    if (!output_->finish()) good_ = false;
+    output_.reset();
+    if (!file_.close()) good_ = false;
+  }
+
+  void discard() {
+    output_.reset();
+    if (file_.isOpen()) file_.close();
+    if (created_) Storage.remove(path_.c_str());
+    created_ = false;
+  }
+
+  bool build(const std::string& cachePath, const std::string& sourcePath, const Fb2ScanResult& scan) {
+    if (!created_ || !good_ || !Storage.openFileForRead("FB2ANC", path_, file_)) return false;
+    const auto end = file_.size64();
+    if (end > UINT32_MAX) return false;
+    Fb2AnchorIndexWriter writer;
+    if (!writer.begin(cachePath + SECTIONS_INDEX_FILE, cachePath + ANCHORS_INDEX_FILE, PACKAGE_VERSION)) return false;
+    HalFile source;
+    if (!Storage.openFileForRead("FB2ANC", sourcePath, source)) return false;
+    FsFileReader reader(source);
+    Fb2Parser parser;
+    Fb2AnchorSink frontMatter(writer, 0);
+    if (!parser.renderAnnotation(reader, frontMatter) || !parser.renderBodyPreambleForFirstSection(reader, frontMatter) ||
+        !frontMatter.ok) return false;
+
+    // A styled paragraph used as a title, or an unusual title location, has
+    // special rendering rules. Only those chapters need the rendering parser.
+    std::unique_ptr<uint8_t[]> replay;
+    const auto chapterCount = scan.sections.size();
+    uint32_t replayed = 0;
+    for (size_t chapter = 0; chapter < chapterCount; ++chapter) {
+      if (fb2CancellationRequested(nullptr)) return false;
+      const auto& section = scan.sections[chapter];
+      if (section.replayAnchors || section.fallbackTitle) {
+        if (!replay) {
+          replay.reset(new (std::nothrow) uint8_t[(chapterCount + 7) / 8]());
+          if (!replay) return false;
+        }
+        replay[chapter / 8] |= static_cast<uint8_t>(1u << (chapter % 8));
+        Fb2AnchorSink sink(writer, chapter);
+        if (!writer.add(scan.sectionId(section), chapter)) return false;
+        if (section.titleLength) parser.renderSectionTitle(reader, section, sink, section.level);
+        if (!parser.renderSection(reader, section, sink) || !sink.ok) return false;
+        ++replayed;
+      }
+    }
+    if (!scan.good()) return false;
+    serialization::BufferedFileReader records(file_);
+    std::string id;
+    while (records.position() < end) {
+      uint16_t owner = 0, length = 0;
+      if (fb2CancellationRequested(nullptr) || !records.readPod(owner) || !records.readPod(length) ||
+          owner >= chapterCount || !length) return false;
+      id.resize(length);
+      if (!records.read(id.data(), length)) return false;
+      if ((!replay || !(replay[owner / 8] & (1u << (owner % 8)))) && !writer.add(id, owner)) return false;
+    }
+    if (!writer.finish()) return false;
+    LOG_INF("FB2ANC", "Indexed inline anchors from initial scan: %zu chapters, %u replayed", chapterCount, replayed);
+    return true;
+  }
+
+ private:
+  std::string path_;
+  HalFile file_;
+  std::optional<BufferedFileWriter> output_;
+  bool created_ = false;
+  bool good_ = true;
+};
+
 // Build anchors through the same render filters used for XHTML. This assigns
 // paragraph/cell IDs to the actual virtual slice, including deferred block cuts.
 bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourcePath, Fb2AnchorIndex& index) {
@@ -1571,16 +1689,6 @@ bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourc
         !Storage.openFileForRead("FB2ANC", sourcePath, source)) return false;
     FsFileReader records(sections), reader(source);
     Fb2Parser parser;
-    class AnchorSink final : public Fb2ContentSink {
-     public:
-      AnchorSink(Fb2AnchorIndexWriter& writer, uint32_t chapter) : writer_(writer), chapter_(chapter) {}
-      bool streamsTableCells() const override { return true; }
-      void onAnchor(const std::string& id) override { if (ok) ok = writer_.add(id, chapter_); }
-      bool ok = true;
-     private:
-      Fb2AnchorIndexWriter& writer_;
-      uint32_t chapter_;
-    };
     // Virtual slices share the same native section. Parse its XML once per
     // bounded batch and replay callbacks through each unchanged range filter.
     // This preserves paragraph-boundary and inline-anchor ownership without
@@ -1597,7 +1705,7 @@ bool ensureFb2AnchorIndex(const std::string& cachePath, const std::string& sourc
       }
       Fb2SectionIndexEntry section;
       uint16_t titleLen;
-      AnchorSink sink;
+      Fb2AnchorSink sink;
       RangeFilterSink images;
       TextRangeFilterSink text;
     };
@@ -2002,7 +2110,45 @@ bool Fb2::prepareSource(const ProgressFn& onProgress) {
 
 void Fb2::setupCacheDir() const { Storage.mkdir(cachePath.c_str(), true); }
 
+bool Fb2::readSourceIdentity(HalFile& file) {
+  sourceSize = file.fileSize64();
+  if (!sourceSize) return false;
+  if (isCompressedFb2()) {
+    FsFileReader reader(file);
+    ZipEntryInfo entry;
+    if (!findFb2EntryInZip(reader, entry)) return false;
+    sourceFingerprint = (uint64_t(entry.uncompressedSize) << 32) | entry.crc32;
+    return true;
+  }
+
+  // FAT timestamps can repeat. Sample the head, middle and tail in addition to
+  // the timestamp without reading a large uncompressed book on every open.
+  uint16_t date = 0;
+  uint16_t time = 0;
+  file.getModifyDateTime(&date, &time);
+  uint64_t hash = 14695981039346656037ull;
+  const auto appendByte = [&hash](const uint8_t byte) {
+    hash ^= byte;
+    hash *= 1099511628211ull;
+  };
+  for (const uint16_t field : {date, time}) {
+    appendByte(static_cast<uint8_t>(field));
+    appendByte(static_cast<uint8_t>(field >> 8));
+  }
+  std::array<uint8_t, 512> buffer;
+  const size_t sampleSize = std::min<uint64_t>(sourceSize, buffer.size());
+  const uint64_t last = sourceSize - sampleSize;
+  for (const uint64_t offset : {uint64_t{0}, last / 2, last}) {
+    if (!file.seek64(offset) || file.read(buffer.data(), sampleSize) != static_cast<int>(sampleSize)) return false;
+    for (size_t index = 0; index < sampleSize; ++index) appendByte(buffer[index]);
+    if (last == 0) break;
+  }
+  sourceFingerprint = hash;
+  return true;
+}
+
 bool Fb2::cacheIsCurrent() {
+  legacySourceSignature = false;
   if (!Storage.exists((packagePath + "/META-INF/container.xml").c_str()) ||
       !Storage.exists((packagePath + "/OEBPS/content.opf").c_str())) {
     return false;
@@ -2029,8 +2175,20 @@ bool Fb2::cacheIsCurrent() {
                      state.read(&cachedChapters, sizeof(cachedChapters)) == sizeof(cachedChapters) &&
                      cachedSize == sourceSize && cachedChapters > 0;
   state.close();
-  if (valid) chapterCount = cachedChapters;
-  return valid;
+  if (!valid) return false;
+
+  const std::string identityPath = cachePath + SOURCE_IDENTITY_FILE;
+  legacySourceSignature = !Storage.exists(identityPath.c_str());
+  if (!legacySourceSignature) {
+    HalFile identity;
+    uint64_t fingerprint = 0;
+    if (!Storage.openFileForRead("FB2", identityPath, identity) ||
+        identity.read(&fingerprint, sizeof(fingerprint)) != sizeof(fingerprint) || fingerprint != sourceFingerprint) {
+      return false;
+    }
+  }
+  chapterCount = cachedChapters;
+  return true;
 }
 
 bool Fb2::loadMetadataCache() {
@@ -2077,14 +2235,31 @@ void Fb2::saveCacheSignature() const {
   if (!Storage.openFileForWrite("FB2", cachePath + PACKAGE_STATE_FILE, state)) return;
   const uint16_t chapters = static_cast<uint16_t>(std::min(chapterCount, static_cast<int>(UINT16_MAX)));
   writeCacheHeader(state);
-  state.write(&sourceSize, sizeof(sourceSize));
-  state.write(&chapters, sizeof(chapters));
-  state.close();
+  if (state.write(&sourceSize, sizeof(sourceSize)) == sizeof(sourceSize) &&
+      state.write(&chapters, sizeof(chapters)) == sizeof(chapters) && state.close()) {
+    writeSourceFingerprint();
+  }
+}
+
+void Fb2::adoptLegacySourceSignature() const {
+  if (legacySourceSignature) writeSourceFingerprint();
+}
+
+void Fb2::writeSourceFingerprint() const {
+  const std::string path = cachePath + SOURCE_IDENTITY_FILE;
+  const std::string temporary = path + ".tmp";
+  HalFile identity;
+  if (!Storage.openFileForWrite("FB2", temporary, identity)) return;
+  const bool wrote = identity.write(&sourceFingerprint, sizeof(sourceFingerprint)) == sizeof(sourceFingerprint);
+  if (!identity.close() || !wrote || !Storage.rename(temporary.c_str(), path.c_str())) {
+    Storage.remove(temporary.c_str());
+  }
 }
 
 void Fb2::maintainCacheBudget() const {
   const std::string indexPath = cacheBaseDir + LRU_INDEX_FILE;
   std::vector<std::string> keys = readLruIndex(indexPath);
+  if (!keys.empty() && keys.front() == cacheKey) return;
 
   keys.erase(std::remove(keys.begin(), keys.end(), cacheKey), keys.end());
   keys.insert(keys.begin(), cacheKey);
@@ -2157,9 +2332,10 @@ bool Fb2::ensurePreparedSource(const std::string& packageCachePath, std::string&
 }
 
 bool Fb2::needsPreparation() {
+  preparedCacheChecked = false;
   HalFile original;
   if (!Storage.openFileForRead("FB2", filepath, original)) return true;
-  sourceSize = original.fileSize64();
+  if (!readSourceIdentity(original)) return true;
   original.close();
   if (!cacheIsCurrent() || !loadMetadataCache()) return true;
 
@@ -2169,8 +2345,23 @@ bool Fb2::needsPreparation() {
   if (!Storage.exists((cachePath + "/.fb2_anchors_ready").c_str())) return true;
   Fb2NavigationIndex navigation;
   Fb2AnchorIndex anchors;
-  return !navigation.open(cachePath + SECTIONS_INDEX_FILE, cachePath + NAVIGATION_INDEX_FILE, PACKAGE_VERSION) ||
-         !anchors.open(cachePath + SECTIONS_INDEX_FILE, cachePath + ANCHORS_INDEX_FILE, PACKAGE_VERSION);
+  if (!navigation.open(cachePath + SECTIONS_INDEX_FILE, cachePath + NAVIGATION_INDEX_FILE, PACKAGE_VERSION) ||
+      !anchors.open(cachePath + SECTIONS_INDEX_FILE, cachePath + ANCHORS_INDEX_FILE, PACKAGE_VERSION)) return true;
+
+  char originalPath[600] = {};
+  const auto originalLength =
+      Storage.readFileToBuffer((cachePath + ORIGINAL_PATH_MARKER_FILE).c_str(), originalPath, sizeof(originalPath));
+  preparedCacheChecked = originalLength < sizeof(originalPath) && filepath.size() == originalLength &&
+                         filepath.compare(0, originalLength, originalPath, originalLength) == 0;
+  return false;
+}
+
+bool Fb2::loadAfterProbe() {
+  if (!std::exchange(preparedCacheChecked, false)) return load();
+  loaded = true;
+  adoptLegacySourceSignature();
+  maintainCacheBudget();
+  return true;
 }
 
 bool Fb2::load(const ProgressFn& onProgress) {
@@ -2197,7 +2388,7 @@ bool Fb2::load(const ProgressFn& onProgress) {
 
   HalFile source;
   if (!Storage.openFileForRead("FB2", filepath, source)) return false;
-  sourceSize = source.fileSize64();
+  if (!readSourceIdentity(source)) return false;
   source.close();
 
   if (cacheIsCurrent() && loadMetadataCache()) {
@@ -2212,6 +2403,7 @@ bool Fb2::load(const ProgressFn& onProgress) {
     { Fb2NavigationIndex navigation; ensureFb2NavigationIndex(cachePath, navigation); }
     { Fb2AnchorIndex anchors; if (!ensureFb2AnchorIndex(cachePath, preparedSource, anchors)) return false; }
     loaded = true;
+    adoptLegacySourceSignature();
     LOG_INF("FB2", "Loaded cached FB2 package: %d chapters", chapterCount);
     maintainCacheBudget();
     if (reportProgress) reportProgress(100);
@@ -2271,8 +2463,10 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
 
   Fb2ScanResult scan;
   std::shared_ptr<BufferedFb2ScanStorage> scanStorage;
-  const auto fail = [this, &scan, &scanStorage]() {
+  ScannedFb2Anchors scannedAnchors(cachePath);
+  const auto fail = [this, &scan, &scanStorage, &scannedAnchors]() {
     // Close scratch handles before removing their directory.
+    scannedAnchors.discard();
     scan.sections.storage.reset();
     scanStorage.reset();
     // Do not throw away progress/statistics if package generation fails after
@@ -2312,11 +2506,16 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
             static_cast<unsigned>(ESP.getMaxAllocHeap()));
     constexpr size_t scanXmlBufferSize = 8 * 1024;
     LOG_INF("FB2-PROF", "scan XML buffer: %u bytes", static_cast<unsigned>(scanXmlBufferSize));
-    if (!parser.scan(reader, scan, scanXmlBufferSize)) {
+    Fb2Parser::AnchorVisitor visitAnchor;
+    if (scannedAnchors.begin()) {
+      visitAnchor = [&scannedAnchors](uint16_t chapter, std::string_view id) { scannedAnchors.add(chapter, id); };
+    }
+    if (!parser.scan(reader, scan, scanXmlBufferSize, visitAnchor)) {
       source.close();
       LOG_ERR("FB2", "FB2 scan failed (not well-formed?): %s", filepath.c_str());
       return fail();
     }
+    scannedAnchors.finishScan();
     source.close();
 #if defined(ENABLE_SERIAL_LOG)
     const uint32_t scanElapsed = millis() - scanStarted;
@@ -2532,6 +2731,11 @@ bool Fb2::convertToPackage(const ProgressFn& onProgress) {
   if (!writeNcxFile(scan) || !scan.good() || !scanStorage->flush()) return fail();
   LOG_INF("FB2-PROF", "package NCX: %lums", millis() - phaseStarted);
   if (onProgress) onProgress(95);
+
+  if (!scannedAnchors.build(cachePath, sourcePath, scan)) {
+    if (CooperativeAbort::wasAborted() || fb2CancellationRequested(nullptr)) return fail();
+    LOG_INF("FB2ANC", "Initial scan did not publish anchors; using section parser");
+  }
 
   phaseStarted = millis();
   saveMetadataCache();
@@ -3653,4 +3857,10 @@ bool Fb2::clearCache() const {
   keys.erase(std::remove(keys.begin(), keys.end(), cacheKey), keys.end());
   writeLruIndex(indexPath, keys);
   return success;
+}
+
+bool Fb2::clearGeneratedCache() const {
+  const bool exists = Storage.exists(cachePath.c_str());
+  if (!exists) return true;
+  return Fb2StateMigration::prepare(cachePath) && clearFb2GeneratedCachePreservingUserState(cachePath);
 }

@@ -1,6 +1,7 @@
 #include <Fb2.h>
 #include <Epub.h>
 #include <GfxRenderer.h>
+#include <CooperativeAbort.h>
 #include <Epub/Section.h>
 #include <Epub/Page.h>
 #include <Fb2AnchorIndex.h>
@@ -74,8 +75,23 @@ int main(int argc, char** argv) {
     Section::BuildParams params;
     params.fontId=1; params.viewportWidth=460; params.viewportHeight=760;
     epub->loadImageManifest();
+    const auto chapterHtml = std::filesystem::path(book.getCachePath()) / "sections" / "html_0.bin";
+    const auto stagingHtml = std::filesystem::path(chapterHtml.string() + ".part");
+    std::filesystem::create_directories(chapterHtml.parent_path());
+    std::ofstream(stagingHtml) << "Interrupted XHTML from an earlier build";
+    Section interrupted(epub, 0, renderer);
+    interrupted.loadSectionFile(params);
+    CooperativeAbort::setLongTaskAbortPredicate(+[] { return true; });
+    const bool createdDespiteAbort = interrupted.createSectionFile(params, {}, true);
+    CooperativeAbort::setLongTaskAbortPredicate(nullptr);
+    CooperativeAbort::clearAborted();
+    require(!createdDespiteAbort && !std::filesystem::exists(chapterHtml) && !std::filesystem::exists(stagingHtml),
+            "an aborted XHTML render does not publish a partial chapter");
+    std::ofstream(stagingHtml) << "Interrupted XHTML from an earlier build";
     Section chapter(epub,0,renderer);
     require(chapter.loadSectionFile(params) || (chapter.createSectionFile(params,{},true) && chapter.loadSectionFile(params)), "build full chapter pages");
+    require(std::filesystem::exists(chapterHtml) && !std::filesystem::exists(stagingHtml),
+            "the next build replaces stale staged XHTML with a complete chapter");
     require(!chapter.isTruncatedCache() && chapter.pageCount>30, "full long chapter must exceed 30 pages without truncation");
     std::set<int> paragraphs;
     int latePage=-1; bool hasNoteLink=false, hasLateLink=false;
@@ -132,22 +148,37 @@ int main(int argc, char** argv) {
     require(warmRange && warmRange->endPage==count,"reloading does not duplicate TOC boundaries");
     auto activeParams=params; activeParams.viewportWidth=450;
     Section active(epub,0,renderer); active.loadSectionFile(activeParams);
+    const auto tocAnchor = epub->getTocItem(0).anchor;
+    require(!tocAnchor.empty(), "TOC uses an explicit chapter anchor");
+    active.watchBuildAnchor(tocAnchor);
     testMillisValue=0; testMillisStep=1;
-    bool sawLivePage=false;
+    std::optional<uint16_t> liveTocPage;
     for(int step=0;step<10000;++step) {
       auto result=active.stepSectionBuild(activeParams,1,{},true);
       require(result!=Section::BuildStep::Failed,"incremental build succeeds");
-      if(active.hasActiveBuild() && active.activeBuildPageCount()>1) {
-        auto live=active.loadPageFromActiveBuild(1);
-        require(live && !live->elements.empty(),"read page from disk index while build active");
-        sawLivePage=true; break;
+      if (!liveTocPage) {
+        liveTocPage = active.getBuiltAnchorPage();
+        if (liveTocPage) {
+          auto live = active.loadPageFromActiveBuild(*liveTocPage);
+          require(live && !live->elements.empty(), "read TOC target while chapter build is active");
+        }
       }
       if(result==Section::BuildStep::Done) break;
     }
+    require(liveTocPage && active.getPageForTocIndex(0) == *liveTocPage,
+            "early TOC target matches the completed section");
+    require(!active.hasActiveBuild() && !active.getBuiltAnchorPage(), "finished build no longer exposes live anchors");
+
+    activeParams.viewportWidth = 440;
+    for (int step = 0; step < 10000; ++step) {
+      const auto result = active.stepSectionBuild(activeParams, 1, {}, true);
+      require(result == Section::BuildStep::More, "replacement build remains active until aborted");
+      if (active.activeBuildPageCount() > 1) break;
+    }
     testMillisStep=0;
-    require(sawLivePage,"incremental build yields while pages available");
     active.abortSectionBuild();
-    require(!active.hasActiveBuild() && !active.loadSectionFile(activeParams),"aborted partial cache is not reusable");
+    require(!active.hasActiveBuild() && !active.getBuiltAnchorPage() && !active.loadSectionFile(activeParams),
+            "aborted partial cache and anchor are not reusable");
     for(const auto& entry:std::filesystem::recursive_directory_iterator(book.getCachePath())) {
       const auto name=entry.path().filename().string();
       require(name.find(".pages.tmp")==std::string::npos && name.find(".paragraphs.tmp")==std::string::npos && name.find(".anchors.tmp")==std::string::npos,"abort removes disk index scratch files");

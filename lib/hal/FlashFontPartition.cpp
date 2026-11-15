@@ -34,10 +34,15 @@ static WriteSession s_ws;
 // --- Internal helpers ---
 
 static const esp_partition_t* findPartition() {
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+  // The Classic's vendor filesystem can share flash with another firmware.
+  return esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "paperio_fonts");
+#else
   const esp_partition_t* part =
       esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
   if (!part) LOG_ERR("FFP", "spiffs partition not found");
   return part;
+#endif
 }
 
 // Read the raw index from flash into a caller-supplied buffer.
@@ -280,8 +285,7 @@ void unmap() {
 // --- Query API ---
 
 size_t capacityBytes() {
-  const esp_partition_t* part =
-      esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "spiffs");
+  const auto* part = findPartition();
   return part ? part->size : 0;
 }
 

@@ -40,8 +40,9 @@ public:
     // Returns false only on a hard read error / clearly-not-FB2 input.
     // Missing individual metadata fields are not an error - FB2 files are
     // frequently missing <document-info>, <lang>, a cover, etc.
+    using AnchorVisitor = std::function<void(uint16_t chapter, std::string_view id)>;
     bool scan(IByteReader& reader, Fb2ScanResult& outResult,
-              size_t xmlBufferSize = 8192);
+              size_t xmlBufferSize = 8192, const AnchorVisitor& visitAnchor = {});
 
     // Emits the metadata cover only when `section` is the first body
     // section. This is intentionally separate from renderSection() so callers

@@ -59,6 +59,8 @@ class Section {
   // In-flight incremental build, owned across stepSectionBuild() calls. Null when no build
   // is live. Heap-owned so the visitor's &lut capture stays stable across ticks.
   std::unique_ptr<BuildState> buildState_;
+  std::string watchedBuildAnchor_;
+  std::optional<uint16_t> watchedBuildPage_;
   // See setExternalBuildScratch. Not owned; must outlive any active build.
   BuildArena* externalScratch_ = nullptr;
   // Outcome of one phase method. Mostly maps to BuildStep: More means the phase yielded
@@ -167,6 +169,9 @@ class Section {
   // stream is exhausted and only Finalize remains). 0 when no build is live. Feeds the
   // DEBUG_BACKGROUND_WORK overlay.
   int activeBuildPercent() const;
+  // Track a single FB2 navigation anchor before starting a fresh incremental build.
+  void watchBuildAnchor(std::string anchor);
+  std::optional<uint16_t> getBuiltAnchorPage() const;
   // Discard an in-flight incremental build: deletes the partially written cache file
   // (its header was never patched, so it must not be left for loadSectionFile to find)
   // and drops the live parser/inflate state. No-op when no build is live. Call on

@@ -34,6 +34,7 @@ class GlobalBookmarkIndex {
 
   // Drop an entry (e.g. when a book is deleted). No-op if not indexed.
   void removeBySourcePath(const std::string& sourcePath);
+  void renameBook(const std::string& oldPath, const std::string& newPath, const std::string& cacheDir);
 
   // Convenience wrapper that pulls bookmarks out of a BookmarkStore and upserts.
   // Also removes the entry if the store is empty.

@@ -21,6 +21,7 @@ struct ZipEntryInfo {
     uint32_t compressedSize = 0;
     uint32_t uncompressedSize = 0;
     uint32_t localHeaderOffset = 0;
+    uint32_t crc32 = 0;
 };
 
 // Scans the archive's Central Directory for the first entry whose filename

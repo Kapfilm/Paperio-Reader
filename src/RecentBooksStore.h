@@ -81,6 +81,7 @@ class RecentBooksStore {
 
   // Remove a book from the recent list by path
   void removeBook(const std::string& path);
+  void renameBook(const std::string& oldPath, const std::string& newPath);
 
   // Get the list of recent books (most recent first)
   const std::vector<RecentBook>& getBooks() const { return recentBooks; }

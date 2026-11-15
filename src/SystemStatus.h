@@ -82,7 +82,7 @@ struct SystemStatus {
       s.displayWidth = 792;
       s.displayHeight = 528;
     } else {
-      s.deviceType = "X4";
+      s.deviceType = gpio.deviceIsX4Classic() ? "X4 Classic" : "X4";
       s.displayWidth = 800;
       s.displayHeight = 480;
     }

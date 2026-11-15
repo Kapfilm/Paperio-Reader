@@ -896,11 +896,12 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book, const OpdsAcqu
             server.username, server.password);
         if (coverDlResult != HttpDownloader::OK) {
           LOG_ERR("OPDS", "Failed to download cover from %s (err %d)", coverUrl.c_str(), (int)coverDlResult);
-          Storage.remove(sidecarPath.c_str());
         }
       }
 
-      clearBookCacheForPath(filename);
+      if (!clearGeneratedBookCacheForPath(filename)) {
+        LOG_ERR("OPDS", "Could not invalidate generated cache for %s", filename.c_str());
+      }
     } else if (acquisition.formatKey == "xtc" || acquisition.formatKey == "xtch") {
       Xtc(filename, "/.crosspoint").clearCache();
     }

@@ -20,6 +20,22 @@ bool TocNavParser::setup() {
 
 TocNavParser::~TocNavParser() = default;
 
+std::string TocNavParser::resolvePath(const std::string& href, const size_t fragment) const {
+  if (fragment == 0) return navPath;
+  return FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(baseContentPath + href.substr(0, fragment)));
+}
+
+bool TocNavParser::isEpubType(std::string_view name) const {
+  if (name == "type") return true;  // Some converters omit the EPUB prefix.
+  const auto colon = name.find(':');
+  if (colon == std::string_view::npos || name.substr(colon + 1) != "type") return false;
+  const auto prefix = name.substr(0, colon);
+  for (auto binding = namespaceBindings.rbegin(); binding != namespaceBindings.rend(); ++binding) {
+    if (binding->prefix == prefix) return binding->epub;
+  }
+  return prefix == "epub";
+}
+
 size_t TocNavParser::write(const uint8_t data) { return write(&data, 1); }
 
 size_t TocNavParser::write(const uint8_t* buffer, const size_t size) {
@@ -41,6 +57,14 @@ size_t TocNavParser::write(const uint8_t* buffer, const size_t size) {
 
 void TocNavParser::startElement(void* userData, const char* name, const char** atts) {
   auto* self = static_cast<TocNavParser*>(userData);
+  ++self->elementDepth;
+  for (int i = 0; atts[i]; i += 2) {
+    const std::string_view attribute = atts[i];
+    if (attribute.starts_with("xmlns:")) {
+      self->namespaceBindings.push_back({std::string(attribute.substr(6)), self->elementDepth,
+                                         std::string_view(atts[i + 1]) == "http://www.idpf.org/2007/ops"});
+    }
+  }
 
   // Track HTML structure loosely - we mainly care about finding <nav epub:type="toc">
   if (strcmp(name, "html") == 0) {
@@ -58,7 +82,7 @@ void TocNavParser::startElement(void* userData, const char* name, const char** a
   if (self->state >= IN_BODY && self->state != IN_NAV_TOC && self->state != IN_NAV_PAGE_LIST &&
       strcmp(name, "nav") == 0) {
     for (int i = 0; atts[i]; i += 2) {
-      if (strcmp(atts[i], "epub:type") == 0 || strcmp(atts[i], "type") == 0) {
+      if (self->isEpubType(atts[i])) {
         if (strcmp(atts[i + 1], "toc") == 0) {
           self->state = IN_NAV_TOC;
           LOG_DBG("NAV", "Found nav toc element");
@@ -149,18 +173,20 @@ void TocNavParser::characterData(void* userData, const char* s, const int len) {
 
 void TocNavParser::endElement(void* userData, const char* name) {
   auto* self = static_cast<TocNavParser*>(userData);
+  while (!self->namespaceBindings.empty() && self->namespaceBindings.back().depth == self->elementDepth) {
+    self->namespaceBindings.pop_back();
+  }
+  if (self->elementDepth) --self->elementDepth;
 
   // ---- Page-list nav close handlers (checked before TOC handlers because IN_PL_* states
   // sort after IN_NAV_TOC, but we want exact-state matching either way).
   if (strcmp(name, "a") == 0 && self->state == IN_PL_ANCHOR) {
     if (self->pageListSink && !self->currentPageLabel.empty() && !self->currentPageHref.empty()) {
-      const std::string rawTarget = self->baseContentPath + self->currentPageHref;
-      const size_t pos = rawTarget.find('#');
-      const std::string rawPath = pos == std::string::npos ? rawTarget : rawTarget.substr(0, pos);
-      std::string href = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(rawPath));
+      const size_t pos = self->currentPageHref.find('#');
+      const auto href = self->resolvePath(self->currentPageHref, pos);
       std::string anchor;
       if (pos != std::string::npos) {
-        anchor = FsHelpers::decodeUriEscapes(rawTarget.substr(pos + 1));
+        anchor = FsHelpers::decodeUriEscapes(self->currentPageHref.substr(pos + 1));
       }
       self->pageListSink->addEntry(href, anchor, self->currentPageLabel);
     }
@@ -207,14 +233,12 @@ void TocNavParser::endElement(void* userData, const char* name) {
   if (strcmp(name, "a") == 0 && self->state == IN_ANCHOR) {
     // Create TOC entry when closing anchor tag (we have all data now)
     if (!self->currentLabel.empty() && !self->currentHref.empty()) {
-      const std::string rawTarget = self->baseContentPath + self->currentHref;
-      const size_t pos = rawTarget.find('#');
-      const std::string rawPath = pos == std::string::npos ? rawTarget : rawTarget.substr(0, pos);
-      std::string href = FsHelpers::normalisePath(FsHelpers::decodeUriEscapes(rawPath));
+      const size_t pos = self->currentHref.find('#');
+      const auto href = self->resolvePath(self->currentHref, pos);
       std::string anchor;
 
       if (pos != std::string::npos) {
-        anchor = FsHelpers::decodeUriEscapes(rawTarget.substr(pos + 1));
+        anchor = FsHelpers::decodeUriEscapes(self->currentHref.substr(pos + 1));
       }
 
       if (self->cache) {

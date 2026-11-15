@@ -287,6 +287,7 @@ bool findFb2EntryInZip(IByteReader& zip, ZipEntryInfo& outEntry) {
             outEntry.compressedSize = compSize;
             outEntry.uncompressedSize = uncompSize;
             outEntry.localHeaderOffset = localOffset;
+            outEntry.crc32 = le32(header.data() + 16);
             return true;
         }
 

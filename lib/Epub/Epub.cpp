@@ -367,10 +367,9 @@ bool Epub::parseTocNavFile() const {
 
   // Note: We can't use `contentBasePath` here as the nav file may be in a different folder to the content.opf
   // and the HTMLX nav file will have hrefs relative to itself
-  const std::string navContentBasePath = tocNavItem.substr(0, tocNavItem.find_last_of('/') + 1);
   // Stream <nav epub:type="page-list"> entries straight to pagelist.bin (see PageListSink).
   PageListSink navPageListSink(getCachePath());
-  TocNavParser navParser(navContentBasePath, navSize, bookMetadataCache.get(), &navPageListSink);
+  TocNavParser navParser(tocNavItem, navSize, bookMetadataCache.get(), &navPageListSink);
 
   if (!navParser.setup()) {
     LOG_ERR("EBP", "Could not setup toc nav parser");
@@ -680,7 +679,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
       writeStoredFingerprint(zipFp);
     } else if (storedFp != zipFp) {
       LOG_INF("EBP", "Book content changed at same path, rebuilding cache");
-      clearCache(false);
+      if (!clearCache(false, true)) return false;
     }
   }
 
@@ -883,7 +882,7 @@ bool Epub::loadForMetadata() {
   return true;
 }
 
-bool Epub::clearCache(const bool preserveThumbs) const {
+bool Epub::clearCache(const bool preserveThumbs, const bool preserveUserState) const {
   if (!Storage.exists(cachePath.c_str())) {
     LOG_DBG("EPB", "Cache does not exist, no action needed");
     return true;
@@ -893,24 +892,26 @@ bool Epub::clearCache(const bool preserveThumbs) const {
   // EPUB-derived caches. Never remove that directory from the Epub layer;
   // Fb2::clearCache() owns full-package invalidation and preserves user state.
   if (isFb2Origin) {
-    Storage.removeDir((cachePath + "/sections").c_str());
-    Storage.removeDir((cachePath + "/spine_src").c_str());
-    Storage.removeDir((cachePath + "/img").c_str());
+    bool success = true;
+    for (const auto* directory : {"/sections", "/spine_src", "/img"}) {
+      const std::string path = cachePath + directory;
+      if (Storage.exists(path.c_str()) && !Storage.removeDir(path.c_str())) success = false;
+    }
     for (const char* name : {"/book.bin", "/spine.bin.tmp", "/toc.bin.tmp", "/css_rules.cache", "/images.bin",
                              "/footnotes.bin", "/pagelist.bin"}) {
       const std::string path = cachePath + name;
-      if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+      if (Storage.exists(path.c_str()) && !Storage.remove(path.c_str())) success = false;
     }
     if (!preserveThumbs) {
       for (const char* name : {"/cover.bmp", "/cover_crop.bmp", "/cover.img"}) {
         const std::string path = cachePath + name;
-        if (Storage.exists(path.c_str())) Storage.remove(path.c_str());
+        if (Storage.exists(path.c_str()) && !Storage.remove(path.c_str())) success = false;
       }
     }
-    return true;
+    return success;
   }
 
-  if (!preserveThumbs) {
+  if (!preserveThumbs && !preserveUserState) {
     if (!Storage.removeDir(cachePath.c_str())) {
       LOG_ERR("EPB", "Failed to clear cache");
       return false;
@@ -919,11 +920,6 @@ bool Epub::clearCache(const bool preserveThumbs) const {
     return true;
   }
 
-  // Delete sections subdirectory (bulk removal).
-  Storage.removeDir((cachePath + "/sections").c_str());
-
-  // Iterate the cache root and remove parsing artifacts, but preserve thumbnail
-  // and cover BMPs so the home screen doesn't have to regenerate them (slow).
   FsFile dir = Storage.open(cachePath.c_str());
   if (!dir || !dir.isDirectory()) {
     LOG_ERR("EPB", "Failed to open cache dir for selective clear");
@@ -934,23 +930,33 @@ bool Epub::clearCache(const bool preserveThumbs) const {
   char nameBuf[128];
   bool anyFailed = false;
   for (FsFile f = dir.openNextFile(); f; f = dir.openNextFile()) {
-    f.getName(nameBuf, sizeof(nameBuf));
+    const size_t nameLength = f.getName(nameBuf, sizeof(nameBuf));
+    const bool isDirectory = f.isDirectory();
     f.close();
+    if (!nameLength || nameLength == sizeof(nameBuf) - 1) {
+      anyFailed = true;
+      continue;
+    }
 
     const std::string name(nameBuf);
-    // Keep thumbnail and cover BMPs, and the cached raw cover image — all are
-    // expensive to regenerate (require ZIP decompression or format conversion).
-    if (FsHelpers::hasBmpExtension(name) || name == "cover.img" || "/" + name == CoverCacheVersion::MARKER) continue;
+    if (preserveThumbs && (FsHelpers::hasBmpExtension(name) || name == "cover.img" ||
+                           "/" + name == CoverCacheVersion::MARKER)) {
+      continue;
+    }
+    if (preserveUserState && (name == "progress.bin" || name == "progress.bin.bak" || name == "stats.bin" ||
+                              name == "bookmarks.bin" || name == "reader_settings.bin")) {
+      continue;
+    }
 
     const std::string fullPath = cachePath + "/" + name;
-    if (!Storage.remove(fullPath.c_str())) {
+    if (!(isDirectory ? Storage.removeDir(fullPath.c_str()) : Storage.remove(fullPath.c_str()))) {
       LOG_ERR("EPB", "Failed to remove cache file: %s", fullPath.c_str());
       anyFailed = true;
     }
   }
   dir.close();
 
-  LOG_DBG("EPB", "Cache cleared successfully");
+  if (!anyFailed) LOG_DBG("EPB", "Cache cleared successfully");
   return !anyFailed;
 }
 

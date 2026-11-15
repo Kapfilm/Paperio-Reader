@@ -64,6 +64,11 @@ void WifiSelectionActivity::onEnter() {
         LOG_DBG("WIFI", "EVT got_ip at %lu ms", millis() - connectionStartTime);
       },
       ARDUINO_EVENT_WIFI_STA_GOT_IP);
+  evtIdDisconnected = WiFi.onEvent(
+      [](WiFiEvent_t, WiFiEventInfo_t info) {
+        LOG_INF("WIFI", "Station disconnected (reason=%u)", info.wifi_sta_disconnected.reason);
+      },
+      ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
 
   // Load saved WiFi credentials - SD card operations need lock as we use SPI
   // for both
@@ -137,6 +142,11 @@ void WifiSelectionActivity::onExit() {
     evtIdGotIp = 0;
   }
 
+  if (evtIdDisconnected != 0) {
+    WiFi.removeEvent(evtIdDisconnected);
+    evtIdDisconnected = 0;
+  }
+
   LOG_DBG("WIFI", "Free heap at onExit start: %d bytes", ESP.getFreeHeap());
 
   // Stop any ongoing WiFi scan
@@ -160,7 +170,7 @@ void WifiSelectionActivity::startWifiScan() {
   networks.clear();
   requestUpdate();
 
-  // Set WiFi mode to station
+  powerManager.ensureFullSpeedForRadio();
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   delay(100);
@@ -376,9 +386,7 @@ void WifiSelectionActivity::prepareForConnect() {
     WiFi.mode(WIFI_STA);
   }
 
-  // Only do the heavy disconnect(true,true) — which erases NVS and tears down the WPA
-  // state machine — when there's actually something to tear down. From a fresh/idle
-  // state it's a pure cost (~50–80 ms on this SoC).
+  // Restart the station only when a previous association left connection state.
   const wl_status_t status = WiFi.status();
   const bool needsReset = (status == WL_CONNECTED) || (status == WL_CONNECT_FAILED) || (status == WL_CONNECTION_LOST) ||
                           (status == WL_NO_SSID_AVAIL);
@@ -444,19 +452,18 @@ void WifiSelectionActivity::issueWifiBegin(bool useHint) {
 
   const char* pwd = (selectedRequiresPassword && !enteredPassword.empty()) ? enteredPassword.c_str() : nullptr;
   const unsigned long preBeginMs = millis() - connectionStartTime;
+  wl_status_t result;
   if (currentAttemptChannel != 0) {
     LOG_DBG("WIFI", "WiFi.begin -> %s ch=%d bssid=%02x:%02x:%02x:%02x:%02x:%02x dhcp=yes (pre-begin %lu ms)",
             selectedSSID.c_str(), currentAttemptChannel, currentAttemptBssid[0], currentAttemptBssid[1],
             currentAttemptBssid[2], currentAttemptBssid[3], currentAttemptBssid[4], currentAttemptBssid[5], preBeginMs);
-    WiFi.begin(selectedSSID.c_str(), pwd, currentAttemptChannel, currentAttemptBssid, true);
+    result = WiFi.begin(selectedSSID.c_str(), pwd, currentAttemptChannel, currentAttemptBssid, true);
   } else {
     LOG_DBG("WIFI", "WiFi.begin -> %s (no hint, pre-begin %lu ms)", selectedSSID.c_str(), preBeginMs);
-    if (pwd) {
-      WiFi.begin(selectedSSID.c_str(), pwd);
-    } else {
-      WiFi.begin(selectedSSID.c_str());
-    }
+    result = WiFi.begin(selectedSSID.c_str(), pwd);
   }
+  LOG_INF("WIFI", "Station start status=%d mode=%d cpu=%lu MHz", static_cast<int>(result),
+          static_cast<int>(WiFi.getMode()), static_cast<unsigned long>(getCpuFrequencyMhz()));
 }
 
 bool WifiSelectionActivity::checkCaptivePortal() {
@@ -912,7 +919,8 @@ void WifiSelectionActivity::renderNetworkList() const {
   const bool hasSavedPassword = !networks.empty() && networks[selectedNetworkIndex].hasSavedPassword;
   const char* optionsLabel = hasSavedPassword ? tr(STR_OPTIONS_BUTTON) : "";
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_CONNECT), optionsLabel, tr(STR_RETRY));
+  const char* retryLabel = I18N.getLanguage() == Language::RU ? tr(STR_WIFI_RETRY_BUTTON) : tr(STR_RETRY);
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_CONNECT), optionsLabel, retryLabel);
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
@@ -1013,50 +1021,40 @@ void WifiSelectionActivity::renderConnectionFailed() const {
 }
 
 void WifiSelectionActivity::renderForgetPrompt() const {
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
-  const auto height = renderer.getLineHeight(UI_10_FONT_ID);
-  const auto top = (pageHeight - height * 3) / 2;
-
-  renderer.drawCenteredText(UI_12_FONT_ID, top - 40, tr(STR_NETWORK_OPTIONS), true, EpdFontFamily::BOLD);
-
-  std::string ssidInfo = std::string(tr(STR_NETWORK_PREFIX)) + selectedSSID;
-  if (ssidInfo.length() > 28) {
-    ssidInfo.replace(25, ssidInfo.length() - 25, "...");
-  }
-  renderer.drawCenteredText(UI_10_FONT_ID, top, ssidInfo.c_str());
-
-  // Contextual description for the highlighted action (Cancel has none).
-  const char* desc = forgetPromptSelection == 1   ? tr(STR_RESET_INFO_DESC)
-                     : forgetPromptSelection == 2 ? tr(STR_FORGET_AND_REMOVE)
-                                                  : "";
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int hintWidth = pageWidth - 2 * metrics.contentSidePadding;
-  const auto descLines = renderer.wrappedText(UI_10_FONT_ID, desc, hintWidth, 3);
-  int descY = top + 40;
-  for (const auto& line : descLines) {
-    renderer.drawCenteredText(UI_10_FONT_ID, descY, line.c_str());
-    descY += height;
+  const int width = renderer.getScreenWidth() - 2 * metrics.contentSidePadding;
+  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  const int titleHeight = renderer.getLineHeight(UI_12_FONT_ID);
+  const int gap = metrics.verticalSpacing;
+  constexpr int actionCount = 3;
+  constexpr int descriptionRows = 4;
+  const int groupHeight = titleHeight + (1 + actionCount + descriptionRows) * lineHeight + 3 * gap;
+  int y = (renderer.getScreenHeight() - groupHeight) / 2;
+
+  renderer.drawCenteredText(UI_12_FONT_ID, y, tr(STR_NETWORK_OPTIONS), true, EpdFontFamily::BOLD);
+  y += titleHeight + gap;
+  const std::string ssidInfo = std::string(tr(STR_NETWORK_PREFIX)) + selectedSSID;
+  const std::string ssidLabel = renderer.truncatedText(UI_10_FONT_ID, ssidInfo.c_str(), width);
+  renderer.drawCenteredText(UI_10_FONT_ID, y, ssidLabel.c_str());
+  y += lineHeight + gap;
+
+  const char* const actions[actionCount] = {tr(STR_CANCEL), tr(STR_RESET_INFO_BUTTON), tr(STR_FORGET_BUTTON)};
+  for (int i = 0; i < actionCount; ++i) {
+    const std::string label = forgetPromptSelection == i ? "[" + std::string(actions[i]) + "]" : actions[i];
+    const std::string fitted = renderer.truncatedText(UI_10_FONT_ID, label.c_str(), width);
+    renderer.drawCenteredText(UI_10_FONT_ID, y, fitted.c_str());
+    y += lineHeight;
   }
 
-  // Draw Cancel / Reset info / Forget buttons
-  const int buttonY = top + 80;
-  constexpr int buttonWidth = 150;
-  constexpr int buttonSpacing = 20;
-  constexpr int totalWidth = buttonWidth * 3 + buttonSpacing * 2;
-  const int startX = (pageWidth - totalWidth) / 2;
-  const char* const buttonLabels[3] = {tr(STR_CANCEL), tr(STR_RESET_INFO_BUTTON), tr(STR_FORGET_BUTTON)};
-  for (int i = 0; i < 3; i++) {
-    const int x = startX + i * (buttonWidth + buttonSpacing);
-    if (forgetPromptSelection == i) {
-      std::string text = "[" + std::string(buttonLabels[i]) + "]";
-      renderer.drawText(UI_10_FONT_ID, x, buttonY, text.c_str());
-    } else {
-      renderer.drawText(UI_10_FONT_ID, x + 4, buttonY, buttonLabels[i]);
-    }
+  y += gap;
+  const char* description = forgetPromptSelection == 1   ? tr(STR_RESET_INFO_DESC)
+                            : forgetPromptSelection == 2 ? tr(STR_FORGET_AND_REMOVE)
+                                                         : "";
+  for (const auto& line : renderer.wrappedText(UI_10_FONT_ID, description, width, descriptionRows)) {
+    renderer.drawCenteredText(UI_10_FONT_ID, y, line.c_str());
+    y += lineHeight;
   }
 
-  // Use centralized button hints
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

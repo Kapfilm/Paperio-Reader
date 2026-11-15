@@ -3,6 +3,8 @@
 #include <SaxParser/SaxParser.h>
 
 #include <string>
+#include <string_view>
+#include <vector>
 
 class BookMetadataCache;
 class PageListSink;
@@ -26,7 +28,8 @@ class TocNavParser final : public Print {
   };
 
  private:
-  const std::string& baseContentPath;
+  const std::string& navPath;
+  const std::string baseContentPath;
   size_t remainingSize;
   SaxParser saxParser_;
   ParserState state = START;
@@ -48,14 +51,28 @@ class TocNavParser final : public Print {
   std::string currentPageLabel;
   std::string currentPageHref;
 
+  struct NamespaceBinding {
+    std::string prefix;
+    unsigned depth;
+    bool epub;
+  };
+  std::vector<NamespaceBinding> namespaceBindings;
+  unsigned elementDepth = 0;
+
+  bool isEpubType(std::string_view name) const;
   static void startElement(void* userData, const char* name, const char** atts);
   static void characterData(void* userData, const char* s, int len);
   static void endElement(void* userData, const char* name);
+  std::string resolvePath(const std::string& href, size_t fragment) const;
 
  public:
-  explicit TocNavParser(const std::string& baseContentPath, const size_t xmlSize, BookMetadataCache* cache,
+  explicit TocNavParser(const std::string& navPath, const size_t xmlSize, BookMetadataCache* cache,
                         PageListSink* pageListSink)
-      : baseContentPath(baseContentPath), remainingSize(xmlSize), cache(cache), pageListSink(pageListSink) {}
+      : navPath(navPath),
+        baseContentPath(navPath.substr(0, navPath.find_last_of('/') + 1)),
+        remainingSize(xmlSize),
+        cache(cache),
+        pageListSink(pageListSink) {}
   ~TocNavParser() override;
 
   bool setup();
