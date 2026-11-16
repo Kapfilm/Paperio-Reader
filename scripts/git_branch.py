@@ -240,7 +240,7 @@ def inject_version(env):
 
     # Stable releases must report the same version as their GitHub tag. This
     # avoids publishing a new OTA asset with a stale version from platformio.ini.
-    if env['PIOENV'] == 'gh_release':
+    if env['PIOENV'] in ('gh_release', 'x4c_release'):
         version_string = get_release_version(project_dir)
         env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
         print(f'CrossPoint build version: {version_string}')

@@ -15,18 +15,26 @@ def main():
     output.mkdir(exist_ok=True)
     for name in ("firmware.bin", "bootloader.bin", "partitions.bin", "firmware.elf", "firmware.map"):
         shutil.copyfile(source / name, output / name)
-    firmware = (output / "firmware.bin").read_bytes()
-    if b"CrossPoint version: " + version.encode() + b"\0" not in firmware:
-        raise SystemExit("Firmware does not contain the exact release version")
+    shutil.copyfile(Path(".pio/build/x4c_release/firmware.bin"), output / "firmware-x4c.bin")
+    version_marker = b"CrossPoint version: " + version.encode() + b"\0"
+    applications = []
+    for name, devices in (("firmware.bin", ["X3", "X4"]), ("firmware-x4c.bin", ["X4 Classic"])):
+        firmware = (output / name).read_bytes()
+        if version_marker not in firmware:
+            raise SystemExit(f"{name} does not contain the exact release version")
+        applications.append({
+            "file": name,
+            "bytes": len(firmware),
+            "sha256": hashlib.sha256(firmware).hexdigest(),
+            "devices": devices,
+            "hardware_tested": False,
+        })
     shutil.copyfile(output / "firmware.bin", output / f"firmware-Paperio-Reader-{version}.bin")
     manifest = {
         "version": version,
         "source_commit": os.environ["GITHUB_SHA"],
-        "file": "firmware.bin",
-        "bytes": len(firmware),
-        "sha256": hashlib.sha256(firmware).hexdigest(),
-        "devices": ["X3", "X4"],
-        "hardware_tested": False,
+        **applications[0],
+        "applications": applications,
     }
     (output / "firmware-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     assets = sorted(path for path in output.iterdir() if path.is_file() and path.name != "SHA256SUMS")

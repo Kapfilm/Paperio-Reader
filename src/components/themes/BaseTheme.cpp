@@ -197,8 +197,9 @@ void BaseTheme::drawCapsuleButtonHints(GfxRenderer& renderer, const char* btn1, 
     if (hasLabel) {
       const int height = buttonHeight;
       const int y = bottomY - height;
-      renderer.fillRoundedRect(x, y, width, height, height / 2, Color::White);
-      renderer.drawRoundedRect(x, y, width, height, 1, height / 2, true);
+      const int radius = classic ? button_hint_layout::sideHintCornerRadius : height / 2;
+      renderer.fillRoundedRect(x, y, width, height, radius, Color::White);
+      renderer.drawRoundedRect(x, y, width, height, 1, radius, true);
       renderer.drawFittedCaption(fontId, x + textPadding, y, width - 2 * textPadding, height, label);
     } else {
       const int screenBottom = classic ? bottomY : renderer.getScreenHeight();
