@@ -163,17 +163,26 @@ void BaseTheme::drawCapsuleButtonHints(GfxRenderer& renderer, const char* btn1, 
   const auto orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
-  constexpr int bottom = 3;
+  const bool classic = gpio.deviceIsX4Classic();
+  const int bottom = button_hint_layout::bottomInset(classic);
   constexpr int emptyHeight = 10;
   const int buttonHeight = reservedHeight - bottom;
   const int bottomY = renderer.getScreenHeight() - bottom;
   const char* labels[] = {btn1, btn2, btn3, btn4};
+  std::array<std::string, 4> shortened{};
+  const int screenWidth = renderer.getScreenWidth();
+  const int captionWidth = button_hint_layout::standardCaptionWidth(screenWidth);
   constexpr auto style = EpdFontFamily::REGULAR;
   std::array<int, 4> textWidths{};
   for (int i = 0; i < 4; ++i) {
-    if (labels[i] && *labels[i]) textWidths[i] = renderer.getTextWidth(fontId, labels[i], style);
+    if (!labels[i] || !*labels[i]) continue;
+    textWidths[i] = renderer.getTextWidth(fontId, labels[i], style);
+    if (textWidths[i] > captionWidth) {
+      shortened[i] = renderer.truncatedText(fontId, labels[i], captionWidth, style);
+      labels[i] = shortened[i].c_str();
+      textWidths[i] = renderer.getTextWidth(fontId, labels[i], style);
+    }
   }
-  const int screenWidth = renderer.getScreenWidth();
   const auto widths = button_hint_layout::capsuleWidths(screenWidth, buttonHeight, textWidths, equalWidths);
   const int widestCaption = *std::max_element(textWidths.begin(), textWidths.end());
   const int textPadding = equalWidths
@@ -192,7 +201,7 @@ void BaseTheme::drawCapsuleButtonHints(GfxRenderer& renderer, const char* btn1, 
       renderer.drawRoundedRect(x, y, width, height, 1, height / 2, true);
       renderer.drawFittedCaption(fontId, x + textPadding, y, width - 2 * textPadding, height, label);
     } else {
-      const int screenBottom = renderer.getScreenHeight();
+      const int screenBottom = classic ? bottomY : renderer.getScreenHeight();
       const int y = screenBottom - emptyHeight;
       constexpr int radius = emptyHeight / 2;
       renderer.fillRoundedRect(x, y, width, emptyHeight, radius, true, true, false, false, Color::White);
@@ -219,7 +228,7 @@ void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
 
   if (gpio.hasEdgeSideButtons()) {
     // Up is on the left edge and Down is on the right edge.
-    constexpr int edgeButtonY = 155;
+    const int edgeButtonY = button_hint_layout::edgeButtonTop(gpio.deviceIsX4Classic());
 
     if (topBtn != nullptr && topBtn[0] != '\0') {
       const int leftX = buttonMargin;

@@ -157,7 +157,7 @@ bool BmpViewerActivity::renderBmpImage(const bool showControls) {
     if (!showControls) return;
     const char* modeLabel =
         bmpHasGreyscale ? (grayscaleDisplay ? tr(STR_IMAGE_DISPLAY_BW) : tr(STR_IMAGE_DISPLAY_GRAYSCALE)) : "";
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), modeLabel, "", tr(STR_SET_SLEEP_SCREEN));
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), modeLabel, "", tr(STR_SLEEP_SCREEN_BUTTON));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   };
 
@@ -229,9 +229,9 @@ bool BmpViewerActivity::renderDecodedImage(const bool showControls) {
     const char* modeLabel = grayscaleDisplay ? tr(STR_IMAGE_DISPLAY_BW) : tr(STR_IMAGE_DISPLAY_GRAYSCALE);
 #ifdef ENABLE_IMAGE_DITHERING_EXTENSION
     const char* btn3Label = grayscaleDisplay ? I18N.get(getCurrentDitherModeLabel()) : "";
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), modeLabel, btn3Label, tr(STR_SET_SLEEP_SCREEN));
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), modeLabel, btn3Label, tr(STR_SLEEP_SCREEN_BUTTON));
 #else
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), modeLabel, "", tr(STR_SET_SLEEP_SCREEN));
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), modeLabel, "", tr(STR_SLEEP_SCREEN_BUTTON));
 #endif
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   };
@@ -303,7 +303,7 @@ StrId BmpViewerActivity::getCurrentDitherModeLabel() const {
     case ImageDitherMode::Atkinson:
       return StrId::STR_IMAGE_DITHER_ATKINSON;
     case ImageDitherMode::DiffusedBayer:
-      return StrId::STR_IMAGE_DITHER_DIFFUSED_BAYER;
+      return StrId::STR_IMAGE_DITHER_DIFFUSED_BUTTON;
     case ImageDitherMode::Bayer:
     case ImageDitherMode::COUNT:
     default:

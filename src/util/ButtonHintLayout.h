@@ -9,6 +9,13 @@ inline constexpr int edge = 4;
 inline constexpr int gap = 6;
 inline constexpr int maxTextPadding = 4;
 
+inline constexpr int bottomInset(bool classic) { return classic ? 11 : 3; }
+inline constexpr int edgeButtonTop(bool classic) { return classic ? 171 : 155; }
+
+inline constexpr int standardCaptionWidth(int screenWidth) {
+  return (screenWidth - 2 * edge - 3 * gap) / 4 - 2 * maxTextPadding;
+}
+
 inline int captionPadding(int screenWidth, const std::array<int, 4>& textWidths) {
   const int available = screenWidth - 2 * edge - 3 * gap;
   const int textWidth = std::accumulate(textWidths.begin(), textWidths.end(), 0);

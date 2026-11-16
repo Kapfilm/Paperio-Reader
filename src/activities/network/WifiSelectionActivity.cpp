@@ -1104,7 +1104,7 @@ void WifiSelectionActivity::renderCaptivePortal() const {
     y += lhSmall;
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_CAPTIVE_PORTAL_DONE), "", "");
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_DONE), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 

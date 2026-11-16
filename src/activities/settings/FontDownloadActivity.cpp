@@ -980,7 +980,7 @@ void FontDownloadActivity::render(RenderLock&&) {
     // or still empty (if the failure was in the stash itself); either way the
     // cache reflects the last update from the download attempt.
     const bool canResume = pendingErrorAction_ == PendingFontAction::Download && downloadingFamilyHasResumable_;
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), canResume ? tr(STR_RESUME) : tr(STR_RETRY), "", "");
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), canResume ? tr(STR_RESUME_BUTTON) : tr(STR_RETRY), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   }
 

@@ -212,7 +212,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
     });
   }
 
-  const char* btn2 = store.getBooks().empty() ? "" : tr(STR_READING_STATS_BOOK_LIST);
+  const char* btn2 = store.getBooks().empty() ? "" : tr(STR_BOOKS);
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), btn2, "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 

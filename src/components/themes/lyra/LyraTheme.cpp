@@ -39,6 +39,7 @@
 #include "fontIds.h"
 #include "util/BookArchiveUtils.h"
 #include "util/TabBarLayout.h"
+#include "util/ButtonHintLayout.h"
 
 // Internal constants
 namespace {
@@ -469,7 +470,7 @@ void LyraTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
 
   if (gpio.hasEdgeSideButtons()) {
     // Up is on the left edge and Down is on the right edge.
-    constexpr int edgeButtonY = 155;
+    const int edgeButtonY = button_hint_layout::edgeButtonTop(gpio.deviceIsX4Classic());
 
     if (topBtn != nullptr && topBtn[0] != '\0') {
       renderer.drawRoundedRect(buttonMargin, edgeButtonY, buttonWidth, buttonHeight, 1, cornerRadius, false, true, false,
