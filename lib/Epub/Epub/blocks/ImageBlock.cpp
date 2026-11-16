@@ -35,20 +35,27 @@ ImageBlock::ImageBlock(const std::string& imagePath, int16_t width, int16_t heig
       epubFilePath_(epubFilePath),
       epubEntryPath_(epubEntryPath) {}
 
-bool ImageBlock::ensureExtracted() const {
-  if (Storage.exists(imagePath.c_str())) return true;
-
-  // FB2 images live as base64 payloads in the source document rather than as
-  // ordinary ZIP entries. Decode the indexed payload directly before falling
-  // back to EPUB extraction. The helper rejects non-FB2 cache paths cheaply.
-  if (Fb2::decodeImageOnDemand(imagePath)) return true;
+std::string ImageBlock::resolveImageSource() const {
+  if (Storage.exists(imagePath.c_str())) return imagePath;
 
   if (epubFilePath_.empty() || epubEntryPath_.empty()) {
-    LOG_ERR("IMG", "Image missing and no EPUB source: %s", imagePath.c_str());
-    return false;
+    // Some serialized FB2 blocks refer directly to an image in the package.
+    if (Fb2::decodeImageOnDemand(imagePath)) return imagePath;
+    LOG_ERR("IMG", "Image missing and no book source: %s", imagePath.c_str());
+    return {};
+  }
+  Epub epub(epubFilePath_, "/.crosspoint");
+  if (epub.isFb2Package()) {
+    const std::string entry = FsHelpers::normalisePath(epubEntryPath_);
+    if (entry.starts_with("OEBPS/images/")) {
+      // The raw image may already have been decoded while probing its dimensions.
+      // Only the pixel cache needs the layout-specific imagePath.
+      const std::string raw = epubFilePath_ + "/" + entry;
+      if (Storage.exists(raw.c_str()) || Fb2::decodeImageOnDemand(raw)) return raw;
+      return {};
+    }
   }
   LOG_DBG("IMG", "Lazy-extracting image: %s -> %s", epubEntryPath_.c_str(), imagePath.c_str());
-  Epub epub(epubFilePath_, "/.crosspoint");
   // Extraction runs inside the reader's warm pass, which has already borrowed the secondary
   // framebuffer as image_scratch for the decoders — but the ZIP inflate ring was the one 32 KB
   // contiguous block in the image path still taken from the heap, and it is the first to fail
@@ -58,10 +65,10 @@ bool ImageBlock::ensureExtracted() const {
   BuildArena* const arena = image_scratch::canServe(Epub::EXTRACT_ARENA_BYTES) ? image_scratch::get() : nullptr;
   if (!epub.extractItemToFile(epubEntryPath_, imagePath, arena)) {
     LOG_ERR("IMG", "Lazy extraction failed: %s", epubEntryPath_.c_str());
-    return false;
+    return {};
   }
   LOG_DBG("IMG", "Lazy extraction done: %s", imagePath.c_str());
-  return true;
+  return imagePath;
 }
 
 bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str()); }
@@ -114,7 +121,7 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   // content with known rendering bugs baked in (e.g. the MCU-order dither grid),
   // and would otherwise be replayed forever without re-decoding. Delete it so
   // the caller falls through to a fresh decode, which rewrites the cache.
-  uint16_t magic;
+  uint16_t magic = 0;
   if (cacheFile.read(&magic, 2) != 2 || magic != PixelCache::PXC_MAGIC) {
     cacheFile.close();
     LOG_INF("IMG", "Stale/unversioned pixel cache (0x%04X), deleting: %s", magic, cachePath.c_str());
@@ -130,7 +137,7 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
   // Verify width is close (allow 1 pixel tolerance for rounding differences).
   // Height tolerance is widened to allow cropped renders (srcHeight < cachedHeight).
-  if (abs(cachedWidth - expectedWidth) > 1) {
+  if (cachedWidth == 0 || abs(cachedWidth - expectedWidth) > 1) {
     LOG_ERR("IMG", "Cache width mismatch: %d vs %d", cachedWidth, expectedWidth);
     cacheFile.close();
     return false;
@@ -146,6 +153,8 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
   // overrunning the framebuffer when a 1-pixel cache rounding difference occurs.
   const int maxRows = std::min(static_cast<int>(cachedHeight) - srcYOffset, expectedHeight - srcYOffset);
   const int rowsToRender = (srcHeight > 0) ? std::min(srcHeight, maxRows) : maxRows;
+
+  if (rowsToRender <= 0) return false;
 
   LOG_DBG("IMG", "Loading from cache: %s (%dx%d) srcY=%d rows=%d", cachePath.c_str(), cachedWidth, cachedHeight,
           srcYOffset, rowsToRender);
@@ -312,7 +321,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y, const b
   const std::string cachePath = monochromeOutput ? getBwCachePath(imagePath) : getGrayscaleCachePath(imagePath);
 
   // Try to render from pixel cache first (always, regardless of forceLoad)
-  if (renderFromCache(renderer, cachePath, x, y, width, renderedHeight, srcYOffset_, srcHeight_)) {
+  if (renderFromCache(renderer, cachePath, x, y, width, height, srcYOffset_, srcHeight_)) {
     return;
   }
 
@@ -323,15 +332,19 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y, const b
     return;
   }
 
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+  const auto extractStart = millis();
+#endif
   // Ensure the image is extracted to SD (lazy extraction if not already present).
-  if (!ensureExtracted()) {
+  const std::string sourcePath = resolveImageSource();
+  if (sourcePath.empty()) {
     LOG_ERR("IMG", "Image unavailable: %s", imagePath.c_str());
     return;
   }
 
   // Proceed with full decode
   FsFile file;
-  if (!Storage.openFileForRead("IMG", imagePath, file)) {
+  if (!Storage.openFileForRead("IMG", sourcePath, file)) {
     LOG_ERR("IMG", "Image file not found after extraction: %s", imagePath.c_str());
     return;
   }
@@ -365,7 +378,14 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y, const b
 
   LOG_DBG("IMG", "Using %s decoder", decoder->getFormatName());
 
-  bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+  const auto decodeStart = millis();
+#endif
+  const bool success = decoder->decodeToFramebuffer(sourcePath, renderer, config);
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+  LOG_INF("IMG", "Image timing: format=%s extractMs=%lu decodeMs=%lu ok=%d", decoder->getFormatName(),
+          decodeStart - extractStart, millis() - decodeStart, success ? 1 : 0);
+#endif
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
   }

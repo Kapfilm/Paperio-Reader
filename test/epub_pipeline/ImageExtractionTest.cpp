@@ -20,6 +20,7 @@
 
 #include "BuildArena.h"
 #include "Epub.h"
+#include "Epub/converters/PixelCache.h"
 
 namespace fs = std::filesystem;
 
@@ -54,6 +55,33 @@ struct ImageExtractionFixture : testing::Test {
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
   }
 };
+
+TEST_F(ImageExtractionFixture, PixelCacheWritesBandsAndFillsSkippedRows) {
+  const auto path = work / "image.pxc";
+  PixelCache cache;
+  constexpr int width = 9;
+  constexpr int height = 22;
+  ASSERT_TRUE(cache.begin(path.string(), width, height, 0, 0, 1));
+  ASSERT_EQ(cache.bandRows, 16);
+  for (int row = 0; row < cache.bandRows; ++row) {
+    std::fill_n(cache.buffer + row * cache.bytesPerRow, cache.bytesPerRow, static_cast<uint8_t>(row));
+  }
+  ASSERT_TRUE(cache.advanceTo(19));
+  std::fill_n(cache.buffer, cache.bytesPerRow, 0x42);
+  ASSERT_TRUE(cache.finalize());
+
+  std::ifstream file(path, std::ios::binary);
+  uint16_t header[3]{};
+  file.read(reinterpret_cast<char*>(header), sizeof(header));
+  EXPECT_EQ(header[0], PixelCache::PXC_MAGIC);
+  EXPECT_EQ(header[1], width);
+  EXPECT_EQ(header[2], height);
+  for (int row = 0; row < height; ++row) {
+    const int expected = row < 16 ? row : row == 19 ? 0x42 : PixelCache::FILL_BYTE;
+    for (int column = 0; column < cache.bytesPerRow; ++column) EXPECT_EQ(file.get(), expected) << "row=" << row;
+  }
+  EXPECT_EQ(file.get(), std::char_traits<char>::eof());
+}
 
 TEST_F(ImageExtractionFixture, HeapPathExtractsWholeEntry) {
   const auto bytes = extract("heap.png", nullptr);

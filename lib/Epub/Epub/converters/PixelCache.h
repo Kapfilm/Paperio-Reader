@@ -4,6 +4,7 @@
 #include <Logging.h>
 #include <stdint.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -41,7 +42,6 @@ struct PixelCache {
   int originY;      // config.y + bandStart - band-local screen-to-cache mapping
   int bandRows;     // rows held in the band buffer
   int bandStart;    // image-local row index of band buffer row 0
-  int flushedRows;  // image-local rows already written to file
   FsFile file;
   std::string cachePathStr;
   bool ok;
@@ -64,7 +64,6 @@ struct PixelCache {
         originY(0),
         bandRows(0),
         bandStart(0),
-        flushedRows(0),
         ok(false) {}
   PixelCache(const PixelCache&) = delete;
   PixelCache& operator=(const PixelCache&) = delete;
@@ -91,9 +90,9 @@ struct PixelCache {
     originX = ox;
     originY = oy;
     bandStart = 0;
-    flushedRows = 0;
     ok = false;
 
+    if (w <= 0 || h <= 0) return false;
     bytesPerRow = (w + 3) / 4;  // 2 bits per pixel, 4 pixels per byte
 
     int wantRows = maxBlockDstRows + 2;
@@ -130,12 +129,8 @@ struct PixelCache {
     }
     cachePathStr = cachePath;
 
-    const uint16_t magic = PXC_MAGIC;
-    uint16_t w16 = (uint16_t)w;
-    uint16_t h16 = (uint16_t)h;
-    if (file.write(reinterpret_cast<const uint8_t*>(&magic), 2) != 2 ||
-        file.write(reinterpret_cast<const uint8_t*>(&w16), 2) != 2 ||
-        file.write(reinterpret_cast<const uint8_t*>(&h16), 2) != 2) {
+    const uint16_t header[] = {PXC_MAGIC, static_cast<uint16_t>(w), static_cast<uint16_t>(h)};
+    if (file.write(reinterpret_cast<const uint8_t*>(header), sizeof(header)) != sizeof(header)) {
       LOG_ERR("IMG", "Failed to write cache header: %s", cachePath.c_str());
       abort();
       return false;
@@ -154,16 +149,20 @@ struct PixelCache {
     if (newTopRow <= bandStart) return true;
     if (newTopRow > height) newTopRow = height;
 
-    for (int r = bandStart; r < newTopRow; ++r) {
-      const int idx = r - bandStart;
-      const uint8_t* rowPtr = (idx < bandRows) ? (buffer + (size_t)idx * bytesPerRow) : fillRow;
-      if (file.write(rowPtr, (size_t)bytesPerRow) != (size_t)bytesPerRow) {
-        LOG_ERR("IMG", "Cache write error at row %d", r);
+    const int rowsInBand = std::min(newTopRow - bandStart, bandRows);
+    const size_t bandBytes = static_cast<size_t>(rowsInBand) * bytesPerRow;
+    if (file.write(buffer, bandBytes) != bandBytes) {
+      LOG_ERR("IMG", "Cache write error at row %d", bandStart);
+      ok = false;
+      return false;
+    }
+    for (int row = bandStart + rowsInBand; row < newTopRow; ++row) {
+      if (file.write(fillRow, bytesPerRow) != static_cast<size_t>(bytesPerRow)) {
+        LOG_ERR("IMG", "Cache write error at row %d", row);
         ok = false;
         return false;
       }
     }
-    flushedRows = newTopRow;
     bandStart = newTopRow;
     memset(buffer, FILL_BYTE, (size_t)bandRows * bytesPerRow);  // fresh band (gaps stay white)
     return true;
@@ -172,20 +171,10 @@ struct PixelCache {
   // Flush the final band and fill any rows never covered (image clipped by the
   // screen, or a decode that produced fewer rows than the box), then close the file.
   bool finalize() {
-    if (!ok) {
+    if (!advanceTo(height) || !file.close()) {
       abort();
       return false;
     }
-    for (int r = flushedRows; r < height; ++r) {
-      const int idx = r - bandStart;
-      const uint8_t* rowPtr = (idx >= 0 && idx < bandRows) ? (buffer + (size_t)idx * bytesPerRow) : fillRow;
-      if (file.write(rowPtr, (size_t)bytesPerRow) != (size_t)bytesPerRow) {
-        LOG_ERR("IMG", "Cache write error at row %d", r);
-        abort();
-        return false;
-      }
-    }
-    file.close();
     LOG_DBG("IMG", "Cache written: %s (%dx%d, %d bytes)", cachePathStr.c_str(), width, height,
             (int)PXC_HEADER_BYTES + bytesPerRow * height);
     ok = false;  // file handed off; nothing left to clean up

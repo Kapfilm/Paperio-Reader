@@ -11,7 +11,11 @@
 
 namespace {
 
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+constexpr size_t INPUT_BUFFER_SIZE = 4096;
+#else
 constexpr size_t INPUT_BUFFER_SIZE = 512;
+#endif
 constexpr uint8_t MAX_COMPONENTS = 4;
 constexpr uint8_t MAX_TABLES = 4;
 

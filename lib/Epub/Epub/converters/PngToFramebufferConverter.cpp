@@ -336,7 +336,8 @@ bool PngToFramebufferConverter::decodeToFramebuffer(const std::string& imagePath
     DirectCacheWriter cw;
     bool rowCaching = caching;
     if (rowCaching) {
-      if (!cache.advanceTo(dstY)) {
+      // Sequential output rows can share a band until the next row no longer fits.
+      if (dstY >= cache.bandStart + cache.bandRows && !cache.advanceTo(dstY)) {
         caching = false;
         rowCaching = false;
       } else {

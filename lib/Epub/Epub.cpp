@@ -1521,7 +1521,7 @@ size_t Epub::readItemHeaderBytes(const std::string& itemHref, uint8_t* outBuf, c
 }
 
 bool Epub::readItemContentsToStreamWithArena(const std::string& itemHref, Print& out, BuildArena* arena) const {
-  if (unpackedPackage) return readItemContentsToStream(itemHref, out, 1024, true);
+  if (unpackedPackage) return readItemContentsToStream(itemHref, out, 4096, true);
   const std::string path = FsHelpers::normalisePath(itemHref);
   ZipFile zip(filepath);
   primeZip(zip);
@@ -1533,10 +1533,13 @@ bool Epub::readItemContentsToStreamWithArena(const std::string& itemHref, Print&
   adoptZipDetails(zip);
   if (!opened) return false;
 
-  // Staging buffer on the stack rather than from the arena: the reader holds an arena block
-  // until close(), and a nested block would have to be released before it (BuildArena is LIFO).
-  // 512 B is nothing against the ~8 KB task stack, and this runs once per image, ever.
-  uint8_t buffer[512];
+  // Let SDMMC transfer multi-sector blocks. Keep the small stack buffer as a
+  // low-memory fallback; the inflater already owns the arena until close().
+  constexpr size_t blockBytes = 4096;
+  std::unique_ptr<uint8_t[]> block(new (std::nothrow) uint8_t[blockBytes]);
+  uint8_t fallback[512];
+  uint8_t* const buffer = block ? block.get() : fallback;
+  const size_t capacity = block ? blockBytes : sizeof(fallback);
   bool done = false;
   while (!done) {
     if (CooperativeAbort::shouldAbortLongTask()) {
@@ -1544,7 +1547,7 @@ bool Epub::readItemContentsToStreamWithArena(const std::string& itemHref, Print&
       return false;
     }
     size_t produced = 0;
-    if (!reader.step(buffer, sizeof(buffer), &produced, &done)) {
+    if (!reader.step(buffer, capacity, &produced, &done)) {
       LOG_ERR("EBP", "Arena extract failed mid-stream: %s", path.c_str());
       return false;
     }
@@ -1563,7 +1566,7 @@ bool Epub::extractItemToFileOnce(const std::string& itemHref, const std::string&
     return false;
   }
   const bool ok = arena ? readItemContentsToStreamWithArena(itemHref, destFile, arena)
-                        : readItemContentsToStream(itemHref, destFile, 1024, /*abortable=*/true);
+                        : readItemContentsToStream(itemHref, destFile, 4096, /*abortable=*/true);
   destFile.flush();
   destFile.close();
   if (!ok) Storage.remove(destPath.c_str());

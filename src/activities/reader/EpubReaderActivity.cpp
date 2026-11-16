@@ -3798,6 +3798,12 @@ void EpubReaderActivity::renderNormalPass(RenderLock& lock, const RenderLayout& 
     // Avoid heap walk in the hot render path; largest free block is sampled in index lifecycle logs.
     lastRenderStats.largestFreeBlockAfter = 0;
     lastRenderStats.valid = true;
+    if (gpio.deviceIsX4Classic() && lastRenderStats.hadImages) {
+      const auto& phases = lastRenderStats.phases;
+      LOG_INF("ERS", "Image page timing: prepareMs=%lu bwMs=%lu displayMs=%lu grayMs=%lu totalMs=%lu",
+              phases.prewarmMs, phases.bwRenderMs, phases.displayMs,
+              phases.grayLsbMs + phases.grayDisplayMs + phases.bwRestoreMs, phases.totalMs);
+    }
     const uint32_t totalFontLookups = lastRenderStats.fontCacheHits + lastRenderStats.fontCacheMisses;
     const uint32_t fontHitRatePct =
         totalFontLookups > 0 ? (lastRenderStats.fontCacheHits * 100UL) / totalFontLookups : 0UL;

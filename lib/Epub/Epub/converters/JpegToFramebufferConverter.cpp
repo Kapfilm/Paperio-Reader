@@ -52,6 +52,10 @@ struct JpegContext {
   const RenderConfig* config{nullptr};
   int screenWidth{0};
   int screenHeight{0};
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+  bool taskWatched = esp_task_wdt_status(nullptr) == ESP_OK;
+  unsigned long lastWatchdogService = millis();
+#endif
   ImageDitherMode effectiveDitherMode{ImageDitherMode::Bayer};
 
   // Source dimensions after the built-in DCT scaling
@@ -200,7 +204,7 @@ void flushDitherBand(JpegContext& ctx) {
   bool caching = ctx.caching;
   DirectCacheWriter cw;
   if (caching) {
-    if (!ctx.cache.advanceTo(bandTop)) {
+    if (bandTop + bandRows > ctx.cache.bandStart + ctx.cache.bandRows && !ctx.cache.advanceTo(bandTop)) {
       caching = false;
       ctx.caching = false;
     } else {
@@ -251,7 +255,7 @@ size_t tjpgInput(JDEC* jd, uint8_t* buff, size_t ndata) {
 // are carved from this pool on top of the ~3 KB base tables/buffers; 12 KB leaves
 // headroom and still beats JPEGDEC's ~20 KB struct. (jd_prepare returns JDR_MEM1 and
 // we fail gracefully if an unusual image needs more.)
-constexpr size_t TJPG_WORK_POOL_SIZE = 12 * 1024;
+constexpr size_t TJPG_WORK_POOL_SIZE = 12 * 1024 + (JD_SZBUF - 512);
 // Minimum free heap to attempt a decode: the work pool plus headroom for the
 // streaming cache band and the ditherer rows allocated further below.
 constexpr size_t MIN_FREE_HEAP_FOR_JPEG = TJPG_WORK_POOL_SIZE + 16 * 1024;
@@ -448,8 +452,20 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
   }
   JpegContext* ctx = &ctxRef;
 
-  // Feed the interrupt WDT every block — large JPEGs can take many seconds.
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+  const auto now = millis();
+  if (now - ctx->lastWatchdogService >= 20) {
+    ctx->lastWatchdogService = now;
+    if (ctx->taskWatched) {
+      esp_task_wdt_reset();
+    } else {
+      // Unregistered tasks cannot reset the watchdog. Let the idle task run.
+      vTaskDelay(1);
+    }
+  }
+#else
   esp_task_wdt_reset();
+#endif
 
   if (stride <= 0 || blockH <= 0 || validW <= 0) return 1;
 
@@ -531,7 +547,7 @@ int emitGrayBlock(JpegContext& ctxRef, const uint8_t* pixels, int blockX, int bl
   bool caching = !useBand && ctx->caching;
   DirectCacheWriter cw;
   if (caching) {
-    if (!ctx->cache.advanceTo(dstYStart)) {
+    if (dstYEnd > ctx->cache.bandStart + ctx->cache.bandRows && !ctx->cache.advanceTo(dstYStart)) {
       caching = false;
       ctx->caching = false;
     } else {
@@ -1124,6 +1140,11 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
     jr = jd_decomp(&jdec, tjpgOutput, tjpgScale);
   }
   unsigned long decodeTime = millis() - decodeStart;
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+  LOG_INF("JPG", "Image timing: jpegMode=%s source=%dx%d output=%dx%d watched=%d engineMs=%lu",
+          mode == JpegMode::Progressive ? "progressive" : "baseline", srcWidth, srcHeight, destWidth, destHeight,
+          ctx.taskWatched ? 1 : 0, decodeTime);
+#endif
   // Check before abort() so a corrupt reading is attributed to the decode itself
   // rather than to the SD-buffer free inside cache cleanup. Runs on both paths.
   jpgCheckHeap("jpg_after_decode");

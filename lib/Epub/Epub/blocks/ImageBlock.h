@@ -99,7 +99,7 @@ class ImageBlock final : public Block {
 
   // Ensure the SD cache file exists, extracting from the EPUB if necessary.
   // Returns true if the file is ready for decoding.
-  bool ensureExtracted() const;
+  std::string resolveImageSource() const;
 
   void renderPlaceholder(GfxRenderer& renderer, int x, int y) const;
 };

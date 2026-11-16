@@ -10,7 +10,11 @@
  * note in mcu_output); tjpgd.h is verbatim.
  */
 
+#if defined(FREEINK_DEVICE_X4CLASSIC) && FREEINK_DEVICE_X4CLASSIC
+#define JD_SZBUF 4096
+#else
 #define JD_SZBUF 512
+#endif
 /* Specifies size of stream input buffer */
 
 #define JD_FORMAT 2
