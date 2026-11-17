@@ -371,8 +371,8 @@ void ActivityManager::goToFileTransfer() {
   replaceActivity(std::make_unique<CrossPointWebServerActivity>(renderer, mappedInput));
 }
 
-void ActivityManager::goToSerialTransfer() {
-  replaceActivity(std::make_unique<SerialTransferActivity>(renderer, mappedInput));
+void ActivityManager::goToSerialTransfer(bool resumeSerial) {
+  replaceActivity(std::make_unique<SerialTransferActivity>(renderer, mappedInput, resumeSerial));
 }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
@@ -547,6 +547,10 @@ bool ActivityManager::isReaderActivity() const {
 }
 
 bool ActivityManager::skipLoopDelay() const { return currentActivity && currentActivity->skipLoopDelay(); }
+
+bool ActivityManager::currentOwnsStorageForUsbDrive() const {
+  return currentActivity && currentActivity->ownsStorageForUsbDrive();
+}
 
 bool ActivityManager::currentOwnsSerialInput() const { return currentActivity && currentActivity->ownsSerialInput(); }
 

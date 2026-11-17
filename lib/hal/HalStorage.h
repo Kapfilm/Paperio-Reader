@@ -9,6 +9,10 @@
 #include <string>
 #include <vector>
 
+#if FREEINK_CAP_USB_MSC
+enum class UsbDriveState : uint8_t { Idle, WaitingForHost, Connected, Ejected, Disconnected, IoError };
+#endif
+
 class HalFile;
 
 class HalStorage {
@@ -16,6 +20,12 @@ class HalStorage {
   HalStorage();
   bool begin();
   bool ready() const;
+#if FREEINK_CAP_USB_MSC
+  bool beginUsbDrive();
+  void endUsbDrive();
+  UsbDriveState usbDriveState() const;
+  bool usbDriveSuspended() const;
+#endif
   std::vector<String> listFiles(const char* path = "/", int maxFiles = 200);
   // Read the entire file at `path` into a String. Returns empty string on failure.
   String readFile(const char* path);

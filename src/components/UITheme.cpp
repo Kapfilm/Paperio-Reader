@@ -453,8 +453,15 @@ int UITheme::getStatusBarBottomHeight(const bool forceStatusItems) {
   const bool statusItemsAtBottom =
       statusBarItemsPosition == CrossPointSettings::STATUS_BAR_ITEMS_POSITION::STATUS_BAR_ITEMS_BOTTOM;
   const int statusItemsHeight = showStatusItems && statusItemsAtBottom ? getStatusBarItemsHeight() : 0;
-  return getProgressBarHeight(SETTINGS.statusBarLowerProgressBar, SETTINGS.statusBarLowerProgressBarThickness) +
-         statusItemsHeight;
+  const int lowerBandHeight =
+      getProgressBarHeight(SETTINGS.statusBarLowerProgressBar, SETTINGS.statusBarLowerProgressBarThickness) +
+      statusItemsHeight;
+  return lowerBandHeight > 0 ? lowerBandHeight + getStatusBarBottomInset() : 0;
+}
+
+int UITheme::getStatusBarBottomInset() {
+  // Additional clearance above the Classic's lower bezel, on top of the renderer's margin.
+  return gpio.deviceIsX4Classic() ? 4 : 0;
 }
 
 int UITheme::getStatusBarHeight(const bool forceStatusItems) {

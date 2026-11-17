@@ -91,6 +91,7 @@ class UITheme {
   static UIIcon getFileIcon(const std::string& filename);
   static int getStatusBarTopHeight(bool forceStatusItems = false);
   static int getStatusBarBottomHeight(bool forceStatusItems = false);
+  static int getStatusBarBottomInset();
   static int getStatusBarHeight(bool forceStatusItems = false);
   static int getStatusBarItemsHeight();
   static int getProgressBarHeight(uint8_t progressBar, uint8_t thickness);

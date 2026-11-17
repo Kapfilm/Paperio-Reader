@@ -22,15 +22,16 @@
 //    on screen (the only user-visible / debug channel while logs are muted).
 class SerialTransferActivity final : public Activity {
  public:
-  explicit SerialTransferActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("SerialTransfer", renderer, mappedInput) {}
+  explicit SerialTransferActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool resumeSerial = false)
+      : Activity("SerialTransfer", renderer, mappedInput), resumeSerial_(resumeSerial) {}
 
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
 
-  bool ownsSerialInput() const override { return true; }
+  bool ownsSerialInput() const override { return mode_ == Mode::Protocol; }
+  bool ownsStorageForUsbDrive() const override { return mode_ == Mode::Drive; }
   bool preventAutoSleep() override { return true; }
   bool skipLoopDelay() override { return true; }
   // Static screen; suppress the minute-tick refresh (it would hold the render
@@ -38,6 +39,21 @@ class SerialTransferActivity final : public Activity {
   bool shouldSkipPeriodicUpdate() const override { return true; }
 
  private:
+  enum class Mode { Select, Protocol, Drive };
+  const bool resumeSerial_;
+  Mode mode_ = Mode::Select;
+  void beginSerial();
+
+#if FREEINK_CAP_USB_MSC
+  void beginDrive();
+  void loopDrive();
+  bool driveSelected_ = true;
+  bool driveFailed_ = false;
+  bool driveSeen_ = false;
+  unsigned long driveStartedAt_ = 0;
+  unsigned long suspendedAt_ = 0;
+#endif
+
   static void statusThunk(void* ctx, const char* msg);
   void onStatus(const char* msg);
 

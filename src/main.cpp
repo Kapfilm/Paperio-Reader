@@ -1092,7 +1092,7 @@ void setup() {
   } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_SERIAL_TRANSFER) {
     // Reset fired while the USB transfer screen was open (host opened the port):
     // land straight back in it so the host's retried command is served.
-    activityManager.goToSerialTransfer();
+    activityManager.goToSerialTransfer(true);
   } else if (resume == BootResume::Silent && silentRebootTargetSnapshot == SILENT_REBOOT_TARGET_READER &&
              !APP_STATE.openEpubPath.empty()) {
     activityManager.goToReader(APP_STATE.openEpubPath);
@@ -1156,6 +1156,12 @@ void loop() {
   static int lastObservedBatteryPercent = -1;
 
   gpio.update();
+  if (activityManager.currentOwnsStorageForUsbDrive()) {
+    buttonEventManager.update(activityManager.hasFastBackExit());
+    activityManager.loop();
+    delay(10);
+    return;
+  }
   powerManager.pollBatteryPercentage();
   const int observedBatteryPercent = static_cast<int>(powerManager.getBatteryPercentage());
   const bool batteryPercentChanged =

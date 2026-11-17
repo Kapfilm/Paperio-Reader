@@ -7,6 +7,11 @@
 #include <SDCardManager.h>
 #include <SdFat.h>
 
+#if FREEINK_CAP_USB_MSC
+#include <UsbMassStorage.h>
+extern "C" esp_err_t deinit_usb_hal();
+#endif
+
 #include <cassert>
 #include <ctime>
 #include <new>
@@ -16,6 +21,11 @@
 #define SDCard SDCardManager::getInstance()
 
 HalStorage HalStorage::instance;
+#if FREEINK_CAP_USB_MSC
+namespace {
+freeink::UsbMassStorage usbDrive;
+}
+#endif
 
 HalStorage::HalStorage() {}
 
@@ -114,6 +124,38 @@ uint64_t HalStorage::sdFreeBytes() {
   if (total <= used) return 0;
   return total - used;
 }
+
+#if FREEINK_CAP_USB_MSC
+bool HalStorage::beginUsbDrive() {
+  StorageLock lock;
+  auto* const blockDevice = SDCard.detachFilesystemForRawAccess();
+  return blockDevice && usbDrive.begin(blockDevice);
+}
+
+void HalStorage::endUsbDrive() {
+  StorageLock lock;
+  if (usbDrive.active()) {
+    usbDrive.end();
+    // Release the shared PHY before rebooting into the usual Serial/JTAG mode.
+    deinit_usb_hal();
+  }
+}
+
+UsbDriveState HalStorage::usbDriveState() const {
+  using State = freeink::UsbMassStorageState;
+  switch (usbDrive.state()) {
+    case State::Idle: return UsbDriveState::Idle;
+    case State::WaitingForHost: return UsbDriveState::WaitingForHost;
+    case State::Connected:
+    case State::Accessed: return UsbDriveState::Connected;
+    case State::Ejected: return UsbDriveState::Ejected;
+    case State::Disconnected: return UsbDriveState::Disconnected;
+    case State::IoError: return UsbDriveState::IoError;
+  }
+  return UsbDriveState::Idle;
+}
+bool HalStorage::usbDriveSuspended() const { return usbDrive.hostSuspended(); }
+#endif
 
 class HalFile::Impl {
  public:

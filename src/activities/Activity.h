@@ -57,6 +57,7 @@ class Activity {
   // main.cpp's line-based `CMD:` handler skips reading logSerial so it can't
   // steal bytes from the activity's byte stream. Default: false.
   virtual bool ownsSerialInput() const { return false; }
+  virtual bool ownsStorageForUsbDrive() const { return false; }
 
   // Called before something captures the raw frame buffer (e.g. a screenshot) outside the
   // normal render flow. An activity that may leave content other than what is on screen in

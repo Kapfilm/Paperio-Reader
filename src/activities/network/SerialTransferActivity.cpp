@@ -3,8 +3,15 @@
 #include <Arduino.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalPowerManager.h>
+#include <HalStorage.h>
 #include <I18n.h>
 #include <Logging.h>
+
+#if FREEINK_CAP_USB_MSC
+#include <esp_efuse.h>
+#include <esp_efuse_table.h>
+#endif
 
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
@@ -44,7 +51,17 @@ void SerialTransferActivity::onStatus(const char* msg) {
 
 void SerialTransferActivity::onEnter() {
   Activity::onEnter();
+#if FREEINK_CAP_USB_MSC
+  if (!resumeSerial_) {
+    requestUpdate();
+    return;
+  }
+#endif
+  beginSerial();
+}
 
+void SerialTransferActivity::beginSerial() {
+  mode_ = Mode::Protocol;
   // Mute LOG_* on the wire for the whole session so no stray log byte from a
   // background task can corrupt the binary protocol stream. Logs still reach the
   // RTC ring buffer (getLastLogs). (On a boot-into-transfer, setup() already
@@ -75,6 +92,17 @@ void SerialTransferActivity::onEnter() {
 }
 
 void SerialTransferActivity::onExit() {
+  if (mode_ == Mode::Select) {
+    Activity::onExit();
+    return;
+  }
+#if FREEINK_CAP_USB_MSC
+  if (mode_ == Mode::Drive) {
+    Storage.endUsbDrive();
+    ESP.restart();
+    return;
+  }
+#endif
   device_.setStatusCallback(nullptr, nullptr);
   setSerialWireMuted(false);
   logSerial.setTxTimeoutMs(100);  // restore HWCDC default (exit reboot also resets it)
@@ -91,6 +119,29 @@ void SerialTransferActivity::onExit() {
 }
 
 void SerialTransferActivity::loop() {
+#if FREEINK_CAP_USB_MSC
+  using Button = MappedInputManager::Button;
+  if (mode_ == Mode::Select) {
+    if (mappedInput.wasPressed(Button::Back)) {
+      finish();
+    } else if (mappedInput.wasPressed(Button::Confirm)) {
+      if (driveSelected_) beginDrive();
+      else beginSerial();
+    } else if (mappedInput.wasPressed(Button::Up) || mappedInput.wasPressed(Button::Down) ||
+               mappedInput.wasPressed(Button::Left) || mappedInput.wasPressed(Button::Right)) {
+      {
+        RenderLock lock(*this);
+        driveSelected_ = !driveSelected_;
+      }
+      requestUpdate();
+    }
+    return;
+  }
+  if (mode_ == Mode::Drive) {
+    loopDrive();
+    return;
+  }
+#endif
   // Check Back first so the session can be left between protocol frames.
   // finish() (not onGoHome()) returns control to the File Transfer picker that
   // launched us via startActivityForResult, matching the Calibre branch.
@@ -120,6 +171,79 @@ void SerialTransferActivity::loop() {
   }
 }
 
+#if FREEINK_CAP_USB_MSC
+void SerialTransferActivity::beginDrive() {
+  if (esp_efuse_read_field_bit(ESP_EFUSE_DIS_USB_OTG)) {
+    {
+      RenderLock lock(*this);
+      statusMessage_ = tr(STR_USB_DRIVE_UNAVAILABLE);
+    }
+    requestUpdate();
+    return;
+  }
+
+  {
+    RenderLock lock(*this);
+    mode_ = Mode::Drive;
+    statusMessage_ = tr(STR_USB_DRIVE_WAITING);
+  }
+  powerManager.setPowerSaving(false);
+  requestUpdateAndWait();
+  setSerialWireMuted(true);
+  logSerial.end();
+  const bool started = Storage.beginUsbDrive();
+  driveStartedAt_ = millis();
+  if (!started) {
+    {
+      RenderLock lock(*this);
+      driveFailed_ = true;
+      statusMessage_ = tr(STR_USB_DRIVE_UNAVAILABLE);
+    }
+    requestUpdate();
+  }
+}
+
+void SerialTransferActivity::loopDrive() {
+  using State = UsbDriveState;
+  const auto state = Storage.usbDriveState();
+  const auto now = millis();
+  const bool connected = state == State::Connected;
+  if (connected && !driveSeen_) {
+    {
+      RenderLock lock(*this);
+      driveSeen_ = true;
+      statusMessage_ = tr(STR_USB_DRIVE_READY);
+    }
+    requestUpdate();
+  }
+  if (state == State::IoError && !driveFailed_) {
+    {
+      RenderLock lock(*this);
+      driveFailed_ = true;
+      statusMessage_ = tr(STR_USB_DRIVE_ERROR);
+    }
+    requestUpdateAndWait();
+    Storage.endUsbDrive();
+    ESP.restart();
+    return;
+  }
+
+  if (connected && Storage.usbDriveSuspended()) {
+    if (suspendedAt_ == 0) suspendedAt_ = now;
+  } else {
+    suspendedAt_ = 0;
+  }
+  const bool cancel = !driveSeen_ && mappedInput.wasPressed(MappedInputManager::Button::Back);
+  const bool noHost = !driveSeen_ && now - driveStartedAt_ >= 300000;
+  const bool suspended = suspendedAt_ != 0 && now - suspendedAt_ >= 5000;
+  if (cancel || noHost || suspended || state == State::Disconnected || state == State::Ejected) {
+    // The host must no longer own the card before the next boot mounts FAT.
+    Storage.endUsbDrive();
+    ESP.restart();
+  }
+}
+#endif
+
 void SerialTransferActivity::render(RenderLock&&) {
   renderer.clearScreen();
 
@@ -142,16 +266,30 @@ void SerialTransferActivity::render(RenderLock&&) {
     }
   };
 
-  // Instruction chrome (translated). Generous line budget so a longer hint
-  // isn't truncated; it sits at the top with room above the status line.
-  drawWrapped(tr(STR_USB_TRANSFER_HINT), 5, EpdFontFamily::REGULAR);
-  y += metrics.verticalSpacing * 2;
-
-  // Live status / diagnostic line (dynamic, includes file names; not translated).
-  drawWrapped(statusMessage_.c_str(), 3, EpdFontFamily::BOLD);
-
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+#if FREEINK_CAP_USB_MSC
+  if (mode_ == Mode::Select) {
+    GUI.drawList(renderer, Rect{x, y, maxWidth, metrics.listRowHeight * 2}, 2, driveSelected_ ? 0 : 1,
+                 [](int index) { return index == 0 ? tr(STR_USB_DRIVE_MODE) : tr(STR_USB_SERIAL_MODE); });
+    y += metrics.listRowHeight * 2 + metrics.verticalSpacing;
+    if (!statusMessage_.empty()) drawWrapped(statusMessage_.c_str(), 3, EpdFontFamily::REGULAR);
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  } else if (mode_ == Mode::Drive) {
+    drawWrapped(statusMessage_.c_str(), 5, EpdFontFamily::BOLD);
+    if (!driveFailed_) drawWrapped(tr(STR_USB_DRIVE_EJECT_HINT), 5, EpdFontFamily::REGULAR);
+    if (!driveSeen_) {
+      const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+      GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    }
+  } else
+#endif
+  {
+    drawWrapped(tr(STR_USB_TRANSFER_HINT), 5, EpdFontFamily::REGULAR);
+    y += metrics.verticalSpacing * 2;
+    drawWrapped(statusMessage_.c_str(), 3, EpdFontFamily::BOLD);
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
 
   renderer.displayBuffer();
 }

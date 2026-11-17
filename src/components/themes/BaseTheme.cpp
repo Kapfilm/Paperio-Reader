@@ -917,6 +917,8 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 
   const auto screenHeight = renderer.getScreenHeight();
   const auto screenWidth = renderer.getScreenWidth();
+  const int bottomInset = UITheme::getStatusBarBottomInset();
+  const int lowerEdge = screenHeight - orientedMarginBottom - paddingBottom - bottomInset;
   // fillMargin: extend bar edge-to-edge under the bezel, adapted from upstream PR #2138
   const int barMarginLeft = fillMargin ? 0 : orientedMarginLeft;
   const int barMarginRight = fillMargin ? 0 : orientedMarginRight;
@@ -950,9 +952,8 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     }
     const int progress = statusBarProgressPercent(progressBar, bookProgress, currentPage, pageCount);
     const int barWidth = progressBarMaxWidth * progress / 100;
-    const int extraBottom = (!topEdge && fillMargin) ? orientedMarginBottom - 1 : 0;
-    const int y =
-        topEdge ? orientedMarginTop + paddingBottom : screenHeight - orientedMarginBottom - paddingBottom - barHeight;
+    const int extraBottom = (!topEdge && fillMargin && bottomInset == 0) ? orientedMarginBottom - 1 : 0;
+    const int y = topEdge ? orientedMarginTop + paddingBottom : lowerEdge - barHeight;
     renderer.fillRect(barMarginLeft, y, barWidth, barHeight + extraBottom, true);
   };
 
@@ -979,8 +980,7 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   const int statusItemsHeight = UITheme::getStatusBarItemsHeight();
 
   const int textY = statusItemsAtTop ? orientedMarginTop + paddingBottom + adjacentProgressHeight + 4
-                                     : screenHeight - orientedMarginBottom - paddingBottom - adjacentProgressHeight -
-                                           statusItemsHeight + 4;
+                                     : lowerEdge - adjacentProgressHeight - statusItemsHeight + 4;
   int progressTextWidth = 0;
   const int printedLabelWidth =
       printedPageLabel.empty() ? 0 : renderer.getTextWidth(SMALL_FONT_ID, printedPageLabel.c_str());
