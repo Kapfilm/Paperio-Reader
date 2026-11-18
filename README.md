@@ -15,7 +15,7 @@
 
 <p align="center">
   <img src="assets/screenshots/x4-classic-5.png" width="23%" alt="Настройки текста">
-  <img src="assets/screenshots/x4-classic-6.png" width="23%" alt="Выделения в книге">
+  <img src="assets/screenshots/x4-classic-6-updated.png" width="23%" alt="Выделения в книге">
   <img src="assets/screenshots/x4-classic-7.png" width="23%" alt="Меню чтения">
   <img src="assets/screenshots/x4-classic-8.png" width="23%" alt="Календарь и погода">
 </p>
