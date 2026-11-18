@@ -79,13 +79,20 @@ jobs:
       - name: Build Paperio Reader Release Candidate
         env:
           CROSSPOINT_RC_VERSION: ${{ env.RC_TAG }}
-        run: pio run -e gh_release_rc
+        run: pio run -e gh_release_rc -e x4c_usb_test
 
       - name: Patch min_chip_rev_full to 0
         run: python3 scripts/patch_min_chip_rev.py .pio/build/gh_release_rc/firmware.bin
 
-      - name: Create branded firmware asset
-        run: cp .pio/build/gh_release_rc/firmware.bin ".pio/build/gh_release_rc/firmware-Paperio-Reader-${RC_TAG}.bin"
+      - name: Create firmware assets for OTA
+        run: |
+          c3=.pio/build/gh_release_rc
+          classic=.pio/build/x4c_usb_test/firmware.bin
+          cp "$c3/firmware.bin" "$c3/firmware-Paperio-Reader-${RC_TAG}.bin"
+          cp "$c3/firmware.bin" "$c3/firmware-x3.bin"
+          cp "$c3/firmware.bin" "$c3/firmware-x4.bin"
+          cp "$classic" "$c3/firmware-x4-classic.bin"
+          cp "$classic" "$c3/firmware-x4c.bin"
 
       - name: Generate release notes
         env:
@@ -114,6 +121,10 @@ jobs:
           files: |
             .pio/build/gh_release_rc/bootloader.bin
             .pio/build/gh_release_rc/firmware.bin
+            .pio/build/gh_release_rc/firmware-x3.bin
+            .pio/build/gh_release_rc/firmware-x4.bin
+            .pio/build/gh_release_rc/firmware-x4-classic.bin
+            .pio/build/gh_release_rc/firmware-x4c.bin
             .pio/build/gh_release_rc/firmware-Paperio-Reader-${{ env.RC_TAG }}.bin
             .pio/build/gh_release_rc/firmware.elf
             .pio/build/gh_release_rc/firmware.map
