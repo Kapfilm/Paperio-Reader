@@ -10,15 +10,25 @@ import shutil
 
 def main():
     version = os.environ["CROSSPOINT_RELEASE_VERSION"]
-    source = Path(".pio/build/gh_release")
+    build_dir = Path(os.environ.get("PLATFORMIO_BUILD_DIR", ".pio/build"))
+    source = build_dir / "gh_release"
     output = Path("dist")
     output.mkdir(exist_ok=True)
     for name in ("firmware.bin", "bootloader.bin", "partitions.bin", "firmware.elf", "firmware.map"):
         shutil.copyfile(source / name, output / name)
-    shutil.copyfile(Path(".pio/build/x4c_release/firmware.bin"), output / "firmware-x4c.bin")
+    shutil.copyfile(build_dir / "x4c_release/firmware.bin", output / "firmware-x4-classic.bin")
+    for name in ("firmware-x3.bin", "firmware-x4.bin"):
+        shutil.copyfile(output / "firmware.bin", output / name)
+    shutil.copyfile(output / "firmware-x4-classic.bin", output / "firmware-x4c.bin")
     version_marker = b"CrossPoint version: " + version.encode() + b"\0"
     applications = []
-    for name, devices in (("firmware.bin", ["X3", "X4"]), ("firmware-x4c.bin", ["X4 Classic"])):
+    for name, devices in (
+        ("firmware.bin", ["X3", "X4"]),
+        ("firmware-x3.bin", ["X3"]),
+        ("firmware-x4.bin", ["X4"]),
+        ("firmware-x4-classic.bin", ["X4 Classic"]),
+        ("firmware-x4c.bin", ["X4 Classic"]),
+    ):
         firmware = (output / name).read_bytes()
         if version_marker not in firmware:
             raise SystemExit(f"{name} does not contain the exact release version")

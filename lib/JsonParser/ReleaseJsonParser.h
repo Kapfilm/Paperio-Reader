@@ -9,7 +9,7 @@
 // initially authored in PR #1810 by znelson and contributors.
 class ReleaseJsonParser {
  public:
-  ReleaseJsonParser();
+  explicit ReleaseJsonParser(const char* selectedAsset);
 
   ReleaseJsonParser(const ReleaseJsonParser&) = delete;
   ReleaseJsonParser& operator=(const ReleaseJsonParser&) = delete;
@@ -56,6 +56,7 @@ class ReleaseJsonParser {
   void commitAsset();
 
   StreamingJsonParser parser;
+  const char* const firmwareAsset;
 
   Position position;
   LastKey lastKey;

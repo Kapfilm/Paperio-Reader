@@ -580,6 +580,7 @@ class EpubReaderActivity final : public Activity {
   // BuildSection pass: construct/load the section cache for currentSpineIndex and resolve the
   // nav target. Returns true if a section is ready to render; false if render() should return
   // (build failed, finished-book handoff, or a requestUpdate retry was posted).
+  bool hideChapterIndexingPopup() const;
   bool buildSection(const RenderLayout& layout);
   // Outcome of compileSectionCache(). Restarting means a fragmented-heap recovery reboot was
   // triggered and the caller must return immediately without further work.

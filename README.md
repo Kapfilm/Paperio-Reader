@@ -17,9 +17,9 @@
 <summary><h2>Возможности прошивки</h2></summary>
 
 
-Прошивка для электронных книг **XTEINK X3 и X4**.
+Прошивка для электронных книг **XTEINK X3, X4 и X4 Classic**.
 
-Стабильная версия: **[Paperio Reader 2.3.0](https://github.com/Kapfilm/Paperio-Reader/releases/tag/2.3.0)**.
+Стабильная версия: **[Paperio Reader 2.3.2](https://github.com/Kapfilm/Paperio-Reader/releases/tag/2.3.2)**.
 
 - Поддержка EPUB, FB2, FB2.ZIP, TXT, XTC/XTC-H и Markdown.
 - Замена обложки книги EPUB или FB2 изображением JPG, JPEG, PNG или BMP с SD-карты и возврат к встроенной обложке в любой момент.
@@ -42,10 +42,26 @@
 - Переключение между Paperio и inkMOD во втором слоте и аварийное восстановление. Требования к установке и ограничения описаны ниже.
 
 Обновления OTA доступны в меню `Настройки → Система → Обновление системы → Проверить обновления`.
-Для ручной установки используйте [firmware.bin версии 2.3.0](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.3.0/firmware.bin).
+Для обновления с SD-карты скачайте файл для своей модели.
+
+| Модель | Файл |
+| --- | --- |
+| XTEINK X3 | [firmware-x3.bin](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.3.2/firmware-x3.bin) |
+| XTEINK X4 | [firmware-x4.bin](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.3.2/firmware-x4.bin) |
+| XTEINK X4 Classic | [firmware-x4-classic.bin](https://github.com/Kapfilm/Paperio-Reader/releases/download/2.3.2/firmware-x4-classic.bin) |
 
 История изменений доступна на [странице релизов](https://github.com/Kapfilm/Paperio-Reader/releases).
 
+
+</details>
+
+<details open>
+<summary><strong>Что нового в 2.3.2</strong></summary>
+
+- **X4.** Исправлено двоение строк при переходах из главного меню и между разделами. Сохранено быстрое обновление экрана.
+- **FB2 и FB2.ZIP.** При переходах между главами окно «Индексация» скрыто.
+- **X4 Classic.** Ускорена загрузка иллюстраций EPUB и FB2, скорректирована нижняя шкала прогресса. В разделе «Передача по USB» доступен режим USB-накопителя для работы с SD-картой из Finder.
+- **OTA.** Версия 2.3.2 подбирает файл по модели ридера. Старые версии получают 2.3.2 по прежним именам. Для этого релиза `firmware.bin` содержит общую сборку для X3 и X4 с определением модели при запуске, а `firmware-x4c.bin` содержит сборку для X4 Classic.
 
 </details>
 
@@ -340,10 +356,9 @@ Paperio Reader поддерживает словари **StarDict**. Распа�
 
 Если Paperio уже установлен, подключитесь к Wi-Fi и выберите
 `Настройки → Система → Обновление системы → Проверить обновления`. Версия
-**2.3.0** — стабильное обновление OTA, включать бета-обновления не требуется.
+**2.3.2** — стабильное обновление OTA, включать бета-обновления не требуется.
 Её можно установить поверх предыдущей версии Paperio Reader без сброса настроек.
-Особенности переноса данных из старых версий описаны в разделе о FB2. Для обновления с SD-карты используйте образ приложения
-`firmware.bin` из релиза.
+Особенности переноса данных из старых версий описаны в разделе о FB2. Для обновления с SD-карты используйте файл для своей модели из таблицы в начале README.
 
 <details>
 <summary>Устройства с блокировкой USB (Xteink Unlocker)</summary>
@@ -354,13 +369,12 @@ Paperio Reader поддерживает словари **StarDict**. Распа�
 перед установкой Paperio Reader потребуется
 [Xteink Unlocker](https://crosspointreader.com/#unlock-tool).
 
-Первую версию Paperio Reader установите вручную с помощью файла
-`firmware.bin`. Последующие версии можно устанавливать на устройстве через:
+Первую версию Paperio Reader установите вручную с помощью образа для вашей модели. Для X4 Classic используйте способ установки, рассчитанный на его таблицу разделов. Последующие версии можно устанавливать на устройстве через:
 
 `Настройки → Система → Обновление системы → Проверить обновления`
 
 - [Последний релиз](https://github.com/Kapfilm/Paperio-Reader/releases/latest)
-- [Скачать firmware.bin](https://github.com/Kapfilm/Paperio-Reader/releases/latest/download/firmware.bin)
+- [Файлы для всех моделей](https://github.com/Kapfilm/Paperio-Reader/releases/tag/2.3.2)
 
 
 </details>
@@ -589,13 +603,12 @@ quit
 
 ```sh
 python3 scripts/gen_i18n.py --strip-unused
-pio run -e gh_release
+pio run -e gh_release -e x4c_release
 ```
 
-Релиз создаётся отправкой тега с номером версии, например `2.3.0`. GitHub Actions
-прикрепляет `firmware-Paperio-Reader-2.3.0.bin` и совместимую с OTA копию с именем
-`firmware.bin`. Стабильный релиз публикуется как последний, чтобы встроенный
-механизм OTA мог его обнаружить.
+Новый стабильный релиз создаётся отправкой тега с номером из `platformio.ini`.
+GitHub Actions проверяет образы и публикует файлы для каждой модели.
+Имена `firmware.bin` и `firmware-x4c.bin` используются для OTA с более ранних версий.
 
 
 </details>

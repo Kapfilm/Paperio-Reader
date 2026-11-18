@@ -102,6 +102,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          if gh release view "$CROSSPOINT_RELEASE_VERSION" --json isDraft --jq '.isDraft' | grep -qx false; then
+            echo "Release $CROSSPOINT_RELEASE_VERSION is already published"
+            exit 0
+          fi
           gh release create "$CROSSPOINT_RELEASE_VERSION" dist/* \
             --verify-tag --target "$GITHUB_SHA" --draft \
             --title "Paperio Reader $CROSSPOINT_RELEASE_VERSION" \

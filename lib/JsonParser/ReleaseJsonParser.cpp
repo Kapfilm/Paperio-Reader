@@ -4,12 +4,6 @@
 #include <cstring>
 
 namespace {
-#if defined(FREEINK_DEVICE_X4CLASSIC)
-constexpr char firmwareAsset[] = "firmware-x4c.bin";
-#else
-constexpr char firmwareAsset[] = "firmware.bin";
-#endif
-
 void safeCopy(char* dst, size_t dstSize, const char* src, size_t srcLen) {
   size_t n = srcLen < dstSize - 1 ? srcLen : dstSize - 1;
   memcpy(dst, src, n);
@@ -18,9 +12,10 @@ void safeCopy(char* dst, size_t dstSize, const char* src, size_t srcLen) {
 
 }  // namespace
 
-ReleaseJsonParser::ReleaseJsonParser()
+ReleaseJsonParser::ReleaseJsonParser(const char* selectedAsset)
     : parser(JsonCallbacks{this, sOnKey, sOnString, sOnNumber, sOnBool, sOnNull, sOnObjectStart, sOnObjectEnd,
-                           sOnArrayStart, sOnArrayEnd}) {
+                           sOnArrayStart, sOnArrayEnd}),
+      firmwareAsset(selectedAsset) {
   reset();
 }
 

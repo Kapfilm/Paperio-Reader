@@ -2,6 +2,7 @@
 #include "OtaUpdater.h"
 
 #include <Arduino.h>
+#include <HalGPIO.h>
 #include <Logging.h>
 #include <ReleaseJsonParser.h>
 
@@ -87,6 +88,9 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   render = false;
 
   const char* releaseApiUrl = getReleaseApiUrl();
+  const char* asset = gpio.deviceIsX3() ? "firmware-x3.bin"
+                      : gpio.deviceIsX4Classic() ? "firmware-x4-classic.bin"
+                                                : "firmware-x4.bin";
 
   // Keep WiFi out of modem-sleep while doing release metadata HTTPS I/O.
   // This mirrors installUpdate() and reduces intermittent TLS read stalls.
@@ -98,7 +102,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   // PR #1810 by znelson and contributors.
   LOG_DBG("OTA", "Checking for %s update at %s", SETTINGS.includeBetaUpdates ? "beta" : "stable", releaseApiUrl);
   for (int attempt = 1; attempt <= otaHttpMaxAttempts; ++attempt) {
-    ReleaseJsonParser releaseParser;
+    ReleaseJsonParser releaseParser(asset);
     size_t bytesSeen = 0;
     const bool ok = HttpDownloader::fetchUrlVerified(
         releaseApiUrl,
@@ -108,7 +112,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
             return false;
           }
           releaseParser.feed(reinterpret_cast<const char*>(data), len);
-          // For OTA metadata we only need tag_name and firmware.bin fields.
+          // For OTA metadata we only need tag_name and the selected firmware asset.
           // Stop early once both are found to avoid fragile tail reads.
           if (releaseParser.foundTag() && releaseParser.foundFirmware()) {
             return false;
@@ -137,7 +141,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
     }
 
     if (!releaseParser.foundFirmware()) {
-      LOG_ERR("OTA", "No firmware.bin asset found");
+      LOG_ERR("OTA", "No %s asset found", asset);
       return NO_UPDATE;
     }
 

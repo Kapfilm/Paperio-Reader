@@ -6,6 +6,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalDisplay.h>
+#include <HalGPIO.h>
 #include <HalStorage.h>
 #include <I18n.h>
 #include <JpegToBmpConverter.h>
@@ -246,15 +247,15 @@ void HomeActivity::loadRecentCovers(int coverHeight) {
       // Keep the displayed Home frame in the buffer that survives the release.
       renderer.syncWriteBufferFromDisplayed();
     }
+    if (gpio.deviceIsX4()) {
+      // Dual-buffer FAST leaves RED holding the older frame. Save the frame
+      // actually on the panel before its host buffer is released.
+      renderer.syncRedRamFromFrameBuffer();
+    }
     if (renderer.releaseSecondaryBuffer()) {
       secondaryBufferReleased = true;
-      // Keep X4 fast-differential refresh alive while the secondary buffer is gone:
-      // the controller still holds the last home frame in RED RAM and displayBuffer()
-      // re-seeds it after every refresh (syncRedRamFromFrameBuffer), so carousel/menu
-      // navigation diffs against that baseline instead of downgrading to a full/half
-      // waveform on every press. Precondition holds: we release right after the first
-      // home render (gate requires firstRenderDone) and only issue plain BW redraws
-      // until restore. Same pattern as KOReaderSyncActivity. No-op on X3.
+      // Blocking single-buffer refreshes keep the controller baseline current
+      // while Home redraws around the cover loader.
       renderer.setSingleBufferFastDiff(true);
       LOG_DBG("HOME", "Released secondary framebuffer for cover loading (free=%lu)",
               static_cast<unsigned long>(esp_get_free_heap_size()));
@@ -648,12 +649,8 @@ void HomeActivity::restoreSecondaryBuffer(bool callerHoldsRenderLock) {
       // Two-buffer differential is available again — turn off the single-buffer
       // RED-RAM-baseline mode so normal fast refresh resumes against the secondary.
       renderer.setSingleBufferFastDiff(false);
-      // Do NOT syncRedRamFromFrameBuffer() here: reallocSecondaryBuffer() fills the new secondary
-      // with WHITE, and syncRedRamFromFrameBuffer() copies that white buffer into RED RAM —
-      // overwriting the correct baseline. RED already holds the home frame (synced before the
-      // release; the controller retains it through release/realloc, which don't touch RED). The
-      // white reseed made the next FAST refresh (e.g. Home->Settings) diff against white, ghosting
-      // the home screen through. Leave RED intact.
+      // The new host buffer has an unverified copy. The driver uses the
+      // controller's retained RED baseline for the first FAST after realloc.
       LOG_DBG("HOME", "Restored secondary framebuffer after cover loading (free=%lu)",
               static_cast<unsigned long>(esp_get_free_heap_size()));
     }
