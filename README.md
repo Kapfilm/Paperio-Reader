@@ -7,10 +7,17 @@
 </div>
 
 <p align="center">
-  <img src="assets/screenshots/home.jpg" width="23%" alt="Главный экран Paperio Reader">
-  <img src="assets/screenshots/recent-books.jpg" width="23%" alt="Недавние книги в сетке 2×2">
-  <img src="assets/screenshots/highlights.jpg" width="23%" alt="Три стиля выделения текста">
-  <img src="assets/screenshots/text-settings.jpg" width="23%" alt="Настройки текста с предварительным просмотром">
+  <img src="assets/screenshots/x4-classic-1.png" width="23%" alt="Главный экран с обложкой книги">
+  <img src="assets/screenshots/x4-classic-2.png" width="23%" alt="Главное меню Paperio Reader">
+  <img src="assets/screenshots/x4-classic-3.png" width="23%" alt="Недавние книги">
+  <img src="assets/screenshots/x4-classic-4.png" width="23%" alt="Меню Mini">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/x4-classic-5.png" width="23%" alt="Настройки текста">
+  <img src="assets/screenshots/x4-classic-6.png" width="23%" alt="Выделения в книге">
+  <img src="assets/screenshots/x4-classic-7.png" width="23%" alt="Меню чтения">
+  <img src="assets/screenshots/x4-classic-8.png" width="23%" alt="Календарь и погода">
 </p>
 
 <details open>
