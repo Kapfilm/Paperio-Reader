@@ -122,7 +122,11 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
           StrId::STR_SLEEP_SCREEN, &CrossPointSettings::sleepScreen,
           {StrId::STR_DARK, StrId::STR_LIGHT, StrId::STR_CUSTOM, StrId::STR_COVER, StrId::STR_NONE_OPT,
            StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY, StrId::STR_QUICK_RESUME, StrId::STR_RANDOM_HIGHLIGHT,
-           StrId::STR_SLEEP_CALENDAR, StrId::STR_SLEEP_CALENDAR_WEATHER},
+           StrId::STR_SLEEP_CALENDAR, StrId::STR_SLEEP_CALENDAR_WEATHER,
+#if FREEINK_DEVICE_X4CLASSIC
+           StrId::STR_CLOCK,
+#endif
+          },
           "sleepScreen", StrId::STR_CAT_DISPLAY)
           .withSubcategory(StrId::STR_MENU_DISP_SLEEP)
           .withSelectorActivity());

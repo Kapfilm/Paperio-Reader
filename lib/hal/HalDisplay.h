@@ -123,6 +123,7 @@ class HalDisplay {
   void cleanupGrayscaleWithPreviousBuffer();
 
   void displayGrayBuffer(bool turnOffScreen = false);
+  bool restoreSleepClockBaseline();
 
   // Returns true when the device is an X3 (X4 returns false).
   bool deviceIsX3() const;

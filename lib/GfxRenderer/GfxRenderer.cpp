@@ -1,5 +1,6 @@
 #include "GfxRenderer.h"
 
+#include <BoardConfig.h>
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
@@ -603,9 +604,23 @@ static inline uint8_t get2BitPixel(const uint8_t* const bitmap, const int stride
 //                      strokes look noticeably bolder/blacker on the
 //                      physical e-ink panel.
 // ───────────────────────────────────────────────────────────────────────────
+static bool useUltraChipTextMasks() {
+  if (!gpio.deviceIsX4Classic()) return false;
+  const auto controller = BoardConfig::ACTIVE.displayController;
+  return controller == BoardConfig::DisplayController::UC8179 ||
+         controller == BoardConfig::DisplayController::UC8279;
+}
+
 static inline uint8_t drawMaskFor2BitMode(const GfxRenderer::RenderMode mode, const uint8_t darkness) {
   if (mode == GfxRenderer::BW) return 0x0E;  // draw raw {1,2,3}
   if (darkness >= 3) return 0x00;            // skip grayscale entirely (Maximum)
+  if (useUltraChipTextMasks()) {
+    // UltraChip forms the second absolute plane using XOR. A dark-gray
+    // edge needs both mask bits, a light-gray edge needs only MSB, and
+    // a solid stroke stays zero in both masks.
+    if (mode == GfxRenderer::GRAYSCALE_MSB) return darkness == 0 ? 0x06 : (darkness == 1 ? 0x02 : 0x00);
+    return darkness == 0 ? 0x04 : 0x00;
+  }
   if (mode == GfxRenderer::GRAYSCALE_MSB) {
     return (darkness == 0) ? 0x02 : 0x06;
   }
@@ -882,42 +897,46 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
       // Compute the drawMask once per glyph from the current render mode + text-darkness setting.
       // The fast path dispatches on this at runtime to a template specialization so the mask is
       // a compile-time constant inside the inner loops.
-      const uint8_t drawMask = drawMaskFor2BitMode(renderMode, renderer.getTextDarkness());
+      const uint8_t darkness = renderer.getTextDarkness();
+      const uint8_t drawMask = drawMaskFor2BitMode(renderMode, darkness);
+      const bool ditherEdges = renderMode == GfxRenderer::BW && darkness < 3 && renderer.getDitherTextEdges();
 
       // drawMask == 0 means "draw nothing" — used by Maximum darkness to skip grayscale passes.
       if (drawMask == 0) return;
 
       if constexpr (rotation == TextRotation::None) {
-        // Fast path for normal text orientation. Handles all device orientations via renderGlyphFast2Bit.
-        // Strip-aware: getWriteTarget() returns the band scratch when a strip is active, otherwise
-        // the live framebuffer; the (fbOriginY, fbRows) pair tells the writer how to translate phyY
-        // and clip rows outside the band.
-        uint8_t* const fb = renderer.getWriteTarget();
-        const int fbOriginY = renderer.getWriteOriginY();
-        const int fbRows = renderer.getWriteRows();
-        switch (drawMask) {
-          case 0x0E:  // BW
-            renderGlyphFast2Bit<0x0E>(fb, bitmap, width, height, innerBase, outerBase, pixelState,
-                                      renderer.getOrientation(), renderer.getDisplayWidth(),
-                                      renderer.getDisplayHeight(), renderer.getDisplayWidthBytes(), fbOriginY, fbRows);
-            break;
-          case 0x06:  // raw {1,2}
-            renderGlyphFast2Bit<0x06>(fb, bitmap, width, height, innerBase, outerBase, pixelState,
-                                      renderer.getOrientation(), renderer.getDisplayWidth(),
-                                      renderer.getDisplayHeight(), renderer.getDisplayWidthBytes(), fbOriginY, fbRows);
-            break;
-          case 0x04:  // raw {2}
-            renderGlyphFast2Bit<0x04>(fb, bitmap, width, height, innerBase, outerBase, pixelState,
-                                      renderer.getOrientation(), renderer.getDisplayWidth(),
-                                      renderer.getDisplayHeight(), renderer.getDisplayWidthBytes(), fbOriginY, fbRows);
-            break;
-          case 0x02:  // raw {1}
-            renderGlyphFast2Bit<0x02>(fb, bitmap, width, height, innerBase, outerBase, pixelState,
-                                      renderer.getOrientation(), renderer.getDisplayWidth(),
-                                      renderer.getDisplayHeight(), renderer.getDisplayWidthBytes(), fbOriginY, fbRows);
-            break;
+        if (!ditherEdges) {
+          // Fast path for normal text orientation. Handles all device orientations via renderGlyphFast2Bit.
+          // Strip-aware: getWriteTarget() returns the band scratch when a strip is active, otherwise
+          // the live framebuffer; the (fbOriginY, fbRows) pair tells the writer how to translate phyY
+          // and clip rows outside the band.
+          uint8_t* const fb = renderer.getWriteTarget();
+          const int fbOriginY = renderer.getWriteOriginY();
+          const int fbRows = renderer.getWriteRows();
+          switch (drawMask) {
+            case 0x0E:  // BW
+              renderGlyphFast2Bit<0x0E>(fb, bitmap, width, height, innerBase, outerBase, pixelState,
+                                        renderer.getOrientation(), renderer.getDisplayWidth(),
+                                        renderer.getDisplayHeight(), renderer.getDisplayWidthBytes(), fbOriginY, fbRows);
+              break;
+            case 0x06:  // raw {1,2}
+              renderGlyphFast2Bit<0x06>(fb, bitmap, width, height, innerBase, outerBase, pixelState,
+                                        renderer.getOrientation(), renderer.getDisplayWidth(),
+                                        renderer.getDisplayHeight(), renderer.getDisplayWidthBytes(), fbOriginY, fbRows);
+              break;
+            case 0x04:  // raw {2}
+              renderGlyphFast2Bit<0x04>(fb, bitmap, width, height, innerBase, outerBase, pixelState,
+                                        renderer.getOrientation(), renderer.getDisplayWidth(),
+                                        renderer.getDisplayHeight(), renderer.getDisplayWidthBytes(), fbOriginY, fbRows);
+              break;
+            case 0x02:  // raw {1}
+              renderGlyphFast2Bit<0x02>(fb, bitmap, width, height, innerBase, outerBase, pixelState,
+                                        renderer.getOrientation(), renderer.getDisplayWidth(),
+                                        renderer.getDisplayHeight(), renderer.getDisplayWidthBytes(), fbOriginY, fbRows);
+              break;
+          }
+          return;
         }
-        return;
       }
 
       // Rotated text fallback: per-pixel path. Uses the same drawMask as the fast path so darkness
@@ -943,7 +962,15 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
           // raw value straight from the font: 0=white, 1=light gray, 2=dark gray, 3=black
           const uint8_t raw = (byte >> bit_index) & 0x3;
 
-          if ((drawMask >> raw) & 0x01) {
+          bool draw = (drawMask >> raw) & 0x01;
+          if (ditherEdges) {
+            // Order the four cells so the darkness levels add ink without
+            // changing the solid center or growing beyond the glyph bitmap.
+            constexpr uint8_t dither[2][2] = {{0, 2}, {3, 1}};
+            constexpr uint8_t edgeCoverage[3][4] = {{0, 0, 2, 4}, {0, 1, 4, 4}, {0, 3, 4, 4}};
+            draw = dither[screenY & 1][screenX & 1] < edgeCoverage[darkness][raw];
+          }
+          if (draw) {
             // BW honors caller's pixelState; grayscale passes always clear the bit (false)
             renderer.drawPixel(screenX, screenY, isBW ? pixelState : false);
           }

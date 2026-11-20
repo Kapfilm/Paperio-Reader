@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <BoardConfig.h>
 #include <CooperativeAbort.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
@@ -25,6 +26,7 @@
 #include <esp_ota_ops.h>
 #include <esp_sleep.h>
 #include <esp_system.h>
+#include <sys/time.h>
 
 #include <cstring>
 #include <vector>
@@ -153,6 +155,29 @@ enum class BootResume : uint8_t {
 // device back up against the user's sleep gesture. Never cleared:
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
+
+#if FREEINK_DEVICE_X4CLASSIC
+// Only a timer wake from an intentional clock-screen sleep may bypass Home.
+// A reset or power-button wake consumes the marker and follows normal boot.
+RTC_NOINIT_ATTR uint32_t flipClockSleepMarker;
+constexpr uint32_t FLIP_CLOCK_SLEEP_MAGIC = 0xF11C10C2;
+static bool flipClockTimerWake = false;
+
+static void armFlipClockTimer() {
+  if (!HalClock::isSynced()) {
+    flipClockSleepMarker = 0;
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+    LOG_ERR("SLP", "Clock sleep has no valid time; minute wake disabled");
+    return;
+  }
+  timeval now = {};
+  gettimeofday(&now, nullptr);
+  const uint64_t untilNextMinute = static_cast<uint64_t>(60 - now.tv_sec % 60) * 1000000ULL - now.tv_usec;
+  const auto result = esp_sleep_enable_timer_wakeup(untilNextMinute);
+  flipClockSleepMarker = result == ESP_OK ? FLIP_CLOCK_SLEEP_MAGIC : 0;
+  if (result != ESP_OK) LOG_ERR("SLP", "Could not arm clock wake: %s", esp_err_to_name(result));
+}
+#endif
 
 void silentRestart() {
   if (deepSleepInProgress) return;  // sleeping supersedes the heap-defrag reboot
@@ -571,6 +596,8 @@ void enterDeepSleep(bool fromTimeout = false) {
   const bool isQuickResumeSleep = quick_wake::isQuickSleep(
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME, fromTimeout,
       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+  const bool flipClockSleep = !isQuickResumeSleep && gpio.deviceIsX4Classic() &&
+                              SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK;
   APP_STATE.quickSleepHome = isQuickResumeSleep ? activityManager.captureHomeForQuickSleep() : HomeSleepState{};
   const bool calendarSleep = !isQuickResumeSleep &&
                              (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR ||
@@ -583,6 +610,8 @@ void enterDeepSleep(bool fromTimeout = false) {
   } else if (SETTINGS.useClock && WiFi.status() == WL_CONNECTED) {
     HalClock::syncNtpIfDue(SETTINGS.ntpServer);
   }
+  // The sleep clock remains available when the small status-bar clock is off.
+  if (flipClockSleep && !HalClock::isSynced()) HalClock::restore();
   HalClock::saveBeforeSleep(keepLpAlive);
   // If sleeping from a running reader the book loaded successfully, so the boot-loop
   // guard count is no longer needed. Reset it now because onExit() is never called
@@ -624,6 +653,14 @@ void enterDeepSleep(bool fromTimeout = false) {
     LOG_ERR("SLP", "Could not save short-wake provenance; an already-released tap may be rejected");
   }
   sleepCalendarSyncMarker = 0;
+#if FREEINK_DEVICE_X4CLASSIC
+  if (flipClockSleep) {
+    armFlipClockTimer();
+  } else {
+    flipClockSleepMarker = 0;
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  }
+#endif
   powerManager.startDeepSleep(gpio, keepLpAlive);
 }
 
@@ -746,6 +783,12 @@ void setup() {
   // GPIO3 is the same active-low power input on both supported C3 boards.
   pinMode(InputManager::POWER_BUTTON_PIN, INPUT_PULLUP);
   const bool earlyPowerWasPressed = digitalRead(InputManager::POWER_BUTTON_PIN) == LOW;
+#if FREEINK_DEVICE_X4CLASSIC
+  flipClockTimerWake = flipClockSleepMarker == FLIP_CLOCK_SLEEP_MAGIC &&
+                       esp_reset_reason() == ESP_RST_DEEPSLEEP &&
+                       esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER && !earlyPowerWasPressed;
+  flipClockSleepMarker = 0;
+#endif
   skipSleepCalendarSync = sleepCalendarSyncMarker == SLEEP_CALENDAR_SYNC_MAGIC;
   sleepCalendarSyncMarker = 0;
   boot_health::begin();
@@ -916,7 +959,11 @@ void setup() {
 #endif
   logStartupMemory("after_hw_init");
 
-  if (wakeupReason == HalGPIO::WakeupReason::PowerButton && !bootWakeCheck.accepted()) {
+  if (wakeupReason == HalGPIO::WakeupReason::PowerButton && !bootWakeCheck.accepted()
+#if FREEINK_DEVICE_X4CLASSIC
+      && !flipClockTimerWake
+#endif
+  ) {
     LOG_INF("BOOT", "Wake gate rejected the press (%s), returning to deep sleep",
             HalGPIO::wakeVerdictName(bootWakeCheck.verdict));
     halTiltSensor.deepSleep();
@@ -926,7 +973,11 @@ void setup() {
 
   // The charger-only and rejected-wake paths above deliberately retain the
   // one-shot marker. A real accepted wake or an unrelated reboot consumes it.
-  if (quickWakeArmed && !writeQuickWakeMarker(quick_wake::MarkerMode::None)) {
+  if (quickWakeArmed
+#if FREEINK_DEVICE_X4CLASSIC
+      && !flipClockTimerWake
+#endif
+      && !writeQuickWakeMarker(quick_wake::MarkerMode::None)) {
     LOG_ERR("SLP", "Could not consume quick-wake state");
   }
 
@@ -1000,6 +1051,24 @@ void setup() {
   // First serial output only here to avoid timing inconsistencies for power button press duration verification
   LOG_DBG("MAIN", "Starting CrossPoint version " CROSSPOINT_VERSION);
   logStartupMemory("before_display_fonts");
+
+#if FREEINK_DEVICE_X4CLASSIC
+  if (flipClockTimerWake && !recoveryFirmwareMode && SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK &&
+      digitalRead(InputManager::POWER_BUTTON_PIN) != LOW) {
+    // Redraw only the selected sleep artwork. In particular, avoid boot artwork,
+    // reader routing, progress saves and the per-sleep NVS writes on every tick.
+    if (!HalClock::restoreExternalDate() && !HalClock::isSynced()) HalClock::restore();
+    setupDisplayAndFonts(/*seamless=*/true, /*skipSdFontDiscovery=*/true);
+    gpio.stopInputSampler();
+    deepSleepInProgress = true;
+    activityManager.goToSleep(false);
+    halTiltSensor.deepSleep();
+    display.deepSleep();
+    armFlipClockTimer();
+    powerManager.startDeepSleep(gpio);
+    return;
+  }
+#endif
 
   // Resolve the single boot-presentation decision. Skipping the splash also
   // skips the panel-clearing pass and the X3 initial-full-sync arming (see
@@ -1147,6 +1216,14 @@ void setup() {
   allowSleepAt = millis() + 2000;
   logBootSummary();
   logStartupMemory("setup_complete");
+#if FREEINK_DEVICE_X4CLASSIC
+  const auto controller = BoardConfig::ACTIVE.displayController;
+  const char* panelDriver = controller == BoardConfig::DisplayController::UC8179 ? "UC8179"
+                            : controller == BoardConfig::DisplayController::UC8279 ? "UC8279"
+                                                                                  : "SSD1677";
+  LOG_INF("EPD", "X4 Classic panel: %s, variant 0x%02x", panelDriver,
+          static_cast<unsigned>(BoardConfig::ACTIVE.displayControllerVariant));
+#endif
 }
 
 void loop() {

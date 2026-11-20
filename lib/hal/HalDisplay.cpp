@@ -278,6 +278,17 @@ void HalDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) { einkDisplay.
 
 void HalDisplay::cleanupGrayscaleWithPreviousBuffer() { einkDisplay.cleanupGrayscaleWithPreviousBuffer(); }
 
+bool HalDisplay::restoreSleepClockBaseline() {
+  const auto controller = BoardConfig::ACTIVE.displayController;
+  if (!gpio.deviceIsX4Classic() ||
+      (controller != BoardConfig::DisplayController::UC8279 && controller != BoardConfig::DisplayController::UC8179))
+    return false;
+  HalSpiBus::Lock spiLock;
+  einkDisplay.skipInitialResync();
+  einkDisplay.cleanupGrayscaleBuffers(einkDisplay.getFrameBuffer());
+  return true;
+}
+
 void HalDisplay::displayGrayBuffer(bool turnOffScreen) {
   HalSpiBus::Lock spiLock;
   einkDisplay.displayGrayBuffer(turnOffScreen);

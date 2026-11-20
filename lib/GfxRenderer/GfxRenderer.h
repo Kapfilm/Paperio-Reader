@@ -41,6 +41,7 @@ class GfxRenderer {
   std::atomic<bool> fadingFix;
   // Text darkness for 2-bit grayscale glyph rendering.
   std::atomic<uint8_t> textDarkness;
+  bool ditherTextEdges = false;
   //   0 = Normal     — true 4-level AA (raw=1 → light gray, raw=2 → dark gray)
   //   1 = Dark       — historical default; raw=2 collapses to black
   //   2 = Extra Dark — both AA shades go black in the grayscale plane
@@ -384,9 +385,12 @@ class GfxRenderer {
   // GfxRenderer.cpp for the per-level pixel breakdown and a worked example.
   void setTextDarkness(const uint8_t d) { textDarkness.store(d, std::memory_order_relaxed); }
   uint8_t getTextDarkness() const { return static_cast<uint8_t>(textDarkness.load(std::memory_order_relaxed)); }
+  void setDitherTextEdges(bool enabled) { ditherTextEdges = enabled; }
+  bool getDitherTextEdges() const { return ditherTextEdges; }
   void copyGrayscaleLsbBuffers() const;
   void copyGrayscaleMsbBuffers() const;
   void displayGrayBuffer() const;
+  bool restoreSleepClockBaseline() const { return display.restoreSleepClockBaseline(); }
 
   // Timing breakdown returned by renderGrayscalePlanesSequential().
   struct GrayscaleTimings {

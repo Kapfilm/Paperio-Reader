@@ -20,6 +20,7 @@
 #include <WeatherIcons.h>
 #include <Xtc.h>
 #include <esp_system.h>
+#include <esp_sleep.h>
 
 #include <algorithm>
 #include <cmath>
@@ -38,6 +39,7 @@
 #include "fontIds.h"
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
+#include "images/FlipClockDigits.h"
 #include "util/BookArchiveUtils.h"
 
 namespace {
@@ -566,6 +568,8 @@ void SleepActivity::onEnter() {
     renderer.setOrientation(GfxRenderer::Portrait);
   }
   switch (SETTINGS.sleepScreen) {
+    case CrossPointSettings::FLIP_CLOCK:
+      return renderFlipClockSleepScreen();
     case CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER:
     case CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR:
       return renderCalendarSleepScreen();
@@ -705,6 +709,87 @@ bool SleepActivity::renderQuoteSleepScreen() const {
   }
   renderer.displayBuffer(finalSleepRefreshMode(renderer));
   return true;
+}
+
+namespace {
+RTC_NOINIT_ATTR time_t previousFlipClockTime;
+RTC_NOINIT_ATTR uint32_t flipClockFastTicks;
+}
+
+void SleepActivity::renderFlipClockSleepScreen() const {
+  const time_t now = HalClock::now();
+  const bool minuteWake = esp_reset_reason() == ESP_RST_DEEPSLEEP &&
+                          esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER;
+  const bool retainedFrame = minuteWake && previousFlipClockTime > 0 &&
+                             now >= previousFlipClockTime && now - previousFlipClockTime < 120;
+  if (!retainedFrame || flipClockFastTicks >= 10) flipClockFastTicks = 0;
+  bool fast = false;
+  if (retainedFrame && flipClockFastTicks != 0) {
+    // Reconstruct the actual visible clock after deep sleep. Restore the
+    // controller OLD plane without driving the glass, then diff to the new time.
+    drawFlipClock(previousFlipClockTime);
+    fast = renderer.restoreSleepClockBaseline();
+  }
+  drawFlipClock(now);
+  renderer.displayBuffer(fast ? HalDisplay::FAST_REFRESH : HalDisplay::HALF_REFRESH);
+  previousFlipClockTime = now;
+  ++flipClockFastTicks;
+}
+
+void SleepActivity::drawFlipClock(const time_t now) const {
+  renderer.setOrientation(GfxRenderer::LandscapeCounterClockwise);
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.clearScreen();
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  const int cardWidth = width * 29 / 100;
+  const int gap = width / 35;
+  const int cardHeight = height * 52 / 100;
+  const int top = (height - cardHeight) / 2 - 18;
+  const int left = (width - cardWidth * 2 - gap) / 2;
+  tm date{};
+  const bool hasTime = now > 0 && localtime_r(&now, &date);
+  const bool twelveHour = SETTINGS.clockFormat12h != 0;
+  int hour = hasTime ? date.tm_hour : 0;
+  if (twelveHour) hour = hour % 12 == 0 ? 12 : hour % 12;
+  char hours[3], minutes[3];
+  snprintf(hours, sizeof(hours), "%02d", hour);
+  snprintf(minutes, sizeof(minutes), "%02d", hasTime ? date.tm_min : 0);
+
+  for (int index = 0; index < 2; ++index) {
+    const int x = left + index * (cardWidth + gap);
+    renderer.fillRoundedRect(x + 2, top + 5, cardWidth, cardHeight, 20, Color::Black);
+    renderer.fillRoundedRect(x, top, cardWidth, cardHeight, 20, Color::White);
+    renderer.drawRoundedRect(x, top, cardWidth, cardHeight, 2, 20, true, true, true, true, true);
+    const char* value = hasTime ? (index == 0 ? hours : minutes) : "--";
+    constexpr int digitGap = 8;
+    const int digitsLeft = x + (cardWidth - FLIP_DIGIT_WIDTH * 2 - digitGap) / 2;
+    const int digitsTop = top + (cardHeight - FLIP_DIGIT_HEIGHT) / 2;
+    for (int digit = 0; digit < 2; ++digit) {
+      if (hasTime) {
+        renderer.drawImage(FLIP_DIGITS[value[digit] - '0'], digitsLeft + digit * (FLIP_DIGIT_WIDTH + digitGap),
+                           digitsTop, FLIP_DIGIT_WIDTH, FLIP_DIGIT_HEIGHT);
+      } else {
+        renderer.fillRect(digitsLeft + digit * (FLIP_DIGIT_WIDTH + digitGap) + 18,
+                          top + cardHeight / 2 - 5, FLIP_DIGIT_WIDTH - 36, 10, true);
+      }
+    }
+    renderer.drawLine(x + 2, top + cardHeight / 2, x + cardWidth - 3, top + cardHeight / 2, 1, true);
+    renderer.fillRect(x - 2, top + cardHeight / 2 - 5, 4, 10, true);
+    renderer.fillRect(x + cardWidth - 2, top + cardHeight / 2 - 5, 4, 10, true);
+  }
+  if (hasTime && twelveHour) {
+    renderer.drawText(UI_12_FONT_ID, left + 14, top + 10, date.tm_hour < 12 ? "AM" : "PM", true,
+                      EpdFontFamily::BOLD);
+  }
+  char caption[64];
+  constexpr const char* weekdays[] = {"ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"};
+  if (hasTime) {
+    snprintf(caption, sizeof(caption), "%02d-%02d %s", date.tm_mday, date.tm_mon + 1, weekdays[date.tm_wday]);
+  } else {
+    snprintf(caption, sizeof(caption), "%s", tr(STR_CLOCK_SETTINGS));
+  }
+  renderer.drawCenteredText(UI_12_FONT_ID, top + cardHeight + 30, caption, true, EpdFontFamily::BOLD);
 }
 
 void SleepActivity::renderCalendarSleepScreen() const {

@@ -2182,6 +2182,7 @@ void EpubReaderActivity::applyBookReaderOverrides(
   // only (see TextBlock::setGuideDots), so a guide-dots-only change must not fall
   // through to the section relayout below.
   const auto& newText = textOverrides ? *textOverrides : bookTextOverrides;
+  const bool classic = gpio.deviceIsX4Classic();
   const bool layoutOverridesUnchanged =
       bookTextOverrides.sideMargin == newText.sideMargin && bookTextOverrides.topMargin == newText.topMargin &&
       bookTextOverrides.bottomMargin == newText.bottomMargin &&
@@ -2191,15 +2192,22 @@ void EpubReaderActivity::applyBookReaderOverrides(
       bookSdFontFamilyOverride == normalizedSdFontFamilyOverride && bookFontSizeOverride == fontSizeOverride &&
       bookFontPointSizeOverride == fontPointSizeOverride && bookBionicReadingOverride == bionicReadingOverride &&
       bookParagraphAlignmentOverride == paragraphAlignmentOverride &&
-      bookTextAntiAliasingOverride == textAntiAliasingOverride && bookHyphenationOverride == hyphenationOverride &&
+      (classic || bookTextAntiAliasingOverride == textAntiAliasingOverride) &&
+      bookHyphenationOverride == hyphenationOverride &&
       bookFontSizeNormalizationOverride == fontSizeNormalizationOverride &&
       bookInlineFootnotePreviewsOverride == inlineFootnotePreviewsOverride &&
       bookLineHeightPercentOverride == lineHeightPercentOverride;
 
-  if (layoutOverridesUnchanged && bookGuideDotsOverride == guideDotsOverride && bookTextOverrides == newText) {
+  if (layoutOverridesUnchanged && bookGuideDotsOverride == guideDotsOverride && bookTextOverrides == newText &&
+      bookTextAntiAliasingOverride == textAntiAliasingOverride) {
     return;
   }
 
+  const bool classicPaintChanged =
+      classic &&
+      (BookTextOverrides::value(bookTextOverrides.darkness, SETTINGS.textDarkness) !=
+           BookTextOverrides::value(newText.darkness, SETTINGS.textDarkness) ||
+       getEffectiveTextAntiAliasing() != (BookTextOverrides::value(textAntiAliasingOverride, SETTINGS.textAntiAliasing) != 0));
   bookEmbeddedStyleOverride = embeddedStyleOverride;
   bookImageRenderingOverride = imageRenderingOverride;
   bookFontFamilyOverride = normalizedFontFamilyOverride;
@@ -2222,8 +2230,16 @@ void EpubReaderActivity::applyBookReaderOverrides(
       bookInlineFootnotePreviewsOverride, bookLineHeightPercentOverride, bookFontPointSizeOverride, &bookTextOverrides);
 
   if (layoutOverridesUnchanged) {
-    // Only guide dots changed: persisted above, and the repaint on resume picks
-    // the new value up in render(). No section relayout, no refresh override.
+    if (classicPaintChanged) {
+      RenderLock lock(*this);
+      pendingPreRender = false;
+      usePreRenderedBuffer = false;
+      preRenderedPage.ready = false;
+      // Repaint the existing page cleanly after switching between gray and
+      // B/W ink. The ordinary page-turn cadence resumes after this frame.
+      renderer.setNextDisplayRefreshMode(HalDisplay::HALF_REFRESH);
+      requestUpdate();
+    }
     return;
   }
 
@@ -2289,6 +2305,11 @@ bool EpubReaderActivity::getEffectiveTextAntiAliasing() const {
     return bookTextAntiAliasingOverride != 0;
   }
   return SETTINGS.textAntiAliasing != 0;
+}
+
+bool EpubReaderActivity::useSinglePassTextAntialiasing(const Page& page) const {
+  return gpio.deviceIsX4Classic() && !renderer.isDarkMode() && getEffectiveTextAntiAliasing() && !page.hasImages() &&
+         renderer.getTextDarkness() >= 2;
 }
 
 bool EpubReaderActivity::getEffectiveHyphenation() const {
@@ -4157,9 +4178,10 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   const int viewportHeight = std::max(0, renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom);
   const int contentTop = orientedMarginTop + getImageOnlyPageYOffset(*page, viewportHeight);
 
-  const bool aaEnabledForThisRender = !renderer.isDarkMode() && getEffectiveTextAntiAliasing() &&
+  const bool singlePassAa = useSinglePassTextAntialiasing(*page);
+  const bool aaEnabledForThisRender = !singlePassAa && !renderer.isDarkMode() && getEffectiveTextAntiAliasing() &&
                                       renderer.hasSecondaryBuffer() && !secondaryBufferDegraded_;
-  if (getEffectiveTextAntiAliasing() && !aaEnabledForThisRender) {
+  if (getEffectiveTextAntiAliasing() && !singlePassAa && !aaEnabledForThisRender) {
     LOG_DBG("ERS", "AA skipped: secondary display buffer unavailable/degraded");
   }
   lastRenderStats.textAntiAliasing = aaEnabledForThisRender;
@@ -4253,8 +4275,10 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   lastRenderStats.forcedHalfRefresh = forceHalfRefreshThisPage;
 
   logReaderMemSnapshot("before_bw_render");
+  renderer.setDitherTextEdges(singlePassAa);
   page->render(renderer, getEffectiveReaderFontId(), orientedMarginLeft, contentTop, effectiveForceLoad,
                imageMonochrome);
+  renderer.setDitherTextEdges(false);
   drawClippingHighlights(*page, getEffectiveReaderFontId(), contentTop, orientedMarginLeft);
   // The BW render also touches images (placeholder/cache draws) and runs the full
   // glyph pipeline; check here too so a clean after_image_warm_pass followed by a
@@ -4325,7 +4349,7 @@ void EpubReaderActivity::renderContents(RenderLock& lock, std::unique_ptr<Page> 
   }
   const bool inlineAaThisRender = aaEnabledForThisRender && !renderer.isX3() && !aaPreempted;
   const bool deferredAaThisRender = aaEnabledForThisRender && renderer.isX3();
-  lastRenderStats.textAntiAliasing = inlineAaThisRender || deferredAaThisRender;
+  lastRenderStats.textAntiAliasing = singlePassAa || inlineAaThisRender || deferredAaThisRender;
   if (inlineAaThisRender) {
     renderer.triggerDisplayAsync(pageRefreshMode);
   } else {
@@ -4463,8 +4487,10 @@ void EpubReaderActivity::displayBuildPage(RenderLock& lock, const Page& page, co
   scope.endScanAndPrewarm();
 
   renderer.clearScreen();
+  renderer.setDitherTextEdges(useSinglePassTextAntialiasing(page));
   page.render(renderer, getEffectiveReaderFontId(), layout.marginLeft, contentTop, /*forceLoadLargeImages=*/false,
               /*monochromeOutput=*/true);
+  renderer.setDitherTextEdges(false);
   drawClippingHighlights(page, getEffectiveReaderFontId(), contentTop, layout.marginLeft);
   renderStatusBar();
   if (forceHalfRefreshAfterPopup_) {
@@ -4497,7 +4523,9 @@ void EpubReaderActivity::renderPageContentOnly(const Page& page, const int orien
   scope.endScanAndPrewarm();
 
   renderer.clearScreen();
+  renderer.setDitherTextEdges(useSinglePassTextAntialiasing(page));
   page.render(renderer, getEffectiveReaderFontId(), orientedMarginLeft, contentTop);
+  renderer.setDitherTextEdges(false);
   drawClippingHighlights(page, getEffectiveReaderFontId(), contentTop, orientedMarginLeft);
   // Status bar intentionally omitted — superimposed at display time with live values.
 }
@@ -4572,7 +4600,8 @@ void EpubReaderActivity::displayPreRenderedPage(const Page& page, const int orie
   if (aaPreempted) {
     LOG_DBG("ERS", "AA replay skipped: page preempted by navigation");
   }
-  if (!aaPreempted && getEffectiveTextAntiAliasing() && renderer.hasSecondaryBuffer() && !secondaryBufferDegraded_) {
+  if (!aaPreempted && !useSinglePassTextAntialiasing(page) && getEffectiveTextAntiAliasing() &&
+      renderer.hasSecondaryBuffer() && !secondaryBufferDegraded_) {
     const int fontId = getEffectiveReaderFontId();
     // Re-warm the page's glyph BITMAPS before the AA replay. The pre-render pass warmed
     // them, but background work since may have dropped or re-wired the cache (B's
