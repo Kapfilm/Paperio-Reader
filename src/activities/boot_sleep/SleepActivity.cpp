@@ -39,7 +39,10 @@
 #include "fontIds.h"
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
+#if FREEINK_DEVICE_X4CLASSIC
 #include "images/FlipClockDigits.h"
+#include "images/CompactFlipClockDigits.h"
+#endif
 #include "util/BookArchiveUtils.h"
 
 namespace {
@@ -568,8 +571,11 @@ void SleepActivity::onEnter() {
     renderer.setOrientation(GfxRenderer::Portrait);
   }
   switch (SETTINGS.sleepScreen) {
+#if FREEINK_DEVICE_X4CLASSIC
+    case CrossPointSettings::CALENDAR_WEATHER_CLOCK:
     case CrossPointSettings::FLIP_CLOCK:
       return renderFlipClockSleepScreen();
+#endif
     case CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER:
     case CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR:
       return renderCalendarSleepScreen();
@@ -711,16 +717,21 @@ bool SleepActivity::renderQuoteSleepScreen() const {
   return true;
 }
 
+#if FREEINK_DEVICE_X4CLASSIC
 namespace {
 RTC_NOINIT_ATTR time_t previousFlipClockTime;
 RTC_NOINIT_ATTR uint32_t flipClockFastTicks;
+RTC_NOINIT_ATTR uint8_t previousFlipClockMode;
+static bool clockRenderedThisBoot = false;
 }
 
 void SleepActivity::renderFlipClockSleepScreen() const {
   const time_t now = HalClock::now();
-  const bool minuteWake = esp_reset_reason() == ESP_RST_DEEPSLEEP &&
-                          esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER;
-  const bool retainedFrame = minuteWake && previousFlipClockTime > 0 &&
+  const bool minuteWake = (esp_reset_reason() == ESP_RST_DEEPSLEEP &&
+                           esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) ||
+                          (gpio.deviceIsX3() && clockRenderedThisBoot);
+  const bool retainedFrame = minuteWake && previousFlipClockMode == SETTINGS.sleepScreen &&
+                             previousFlipClockTime > 0 &&
                              now >= previousFlipClockTime && now - previousFlipClockTime < 120;
   if (!retainedFrame || flipClockFastTicks >= 10) flipClockFastTicks = 0;
   bool fast = false;
@@ -732,20 +743,23 @@ void SleepActivity::renderFlipClockSleepScreen() const {
   }
   drawFlipClock(now);
   renderer.displayBuffer(fast ? HalDisplay::FAST_REFRESH : HalDisplay::HALF_REFRESH);
+  clockRenderedThisBoot = true;
   previousFlipClockTime = now;
+  previousFlipClockMode = SETTINGS.sleepScreen;
   ++flipClockFastTicks;
 }
 
 void SleepActivity::drawFlipClock(const time_t now) const {
-  renderer.setOrientation(GfxRenderer::LandscapeCounterClockwise);
+  const bool withCalendar = SETTINGS.sleepScreen == CrossPointSettings::CALENDAR_WEATHER_CLOCK;
+  renderer.setOrientation(withCalendar ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
   renderer.setRenderMode(GfxRenderer::BW);
   renderer.clearScreen();
   const int width = renderer.getScreenWidth();
   const int height = renderer.getScreenHeight();
-  const int cardWidth = width * 29 / 100;
-  const int gap = width / 35;
-  const int cardHeight = height * 52 / 100;
-  const int top = (height - cardHeight) / 2 - 18;
+  const int cardWidth = withCalendar ? 184 : width * 29 / 100;
+  const int gap = withCalendar ? 16 : width / 35;
+  const int cardHeight = withCalendar ? 194 : height * 52 / 100;
+  const int top = withCalendar ? 28 : (height - cardHeight) / 2 - 18;
   const int left = (width - cardWidth * 2 - gap) / 2;
   tm date{};
   const bool hasTime = now > 0 && localtime_r(&now, &date);
@@ -763,15 +777,34 @@ void SleepActivity::drawFlipClock(const time_t now) const {
     renderer.drawRoundedRect(x, top, cardWidth, cardHeight, 2, 20, true, true, true, true, true);
     const char* value = hasTime ? (index == 0 ? hours : minutes) : "--";
     constexpr int digitGap = 8;
-    const int digitsLeft = x + (cardWidth - FLIP_DIGIT_WIDTH * 2 - digitGap) / 2;
-    const int digitsTop = top + (cardHeight - FLIP_DIGIT_HEIGHT) / 2;
+    const int digitWidth = withCalendar ? COMPACT_FLIP_DIGIT_WIDTH : FLIP_DIGIT_WIDTH;
+    const int digitHeight = withCalendar ? COMPACT_FLIP_DIGIT_HEIGHT : FLIP_DIGIT_HEIGHT;
+    const int digitsLeft = x + (cardWidth - digitWidth * 2 - digitGap) / 2;
+    const int digitsTop = top + (cardHeight - digitHeight) / 2;
     for (int digit = 0; digit < 2; ++digit) {
       if (hasTime) {
-        renderer.drawImage(FLIP_DIGITS[value[digit] - '0'], digitsLeft + digit * (FLIP_DIGIT_WIDTH + digitGap),
-                           digitsTop, FLIP_DIGIT_WIDTH, FLIP_DIGIT_HEIGHT);
+        const auto* bitmap = withCalendar ? COMPACT_FLIP_DIGITS[value[digit] - '0'] : FLIP_DIGITS[value[digit] - '0'];
+        if (withCalendar) {
+          // drawImage rotates the origin, but not bitmap pixels, in portrait.
+          // Use native-size glyphs rasterized directly from the vector font.
+          // No nearest-neighbor reduction of the large binary glyph.
+          for (int row = 0; row < digitHeight; ++row) {
+            const int sourceY = row;
+            for (int col = 0; col < digitWidth; ++col) {
+              const int sourceX = col;
+              const uint8_t bits = bitmap[sourceY * (COMPACT_FLIP_DIGIT_WIDTH / 8) + sourceX / 8];
+              if ((bits & (0x80 >> (sourceX % 8))) == 0) {
+                renderer.drawPixel(digitsLeft + digit * (digitWidth + digitGap) + col, digitsTop + row, true);
+              }
+            }
+          }
+        } else {
+          renderer.drawImage(bitmap, digitsLeft + digit * (digitWidth + digitGap),
+                             digitsTop, digitWidth, digitHeight);
+        }
       } else {
-        renderer.fillRect(digitsLeft + digit * (FLIP_DIGIT_WIDTH + digitGap) + 18,
-                          top + cardHeight / 2 - 5, FLIP_DIGIT_WIDTH - 36, 10, true);
+        renderer.fillRect(digitsLeft + digit * (digitWidth + digitGap) + 18,
+                          top + cardHeight / 2 - 5, digitWidth - 36, 10, true);
       }
     }
     renderer.drawLine(x + 2, top + cardHeight / 2, x + cardWidth - 3, top + cardHeight / 2, 1, true);
@@ -781,6 +814,10 @@ void SleepActivity::drawFlipClock(const time_t now) const {
   if (hasTime && twelveHour) {
     renderer.drawText(UI_12_FONT_ID, left + 14, top + 10, date.tm_hour < 12 ? "AM" : "PM", true,
                       EpdFontFamily::BOLD);
+  }
+  if (withCalendar) {
+    drawCalendar(now, true);
+    return;
   }
   char caption[64];
   constexpr const char* weekdays[] = {"ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"};
@@ -792,21 +829,27 @@ void SleepActivity::drawFlipClock(const time_t now) const {
   renderer.drawCenteredText(UI_12_FONT_ID, top + cardHeight + 30, caption, true, EpdFontFamily::BOLD);
 }
 
+#endif
+
 void SleepActivity::renderCalendarSleepScreen() const {
   // Network refresh may have freed the previous-frame buffer. Repaint both
   // panel planes on X4 instead of diffing against a potentially stale image.
   const auto refreshMode =
       renderer.hasSecondaryBuffer() ? finalSleepRefreshMode(renderer) : HalDisplay::HALF_REFRESH;
+  const time_t now = HalClock::hasCurrentDate() ? HalClock::now() : 0;
+  renderer.clearScreen();
+  drawCalendar(now, false);
+  renderer.displayBuffer(refreshMode);
+}
+
+void SleepActivity::drawCalendar(const time_t now, const bool withClock) const {
   const int width = renderer.getScreenWidth();
   const int height = renderer.getScreenHeight();
-  const time_t now = HalClock::hasCurrentDate() ? HalClock::now() : 0;
   tm date{};
-  renderer.clearScreen();
-
   if (!now || !localtime_r(&now, &date)) {
-    renderer.drawCenteredText(UI_12_FONT_ID, height / 2 - 40, tr(STR_SLEEP_CALENDAR), true, EpdFontFamily::BOLD);
-    renderer.drawCenteredText(SMALL_FONT_ID, height / 2 + 8, tr(STR_SLEEPING));
-    renderer.displayBuffer(refreshMode);
+    renderer.drawCenteredText(UI_12_FONT_ID, withClock ? 360 : height / 2 - 40,
+                              tr(STR_SLEEP_CALENDAR), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(SMALL_FONT_ID, withClock ? 408 : height / 2 + 8, tr(STR_SLEEPING));
     return;
   }
 
@@ -825,9 +868,9 @@ void SleepActivity::renderCalendarSleepScreen() const {
   const bool leapYear = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
   const int days = daysPerMonth[date.tm_mon] + (date.tm_mon == 1 && leapYear);
   const int firstColumn = (date.tm_wday + 6 - (date.tm_mday - 1) % 7) % 7;
-  const int cell = (width - 48) / 7;
+  const int cell = withClock ? std::min((width - 48) / 7, (height - 420) / 7) : (width - 48) / 7;
   const int left = (width - 7 * cell) / 2;
-  const int top = (height - 7 * cell) / 2;
+  const int top = withClock ? 312 : (height - 7 * cell) / 2;
 
   const std::string title = std::string(I18N.get(monthNames[date.tm_mon])) + " " + std::to_string(year);
   renderer.drawCenteredText(UI_12_FONT_ID, top - 56, title.c_str(), true, EpdFontFamily::BOLD);
@@ -850,10 +893,9 @@ void SleepActivity::renderCalendarSleepScreen() const {
     renderer.drawText(UI_12_FONT_ID, x + (cell - renderer.getTextWidth(UI_12_FONT_ID, number, style)) / 2,
                       y + (cell - renderer.getLineHeight(UI_12_FONT_ID)) / 2, number, !today, style);
   }
-  if (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER) {
+  if (withClock || SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER) {
     renderCalendarWeather(now, top + 7 * cell);
   }
-  renderer.displayBuffer(refreshMode);
 }
 
 void SleepActivity::renderCalendarWeather(time_t now, int calendarBottom) const {

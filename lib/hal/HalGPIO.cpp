@@ -123,7 +123,13 @@ void HalGPIO::begin() {
   pinMode(BoardConfig::ACTIVE.batteryChargeStatus, INPUT);
   inputMgr.begin();
 #else
+#if defined(PAPERIO_TARGET_X3)
+  _deviceType = DeviceType::X3;
+#elif defined(PAPERIO_TARGET_X4)
+  _deviceType = DeviceType::X4;
+#else
   _deviceType = detectDeviceTypeWithFingerprint();
+#endif
   BoardConfig::selectDevice(deviceIsX3() ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);
 
   // Resolve the per-batch controller before SPI owns the display pins. FreeInk

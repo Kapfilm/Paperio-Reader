@@ -51,6 +51,7 @@ EpdFontFamily ui12Default(&ui12Regular, &ui12Bold);
 void registerUiFonts(GfxRenderer& renderer) {
   renderer.insertFont(SMALL_FONT_ID, smallDefault);
   renderer.insertFont(UI_HINT_FONT_ID, smallDefault);
+  renderer.insertFont(STATUS_LARGE_FONT_ID, ui9Default);
   renderer.insertFont(COMPACT_BUTTON_FONT_ID, smallDefault);
   renderer.insertFont(UI_10_FONT_ID, ui10Default);
   renderer.insertFont(UI_12_FONT_ID, ui12Default);
@@ -62,6 +63,7 @@ bool applyUiTextSize(GfxRenderer& renderer, uint8_t size, bool bold) {
   if (size > UiTextSize::Medium) size = UiTextSize::Normal;
   if (appliedSize == size && appliedBold == bold) return false;
   const bool enlarged = size == UiTextSize::Enlarged;
+  renderer.replaceFont(STATUS_LARGE_FONT_ID, bold ? ui9Dark : ui9Default);
   // Map both regular and explicit bold calls to real bold faces. Width measuring,
   // wrapping and drawing then agree for every size without synthetic thickening.
   renderer.replaceFont(SMALL_FONT_ID, enlarged ? (bold ? ui10Dark : ui10Default) : (bold ? smallDark : smallDefault));

@@ -83,6 +83,19 @@ namespace {
 constexpr uint8_t PROGRESS_TEXT_ANCHOR_MARKER = 0xA1;
 constexpr size_t PROGRESS_BASE_SIZE = 11;
 
+std::array<uint8_t, 19> readerStatusBarSnapshot() {
+  return {SETTINGS.statusBarFontSize, SETTINGS.statusBarItemsPosition,
+          SETTINGS.statusBarChapterPageCount, SETTINGS.statusBarChapterPageCountPosition,
+          SETTINGS.statusBarBookProgressPercentage, SETTINGS.statusBarBookProgressPercentagePosition,
+          SETTINGS.statusBarTitle, SETTINGS.statusBarTitlePosition,
+          SETTINGS.statusBarBattery, SETTINGS.statusBarBatteryPosition,
+          SETTINGS.statusBarClock, SETTINGS.statusBarClockPosition,
+          SETTINGS.statusBarBookTitle, SETTINGS.statusBarBookTitlePosition,
+          SETTINGS.statusBarUpperProgressBar, SETTINGS.statusBarUpperProgressBarThickness,
+          SETTINGS.statusBarLowerProgressBar, SETTINGS.statusBarLowerProgressBarThickness,
+          SETTINGS.useClock};
+}
+
 std::string bookmarkPageText(const Page& page, size_t limit = std::string::npos) {
   std::string text;
   for (const auto& element : page.elements) {
@@ -2203,11 +2216,11 @@ void EpubReaderActivity::applyBookReaderOverrides(
     return;
   }
 
-  const bool classicPaintChanged =
-      classic &&
-      (BookTextOverrides::value(bookTextOverrides.darkness, SETTINGS.textDarkness) !=
-           BookTextOverrides::value(newText.darkness, SETTINGS.textDarkness) ||
-       getEffectiveTextAntiAliasing() != (BookTextOverrides::value(textAntiAliasingOverride, SETTINGS.textAntiAliasing) != 0));
+  const bool bookPaintChanged =
+      BookTextOverrides::value(bookTextOverrides.darkness, SETTINGS.textDarkness) !=
+          BookTextOverrides::value(newText.darkness, SETTINGS.textDarkness) ||
+      (classic && getEffectiveTextAntiAliasing() !=
+          (BookTextOverrides::value(textAntiAliasingOverride, SETTINGS.textAntiAliasing) != 0));
   bookEmbeddedStyleOverride = embeddedStyleOverride;
   bookImageRenderingOverride = imageRenderingOverride;
   bookFontFamilyOverride = normalizedFontFamilyOverride;
@@ -2230,7 +2243,7 @@ void EpubReaderActivity::applyBookReaderOverrides(
       bookInlineFootnotePreviewsOverride, bookLineHeightPercentOverride, bookFontPointSizeOverride, &bookTextOverrides);
 
   if (layoutOverridesUnchanged) {
-    if (classicPaintChanged) {
+    if (bookPaintChanged) {
       RenderLock lock(*this);
       pendingPreRender = false;
       usePreRenderedBuffer = false;
@@ -4512,6 +4525,9 @@ void EpubReaderActivity::displayBuildPage(RenderLock& lock, const Page& page, co
 void EpubReaderActivity::renderPageContentOnly(const Page& page, const int orientedMarginTop,
                                                const int orientedMarginRight, const int orientedMarginBottom,
                                                const int orientedMarginLeft) {
+  // This path also restores a page after a menu/preview changed renderer state.
+  renderer.setTextDarkness(BookTextOverrides::value(bookTextOverrides.darkness, SETTINGS.textDarkness));
+
   auto* fcm = renderer.getFontCacheManager();
   fcm->resetStats();
 
@@ -4700,20 +4716,8 @@ void EpubReaderActivity::renderStatusBar() const {
   const bool isStarred =
       section && bookmarkStore.has(static_cast<uint16_t>(currentSpineIndex),
                                    static_cast<uint16_t>(section->currentPage), annotationAnchor(), isFullNoteView());
-  std::string printedPageLabel;
-  if (section && SETTINGS.statusBarPrintedPage) {
-    const auto page = static_cast<uint16_t>(section->currentPage);
-    if (const auto label = section->getPrintedPageLabelForPage(page)) {
-      // Exact-match label (already parenthesised, may be "7/8" when multiple anchors collapse).
-      printedPageLabel = *label;
-    } else if (const auto nearest = section->getNearestPrintedPageLabelAtOrBefore(page)) {
-      // No pagebreak on this device page: show the last printed-page label we passed within
-      // this section so the status bar still tells the reader which printed page they're on.
-      printedPageLabel = std::string("(") + *nearest + ")";
-    }
-  }
-  GUI.drawStatusBar(renderer, bookProgress, currentPage, displayPageCount, title, 0, isStarred, printedPageLabel,
-                    /*fillMargin=*/true, /*pageCountApproximate=*/building);
+  GUI.drawStatusBar(renderer, bookProgress, currentPage, displayPageCount, title, 0, isStarred, {},
+                    /*fillMargin=*/true, /*pageCountApproximate=*/building, epub->getTitle());
 
 #if DEBUG_BACKGROUND_WORK
   renderBackgroundDebugOverlay();
@@ -5640,6 +5644,9 @@ void EpubReaderActivity::openReaderMenu() {
   // flash the whole panel black. Keep the return paint differential instead:
   // it restores the page over the former menu area without a black transition.
   renderer.setNextDisplayRefreshMode(HalDisplay::FAST_REFRESH);
+  const auto statusBarBefore = readerStatusBarSnapshot();
+  const int statusBarTopBefore = UITheme::getStatusBarTopHeight(automaticPageTurnActive);
+  const int statusBarBottomBefore = UITheme::getStatusBarBottomHeight(automaticPageTurnActive);
   startActivityForResult(
       std::make_unique<EpubReaderMenuActivity>(
           renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent, SETTINGS.orientation,
@@ -5649,7 +5656,7 @@ void EpubReaderActivity::openReaderMenu() {
           bookTextAntiAliasingOverride, bookHyphenationOverride, bookFontSizeNormalizationOverride,
           bookInlineFootnotePreviewsOverride, !bookmarkStore.isEmpty(), isCurrentPageStarred, hasPrintedPages,
           !clippingStore.empty(), bookFontPointSizeOverride, bookTextOverrides),
-      [this](const ActivityResult& result) {
+      [this, statusBarBefore, statusBarTopBefore, statusBarBottomBefore](const ActivityResult& result) {
         const auto& menu = std::get<MenuResult>(result.data);
         applyBookReaderOverrides(
             menu.embeddedStyleOverride, menu.imageRenderingOverride, menu.fontFamilyOverride, menu.sdFontFamilyOverride,
@@ -5659,6 +5666,22 @@ void EpubReaderActivity::openReaderMenu() {
             menu.fontPointSizeOverride, &menu.textOverrides);
         applyOrientation(menu.orientation);
         toggleAutoPageTurn(menu.pageTurnOption);
+        if (readerStatusBarSnapshot() != statusBarBefore) {
+          RenderLock lock(*this);
+          const bool rowGeometryChanged =
+              statusBarTopBefore != UITheme::getStatusBarTopHeight(automaticPageTurnActive) ||
+              statusBarBottomBefore != UITheme::getStatusBarBottomHeight(automaticPageTurnActive);
+          if (rowGeometryChanged) {
+            preservePositionForRelayout();
+            section.reset();
+          }
+          pendingPreRender = false;
+          usePreRenderedBuffer = false;
+          preRenderedPage.ready = false;
+          pendingGrayscale_ = {};
+          requestUpdate();
+        }
+
         if (!result.isCancelled) {
           onReaderMenuConfirm(static_cast<EpubReaderMenuActivity::MenuAction>(menu.action));
         }

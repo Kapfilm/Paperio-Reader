@@ -94,6 +94,12 @@ class UITheme {
   static int getStatusBarBottomInset();
   static int getStatusBarHeight(bool forceStatusItems = false);
   static int getStatusBarItemsHeight();
+  static int getStatusBarItemsHeightForEdge(bool top, bool forceStatusItems = false);
+  static int getStatusBarFontId();
+  static bool statusBarItemAtTop(uint8_t overridePosition);
+  static bool statusBarItemAtLeft(uint8_t overridePosition, bool defaultLeft);
+  static bool hasStatusBarItemsAtEdge(bool top, bool forceStatusItems = false);
+  static int getStatusBarTopInset();
   static int getProgressBarHeight(uint8_t progressBar, uint8_t thickness);
 
  private:

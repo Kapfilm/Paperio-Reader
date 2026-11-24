@@ -61,6 +61,23 @@ Rect fittedBitmapRect(const Bitmap& bitmap, const Rect& target) {
   return Rect{target.x + (target.width - width) / 2, target.y + (target.height - height) / 2, width, height};
 }
 
+// A rounded border alone leaves the rectangular bitmap visible in its corners.
+// Clear only pixels outside the four quarter circles before drawing the border.
+void clipCoverCorners(const GfxRenderer& renderer, const Rect& rect) {
+  const int radius = std::min({kCoverCornerRadius, rect.width / 2, rect.height / 2});
+  for (int dy = 0; dy < radius; ++dy) {
+    for (int dx = 0; dx < radius; ++dx) {
+      const int cx = radius - dx;
+      const int cy = radius - dy;
+      if (cx * cx + cy * cy <= radius * radius) continue;
+      renderer.drawPixel(rect.x + dx, rect.y + dy, false);
+      renderer.drawPixel(rect.x + rect.width - 1 - dx, rect.y + dy, false);
+      renderer.drawPixel(rect.x + dx, rect.y + rect.height - 1 - dy, false);
+      renderer.drawPixel(rect.x + rect.width - 1 - dx, rect.y + rect.height - 1 - dy, false);
+    }
+  }
+}
+
 const char* bookFormatLabel(const RecentBook& book) {
   if (book.sourceFormat == "FB2") return "FB2";
   if (book.sourceFormat == "EPUB") return "EPUB";
@@ -132,8 +149,9 @@ void drawProgress(const GfxRenderer& renderer, const Rect& coverRect, const Rece
   } else {
     snprintf(label, sizeof(label), "%d%%", progress);
   }
-  const int labelWidth = renderer.getTextWidth(UI_10_FONT_ID, label);
-  renderer.drawText(UI_10_FONT_ID, coverRect.x + coverRect.width - labelWidth, labelY, label);
+  // Compact mapping follows all three UI sizes: 8 / 9 / 10 pt instead of 10 / 11 / 12.
+  const int labelWidth = renderer.getTextWidth(COMPACT_BUTTON_FONT_ID, label);
+  renderer.drawText(COMPACT_BUTTON_FONT_ID, coverRect.x + coverRect.width - labelWidth, labelY, label);
 }
 }  // namespace
 
@@ -142,15 +160,15 @@ void MinimalTheme::drawHeader(const GfxRenderer& renderer, const Rect rect, cons
   renderer.fillRect(rect.x, rect.y, rect.width, rect.height, false);
   const bool showPercentage =
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
-  const int batteryX = rect.x + rect.width - 12 - MinimalMetrics::values.batteryWidth;
+  const int batteryX = rect.x + rect.width - 18 - MinimalMetrics::values.batteryWidth;
   drawBatteryRight(
-      renderer, Rect{batteryX, rect.y + 5, MinimalMetrics::values.batteryWidth, MinimalMetrics::values.batteryHeight},
+      renderer, Rect{batteryX, rect.y + 9, MinimalMetrics::values.batteryWidth, MinimalMetrics::values.batteryHeight},
       showPercentage);
 
   if (SETTINGS.useClock) {
     char clockStr[16];
     HalClock::formatTime(clockStr, sizeof(clockStr), !SETTINGS.clockFormat12h);
-    renderer.drawText(SMALL_FONT_ID, rect.x + MinimalMetrics::values.contentSidePadding, rect.y + 5, clockStr);
+    renderer.drawText(SMALL_FONT_ID, rect.x + MinimalMetrics::values.contentSidePadding + 6, rect.y + 9, clockStr);
   }
 
   constexpr int titleInset = 12;
@@ -209,6 +227,7 @@ void MinimalTheme::drawRecentBookCover(GfxRenderer& renderer, const Rect rect,
           renderer.fillRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, kCoverCornerRadius,
                                    Color::White);
           renderer.drawBitmap(bitmap, bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 0, 0, true);
+          clipCoverCorners(renderer, bitmapRect);
           renderer.drawRoundedRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 1,
                                    kCoverCornerRadius, true);
           hasCover = true;

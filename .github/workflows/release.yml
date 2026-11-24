@@ -19,7 +19,7 @@ jobs:
   build-release:
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       CROSSPOINT_RELEASE_VERSION: ${{ github.ref_name }}
     steps:
@@ -65,10 +65,13 @@ jobs:
       - name: Build Paperio Reader
         run: |
           set -o pipefail
-          pio run -e gh_release -e x4c_release 2>&1 | tee firmware-build.log
+          pio run -e gh_release -e x3_release -e x4_release -e x4c_release 2>&1 | tee firmware-build.log
 
       - name: Prepare final firmware image
-        run: python scripts/patch_min_chip_rev.py .pio/build/gh_release/firmware.bin
+        run: |
+          python scripts/patch_min_chip_rev.py .pio/build/gh_release/firmware.bin
+          python scripts/patch_min_chip_rev.py .pio/build/x3_release/firmware.bin
+          python scripts/patch_min_chip_rev.py .pio/build/x4_release/firmware.bin
 
       - name: Build host tests
         run: |
@@ -80,6 +83,8 @@ jobs:
           set -o pipefail
           ctest --test-dir build/test --output-on-failure -j 2 2>&1 | tee host-tests.log
           FIRMWARE_IMAGE_TEST_PATH=.pio/build/gh_release/firmware.bin build/test/firmware_image/FirmwareImageTest 2>&1 | tee -a host-tests.log
+          FIRMWARE_IMAGE_TEST_PATH=.pio/build/x3_release/firmware.bin build/test/firmware_image/FirmwareImageTest 2>&1 | tee -a host-tests.log
+          FIRMWARE_IMAGE_TEST_PATH=.pio/build/x4_release/firmware.bin build/test/firmware_image/FirmwareImageTest 2>&1 | tee -a host-tests.log
           FIRMWARE_IMAGE_TEST_PATH=.pio/build/x4c_release/firmware.bin build/test/firmware_image/FirmwareImageClassicTest 2>&1 | tee -a host-tests.log
           bash tools/check_recent_books_ui.sh 2>&1 | tee recent-books-ui.log
 
@@ -106,12 +111,21 @@ jobs:
             echo "Release $CROSSPOINT_RELEASE_VERSION is already published"
             exit 0
           fi
-          gh release create "$CROSSPOINT_RELEASE_VERSION" dist/* \
-            --verify-tag --target "$GITHUB_SHA" --draft \
-            --title "Paperio Reader $CROSSPOINT_RELEASE_VERSION" \
-            --notes-file "docs/releases/$CROSSPOINT_RELEASE_VERSION.md"
+          if gh release view "$CROSSPOINT_RELEASE_VERSION" --json isDraft --jq '.isDraft' | grep -qx true; then
+            gh release upload "$CROSSPOINT_RELEASE_VERSION" dist/* --clobber
+            gh release edit "$CROSSPOINT_RELEASE_VERSION" \
+              --title "Paperio Reader $CROSSPOINT_RELEASE_VERSION" \
+              --notes-file "docs/releases/$CROSSPOINT_RELEASE_VERSION.md"
+          else
+            gh release create "$CROSSPOINT_RELEASE_VERSION" dist/* \
+              --verify-tag --target "$GITHUB_SHA" --draft \
+              --title "Paperio Reader $CROSSPOINT_RELEASE_VERSION" \
+              --notes-file "docs/releases/$CROSSPOINT_RELEASE_VERSION.md"
+          fi
           gh release download "$CROSSPOINT_RELEASE_VERSION" --dir verified-release
           (cd verified-release && sha256sum -c SHA256SUMS)
           cmp dist/firmware.bin verified-release/firmware.bin
           cmp dist/firmware-x4c.bin verified-release/firmware-x4c.bin
+          cmp dist/firmware-x3.bin verified-release/firmware-x3.bin
+          cmp dist/firmware-x4.bin verified-release/firmware-x4.bin
           gh release edit "$CROSSPOINT_RELEASE_VERSION" --draft=false --prerelease=false --latest

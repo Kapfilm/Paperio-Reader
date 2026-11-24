@@ -9,8 +9,8 @@
 // Reader status bar configuration activity
 class StatusBarSettingsActivity final : public Activity {
  public:
-  explicit StatusBarSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("StatusBarSettings", renderer, mappedInput) {}
+  explicit StatusBarSettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool overlayPanel = false)
+      : Activity("StatusBarSettings", renderer, mappedInput), overlayPanel(overlayPanel) {}
 
   void onEnter() override;
   void onExit() override;
@@ -19,6 +19,7 @@ class StatusBarSettingsActivity final : public Activity {
 
  private:
   ButtonNavigator buttonNavigator;
+  const bool overlayPanel;
 
   int selectedIndex = 0;
 

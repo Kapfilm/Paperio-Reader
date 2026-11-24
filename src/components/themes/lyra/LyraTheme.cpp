@@ -189,16 +189,16 @@ void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
   // Position icon at right edge, drawBatteryRight will place text to the left
-  const int batteryX = rect.x + rect.width - 12 - LyraMetrics::values.batteryWidth;
+  const int batteryX = rect.x + rect.width - 18 - LyraMetrics::values.batteryWidth;
   drawBatteryRight(renderer,
-                   Rect{batteryX, rect.y + 5, LyraMetrics::values.batteryWidth, LyraMetrics::values.batteryHeight},
+                   Rect{batteryX, rect.y + 9, LyraMetrics::values.batteryWidth, LyraMetrics::values.batteryHeight},
                    showBatteryPercentage);
 
   // Draw clock in header
   if (SETTINGS.useClock) {
     char clockStr[16];
     HalClock::formatTime(clockStr, sizeof(clockStr), !SETTINGS.clockFormat12h);
-    renderer.drawText(SMALL_FONT_ID, rect.x + LyraMetrics::values.contentSidePadding, rect.y + 5, clockStr);
+    renderer.drawText(SMALL_FONT_ID, rect.x + LyraMetrics::values.contentSidePadding + 6, rect.y + 9, clockStr);
   }
 
   int maxTitleWidth = title != nullptr ? renderer.getTextWidth(UI_12_FONT_ID, title, EpdFontFamily::BOLD) : 0;

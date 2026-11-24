@@ -15,8 +15,6 @@
 #include "fontIds.h"
 
 namespace {
-constexpr int selectionGap = 6;
-constexpr int selectionWidth = 4;
 
 Rect fitCover(const Rect& box, const int width, const int height) {
   // Integer contain-fit, with the same scale on both axes. The outer box is
@@ -115,8 +113,8 @@ void Lyra3CoversTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, con
 
   if (selectorIndex >= 0 && selectorIndex < bookCount) {
     const Rect& artwork = coverRects_[selectorIndex];
-    renderer.drawRoundedRect(artwork.x - selectionGap, artwork.y - selectionGap, artwork.width + 2 * selectionGap,
-                             artwork.height + 2 * selectionGap, selectionWidth, 4, true);
+    renderer.drawRoundedRect(artwork.x - 6, artwork.y - 6, artwork.width + 12,
+                             artwork.height + 12, 4, 4, true);
   }
   // No titles, authors, percentages, or progress bars: only the three covers.
 }

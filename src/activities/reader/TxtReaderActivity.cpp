@@ -321,7 +321,8 @@ void TxtReaderActivity::renderStatusBar() const {
     title = txt->getTitle();
   }
   const bool isStarred = bookmarkStore.has(0, static_cast<uint16_t>(currentPage));
-  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title, 0, isStarred);
+  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title, 0, isStarred, {},
+                    true, false, txt->getTitle());
 
   noteStatusBarRendered();
 }

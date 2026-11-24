@@ -429,23 +429,23 @@ void BaseTheme::drawListSeparator(const GfxRenderer& renderer, Rect rowRect, int
 
 void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title, const char* subtitle) const {
   // Hide last battery draw
-  constexpr int maxBatteryWidth = 80;
-  renderer.fillRect(rect.x + rect.width - maxBatteryWidth, rect.y + 5, maxBatteryWidth,
+  constexpr int maxBatteryWidth = 86;
+  renderer.fillRect(rect.x + rect.width - maxBatteryWidth, rect.y + 9, maxBatteryWidth,
                     BaseMetrics::values.batteryHeight + 10, false);
 
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage != CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_ALWAYS;
   // Position icon at right edge, drawBatteryRight will place text to the left
-  const int batteryX = rect.x + rect.width - 12 - BaseMetrics::values.batteryWidth;
+  const int batteryX = rect.x + rect.width - 18 - BaseMetrics::values.batteryWidth;
   drawBatteryRight(renderer,
-                   Rect{batteryX, rect.y + 5, BaseMetrics::values.batteryWidth, BaseMetrics::values.batteryHeight},
+                   Rect{batteryX, rect.y + 9, BaseMetrics::values.batteryWidth, BaseMetrics::values.batteryHeight},
                    showBatteryPercentage);
 
   // Draw clock in header
   if (SETTINGS.useClock) {
     char clockStr[16];
     HalClock::formatTime(clockStr, sizeof(clockStr), !SETTINGS.clockFormat12h);
-    renderer.drawText(SMALL_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding, rect.y + 5, clockStr);
+    renderer.drawText(SMALL_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding + 6, rect.y + 9, clockStr);
   }
 
   if (title) {
@@ -453,7 +453,7 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
     auto truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, title,
                                                  rect.width - padding * 2 - BaseMetrics::values.contentSidePadding * 2,
                                                  EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_12_FONT_ID, rect.y + 5, truncatedTitle.c_str(), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, rect.y + 9, truncatedTitle.c_str(), true, EpdFontFamily::BOLD);
   }
 
   if (subtitle) {
@@ -906,7 +906,7 @@ void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layou
 void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
                               const int pageCount, std::string title, const int paddingBottom, const bool isStarred,
                               const std::string& printedPageLabel, const bool fillMargin,
-                              const bool pageCountApproximate) const {
+                              const bool pageCountApproximate, const std::string& bookTitle) const {
   // While a section is still being laid out the total page count is a byte-based estimate, shown
   // with a leading "~" so the reader knows it will firm up as the chapter finishes building.
   const char* pageCountPrefix = pageCountApproximate ? "~" : "";
@@ -961,117 +961,132 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   drawEdgeProgressBar(SETTINGS.statusBarUpperProgressBar, SETTINGS.statusBarUpperProgressBarThickness, true);
   drawEdgeProgressBar(SETTINGS.statusBarLowerProgressBar, SETTINGS.statusBarLowerProgressBarThickness, false);
 
-  const bool hasProgressText = SETTINGS.statusBarBookProgressPercentage || SETTINGS.statusBarChapterPageCount;
-  const bool hasStatusItems = hasProgressText || SETTINGS.statusBarBattery || !title.empty() ||
-                              SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE ||
-                              (SETTINGS.useClock && SETTINGS.statusBarClock) || !printedPageLabel.empty();
-  if (!hasStatusItems) {
-    drawPageBookmark();
-    return;
-  }
-
-  const bool statusItemsAtTop =
-      SETTINGS.statusBarItemsPosition == CrossPointSettings::STATUS_BAR_ITEMS_POSITION::STATUS_BAR_ITEMS_TOP;
-  const int adjacentProgressHeight = statusItemsAtTop
-                                         ? UITheme::getProgressBarHeight(SETTINGS.statusBarUpperProgressBar,
-                                                                         SETTINGS.statusBarUpperProgressBarThickness)
-                                         : UITheme::getProgressBarHeight(SETTINGS.statusBarLowerProgressBar,
-                                                                         SETTINGS.statusBarLowerProgressBarThickness);
-  const int statusItemsHeight = UITheme::getStatusBarItemsHeight();
-
-  const int textY = statusItemsAtTop ? orientedMarginTop + paddingBottom + adjacentProgressHeight + 4
-                                     : lowerEdge - adjacentProgressHeight - statusItemsHeight + 4;
-  int progressTextWidth = 0;
-  const int printedLabelWidth =
-      printedPageLabel.empty() ? 0 : renderer.getTextWidth(SMALL_FONT_ID, printedPageLabel.c_str());
-  const int printedLabelGap = printedLabelWidth > 0 && hasProgressText ? 8 : 0;
-
-  if (hasProgressText) {
-    // Right-aligned device page counter / progress percentage. The printed-page label, if any,
-    // is drawn to the LEFT of this counter as a parenthesised hint — the device counter on the
-    // right always reflects spine pagination.
-    char progressStr[32];
-
-    if (SETTINGS.statusBarBookProgressPercentage && SETTINGS.statusBarChapterPageCount) {
-      snprintf(progressStr, sizeof(progressStr), "%d/%s%d  %.0f%%", currentPage, pageCountPrefix, pageCount,
-               bookProgress);
-    } else if (SETTINGS.statusBarBookProgressPercentage) {
-      snprintf(progressStr, sizeof(progressStr), "%.0f%%", bookProgress);
-    } else {
-      snprintf(progressStr, sizeof(progressStr), "%d/%s%d", currentPage, pageCountPrefix, pageCount);
-    }
-
-    const int progressStrWidth = renderer.getTextWidth(SMALL_FONT_ID, progressStr);
-    progressTextWidth = progressStrWidth + printedLabelGap + printedLabelWidth;
-
-    const int textX = screenWidth - metrics.statusBarHorizontalMargin - orientedMarginRight - progressStrWidth;
-    renderer.drawText(SMALL_FONT_ID, textX, textY, progressStr);
-    if (printedLabelWidth > 0) {
-      renderer.drawText(SMALL_FONT_ID, textX - printedLabelGap - printedLabelWidth, textY, printedPageLabel.c_str());
-    }
-  } else if (printedLabelWidth > 0) {
-    progressTextWidth = printedLabelWidth;
-    const int textX = screenWidth - metrics.statusBarHorizontalMargin - orientedMarginRight - printedLabelWidth;
-    renderer.drawText(SMALL_FONT_ID, textX, textY, printedPageLabel.c_str());
-  }
-
-  // Draw Battery
+  // Legacy printed-page hints are deliberately ignored: these rows report
+  // device pagination and independently selected chapter/book titles only.
+  (void)printedPageLabel;
+  const int fontId = UITheme::getStatusBarFontId();
+  const int lineHeight = renderer.getLineHeight(fontId);
+  const int rowLeft = orientedMarginLeft + metrics.statusBarHorizontalMargin + 6;
+  const int rowRight = screenWidth - orientedMarginRight - metrics.statusBarHorizontalMargin - 6;
+  constexpr int itemGap = 8;
+  const auto onEdge = [](const uint8_t position, const bool top) {
+    return UITheme::statusBarItemAtTop(position) == top;
+  };
   const bool showBatteryPercentage =
       SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
-  const int batteryX = metrics.statusBarHorizontalMargin + orientedMarginLeft + 1;
-  int batteryStatusWidth = 0;
-  if (SETTINGS.statusBarBattery) {
-    batteryStatusWidth = metrics.batteryWidth;
-    if (showBatteryPercentage) {
-      const std::string percentageText = std::to_string(powerManager.getBatteryPercentage()) + "%";
-      batteryStatusWidth +=
-          BaseTheme::batteryPercentSpacing + renderer.getTextWidth(SMALL_FONT_ID, percentageText.c_str());
+  const bool forcedTitle = !title.empty() && SETTINGS.statusBarTitle == CrossPointSettings::HIDE_TITLE;
+
+  for (const bool top : {true, false}) {
+    const bool showBattery = SETTINGS.statusBarBattery && onEdge(SETTINGS.statusBarBatteryPosition, top);
+    const bool showClock = SETTINGS.useClock && SETTINGS.statusBarClock &&
+                           onEdge(SETTINGS.statusBarClockPosition, top);
+    const bool showCounter = SETTINGS.statusBarChapterPageCount &&
+                             onEdge(SETTINGS.statusBarChapterPageCountPosition, top);
+    const bool showPercent = SETTINGS.statusBarBookProgressPercentage &&
+                             onEdge(SETTINGS.statusBarBookProgressPercentagePosition, top);
+    // A nonempty chapter title also covers the automatic-page-turn countdown.
+    const bool showTitle = !title.empty() && onEdge(SETTINGS.statusBarTitlePosition, top);
+    const bool showBookTitle = SETTINGS.statusBarBookTitle && !bookTitle.empty() &&
+                               onEdge(SETTINGS.statusBarBookTitlePosition, top);
+    if (!showBattery && !showClock && !showCounter && !showPercent && !showTitle && !showBookTitle) continue;
+
+    const int adjacentProgressHeight =
+        top ? UITheme::getProgressBarHeight(SETTINGS.statusBarUpperProgressBar,
+                                            SETTINGS.statusBarUpperProgressBarThickness)
+            : UITheme::getProgressBarHeight(SETTINGS.statusBarLowerProgressBar,
+                                            SETTINGS.statusBarLowerProgressBarThickness);
+    const int reservedItemsHeight =
+        top ? UITheme::getStatusBarTopHeight(forcedTitle) - adjacentProgressHeight - UITheme::getStatusBarTopInset()
+            : UITheme::getStatusBarBottomHeight(forcedTitle) - adjacentProgressHeight -
+                  UITheme::getStatusBarBottomInset();
+    const int textY = top ? orientedMarginTop + paddingBottom + adjacentProgressHeight + 1 + UITheme::getStatusBarTopInset()
+                         : lowerEdge - adjacentProgressHeight - reservedItemsHeight + 1;
+
+    struct SideItem {
+      std::string text;
+      bool battery;
+      bool left;
+      int width;
+    };
+    SideItem items[4];
+    int itemCount = 0;
+    if (showBattery) {
+      const std::string percentageText = showBatteryPercentage
+                                             ? std::to_string(powerManager.getBatteryPercentage()) + "%"
+                                             : std::string();
+      const int textWidth = percentageText.empty() ? 0 : BaseTheme::batteryPercentSpacing +
+                                                         renderer.getTextWidth(fontId, percentageText.c_str());
+      items[itemCount++] = {percentageText, true,
+                            UITheme::statusBarItemAtLeft(SETTINGS.statusBarBatteryPosition, true),
+                            metrics.batteryWidth + textWidth};
     }
-    GUI.drawBatteryLeft(renderer, Rect{batteryX, textY, metrics.batteryWidth, metrics.batteryHeight},
-                        showBatteryPercentage);
-  }
-
-  // Draw Clock
-  int clockTextWidth = 0;
-  if (SETTINGS.useClock && SETTINGS.statusBarClock) {
-    char clockStr[16];
-    HalClock::formatTime(clockStr, sizeof(clockStr), !SETTINGS.clockFormat12h);
-    clockTextWidth = renderer.getTextWidth(SMALL_FONT_ID, clockStr);
-    constexpr int statusItemGap = 8;
-    const int clockX = batteryX + batteryStatusWidth + (SETTINGS.statusBarBattery ? statusItemGap : 0);
-    renderer.drawText(SMALL_FONT_ID, clockX, textY, clockStr);
-  }
-
-  // Draw Title
-  if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE && !title.empty()) {
-    const int rendererableScreenWidth =
-        screenWidth - (metrics.statusBarHorizontalMargin * 2) - orientedMarginLeft - orientedMarginRight;
-
-    const int batterySize = SETTINGS.statusBarBattery ? batteryStatusWidth : 0;
-    const int clockSize = clockTextWidth > 0 ? clockTextWidth + 8 : 0;
-    const int titleMarginLeft = batterySize + clockSize + 30;
-    const int titleMarginRight = progressTextWidth + 30;
-
-    // Attempt to center title on the screen, but if title is too wide then later we will center it within the
-    // available space.
-    int titleMarginLeftAdjusted = std::max(titleMarginLeft, titleMarginRight);
-    int availableTitleSpace = rendererableScreenWidth - 2 * titleMarginLeftAdjusted;
-
-    int titleWidth = renderer.getTextWidth(SMALL_FONT_ID, title.c_str());
-    if (titleWidth > availableTitleSpace) {
-      // Not enough space to center on the screen, center it within the remaining space instead
-      availableTitleSpace = rendererableScreenWidth - titleMarginLeft - titleMarginRight;
-      titleMarginLeftAdjusted = titleMarginLeft;
+    if (showClock) {
+      char clockStr[16];
+      HalClock::formatTime(clockStr, sizeof(clockStr), !SETTINGS.clockFormat12h);
+      items[itemCount++] = {clockStr, false, UITheme::statusBarItemAtLeft(SETTINGS.statusBarClockPosition, true),
+                            renderer.getTextWidth(fontId, clockStr)};
     }
-    if (titleWidth > availableTitleSpace) {
-      title = renderer.truncatedText(SMALL_FONT_ID, title.c_str(), availableTitleSpace);
-      titleWidth = renderer.getTextWidth(SMALL_FONT_ID, title.c_str());
+    if (showCounter) {
+      char counter[32];
+      snprintf(counter, sizeof(counter), "%d/%s%d", currentPage, pageCountPrefix, pageCount);
+      items[itemCount++] = {counter, false,
+                            UITheme::statusBarItemAtLeft(SETTINGS.statusBarChapterPageCountPosition, false),
+                            renderer.getTextWidth(fontId, counter)};
     }
-
-    renderer.drawText(SMALL_FONT_ID,
-                      titleMarginLeftAdjusted + metrics.statusBarHorizontalMargin + orientedMarginLeft +
-                          (availableTitleSpace - titleWidth) / 2,
-                      textY, title.c_str());
+    if (showPercent) {
+      char percent[16];
+      snprintf(percent, sizeof(percent), "%.0f%%", bookProgress);
+      items[itemCount++] = {percent, false,
+                            UITheme::statusBarItemAtLeft(SETTINGS.statusBarBookProgressPercentagePosition, false),
+                            renderer.getTextWidth(fontId, percent)};
+    }
+    int leftWidth = 0, rightWidth = 0;
+    for (int i = 0; i < itemCount; ++i) {
+      int& width = items[i].left ? leftWidth : rightWidth;
+      width += (width ? itemGap : 0) + items[i].width;
+    }
+    // All side selections remain deterministic. On very narrow layouts, omit
+    // overflow rather than painting one group's text over the other group.
+    int leftCursor = rowLeft;
+    int rightCursor = std::max(rowLeft, rowRight - rightWidth);
+    const int rightStart = rightCursor;
+    for (int i = 0; i < itemCount; ++i) {
+      const auto& item = items[i];
+      int& cursor = item.left ? leftCursor : rightCursor;
+      const int limit = item.left && rightWidth ? rightStart - itemGap : rowRight;
+      if (cursor + item.width > limit) continue;
+      if (item.battery) {
+        const int iconTop = textY + std::max(0, (lineHeight - metrics.batteryHeight) / 2);
+        GUI.drawBatteryLeft(renderer,
+                            Rect{cursor, iconTop - 6, metrics.batteryWidth, metrics.batteryHeight}, false);
+        if (!item.text.empty()) {
+          renderer.drawText(fontId, cursor + metrics.batteryWidth + BaseTheme::batteryPercentSpacing,
+                            textY, item.text.c_str());
+        }
+      } else {
+        renderer.drawText(fontId, cursor, textY, item.text.c_str());
+      }
+      cursor += item.width + itemGap;
+    }
+    const int centreLeft = leftWidth ? std::min(rowRight, leftCursor) : rowLeft;
+    const int centreRight = rightWidth ? std::max(rowLeft, rightStart - itemGap) : rowRight;
+    auto drawCentredTitle = [&](const std::string& value, const int y, const int left, const int right) {
+      const int space = right - left;
+      if (space <= 0) return;
+      const auto fitted = renderer.truncatedText(fontId, value.c_str(), space);
+      const int width = renderer.getTextWidth(fontId, fitted.c_str());
+      if (width > space) return;
+      const int x = std::clamp((screenWidth - width) / 2, left, right - width);
+      renderer.drawText(fontId, x, y, fitted.c_str());
+    };
+    if (showBookTitle) drawCentredTitle(bookTitle, textY, centreLeft, centreRight);
+    if (showTitle) {
+      // The two independently enabled titles get separate lines only when
+      // assigned to the same edge. The extra line may use the full row width.
+      const bool secondLine = showBookTitle;
+      drawCentredTitle(title, textY + (secondLine ? lineHeight : 0),
+                        secondLine ? rowLeft : centreLeft, secondLine ? rowRight : centreRight);
+    }
   }
 
   drawPageBookmark();

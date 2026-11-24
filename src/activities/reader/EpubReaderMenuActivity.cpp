@@ -9,6 +9,7 @@
 #include "activities/SliderPickerActivity.h"
 #include "activities/settings/EnumSelectionActivity.h"
 #include "activities/settings/SettingsSubmenuActivity.h"
+#include "activities/settings/StatusBarSettingsActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ReaderFontSizeOptions.h"
@@ -375,13 +376,6 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
     addTextToggle.operator()<&BookTextOverrides::fastAa>(StrId::STR_FAST_AA);
   }
 
-  // --- Synchronisation (only if credentials are set) ---
-  if (KOREADER_STORE.hasCredentials()) {
-    menuItems.push_back(SettingInfo::Separator(StrId::STR_KOREADER_SYNC));
-    menuItems.push_back(SettingInfo::Action(StrId::STR_PULL_PROGRESS_FROM_OTHER_DEVICES, SettingAction::None));
-    menuItems.push_back(SettingInfo::Action(StrId::STR_PUSH_PROGRESS_FROM_THIS_DEVICE, SettingAction::None));
-  }
-
   // --- Tools ---
   menuItems.push_back(SettingInfo::Separator(StrId::STR_READER_TOOLS));
   menuItems.push_back(
@@ -403,6 +397,14 @@ void EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes, bool hasStarredPa
   menuItems.push_back(
       SettingInfo::Action(StrId::STR_RENDER_BENCHMARK, SettingAction::None).withSubmenu(StrId::STR_READER_TOOLS));
 #endif  // ENABLE_BENCHMARKS
+
+  // --- Synchronisation (only if credentials are set) ---
+  if (KOREADER_STORE.hasCredentials()) {
+    menuItems.push_back(SettingInfo::Separator(StrId::STR_KOREADER_SYNC));
+    menuItems.push_back(SettingInfo::Action(StrId::STR_PULL_PROGRESS_FROM_OTHER_DEVICES, SettingAction::None));
+    menuItems.push_back(SettingInfo::Action(StrId::STR_PUSH_PROGRESS_FROM_THIS_DEVICE, SettingAction::None));
+  }
+
 }
 
 EpubReaderMenuActivity::MenuAction EpubReaderMenuActivity::actionForNameId(StrId nameId) {
@@ -509,6 +511,14 @@ void EpubReaderMenuActivity::onActionSelected(int index) {
 
   if (item.nameId == StrId::STR_READER_OVERRIDES) {
     showTextTab(TextTab::Font);
+    return;
+  }
+  if (item.nameId == StrId::STR_CUSTOMISE_STATUS_BAR) {
+    // Keep this menu alive so pending per-book text overrides survive the
+    // nested global status-bar editor. The reader compares row geometry when
+    // the menu eventually closes and preserves its text anchor before reflow.
+    startActivityForResult(std::make_unique<StatusBarSettingsActivity>(renderer, mappedInput, true),
+                           [this](const ActivityResult&) { requestUpdate(); });
     return;
   }
   int8_t* margin = nullptr;
@@ -624,7 +634,15 @@ std::string EpubReaderMenuActivity::getItemValueString(int index) const {
     if (item.action == SettingAction::Submenu) {
       return MenuListActivity::getItemValueString(index);
     }
-    return {};
+    switch (item.nameId) {
+      case StrId::STR_SCREENSHOT_BUTTON:
+      case StrId::STR_HIGHLIGHT_MARKER:
+      case StrId::STR_HIGHLIGHT_UNDERLINE:
+      case StrId::STR_HIGHLIGHT_BLACK_MARKER:
+        return {};
+      default:
+        return ">>";
+    }
   }
 
   if (item.type == SettingType::ENUM) {
@@ -921,10 +939,15 @@ void EpubReaderMenuActivity::prepareTabs() {
   }
 
   auto& appearance = tabItems[static_cast<size_t>(Tab::Settings)];
-  std::vector<SettingInfo> textMenu{SettingInfo::Action(StrId::STR_READER_OVERRIDES, SettingAction::None)};
+  std::vector<SettingInfo> textMenu;
   for (auto& item : appearance) {
     if (item.nameId == StrId::STR_READING_PROFILES || item.nameId == StrId::STR_ORIENTATION) {
+      const bool orientation = item.nameId == StrId::STR_ORIENTATION;
       textMenu.push_back(std::move(item));
+      if (orientation) {
+        textMenu.push_back(SettingInfo::Action(StrId::STR_READER_OVERRIDES, SettingAction::None));
+        textMenu.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::None));
+      }
       continue;
     }
     TextTab destination = TextTab::Style;

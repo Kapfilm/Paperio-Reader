@@ -124,7 +124,7 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
            StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY, StrId::STR_QUICK_RESUME, StrId::STR_RANDOM_HIGHLIGHT,
            StrId::STR_SLEEP_CALENDAR, StrId::STR_SLEEP_CALENDAR_WEATHER,
 #if FREEINK_DEVICE_X4CLASSIC
-           StrId::STR_CLOCK,
+           StrId::STR_CLOCK, StrId::STR_SLEEP_CALENDAR_WEATHER_CLOCK,
 #endif
           },
           "sleepScreen", StrId::STR_CAT_DISPLAY)
@@ -483,6 +483,22 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
   }());
 
   // --- Status Bar Settings (web-only, uses StatusBarSettingsActivity) ---
+  const auto statusPositionSetting = [](StrId label, uint8_t CrossPointSettings::* field, const char* key) {
+    auto setting = SettingInfo::Enum(label, field,
+        {StrId::STR_DEFAULT_VALUE, StrId::STR_TOP, StrId::STR_BOTTOM, StrId::STR_TOP, StrId::STR_TOP,
+         StrId::STR_BOTTOM, StrId::STR_BOTTOM}, key, StrId::STR_CUSTOMISE_STATUS_BAR);
+    setting.enumLabels = {I18N.get(StrId::STR_DEFAULT_VALUE), I18N.get(StrId::STR_TOP), I18N.get(StrId::STR_BOTTOM),
+        std::string("<") + I18N.get(StrId::STR_TOP), std::string(I18N.get(StrId::STR_TOP)) + ">",
+        std::string("<") + I18N.get(StrId::STR_BOTTOM), std::string(I18N.get(StrId::STR_BOTTOM)) + ">"};
+    return setting;
+  };
+  add(SettingInfo::Toggle(StrId::STR_EXAMPLE_BOOK, &CrossPointSettings::statusBarBookTitle,
+                          "statusBarBookTitle", StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(statusPositionSetting(StrId::STR_EXAMPLE_BOOK, &CrossPointSettings::statusBarBookTitlePosition,
+                            "statusBarBookTitlePosition"));
+  add(SettingInfo::Enum(StrId::STR_STATUS_FONT_SIZE, &CrossPointSettings::statusBarFontSize,
+                        {StrId::STR_NORMAL, StrId::STR_LARGE}, "statusBarFontSize",
+                        StrId::STR_CUSTOMISE_STATUS_BAR));
   add(SettingInfo::Enum(StrId::STR_UPPER_PROGRESS_BAR, &CrossPointSettings::statusBarUpperProgressBar,
                         {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarUpperProgressBar",
                         StrId::STR_CUSTOMISE_STATUS_BAR));
@@ -499,13 +515,19 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
                           "statusBarPrintedPage", StrId::STR_CUSTOMISE_STATUS_BAR));
   add(SettingInfo::Toggle(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage,
                           "statusBarBookProgressPercentage", StrId::STR_CUSTOMISE_STATUS_BAR));
-  add(SettingInfo::Enum(StrId::STR_TITLE, &CrossPointSettings::statusBarTitle,
+  add(SettingInfo::Enum(StrId::STR_CHAPTER, &CrossPointSettings::statusBarTitle,
                         {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarTitle",
                         StrId::STR_CUSTOMISE_STATUS_BAR));
   add(SettingInfo::Toggle(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery, "statusBarBattery",
                           StrId::STR_CUSTOMISE_STATUS_BAR));
   add(SettingInfo::Toggle(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock, "statusBarClock",
                           StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(statusPositionSetting(StrId::STR_TITLE, &CrossPointSettings::statusBarTitlePosition, "statusBarTitlePosition"));
+  add(statusPositionSetting(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCountPosition, "statusBarChapterPageCountPosition"));
+  add(statusPositionSetting(StrId::STR_PRINTED_PAGE_NUMBER, &CrossPointSettings::statusBarPrintedPagePosition, "statusBarPrintedPagePosition"));
+  add(statusPositionSetting(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentagePosition, "statusBarBookProgressPercentagePosition"));
+  add(statusPositionSetting(StrId::STR_BATTERY, &CrossPointSettings::statusBarBatteryPosition, "statusBarBatteryPosition"));
+  add(statusPositionSetting(StrId::STR_CLOCK, &CrossPointSettings::statusBarClockPosition, "statusBarClockPosition"));
   add(SettingInfo::Enum(StrId::STR_LOWER_PROGRESS_BAR, &CrossPointSettings::statusBarLowerProgressBar,
                         {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE}, "statusBarLowerProgressBar",
                         StrId::STR_CUSTOMISE_STATUS_BAR));

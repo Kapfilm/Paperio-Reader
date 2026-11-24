@@ -17,9 +17,11 @@ def main():
     for name in ("firmware.bin", "bootloader.bin", "partitions.bin", "firmware.elf", "firmware.map"):
         shutil.copyfile(source / name, output / name)
     shutil.copyfile(build_dir / "x4c_release/firmware.bin", output / "firmware-x4-classic.bin")
-    for name in ("firmware-x3.bin", "firmware-x4.bin"):
-        shutil.copyfile(output / "firmware.bin", output / name)
+    for model in ("x3", "x4"):
+        shutil.copyfile(build_dir / f"{model}_release/firmware.bin", output / f"firmware-{model}.bin")
     shutil.copyfile(output / "firmware-x4-classic.bin", output / "firmware-x4c.bin")
+    if (output / "firmware-x3.bin").read_bytes() == (output / "firmware-x4.bin").read_bytes():
+        raise SystemExit("X3 and X4 must be separately compiled model-specific images")
     version_marker = b"CrossPoint version: " + version.encode() + b"\0"
     applications = []
     for name, devices in (

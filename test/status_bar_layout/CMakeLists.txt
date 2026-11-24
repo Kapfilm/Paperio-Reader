@@ -1,0 +1,4 @@
+add_executable(StatusBarLayoutTest StatusBarLayoutTest.cpp ClockSleepTimingTest.cpp)
+target_include_directories(StatusBarLayoutTest PRIVATE ${REPO_ROOT}/src)
+target_link_libraries(StatusBarLayoutTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(StatusBarLayoutTest)

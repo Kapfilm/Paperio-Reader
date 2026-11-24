@@ -27,14 +27,14 @@
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/minimal/MinimalTheme.h"
 #include "fontIds.h"
+#include "UiFonts.h"
 #include "util/BookArchiveUtils.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookProgressPages.h"
+#include "util/StatusBarLayout.h"
 
 namespace {
 constexpr int SKIP_PAGE_MS = 700;
-constexpr int STATUS_BAR_ITEM_PADDING = 4;
-constexpr int STATUS_BAR_DESCENDER_CLEARANCE = 4;
 
 uint8_t normalizeProgressBar(const uint8_t progressBar) {
   return progressBar < CrossPointSettings::STATUS_BAR_PROGRESS_BAR_COUNT ? progressBar
@@ -425,38 +425,59 @@ int UITheme::getProgressBarHeight(const uint8_t progressBar, const uint8_t thick
   return ((normalizedThickness + 1) * 2) + metrics.progressBarMarginTop;
 }
 
-int UITheme::getStatusBarItemsHeight() {
-  const ThemeMetrics& metrics = UITheme::getInstance().getMetrics();
-  return std::max(metrics.statusBarVerticalMargin + (STATUS_BAR_ITEM_PADDING * 2) + STATUS_BAR_DESCENDER_CLEARANCE,
-                  metrics.batteryHeight + (STATUS_BAR_ITEM_PADDING * 2) + STATUS_BAR_DESCENDER_CLEARANCE);
+int UITheme::getStatusBarFontId() {
+  return SETTINGS.statusBarFontSize == 1 ? STATUS_LARGE_FONT_ID : SMALL_FONT_ID;
 }
 
+bool UITheme::statusBarItemAtTop(const uint8_t overridePosition) {
+  return status_bar::itemAtTop(overridePosition, normalizeStatusBarItemsPosition(SETTINGS.statusBarItemsPosition));
+}
+
+bool UITheme::statusBarItemAtLeft(const uint8_t position, const bool defaultLeft) {
+  return status_bar::itemAtLeft(position, defaultLeft);
+}
+
+bool UITheme::hasStatusBarItemsAtEdge(const bool top, const bool forceStatusItems) {
+  const std::array<status_bar::Item, 6> items{{
+      {SETTINGS.statusBarChapterPageCount != 0, SETTINGS.statusBarChapterPageCountPosition},
+      {SETTINGS.statusBarBookTitle != 0, SETTINGS.statusBarBookTitlePosition},
+      {SETTINGS.statusBarBookProgressPercentage != 0, SETTINGS.statusBarBookProgressPercentagePosition},
+      {forceStatusItems || SETTINGS.statusBarTitle != CrossPointSettings::HIDE_TITLE, SETTINGS.statusBarTitlePosition},
+      {SETTINGS.statusBarBattery != 0, SETTINGS.statusBarBatteryPosition},
+      {SETTINGS.useClock && SETTINGS.statusBarClock, SETTINGS.statusBarClockPosition},
+  }};
+  return status_bar::hasItemsAtEdge(items, top, normalizeStatusBarItemsPosition(SETTINGS.statusBarItemsPosition));
+}
+
+int UITheme::getStatusBarItemsHeight() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  // Reserve ink height and a small clearance, rather than two large padding bands.
+  return std::max(metrics.statusBarVerticalMargin + 5, SETTINGS.statusBarFontSize == 1 ? 27 : 26);
+}
+
+int UITheme::getStatusBarItemsHeightForEdge(const bool top, const bool forceStatusItems) {
+  const bool bookHere = SETTINGS.statusBarBookTitle && statusBarItemAtTop(SETTINGS.statusBarBookTitlePosition) == top;
+  const bool chapterHere = (forceStatusItems || SETTINGS.statusBarTitle != CrossPointSettings::HIDE_TITLE) &&
+                          statusBarItemAtTop(SETTINGS.statusBarTitlePosition) == top;
+  const int lineHeight = SETTINGS.statusBarFontSize == 1 ? 23 :
+      UITheme::getInstance().getMetrics().statusBarVerticalMargin >= 25 ? 25 : 23;
+  return getStatusBarItemsHeight() + (bookHere && chapterHere ? lineHeight : 0);
+}
+
+int UITheme::getStatusBarTopInset() { return 3; }
+
 int UITheme::getStatusBarTopHeight(const bool forceStatusItems) {
-  const bool showStatusItems = forceStatusItems || SETTINGS.statusBarChapterPageCount ||
-                               SETTINGS.statusBarBookProgressPercentage ||
-                               SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE ||
-                               SETTINGS.statusBarBattery || (SETTINGS.useClock && SETTINGS.statusBarClock);
-  const uint8_t statusBarItemsPosition = normalizeStatusBarItemsPosition(SETTINGS.statusBarItemsPosition);
-  const bool statusItemsAtTop =
-      statusBarItemsPosition == CrossPointSettings::STATUS_BAR_ITEMS_POSITION::STATUS_BAR_ITEMS_TOP;
-  const int statusItemsHeight = showStatusItems && statusItemsAtTop ? getStatusBarItemsHeight() : 0;
-  return getProgressBarHeight(SETTINGS.statusBarUpperProgressBar, SETTINGS.statusBarUpperProgressBarThickness) +
-         statusItemsHeight;
+  const int itemsHeight = hasStatusBarItemsAtEdge(true, forceStatusItems) ? getStatusBarItemsHeightForEdge(true, forceStatusItems) : 0;
+  const int band = getProgressBarHeight(SETTINGS.statusBarUpperProgressBar,
+                                      SETTINGS.statusBarUpperProgressBarThickness) + itemsHeight;
+  return band > 0 ? band + getStatusBarTopInset() : 0;
 }
 
 int UITheme::getStatusBarBottomHeight(const bool forceStatusItems) {
-  const bool showStatusItems = forceStatusItems || SETTINGS.statusBarChapterPageCount ||
-                               SETTINGS.statusBarBookProgressPercentage ||
-                               SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE ||
-                               SETTINGS.statusBarBattery || (SETTINGS.useClock && SETTINGS.statusBarClock);
-  const uint8_t statusBarItemsPosition = normalizeStatusBarItemsPosition(SETTINGS.statusBarItemsPosition);
-  const bool statusItemsAtBottom =
-      statusBarItemsPosition == CrossPointSettings::STATUS_BAR_ITEMS_POSITION::STATUS_BAR_ITEMS_BOTTOM;
-  const int statusItemsHeight = showStatusItems && statusItemsAtBottom ? getStatusBarItemsHeight() : 0;
-  const int lowerBandHeight =
-      getProgressBarHeight(SETTINGS.statusBarLowerProgressBar, SETTINGS.statusBarLowerProgressBarThickness) +
-      statusItemsHeight;
-  return lowerBandHeight > 0 ? lowerBandHeight + getStatusBarBottomInset() : 0;
+  const int itemsHeight = hasStatusBarItemsAtEdge(false, forceStatusItems) ? getStatusBarItemsHeightForEdge(false, forceStatusItems) : 0;
+  const int band = getProgressBarHeight(SETTINGS.statusBarLowerProgressBar,
+                                      SETTINGS.statusBarLowerProgressBarThickness) + itemsHeight;
+  return band > 0 ? band + getStatusBarBottomInset() : 0;
 }
 
 int UITheme::getStatusBarBottomInset() {

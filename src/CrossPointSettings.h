@@ -30,6 +30,7 @@ class CrossPointSettings {
     CALENDAR = 9,
     CALENDAR_WEATHER = 10,
     FLIP_CLOCK = 11,
+    CALENDAR_WEATHER_CLOCK = 12,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -243,7 +244,7 @@ class CrossPointSettings {
   uint8_t statusBarChapterPageCount = 1;
   // Printed ("physical") page number from the book's page-list. Drawn in parentheses to the left of
   // the device page counter when both share a location; otherwise on its own. Default on.
-  uint8_t statusBarPrintedPage = 1;
+  uint8_t statusBarPrintedPage = 0;
   uint8_t statusBarBookProgressPercentage = 1;
   uint8_t statusBarProgressBar = HIDE_PROGRESS;
   uint8_t statusBarProgressBarThickness = PROGRESS_BAR_NORMAL;
@@ -252,6 +253,17 @@ class CrossPointSettings {
   uint8_t statusBarLowerProgressBar = HIDE_PROGRESS;
   uint8_t statusBarLowerProgressBarThickness = PROGRESS_BAR_NORMAL;
   uint8_t statusBarItemsPosition = STATUS_BAR_ITEMS_BOTTOM;
+  uint8_t statusBarFontSize = 0;  // 0 standard, 1 enlarged.
+  // 0 inherits; 1 top/2 bottom retain legacy alignment; 3 top-left, 4 top-right,
+  // 5 bottom-left, 6 bottom-right. Titles use centered top/bottom.
+  uint8_t statusBarTitlePosition = 0;
+  uint8_t statusBarBookTitle = 0;
+  uint8_t statusBarBookTitlePosition = 0;
+  uint8_t statusBarChapterPageCountPosition = 0;
+  uint8_t statusBarPrintedPagePosition = 0;
+  uint8_t statusBarBookProgressPercentagePosition = 0;
+  uint8_t statusBarBatteryPosition = 0;
+  uint8_t statusBarClockPosition = 0;
   uint8_t statusBarTitle = CHAPTER_TITLE;
   uint8_t statusBarBattery = 1;
   // Text rendering settings

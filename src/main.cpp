@@ -25,6 +25,8 @@
 #include <esp_heap_caps.h>
 #include <esp_ota_ops.h>
 #include <esp_sleep.h>
+#include <driver/gpio.h>
+#include <algorithm>
 #include <esp_system.h>
 #include <sys/time.h>
 
@@ -479,8 +481,10 @@ static void serviceBootPowerRelease() {
 }
 
 static void refreshSleepCalendar() {
-  const bool withWeather = SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER &&
-                           WEATHER_SETTINGS.hasLocation();
+  const bool withWeather =
+      (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER ||
+       (gpio.deviceIsX4Classic() && SETTINGS.sleepScreen == CrossPointSettings::CALENDAR_WEATHER_CLOCK)) &&
+      WEATHER_SETTINGS.hasLocation();
   if ((gpio.deviceIsX3() || gpio.deviceIsX4Classic()) && !HalClock::hasCurrentDate()) {
     HalClock::restoreExternalDate();
   }
@@ -549,6 +553,7 @@ static void refreshSleepCalendar() {
 }
 
 // Enter deep sleep mode. fromTimeout=true marks an auto-sleep (gates "Quick Resume on Timeout").
+
 void enterDeepSleep(bool fromTimeout = false) {
   if (!gaugeSleepRetryDue()) return;
   // Restore idle downclocking before waiting for rendering. Acquire a scoped
@@ -597,11 +602,14 @@ void enterDeepSleep(bool fromTimeout = false) {
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME, fromTimeout,
       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
   const bool flipClockSleep = !isQuickResumeSleep && gpio.deviceIsX4Classic() &&
-                              SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK;
+                              (SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK ||
+                               SETTINGS.sleepScreen == CrossPointSettings::CALENDAR_WEATHER_CLOCK);
   APP_STATE.quickSleepHome = isQuickResumeSleep ? activityManager.captureHomeForQuickSleep() : HomeSleepState{};
   const bool calendarSleep = !isQuickResumeSleep &&
                              (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR ||
-                              SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER);
+                              SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::CALENDAR_WEATHER ||
+                              (gpio.deviceIsX4Classic() &&
+                               SETTINGS.sleepScreen == CrossPointSettings::CALENDAR_WEATHER_CLOCK));
   if (calendarSleep) {
     if (!skipSleepCalendarSync) {
       sleepCalendarSyncMarker = SLEEP_CALENDAR_SYNC_MAGIC;
@@ -641,7 +649,6 @@ void enterDeepSleep(bool fromTimeout = false) {
   }
 
   halTiltSensor.deepSleep();
-
   display.deepSleep();
   LOG_DBG("MAIN", "Entering deep sleep (powerBtn isPressed=%d, rawPin=%d)", gpio.isPressed(HalGPIO::BTN_POWER),
           digitalRead(InputManager::POWER_BUTTON_PIN) == LOW);
@@ -1053,7 +1060,9 @@ void setup() {
   logStartupMemory("before_display_fonts");
 
 #if FREEINK_DEVICE_X4CLASSIC
-  if (flipClockTimerWake && !recoveryFirmwareMode && SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK &&
+  if (flipClockTimerWake && !recoveryFirmwareMode &&
+      (SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK ||
+       SETTINGS.sleepScreen == CrossPointSettings::CALENDAR_WEATHER_CLOCK) &&
       digitalRead(InputManager::POWER_BUTTON_PIN) != LOW) {
     // Redraw only the selected sleep artwork. In particular, avoid boot artwork,
     // reader routing, progress saves and the per-sleep NVS writes on every tick.
@@ -1252,7 +1261,8 @@ void loop() {
                        activityManager.isReaderActivity(), SETTINGS.tiltDirection);
 
   renderer.setFadingFix(SETTINGS.fadingFix && !gpio.deviceIsX4Classic());
-  renderer.setTextDarkness(SETTINGS.textDarkness);
+  // The active reader owns per-book darkness. Do not overwrite it from
+  // the main loop while the render task is painting individual glyphs.
 
   // Re-emit the boot summary when the serial link comes up. A power-up from deep sleep
   // re-enumerates USB, so a monitor attached across the wake misses everything setup()

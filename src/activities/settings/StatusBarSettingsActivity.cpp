@@ -17,12 +17,11 @@ namespace {
 const StrId progressBarNames[] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
 const StrId progressBarThicknessNames[] = {StrId::STR_PROGRESS_BAR_THIN, StrId::STR_PROGRESS_BAR_MEDIUM,
                                            StrId::STR_PROGRESS_BAR_THICK};
-const StrId titleNames[] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
-const StrId statusItemsPositionNames[] = {StrId::STR_TOP, StrId::STR_BOTTOM};
+const StrId itemPositionNames[] = {StrId::STR_TOP, StrId::STR_BOTTOM, StrId::STR_HIDE};
+const StrId fontSizeNames[] = {StrId::STR_NORMAL, StrId::STR_LARGE};
 
-// One menu row. Editing a status-bar option means: cycle `field` through `valueCount` values and
-// display its current value. Rows with an enum-style set of choices provide `valueNames` (indexed by
-// the field value); rows with no `valueNames` are on/off toggles rendered as Show/Hide.
+// One menu row. Location rows combine their visibility and position settings into
+// Top / Bottom / Hide. Other rows cycle their ordinary enum values.
 //
 // The whole menu is this single table. Adding, removing, or reordering a row is a one-line edit here —
 // there is no parallel index bookkeeping to keep in sync. Rows with `requiresClock` are skipped when
@@ -34,6 +33,7 @@ struct StatusBarItem {
   uint8_t defaultValue;     // value to reset to if the stored one is out of range
   const StrId* valueNames;  // nullptr → boolean Show/Hide toggle
   bool requiresClock;
+  uint8_t CrossPointSettings::* positionField = nullptr;
 };
 
 template <size_t N>
@@ -41,20 +41,55 @@ constexpr StatusBarItem enumItem(StrId label, uint8_t CrossPointSettings::* fiel
                                  uint8_t defaultValue) {
   return {label, field, static_cast<uint8_t>(N), defaultValue, names, false};
 }
-constexpr StatusBarItem toggleItem(StrId label, uint8_t CrossPointSettings::* field, bool requiresClock = false) {
-  return {label, field, 2, 1, nullptr, requiresClock};
+bool isCenteredItem(const StatusBarItem& item) {
+  return item.field == &CrossPointSettings::statusBarTitle || item.field == &CrossPointSettings::statusBarBookTitle;
+}
+
+constexpr StatusBarItem locationItem(StrId label, uint8_t CrossPointSettings::* field,
+                                      uint8_t CrossPointSettings::* positionField, bool requiresClock = false) {
+  const bool centered = field == &CrossPointSettings::statusBarTitle || field == &CrossPointSettings::statusBarBookTitle;
+  return {label, field, static_cast<uint8_t>(centered ? 3 : 5), 0, centered ? itemPositionNames : nullptr,
+          requiresClock, positionField};
+}
+
+uint8_t currentItemValue(const StatusBarItem& item) {
+  if (!item.positionField) return SETTINGS.*item.field;
+  const bool title = item.field == &CrossPointSettings::statusBarTitle;
+  const bool hidden = title ? SETTINGS.*item.field == CrossPointSettings::HIDE_TITLE : SETTINGS.*item.field == 0;
+  const bool centered = isCenteredItem(item);
+  if (hidden) return centered ? 2 : 4;
+  const uint8_t position = SETTINGS.*item.positionField;
+  const bool top = position == 1 || position == 3 || position == 4 ||
+      (position == 0 && SETTINGS.statusBarItemsPosition == CrossPointSettings::STATUS_BAR_ITEMS_TOP);
+  if (centered) return top ? 0 : 1;
+  const bool legacyLeft = item.field == &CrossPointSettings::statusBarBattery ||
+                          item.field == &CrossPointSettings::statusBarClock;
+  const bool left = position == 3 || position == 5 || (position < 3 && legacyLeft);
+  return (top ? 0 : 2) + (left ? 0 : 1);
+}
+
+std::string currentItemLabel(const StatusBarItem& item) {
+  const uint8_t value = currentItemValue(item);
+  if (!item.positionField || isCenteredItem(item)) return I18N.get(item.valueNames[value]);
+  if (value == 4) return tr(STR_HIDE);
+  const char* edge = value < 2 ? tr(STR_TOP) : tr(STR_BOTTOM);
+  return value % 2 == 0 ? std::string("<") + edge : std::string(edge) + ">";
 }
 
 const StatusBarItem statusBarItems[] = {
-    enumItem(StrId::STR_STATUS_ITEMS_POSITION, &CrossPointSettings::statusBarItemsPosition, statusItemsPositionNames,
-             CrossPointSettings::STATUS_BAR_ITEMS_POSITION::STATUS_BAR_ITEMS_BOTTOM),
-    toggleItem(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount),
-    toggleItem(StrId::STR_PRINTED_PAGE_NUMBER, &CrossPointSettings::statusBarPrintedPage),
-    toggleItem(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage),
-    enumItem(StrId::STR_TITLE, &CrossPointSettings::statusBarTitle, titleNames,
-             CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE),
-    toggleItem(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery),
-    toggleItem(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock, /*requiresClock=*/true),
+    enumItem(StrId::STR_STATUS_FONT_SIZE, &CrossPointSettings::statusBarFontSize, fontSizeNames, 0),
+    locationItem(StrId::STR_CHAPTER_PAGE_COUNT, &CrossPointSettings::statusBarChapterPageCount,
+                 &CrossPointSettings::statusBarChapterPageCountPosition),
+    locationItem(StrId::STR_BOOK_PROGRESS_PERCENTAGE, &CrossPointSettings::statusBarBookProgressPercentage,
+                 &CrossPointSettings::statusBarBookProgressPercentagePosition),
+    locationItem(StrId::STR_EXAMPLE_BOOK, &CrossPointSettings::statusBarBookTitle,
+                 &CrossPointSettings::statusBarBookTitlePosition),
+    locationItem(StrId::STR_CHAPTER, &CrossPointSettings::statusBarTitle,
+                 &CrossPointSettings::statusBarTitlePosition),
+    locationItem(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery,
+                 &CrossPointSettings::statusBarBatteryPosition),
+    locationItem(StrId::STR_CLOCK, &CrossPointSettings::statusBarClock,
+                 &CrossPointSettings::statusBarClockPosition, true),
     enumItem(StrId::STR_UPPER_PROGRESS_BAR, &CrossPointSettings::statusBarUpperProgressBar, progressBarNames,
              CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS),
     enumItem(StrId::STR_UPPER_PROGRESS_BAR_THICKNESS, &CrossPointSettings::statusBarUpperProgressBarThickness,
@@ -90,7 +125,7 @@ int visibleItemCount() {
 constexpr int PROGRESS_BAR_ITEMS = 3;
 
 constexpr int previewHorizontalInset = 10;
-constexpr int previewHeight = 78;
+constexpr int previewHeight = 136;
 constexpr int previewInnerMargin = 4;
 
 void drawPreviewProgressBar(const GfxRenderer& renderer, const Rect& rect, const uint8_t progressBar,
@@ -106,105 +141,55 @@ void drawPreviewProgressBar(const GfxRenderer& renderer, const Rect& rect, const
   renderer.fillRect(rect.x + previewInnerMargin, y, barWidth, barHeight);
 }
 
-void drawPreviewStatusItems(const GfxRenderer& renderer, const Rect& rect, const ThemeMetrics& metrics) {
-  const bool hasProgressText = SETTINGS.statusBarChapterPageCount || SETTINGS.statusBarBookProgressPercentage;
-  const bool hasTitle = SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE;
-  const bool hasStatusItems = hasProgressText || hasTitle || SETTINGS.statusBarBattery ||
-                              SETTINGS.statusBarPrintedPage || (SETTINGS.useClock && SETTINGS.statusBarClock);
-  if (!hasStatusItems) {
-    return;
-  }
-
-  const bool statusItemsAtTop =
-      SETTINGS.statusBarItemsPosition == CrossPointSettings::STATUS_BAR_ITEMS_POSITION::STATUS_BAR_ITEMS_TOP;
-  const int adjacentProgressHeight = statusItemsAtTop
-                                         ? UITheme::getProgressBarHeight(SETTINGS.statusBarUpperProgressBar,
-                                                                         SETTINGS.statusBarUpperProgressBarThickness)
-                                         : UITheme::getProgressBarHeight(SETTINGS.statusBarLowerProgressBar,
-                                                                         SETTINGS.statusBarLowerProgressBarThickness);
-  const int statusItemsHeight = UITheme::getStatusBarItemsHeight();
-  const int textY = statusItemsAtTop
-                        ? rect.y + previewInnerMargin + adjacentProgressHeight + 4
-                        : rect.y + rect.height - previewInnerMargin - adjacentProgressHeight - statusItemsHeight + 4;
-
-  const bool showBatteryPercentage =
-      SETTINGS.statusBarBattery &&
-      SETTINGS.hideBatteryPercentage == CrossPointSettings::HIDE_BATTERY_PERCENTAGE::HIDE_NEVER;
-  const bool showClock = SETTINGS.useClock && SETTINGS.statusBarClock;
-  const int previewClockWidth = showClock ? renderer.getTextWidth(SMALL_FONT_ID, "00:00") : 0;
-
-  if (SETTINGS.statusBarBattery) {
-    GUI.drawBatteryLeft(renderer,
-                        Rect{rect.x + previewInnerMargin + 2, textY, metrics.batteryWidth, metrics.batteryHeight},
-                        showBatteryPercentage);
-  }
-  if (showClock) {
-    const int clockX = rect.x + previewInnerMargin + (SETTINGS.statusBarBattery ? metrics.batteryWidth + 8 : 0);
-    renderer.drawText(SMALL_FONT_ID, clockX, textY, "00:00");
-  }
-
-  // Right-aligned zone: the printed ("physical") page label sits to the LEFT of the device page
-  // counter as a parenthesised hint, matching BaseTheme::drawStatusBar. Example label "(vii)".
-  const char* printedLabel = SETTINGS.statusBarPrintedPage ? "(vii)" : "";
-  const int printedLabelWidth = *printedLabel ? renderer.getTextWidth(SMALL_FONT_ID, printedLabel) : 0;
-  const int printedLabelGap = printedLabelWidth > 0 && hasProgressText ? 8 : 0;
-
-  int progressTextWidth = 0;
-  const int rightEdge = rect.x + rect.width - previewInnerMargin - 2;
-  if (hasProgressText) {
-    char progressStr[32] = "";
-    if (SETTINGS.statusBarChapterPageCount && SETTINGS.statusBarBookProgressPercentage) {
-      snprintf(progressStr, sizeof(progressStr), "%d/%d  %d%%", 8, 32, 75);
-    } else if (SETTINGS.statusBarBookProgressPercentage) {
-      snprintf(progressStr, sizeof(progressStr), "%d%%", 75);
-    } else {
-      snprintf(progressStr, sizeof(progressStr), "%d/%d", 8, 32);
+void drawPreviewStatusItems(const GfxRenderer& renderer, const Rect& rect, const ThemeMetrics&) {
+  const int font = UITheme::getStatusBarFontId();
+  const int lineHeight = renderer.getLineHeight(font);
+  for (const bool top : {true, false}) {
+    const int barHeight = top ? UITheme::getProgressBarHeight(SETTINGS.statusBarUpperProgressBar,
+                                                            SETTINGS.statusBarUpperProgressBarThickness)
+                             : UITheme::getProgressBarHeight(SETTINGS.statusBarLowerProgressBar,
+                                                            SETTINGS.statusBarLowerProgressBarThickness);
+    const int y = top ? rect.y + previewInnerMargin + barHeight + 1
+                      : rect.y + rect.height - previewInnerMargin - barHeight -
+                            UITheme::getStatusBarItemsHeightForEdge(false) + 1;
+    struct Sample { bool visible; uint8_t position; bool defaultLeft; const char* text; };
+    const Sample samples[] = {
+        {SETTINGS.statusBarBattery != 0, SETTINGS.statusBarBatteryPosition, true, "75%"},
+        {SETTINGS.useClock && SETTINGS.statusBarClock, SETTINGS.statusBarClockPosition, true, "12:34"},
+        {SETTINGS.statusBarChapterPageCount != 0, SETTINGS.statusBarChapterPageCountPosition, false, "8/32"},
+        {SETTINGS.statusBarBookProgressPercentage != 0, SETTINGS.statusBarBookProgressPercentagePosition, false, "75%"},
+    };
+    int left = rect.x + previewInnerMargin + 6;
+    int right = rect.x + rect.width - previewInnerMargin - 6;
+    for (const auto& item : samples) {
+      if (!item.visible || UITheme::statusBarItemAtTop(item.position) != top) continue;
+      const int width = renderer.getTextWidth(font, item.text);
+      if (left + width > right) continue;
+      if (UITheme::statusBarItemAtLeft(item.position, item.defaultLeft)) {
+        renderer.drawText(font, left, y, item.text);
+        left += width + 8;
+      } else {
+        right -= width;
+        renderer.drawText(font, right, y, item.text);
+        right -= 8;
+      }
     }
-
-    const int progressStrWidth = renderer.getTextWidth(SMALL_FONT_ID, progressStr);
-    progressTextWidth = progressStrWidth + printedLabelGap + printedLabelWidth;
-    renderer.drawText(SMALL_FONT_ID, rightEdge - progressStrWidth, textY, progressStr);
-    if (printedLabelWidth > 0) {
-      renderer.drawText(SMALL_FONT_ID, rightEdge - progressStrWidth - printedLabelGap - printedLabelWidth, textY,
-                        printedLabel);
-    }
-  } else if (printedLabelWidth > 0) {
-    progressTextWidth = printedLabelWidth;
-    renderer.drawText(SMALL_FONT_ID, rightEdge - printedLabelWidth, textY, printedLabel);
+    const bool book = SETTINGS.statusBarBookTitle && UITheme::statusBarItemAtTop(SETTINGS.statusBarBookTitlePosition) == top;
+    const bool chapter = SETTINGS.statusBarTitle != CrossPointSettings::HIDE_TITLE &&
+                         UITheme::statusBarItemAtTop(SETTINGS.statusBarTitlePosition) == top;
+    auto label = [&](const char* text, int textY, int x1, int x2) {
+      if (x2 <= x1) return;
+      const auto fitted = renderer.truncatedText(font, text, x2 - x1);
+      const int width = renderer.getTextWidth(font, fitted.c_str());
+      if (width <= x2 - x1) renderer.drawText(font, std::clamp(rect.x + (rect.width - width) / 2, x1, x2 - width),
+                                            textY, fitted.c_str());
+    };
+    if (book) label(tr(STR_EXAMPLE_BOOK), y, left, right);
+    if (chapter) label(tr(STR_EXAMPLE_CHAPTER), y + (book ? lineHeight : 0),
+                       book ? rect.x + 10 : left, book ? rect.x + rect.width - 10 : right);
   }
-
-  if (!hasTitle) {
-    return;
-  }
-
-  const char* title = SETTINGS.statusBarTitle == CrossPointSettings::STATUS_BAR_TITLE::BOOK_TITLE
-                          ? tr(STR_EXAMPLE_BOOK)
-                          : tr(STR_EXAMPLE_CHAPTER);
-  int leftReserve = 6;
-  if (SETTINGS.statusBarBattery) {
-    leftReserve = metrics.batteryWidth + 28;
-    if (showBatteryPercentage) {
-      const int percentReserve = 2 + metrics.batteryWidth + BaseTheme::batteryPercentSpacing +
-                                 renderer.getTextWidth(SMALL_FONT_ID, "100%") + 8;
-      leftReserve = std::max(leftReserve, percentReserve);
-    }
-    if (showClock) {
-      leftReserve += previewClockWidth + 8;
-    }
-  } else if (showClock) {
-    leftReserve = std::max(leftReserve, previewClockWidth + 8);
-  }
-  const int rightReserve = progressTextWidth > 0 ? progressTextWidth + 18 : 6;
-  const int titleAreaWidth = rect.width - previewInnerMargin * 2 - leftReserve - rightReserve;
-  if (titleAreaWidth <= 0) {
-    return;
-  }
-
-  std::string previewTitle = renderer.truncatedText(SMALL_FONT_ID, title, titleAreaWidth);
-  const int titleWidth = renderer.getTextWidth(SMALL_FONT_ID, previewTitle.c_str());
-  renderer.drawText(SMALL_FONT_ID, rect.x + previewInnerMargin + leftReserve + (titleAreaWidth - titleWidth) / 2, textY,
-                    previewTitle.c_str());
 }
+
 }  // namespace
 
 void StatusBarSettingsActivity::onEnter() {
@@ -217,7 +202,9 @@ void StatusBarSettingsActivity::onEnter() {
   // Clamp status bar settings in case of corrupt/migrated data: every field must hold a valid value
   // index (0..valueCount-1). A stray value would index past its valueNames array when rendered.
   for (const auto& item : statusBarItems) {
-    if (SETTINGS.*item.field >= item.valueCount) {
+    const uint8_t storedValueCount = item.positionField && item.field != &CrossPointSettings::statusBarTitle
+                                         ? 2 : item.valueCount;
+    if (SETTINGS.*item.field >= storedValueCount) {
       SETTINGS.*item.field = item.defaultValue;
     }
   }
@@ -247,44 +234,75 @@ void StatusBarSettingsActivity::loop() {
 
 void StatusBarSettingsActivity::handleSelection() {
   const StatusBarItem& item = visibleItem(selectedIndex);
-  SETTINGS.*item.field = (SETTINGS.*item.field + 1) % item.valueCount;
+  const uint8_t value = (currentItemValue(item) + 1) % item.valueCount;
+  if (item.positionField) {
+    const bool title = item.field == &CrossPointSettings::statusBarTitle;
+    const bool centered = isCenteredItem(item);
+    if (value == (centered ? 2 : 4)) {
+      SETTINGS.*item.field = title ? static_cast<uint8_t>(CrossPointSettings::HIDE_TITLE) : 0;
+    } else {
+      SETTINGS.*item.positionField = centered ? value + 1 : value + 3;
+      SETTINGS.*item.field = title ? static_cast<uint8_t>(CrossPointSettings::CHAPTER_TITLE) : 1;
+    }
+  } else {
+    SETTINGS.*item.field = value;
+  }
   SETTINGS.saveToFile();
 }
 
 void StatusBarSettingsActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+  const int panelTop = overlayPanel ? renderer.getScreenHeight() / 4 : 0;
+  if (overlayPanel) {
+    renderer.syncWriteBufferFromDisplayed();
+    renderer.fillRect(0, panelTop, renderer.getScreenWidth(), renderer.getScreenHeight() - panelTop, false);
+  } else {
+    renderer.clearScreen();
+  }
 
   auto metrics = UITheme::getInstance().getMetrics();
   const Rect contentRect = UITheme::getContentRect(renderer, true, false);
   const int pageWidth = (int)renderer.getScreenWidth();
   const int pageHeight = (int)renderer.getScreenHeight();
 
-  GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.headerHeight},
-                 tr(STR_CUSTOMISE_STATUS_BAR));
+  const int panelHeaderHeight = renderer.getLineHeight(UI_12_FONT_ID) + 30;
+  if (overlayPanel) {
+    renderer.fillRoundedRect(0, panelTop, pageWidth, pageHeight - panelTop, 12,
+                             true, true, false, false, Color::White);
+    renderer.fillRoundedRect(0, panelTop, pageWidth, panelHeaderHeight, 12,
+                             true, true, false, false, Color::LightGray);
+    renderer.drawRoundedRect(0, panelTop, pageWidth, pageHeight - panelTop, 2, 12,
+                             true, true, false, false, true);
+    const auto heading = renderer.truncatedText(UI_12_FONT_ID, tr(STR_CUSTOMISE_STATUS_BAR),
+                                                pageWidth - 40, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_12_FONT_ID, panelTop + 15, heading.c_str(), true, EpdFontFamily::BOLD);
+    renderer.drawLine(0, panelTop + panelHeaderHeight, pageWidth - 1, panelTop + panelHeaderHeight, 1, true);
+  } else {
+    GUI.drawHeader(renderer, Rect{contentRect.x, metrics.topPadding, contentRect.width, metrics.headerHeight},
+                   tr(STR_CUSTOMISE_STATUS_BAR));
+  }
 
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int contentTop = overlayPanel ? panelTop + panelHeaderHeight + metrics.verticalSpacing
+                                      : metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int previewLabelHeight = renderer.getLineHeight(UI_10_FONT_ID);
-  const int previewAreaHeight = previewLabelHeight + previewHeight + metrics.verticalSpacing * 2;
+  const bool showPreview = !overlayPanel || pageHeight >= 700;
+  const int previewAreaHeight = showPreview ? previewLabelHeight + previewHeight + metrics.verticalSpacing * 2 : 0;
   const int contentHeight =
       pageHeight - contentTop - metrics.buttonHintsHeight - previewAreaHeight - metrics.verticalSpacing * 2;
   GUI.drawList(
       renderer, Rect{0, contentTop, pageWidth, contentHeight}, visibleItemCount(), static_cast<int>(selectedIndex),
-      [](int index) { return std::string(I18N.get(visibleItem(index).label)); }, nullptr, nullptr,
       [](int index) {
-        const StatusBarItem& item = visibleItem(index);
-        const uint8_t value = SETTINGS.*item.field;
-        // Enum rows show their named value; toggle rows (no valueNames) show Show/Hide.
-        if (item.valueNames) {
-          return I18N.get(item.valueNames[value]);
-        }
-        return value ? tr(STR_SHOW) : tr(STR_HIDE);
-      },
+        const auto& item = visibleItem(index);
+        std::string label = I18N.get(item.label);
+        return label;
+      }, nullptr, nullptr,
+      [](int index) { return currentItemLabel(visibleItem(index)); },
       true);
 
   // Draw button hints
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+  if (showPreview) {
   const int previewLabelY = contentTop + contentHeight + metrics.verticalSpacing;
   renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, previewLabelY, tr(STR_PREVIEW));
   const Rect previewRect{previewHorizontalInset, previewLabelY + previewLabelHeight + metrics.verticalSpacing / 2,
@@ -296,5 +314,8 @@ void StatusBarSettingsActivity::render(RenderLock&&) {
                          SETTINGS.statusBarLowerProgressBarThickness, false);
   drawPreviewStatusItems(renderer, previewRect, metrics);
 
-  renderer.displayBuffer();
+  }
+
+  if (overlayPanel) renderer.displayWindow(0, panelTop, pageWidth, pageHeight - panelTop);
+  else renderer.displayBuffer();
 }

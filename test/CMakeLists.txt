@@ -124,3 +124,5 @@ add_subdirectory(dropbox)
 
 add_subdirectory(hal_file_lifecycle)
 add_subdirectory(panic_snapshot)
+
+add_subdirectory(status_bar_layout)

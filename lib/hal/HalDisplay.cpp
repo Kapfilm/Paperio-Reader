@@ -280,8 +280,10 @@ void HalDisplay::cleanupGrayscaleWithPreviousBuffer() { einkDisplay.cleanupGrays
 
 bool HalDisplay::restoreSleepClockBaseline() {
   const auto controller = BoardConfig::ACTIVE.displayController;
-  if (!gpio.deviceIsX4Classic() ||
-      (controller != BoardConfig::DisplayController::UC8279 && controller != BoardConfig::DisplayController::UC8179))
+  const bool clockPanel = gpio.deviceIsX4Classic() || gpio.deviceIsX3();
+  if (!clockPanel ||
+      (controller != BoardConfig::DisplayController::UC8279 && controller != BoardConfig::DisplayController::UC8179 &&
+       controller != BoardConfig::DisplayController::UC8253))
     return false;
   HalSpiBus::Lock spiLock;
   einkDisplay.skipInitialResync();

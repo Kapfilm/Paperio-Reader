@@ -755,7 +755,8 @@ void MdReaderActivity::renderStatusBar() const {
   if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
     title = txt->getTitle();
   }
-  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
+  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title, 0, false, {},
+                    true, false, txt->getTitle());
 
   noteStatusBarRendered();
 }
