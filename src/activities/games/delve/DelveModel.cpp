@@ -65,7 +65,8 @@ void Game::enterLevel(int depth){
  std::array<uint8_t,Cells>corridor{};
  auto dig=[&](int x,int y){if(run.map[index(x,y)]==Tile::Rock){run.map[index(x,y)]=Tile::Floor;corridor[index(x,y)]=1;}};
  auto join=[&](const Room&a,const Room&b){int x=a.x+a.w/2,y=a.y+a.h/2,tx=b.x+b.w/2,ty=b.y+b.h/2;while(x!=tx){dig(x,y);x+=x<tx?1:-1;}while(y!=ty){dig(x,y);y+=y<ty?1:-1;}dig(x,y);};
- for(size_t i=1;i<rooms.size();++i)join(rooms[i-1],rooms[i]);join(rooms.front(),rooms.back());
+ for(size_t i=1;i<rooms.size();++i) { join(rooms[i-1],rooms[i]); }
+ join(rooms.front(),rooms.back());
  for(int y=1;y<Height-1;++y)for(int x=1;x<Width-1;++x)if(corridor[index(x,y)]&&chance(35)){
   bool across=tile(x-1,y)!=Tile::Rock&&tile(x+1,y)!=Tile::Rock&&tile(x,y-1)==Tile::Rock&&tile(x,y+1)==Tile::Rock;
   bool down=tile(x,y-1)!=Tile::Rock&&tile(x,y+1)!=Tile::Rock&&tile(x-1,y)==Tile::Rock&&tile(x+1,y)==Tile::Rock;
@@ -149,8 +150,12 @@ std::vector<uint8_t> Game::encode()const{
  std::vector<uint8_t>b{'D','L','V',2};auto put=[&](uint32_t n){for(int k=0;k<4;++k)b.push_back((n>>(k*8))&255);};
  for(uint32_t v:{run.seed,run.rng,run.turns,run.gold,run.kills,run.daily})put(v);
  for(int v:std::initializer_list<int>{std::max(0,static_cast<int>(run.hp)),run.maxHp,run.xp,run.strength,run.torch,run.depth,run.x,run.y,run.level,run.regen,run.weapon,run.weaponPlus,run.armour,run.armourPlus,run.won,run.dead})put(v);
- for(auto v:run.map)b.push_back(static_cast<uint8_t>(v));for(auto v:run.seen)b.push_back(v);
- for(auto v:run.colours)b.push_back(v);for(auto v:run.knownPotions)b.push_back(v);for(auto v:run.labels)b.push_back(v);for(auto v:run.knownScrolls)b.push_back(v);
+ for(auto v:run.map) { b.push_back(static_cast<uint8_t>(v)); }
+ for(auto v:run.seen) { b.push_back(v); }
+ for(auto v:run.colours) { b.push_back(v); }
+ for(auto v:run.knownPotions) { b.push_back(v); }
+ for(auto v:run.labels) { b.push_back(v); }
+ for(auto v:run.knownScrolls) { b.push_back(v); }
  put(run.monsters.size());for(const auto&m:run.monsters){for(int v:std::initializer_list<int>{m.x,m.y,static_cast<int>(m.kind),m.hp,m.awake,m.sleep,m.lost})put(v);}
  auto items=[&](const std::vector<Item>&list){put(list.size());for(const auto&i:list)for(int v:std::initializer_list<int>{static_cast<int>(i.kind),i.type,i.plus,i.x,i.y,i.amount})put(v);};items(run.items);items(run.bag);put(digest(b,b.size()));return b;
 }
@@ -164,7 +169,8 @@ bool Game::decode(const std::vector<uint8_t>&b){
  for(auto&v:r.colours){if(p>=b.size())return false;v=b[p++];if(v>4)return false;}for(auto&v:r.knownPotions){if(p>=b.size())return false;v=b[p++];if(v>1)return false;}for(auto&v:r.labels){if(p>=b.size())return false;v=b[p++];if(v>25)return false;}for(auto&v:r.knownScrolls){if(p>=b.size())return false;v=b[p++];if(v>1)return false;}
  uint32_t n=get();if(n>16)return false;for(uint32_t i=0;i<n;++i){Monster m;m.x=bounded(Width-1);m.y=bounded(Height-1);m.kind=static_cast<Kind>(bounded(8));m.hp=bounded(1000);m.awake=bounded(1);m.sleep=bounded(12);m.lost=bounded(255);if(!ok)return false;if(!inside(m.x,m.y)||m.kind>Kind::Dragon||m.hp<1||m.hp>rule(m.kind).hp||m.awake>1||m.sleep>12||g.tile(m.x,m.y)==Tile::Rock||g.monsterAt(m.x,m.y)>=0||(m.x==r.x&&m.y==r.y))return false;r.monsters.push_back(m);}
  auto items=[&](std::vector<Item>&list,bool bag){uint32_t count=get();if(count>(bag?12u:32u))return false;for(uint32_t i=0;i<count;++i){Item it;it.kind=static_cast<ItemKind>(bounded(6));it.type=bounded(5);it.plus=bounded(50);it.x=bounded(Width-1);it.y=bounded(Height-1);it.amount=bounded(65535);if(!ok)return false;if(it.kind>ItemKind::Amulet||it.plus>50||!inside(it.x,it.y))return false;if(it.type>(it.kind==ItemKind::Scroll?5:4))return false;if(bag&&it.kind>ItemKind::Armour)return false;if(!bag&&(g.tile(it.x,it.y)==Tile::Rock||g.itemAt(it.x,it.y)>=0))return false;list.push_back(it);}return true;};
- if(!items(r.items,false)||!items(r.bag,true))return false;size_t payload=p;uint32_t hash=get();if(!ok||p!=b.size()||hash!=digest(b,payload))return false;
+ if(!items(r.items,false)||!items(r.bag,true)) { return false; }
+ size_t payload=p;uint32_t hash=get();if(!ok||p!=b.size()||hash!=digest(b,payload))return false;
  if(r.seed<1||r.seed>=2147483647||r.rng<1||r.rng>=2147483647||r.depth<1||r.depth>10||!inside(r.x,r.y)||g.tile(r.x,r.y)==Tile::Rock||r.maxHp<1||r.maxHp>1000||r.hp<0||r.hp>r.maxHp||r.level<1||r.level>50||r.weapon>4||r.armour>4||r.weaponPlus>50||r.armourPlus>50||r.strength<0||r.strength>100||r.torch<0||r.torch>600||r.won>1||r.dead>1||(r.won&&r.dead)||(!r.dead&&r.hp==0))return false;
  g.updateSight();g.say(Event::Welcome,r.depth);*this=std::move(g);return true;
 }
