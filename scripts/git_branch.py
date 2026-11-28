@@ -231,7 +231,7 @@ def inject_version(env):
     # Release candidate builds use the CI-provided RC tag when available, but
     # keep local gh_release_rc builds identifiable instead of leaving the
     # firmware version empty.
-    if env['PIOENV'] in ('gh_release_rc', 'x4c_release_rc', 'x4c_usb_test', 'x4_features_test', 'x3_features_test'):
+    if env['PIOENV'] in ('gh_release_rc', 'x4c_release_rc', 'x4c_usb_test', 'x4_features_test', 'x3_features_test', 'x4_display_trace_test', 'x4_quiet_ui_test'):
         base_version = normalize_semver_patch(get_base_version(project_dir))
         version_string = os.environ.get('CROSSPOINT_RC_VERSION') or f'{base_version}-rc.0+local'
         env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])

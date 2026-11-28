@@ -334,7 +334,12 @@ void HangmanGameActivity::renderPlaying() {
   } else {
     const HangmanWord& word = hangmanWordAt(language, category, difficulty, wordIndex);
     drawWrappedText(renderer, UI_10_FONT_ID, hintX, figureTop + 66, hintWidth, 3, word.hint);
-    if (hintUsed) renderer.drawText(UI_10_FONT_ID, hintX, figureTop + 132, tr(STR_HANGMAN_HINT_USED));
+    if (hintUsed) {
+      // Three wrapped clue lines must finish before the separate hint-used caption.
+      const int usedY = figureTop + 66 + 3 * (renderer.getTextHeight(UI_10_FONT_ID) + 4) + 6;
+      const auto caption = renderer.truncatedText(UI_10_FONT_ID, tr(STR_HANGMAN_HINT_USED), hintWidth);
+      renderer.drawText(UI_10_FONT_ID, hintX, usedY, caption.c_str());
+    }
   }
   renderer.drawLine(hintX, figureTop + 58, hintX + hintWidth, figureTop + 58, true);
 
@@ -393,7 +398,18 @@ void HangmanGameActivity::drawWord(const int y, const bool revealAll) const {
     wordDisplay += " ";
     wordCursor += bytes;
   }
-  renderer.drawCenteredText(NOTOSANS_14_FONT_ID, y, wordDisplay.c_str(), true, EpdFontFamily::BOLD);
+  const int availableWidth = renderer.getScreenWidth() - 40;
+  // Spaced 14-letter Russian words can exceed the X3 panel. Preserve every
+  // letter: remove optional spacing first, then use a smaller built-in font.
+  if (renderer.getTextWidth(NOTOSANS_14_FONT_ID, wordDisplay.c_str(), EpdFontFamily::BOLD) > availableWidth) {
+    wordDisplay.erase(std::remove(wordDisplay.begin(), wordDisplay.end(), ' '), wordDisplay.end());
+  }
+  int font = NOTOSANS_14_FONT_ID;
+  for (int candidate : {NOTOSANS_14_FONT_ID, NOTOSANS_12_FONT_ID, UI_10_FONT_ID}) {
+    font = candidate;
+    if (renderer.getTextWidth(font, wordDisplay.c_str(), EpdFontFamily::BOLD) <= availableWidth) break;
+  }
+  renderer.drawCenteredText(font, y, wordDisplay.c_str(), true, EpdFontFamily::BOLD);
 }
 
 void HangmanGameActivity::drawAlphabet(const int top) {

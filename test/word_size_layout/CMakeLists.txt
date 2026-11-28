@@ -1,5 +1,6 @@
 add_executable(WordSizeLayoutTest
   WordSizeLayoutTest.cpp
+  ${REPO_ROOT}/src/clippings/ClipTextBuilder.cpp
   ${REPO_ROOT}/lib/Epub/Epub/ParsedText.cpp
   ${REPO_ROOT}/lib/Epub/Epub/blocks/TextBlock.cpp
   ${REPO_ROOT}/lib/Epub/Epub/hyphenation/Hyphenator.cpp
@@ -14,6 +15,7 @@ add_executable(WordSizeLayoutTest
 # deliberately absent from the include path.
 target_include_directories(WordSizeLayoutTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${REPO_ROOT}/src
   ${REPO_ROOT}/test/shims
   ${REPO_ROOT}/lib/Epub
   ${REPO_ROOT}/lib/EpdFont

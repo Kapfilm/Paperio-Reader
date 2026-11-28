@@ -2,6 +2,10 @@
 
 #include <Arduino.h>
 #include <HalClock.h>
+#if PAPERIO_X4_DISPLAY_TRACE
+#include <HalStorage.h>
+#include <cstdio>
+#endif
 #include <HalGPIO.h>
 #include <HalPowerManager.h>
 #include <Logging.h>
@@ -118,7 +122,44 @@ void ActivityManager::renderTaskLoop() {
       renderPassActive.store(true, std::memory_order_release);
       const bool healthScreen = currentActivity->getName() != "Boot" && currentActivity->getName() != "Sleep" &&
                                 currentActivity->getName() != "SdFirmwareUpdate";
+#if PAPERIO_X4_DISPLAY_TRACE
+      const std::string traceActivity = currentActivity->getName();
+      const uint32_t traceStarted = millis();
+      const uint32_t traceActivations = renderer.getActivationCounter();
+#endif
       currentActivity->render(std::move(lock));
+#if PAPERIO_X4_DISPLAY_TRACE
+      // Still inside renderPassActive: transitions cannot destroy this activity.
+      // Drain only on the render task before touching the SD/SPI bus for the log.
+      if (gpio.deviceIsX4()) {
+        if (renderer.isRefreshPending()) renderer.completeDisplay();
+        static unsigned traceRecords = 0;
+        static bool traceFileStarted = false;
+        if (traceRecords < 200) {
+          ++traceRecords;
+          const bool first = !traceFileStarted;
+          HalFile trace = Storage.open("/paperio-x4-display.log",
+              O_WRONLY | O_CREAT | (first ? O_TRUNC : O_APPEND));
+          if (trace) {
+            if (first) {
+              trace.print("# firmware=" CROSSPOINT_VERSION "\n");
+              trace.print("time_ms,elapsed_ms,activity,requested,activation_hex,activation_count,activation_delta,secondary,inverted\n");
+            }
+            char row[224];
+            const uint32_t count = renderer.getActivationCounter();
+            const int length = snprintf(row, sizeof(row), "%lu,%lu,%s,%u,0x%02X,%lu,%lu,%u,%u\n",
+                static_cast<unsigned long>(millis()), static_cast<unsigned long>(millis() - traceStarted),
+                traceActivity.c_str(), static_cast<unsigned>(renderer.getLastRefreshMode()),
+                static_cast<unsigned>(renderer.getLastActivationByte()), static_cast<unsigned long>(count),
+                static_cast<unsigned long>(count - traceActivations), renderer.hasSecondaryBuffer() ? 1u : 0u,
+                renderer.isDarkMode() ? 1u : 0u);
+            if (length > 0 && length < static_cast<int>(sizeof(row))) trace.write(row, length);
+            trace.close();
+            traceFileStarted = true;
+          }
+        }
+      }
+#endif
       if (healthScreen) boot_health::rendered();
       // Cleared unconditionally on every exit path of render(): the call cannot throw
       // (-fno-exceptions) and every `return` inside it lands here.
@@ -716,4 +757,8 @@ void RenderLock::unlock() {
  * but it is unsupported API use in the reader's hottest polling path, and the holder query
  * answers exactly the same question legally.
  */
+bool RenderLock::isHeldByCurrentTask() {
+  return xSemaphoreGetMutexHolder(activityManager.renderingMutex) == xTaskGetCurrentTaskHandle();
+}
+
 bool RenderLock::peek() { return xSemaphoreGetMutexHolder(activityManager.renderingMutex) != nullptr; };

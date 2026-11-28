@@ -1,0 +1,42 @@
+{
+  "ru": {
+    "STR_PEG_TITLE": "Йога",
+    "STR_PEG_ENGLISH": "Крест",
+    "STR_PEG_TRIANGLE": "Треугольник",
+    "STR_PEG_PEGS": "Фишек:",
+    "STR_PEG_JUMPS": "Ходов:",
+    "STR_PEG_UNDO": "Отменить ход",
+    "STR_PEG_BOARD": "Поле",
+    "STR_PEG_RULES": "Правила",
+    "STR_PEG_MENU": "Меню",
+    "STR_PEG_PICK_PEG": "Выберите фишку, которая может прыгнуть.",
+    "STR_PEG_PICK_TARGET": "Выберите отмеченную пустую лунку.",
+    "STR_PEG_PERFECT": "Идеально: одна фишка в начальной лунке!",
+    "STR_PEG_WIN": "Победа! Осталась одна фишка.",
+    "STR_PEG_NO_MOVES": "Ходов больше нет. Можно отменить ход или начать заново.",
+    "STR_PEG_BEST": "Рекорд — фишек:",
+    "STR_PEG_SAVE_ERROR": "Не удалось сохранить игру. Проверьте SD-карту.",
+    "STR_PEG_RESTART_CONFIRM": "Начать новую партию на этом поле? Текущая партия будет заменена. Выбор — начать, Назад — отмена.",
+    "STR_PEG_HELP": "Цель — оставить одну фишку. Выберите фишку и пустую лунку через одну занятую. Перепрыгнутая фишка исчезает. На кресте прыжки прямые, на треугольнике — также диагональные. Кнопки направлений двигают курсор, Выбор отмечает фишку и выполняет прыжок. Назад снимает выбор или открывает меню. Отмена хода доступна в меню. Прогресс каждого поля сохраняется отдельно."
+  },
+  "en": {
+    "STR_PEG_TITLE": "Yoga",
+    "STR_PEG_ENGLISH": "English",
+    "STR_PEG_TRIANGLE": "Triangle",
+    "STR_PEG_PEGS": "Pegs:",
+    "STR_PEG_JUMPS": "Jumps:",
+    "STR_PEG_UNDO": "Undo move",
+    "STR_PEG_BOARD": "Board",
+    "STR_PEG_RULES": "Rules",
+    "STR_PEG_MENU": "Menu",
+    "STR_PEG_PICK_PEG": "Select a peg that can jump.",
+    "STR_PEG_PICK_TARGET": "Select one of the marked empty holes.",
+    "STR_PEG_PERFECT": "Perfect: one peg in the starting hole!",
+    "STR_PEG_WIN": "You won! One peg remains.",
+    "STR_PEG_NO_MOVES": "No more jumps. Undo a move or start again.",
+    "STR_PEG_BEST": "Best — pegs:",
+    "STR_PEG_SAVE_ERROR": "Could not save the game. Check the SD card.",
+    "STR_PEG_RESTART_CONFIRM": "Start a new game on this board? This replaces the current game. Select to start, Back to cancel.",
+    "STR_PEG_HELP": "Leave one peg. Select a peg and an empty hole beyond one neighbouring peg. The jumped peg disappears. English jumps follow rows and columns; Triangle also permits diagonals. Direction keys move the cursor, Select picks a peg and jumps. Back cancels selection or opens the menu. Undo is in the menu. Progress is saved separately for each board."
+  }
+}

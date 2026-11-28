@@ -1,487 +1,66 @@
 #include "KakuroGameActivity.h"
-
 #include <Arduino.h>
 #include <I18n.h>
-#include <Logging.h>
-
+#include <algorithm>
 #include <cstdio>
 #include <memory>
-
 #include "KakuroMenuActivity.h"
 #include "KakuroStore.h"
-#include "activities/games/GameUi.h"
+#include "KakuroLayout.h"
+#include "UiFonts.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-
-namespace {
-
-constexpr int kDigitFont = NOTOSANS_16_FONT_ID;
-constexpr int kClueFont = UI_10_FONT_ID;
-constexpr int kStatusFont = UI_12_FONT_ID;
-constexpr int kMetaFont = UI_10_FONT_ID;
-
-}  // namespace
-
-KakuroGameActivity::KakuroGameActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                       KakuroBoard::Difficulty difficulty, bool resume)
-    : Activity("Kakuro", renderer, mappedInput), difficulty(difficulty), resumeRequested(resume) {}
-
-void KakuroGameActivity::onEnter() {
-  Activity::onEnter();
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-  state = State::Playing;
-  focus = Focus::Grid;
-  mistakes = 0;
-  hintsLeft = 3;
-  showErrors = false;
-  elapsedMs = 0;
-  saveDebouncer.clear();
-
-  bool resumed = false;
-  if (resumeRequested) {
-    KakuroSaveSlot slot;
-    if (KakuroStore::load(slot)) {
-      board = slot.board;
-      difficulty = slot.difficulty;
-      variant = slot.variant;
-      cursorRow = slot.cursorRow;
-      cursorColumn = slot.cursorColumn;
-      elapsedMs = static_cast<uint32_t>(slot.elapsedSec) * 1000u;
-      mistakes = slot.mistakes;
-      hintsLeft = slot.hintsLeft;
-      showErrors = slot.showErrors;
-      resumed = true;
-    }
+namespace {constexpr int small=STATUS_LARGE_FONT_ID;}
+KakuroGameActivity::KakuroGameActivity(GfxRenderer&r,MappedInputManager&i,KakuroBoard::Difficulty d,bool resume):Activity("Kakuro",r,i),resumeRequested(resume),difficulty(d){}
+void KakuroGameActivity::firstCell(){for(int r=0;r<board.rows;++r)for(int c=0;c<board.columns;++c)if(board.isPlayable(r,c)){cursorRow=r;cursorColumn=c;return;}}
+void KakuroGameActivity::onEnter(){Activity::onEnter();renderer.setOrientation(GfxRenderer::Portrait);KakuroSaveSlot slot;if(resumeRequested&&KakuroStore::load(slot)){board=slot.board;difficulty=slot.difficulty;variant=slot.variant;cursorRow=slot.cursorRow;cursorColumn=slot.cursorColumn;elapsedMs=uint32_t(slot.elapsedSec)*1000;}else{auto s=KakuroStore::loadStats();variant=s.positions[int(difficulty)];board.build(difficulty,variant);firstCell();KakuroStore::recordStart(difficulty);}{auto s=KakuroStore::loadStats();for(int i=0;i<3;++i)solvedCounts[i]=s.completedCount[i];}lastTickMs=millis();if(board.isSolved())state=State::Won;requestUpdate();}
+void KakuroGameActivity::onExit(){flushSave();Activity::onExit();}
+void KakuroGameActivity::scheduleSave(){saveDebouncer.schedule(millis());}
+bool KakuroGameActivity::flushSave(){saveDebouncer.clear();KakuroSaveSlot s;s.board=board;s.difficulty=difficulty;s.variant=variant;s.cursorRow=cursorRow;s.cursorColumn=cursorColumn;s.elapsedSec=std::min<uint32_t>(65535,elapsedMs/1000);saveFailed=!KakuroStore::save(s);return !saveFailed;}
+void KakuroGameActivity::resume(){state=State::Playing;lastTickMs=millis();requestUpdate();}
+void KakuroGameActivity::openPuzzle(int n){if(!flushSave())return;variant=(n+200)%200;board.build(difficulty,variant);firstCell();palette=false;elapsedMs=0;auto s=KakuroStore::loadStats();s.positions[int(difficulty)]=variant;KakuroStore::saveStats(s);KakuroStore::recordStart(difficulty);flushSave();resume();}
+void KakuroGameActivity::solve(){KakuroStore::recordCompletion(difficulty,std::max<uint32_t>(1,std::min<uint32_t>(65535,elapsedMs/1000)),variant);flushSave();{auto s=KakuroStore::loadStats();for(int i=0;i<3;++i)solvedCounts[i]=s.completedCount[i];}state=State::Won;palette=false;}
+void KakuroGameActivity::useHint(){uint8_t previous[64];std::copy(board.hinted,board.hinted+64,previous);if(board.hint(cursorRow,cursorColumn)){for(int i=0;i<64;++i)if(board.hinted[i]&&!previous[i]){cursorRow=i/8;cursorColumn=i%8;break;}scheduleSave();if(board.isSolved())solve();}}
+void KakuroGameActivity::moveCursor(int dr,int dc){int r=cursorRow,c=cursorColumn;for(int tries=0;tries<64;++tries){r=(r+dr+board.rows)%board.rows;c=(c+dc+board.columns)%board.columns;if(board.isPlayable(r,c)){cursorRow=r;cursorColumn=c;scheduleSave();return;}}}
+void KakuroGameActivity::loop(){using B=MappedInputManager::Button;
+ if(state==State::Playing){auto now=millis();elapsedMs+=now-lastTickMs;lastTickMs=now;if(saveDebouncer.consumeIfDue(now))flushSave();
+ if(mappedInput.wasReleased(B::Back)){if(palette)palette=false;else{state=State::GameMenu;selected=0;}requestUpdate();return;}
+ if(mappedInput.wasPressed(B::Up)||mappedInput.wasPressed(B::Down)||mappedInput.wasPressed(B::Left)||mappedInput.wasPressed(B::Right)){
+ int dr=mappedInput.wasPressed(B::Up)?-1:mappedInput.wasPressed(B::Down)?1:0,dc=mappedInput.wasPressed(B::Left)?-1:mappedInput.wasPressed(B::Right)?1:0;
+ if(palette)paletteIndex=((paletteIndex/5+dr+2)%2)*5+(paletteIndex%5+dc+5)%5;else moveCursor(dr,dc);requestUpdate();
+ }else if(mappedInput.wasReleased(B::Confirm)){if(palette){board.place(cursorRow,cursorColumn,paletteIndex==9?0:paletteIndex+1);palette=false;scheduleSave();if(board.isSolved())solve();}else if(!board.isHinted(cursorRow,cursorColumn)){palette=true;paletteIndex=board.value(cursorRow,cursorColumn)?board.value(cursorRow,cursorColumn)-1:0;}requestUpdate();}return;}
+ if(state==State::Won){if(mappedInput.wasReleased(B::Confirm)){openPuzzle(variant+1);requestUpdate();}else if(mappedInput.wasReleased(B::Back)&&flushSave())activityManager.replaceActivity(std::make_unique<KakuroMenuActivity>(renderer,mappedInput));return;}
+ if(state==State::Rules||state==State::Combinations){if(mappedInput.wasReleased(B::Back)){state=State::GameMenu;requestUpdate();return;}if(mappedInput.wasPressed(B::Up)){scroll=std::max(0,scroll-1);requestUpdate();}if(mappedInput.wasPressed(B::Down)||mappedInput.wasReleased(B::Confirm)){++scroll;requestUpdate();}return;}
+ if(state==State::ConfirmRestart){if(mappedInput.wasReleased(B::Confirm)){board.resetUser();elapsedMs=0;firstCell();flushSave();resume();}else if(mappedInput.wasReleased(B::Back)){state=State::GameMenu;requestUpdate();}return;}
+ const int count=state==State::Levels?3:MenuCount;navigator.onPrevious([&]{selected=(selected+count-1)%count;requestUpdate();});navigator.onNext([&]{selected=(selected+1)%count;requestUpdate();});if(mappedInput.wasReleased(B::Confirm)){activate();requestUpdate();}else if(mappedInput.wasReleased(B::Back)){resume();}}
+void KakuroGameActivity::activate(){if(state==State::Levels){if(!flushSave())return;difficulty=static_cast<KakuroBoard::Difficulty>(selected);variant=KakuroStore::loadStats().positions[selected];board.build(difficulty,variant);firstCell();palette=false;elapsedMs=0;flushSave();resume();return;}
+ if(selected==2){board.undo();scheduleSave();resume();return;}
+ int action=selected>2?selected-1:selected;switch(action){case 0:resume();break;case 1:useHint();if(state!=State::Won)resume();break;case 2:state=State::Combinations;scroll=0;break;case 3:openPuzzle(variant+1);break;case 4:openPuzzle(variant-1);break;case 5:state=State::Levels;selected=int(difficulty);break;case 6:state=State::ConfirmRestart;break;case 7:state=State::Rules;scroll=0;break;case 8:if(flushSave())activityManager.replaceActivity(std::make_unique<KakuroMenuActivity>(renderer,mappedInput));break;}}
+const char*KakuroGameActivity::difficultyName(KakuroBoard::Difficulty d){return I18N.get(d==KakuroBoard::Difficulty::Easy?StrId::STR_SUDOKU_DIFFICULTY_EASY:d==KakuroBoard::Difficulty::Medium?StrId::STR_SUDOKU_DIFFICULTY_MEDIUM:StrId::STR_SUDOKU_DIFFICULTY_HARD);}
+void KakuroGameActivity::buttons(const char*b,const char*c,const char*u,const char*d){auto l=mappedInput.mapLabels(b,c,u,d);GUI.drawButtonHints(renderer,l.btn1,l.btn2,l.btn3,l.btn4,true);}
+void KakuroGameActivity::render(RenderLock&&){renderer.setOrientation(GfxRenderer::Portrait);renderer.clearScreen();if(state==State::Playing)renderPlaying();else if(state==State::GameMenu||state==State::Levels)renderList();else if(state==State::Won)renderWon();else renderText();renderer.displayBuffer(HalDisplay::FAST_REFRESH);}
+void KakuroGameActivity::drawHeader(){renderer.drawText(UI_12_FONT_ID,16,10,tr(STR_KAKURO_TITLE),true,EpdFontFamily::BOLD);char b[100];snprintf(b,sizeof(b),"%s · %u / 200 · %s %u",difficultyName(difficulty),unsigned(variant+1),tr(STR_KAKURO_COMPLETED),unsigned(solvedCounts[int(difficulty)]));renderer.drawText(small,16,44,saveFailed?tr(STR_KAKURO_SAVE_FAILED):b);renderer.drawLine(16,70,renderer.getScreenWidth()-16,70,2,true);}
+std::string KakuroGameActivity::runText(bool across)const{auto run=board.runFor(cursorRow,cursorColumn,across);if(!run.count)return {};char b[64];snprintf(b,sizeof(b),"%s %u / %u: ",I18N.get(across?StrId::STR_KAKURO_ACROSS:StrId::STR_KAKURO_DOWN),unsigned(run.sum),unsigned(run.count));std::string text=b;auto combos=KakuroBoard::combinations(run.count,run.sum);for(size_t i=0;i<combos.size();++i){if(i)text+=" · ";text+=combos[i];}return text;}
+void KakuroGameActivity::renderPlaying(){drawHeader();drawGrid();drawPalette();buttons(palette?tr(STR_KAKURO_CANCEL):tr(STR_KAKURO_MENU),palette?tr(STR_KAKURO_PLACE):tr(STR_KAKURO_PICK_NUMBER),tr(STR_DIR_LEFT),tr(STR_DIR_RIGHT));}
+void KakuroGameActivity::drawGrid(){const auto&m=UITheme::getInstance().getMetrics();const int w=renderer.getScreenWidth(),h=renderer.getScreenHeight(),lh=renderer.getLineHeight(small);auto v=kakuro_ui::layout(w,h,board.rows,board.columns,lh,m.buttonHintsHeight);const int font=v.cell<48?UI_12_FONT_ID:NOTOSANS_16_FONT_ID;const auto outside=kakuro_ui::outsideBlocks(board);
+ for(int r=0;r<board.rows;++r)for(int c=0;c<board.columns;++c){int x=v.left+c*v.cell,y=v.top+r*v.cell,cell=KakuroBoard::idx(r,c);if(!board.playable[cell]){auto right=board.clueRight[cell],down=board.clueDown[cell];if(!right&&!down){if(!outside[cell]){renderer.drawRect(x,y,v.cell,v.cell,2,true);renderer.drawRect(x+4,y+4,v.cell-8,v.cell-8,true);}continue;}renderer.drawRect(x,y,v.cell,v.cell,2,true);renderer.drawRect(x+4,y+4,v.cell-8,v.cell-8,true);renderer.drawLine(x+2,y+2,x+v.cell-3,y+v.cell-3,2,true);char b[4];if(right){snprintf(b,sizeof(b),"%u",right);renderer.drawText(UI_HINT_FONT_ID,x+v.cell-renderer.getTextWidth(UI_HINT_FONT_ID,b)-3,y+2,b);}if(down){snprintf(b,sizeof(b),"%u",down);renderer.drawText(UI_HINT_FONT_ID,x+3,y+v.cell-renderer.getLineHeight(UI_HINT_FONT_ID)-2,b);}continue;}
+ bool active=r==cursorRow&&c==cursorColumn;renderer.drawRect(x,y,v.cell,v.cell,2,true);if(active)renderer.drawRect(x+3,y+3,v.cell-6,v.cell-6,2,true);auto digit=board.user[cell];if(digit){char b[2]={char('0'+digit),0};int tw=renderer.getTextWidth(font,b);int ty=y+(v.cell-renderer.getLineHeight(font))/2;renderer.drawText(font,x+(v.cell-tw)/2,ty,b);if(board.isHinted(r,c))renderer.fillRect(x+(v.cell-tw)/2,ty+renderer.getLineHeight(font)-3,tw,2,true);if(board.hasError(r,c)){renderer.drawLine(x+6,y+6,x+v.cell-7,y+v.cell-7,2,true);renderer.drawLine(x+v.cell-7,y+6,x+6,y+v.cell-7,2,true);}}}
+ std::vector<std::string> preview;
+ for(bool across:{true,false}){
+  auto text=runText(across);
+  auto lines=renderer.wrappedText(small,text.c_str(),w-32,100);
+  for(size_t i=0;i<std::min<size_t>(3,lines.size());++i){
+   auto line=lines[i];
+   if(i==2&&lines.size()>3)line=renderer.truncatedText(small,(line+"…").c_str(),w-32);
+   preview.push_back(std::move(line));
   }
+ }
+ int y=kakuro_ui::hintBlockTop(v.paletteY,lh,preview.size());
+ for(const auto&line:preview){renderer.drawText(small,16,y,line.c_str());y+=lh;}
 
-  if (!resumed) {
-    variant = static_cast<uint8_t>(esp_random() % 3u);
-    if (!board.build(difficulty, variant)) LOG_ERR("KAK", "Invalid built-in puzzle");
-    cursorRow = 1;
-    cursorColumn = 1;
-    KakuroStore::recordStart(difficulty);
-  }
-  lastTickMs = millis();
-  requestUpdate();
 }
-
-void KakuroGameActivity::onExit() {
-  flushSave();
-  Activity::onExit();
-}
-
-void KakuroGameActivity::loop() {
-  if (state == State::Playing) {
-    const uint32_t now = millis();
-    if (now > lastTickMs) elapsedMs += now - lastTickMs;
-    lastTickMs = now;
-    if (saveDebouncer.consumeIfDue(now)) flushSave();
-    handlePlayingInput();
-  } else if (state == State::GameMenu) {
-    handleGameMenuInput();
-  } else {
-    handleWonInput();
-  }
-}
-
-void KakuroGameActivity::handlePlayingInput() {
-  if (focus == Focus::Grid) {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
-      moveCursor(-1, 0);
-      requestUpdate();
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
-      moveCursor(1, 0);
-      requestUpdate();
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-      moveCursor(0, -1);
-      requestUpdate();
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
-      moveCursor(0, 1);
-      requestUpdate();
-    } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      enterPalette();
-      requestUpdate();
-    } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      state = State::GameMenu;
-      gameMenuIndex = 0;
-      requestUpdate();
-    }
-  } else {
-    if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
-      movePalette(-1, 0);
-      requestUpdate();
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Down)) {
-      movePalette(1, 0);
-      requestUpdate();
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
-      movePalette(0, -1);
-      requestUpdate();
-    } else if (mappedInput.wasPressed(MappedInputManager::Button::Right)) {
-      movePalette(0, 1);
-      requestUpdate();
-    } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      leavePalette(true);
-      requestUpdate();
-    } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      leavePalette(false);
-      requestUpdate();
-    }
-  }
-}
-
-void KakuroGameActivity::handleGameMenuInput() {
-  buttonNavigator.onPrevious([this] {
-    gameMenuIndex = static_cast<uint8_t>((gameMenuIndex + MENU_ITEM_COUNT - 1) % MENU_ITEM_COUNT);
-    requestUpdate();
-  });
-  buttonNavigator.onNext([this] {
-    gameMenuIndex = static_cast<uint8_t>((gameMenuIndex + 1) % MENU_ITEM_COUNT);
-    requestUpdate();
-  });
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    runMenuItem(gameMenuIndex);
-    requestUpdate();
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    resumeFromMenu();
-    requestUpdate();
-  }
-}
-
-void KakuroGameActivity::handleWonInput() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    activityManager.replaceActivity(std::make_unique<KakuroGameActivity>(renderer, mappedInput, difficulty, false));
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    activityManager.replaceActivity(std::make_unique<KakuroMenuActivity>(renderer, mappedInput));
-  }
-}
-
-void KakuroGameActivity::moveCursor(int rowDelta, int columnDelta) {
-  int row = cursorRow;
-  int column = cursorColumn;
-  for (uint8_t attempt = 0; attempt < KakuroBoard::MAX_CELLS; attempt++) {
-    row = (row + rowDelta + board.rows) % board.rows;
-    column = (column + columnDelta + board.columns) % board.columns;
-    if (board.isPlayable(row, column)) {
-      cursorRow = static_cast<uint8_t>(row);
-      cursorColumn = static_cast<uint8_t>(column);
-      return;
-    }
-  }
-}
-
-void KakuroGameActivity::movePalette(int rowDelta, int columnDelta) {
-  int row = paletteIndex / 5;
-  int column = paletteIndex % 5;
-  row = (row + rowDelta + 2) % 2;
-  column = (column + columnDelta + 5) % 5;
-  paletteIndex = static_cast<uint8_t>(row * 5 + column);
-}
-
-void KakuroGameActivity::enterPalette() {
-  focus = Focus::Palette;
-  paletteIndex = board.value(cursorRow, cursorColumn) == 0 ? static_cast<uint8_t>(lastPlacedDigit - 1) : 9;
-}
-
-void KakuroGameActivity::leavePalette(bool place) {
-  if (place) placeDigit(paletteIndex == 9 ? 0 : static_cast<uint8_t>(paletteIndex + 1));
-  focus = Focus::Grid;
-}
-
-void KakuroGameActivity::placeDigit(uint8_t digit) {
-  if (!board.place(cursorRow, cursorColumn, digit)) return;
-  if (digit != 0) {
-    lastPlacedDigit = digit;
-    if (board.hasError(cursorRow, cursorColumn) && mistakes < 255) mistakes++;
-  }
-  scheduleSave();
-  if (board.isSolved()) solve();
-}
-
-void KakuroGameActivity::useHint() {
-  if (hintsLeft == 0) return;
-  uint8_t targetRow = cursorRow;
-  uint8_t targetColumn = cursorColumn;
-  if (board.value(targetRow, targetColumn) != 0) {
-    bool found = false;
-    for (uint8_t row = 0; row < board.rows && !found; row++) {
-      for (uint8_t column = 0; column < board.columns; column++) {
-        if (board.isPlayable(row, column) && board.value(row, column) == 0) {
-          targetRow = row;
-          targetColumn = column;
-          found = true;
-          break;
-        }
-      }
-    }
-    if (!found) return;
-  }
-  const uint8_t digit = board.solution[KakuroBoard::idx(targetRow, targetColumn)];
-  board.place(targetRow, targetColumn, digit);
-  cursorRow = targetRow;
-  cursorColumn = targetColumn;
-  hintsLeft--;
-  scheduleSave();
-  if (board.isSolved()) solve();
-}
-
-void KakuroGameActivity::restart() {
-  board.resetUser();
-  cursorRow = 1;
-  cursorColumn = 1;
-  mistakes = 0;
-  hintsLeft = 3;
-  showErrors = false;
-  elapsedMs = 0;
-  focus = Focus::Grid;
-  scheduleSave();
-}
-
-void KakuroGameActivity::solve() {
-  const uint32_t seconds = elapsedMs / 1000u;
-  KakuroStore::recordCompletion(difficulty, static_cast<uint16_t>(seconds > 0xFFFF ? 0xFFFF : seconds));
-  KakuroStore::clear();
-  saveDebouncer.clear();
-  state = State::Won;
-}
-
-void KakuroGameActivity::runMenuItem(uint8_t index) {
-  switch (index) {
-    case 0:
-      resumeFromMenu();
-      break;
-    case 1:
-      useHint();
-      if (state != State::Won) resumeFromMenu();
-      break;
-    case 2:
-      showErrors = true;
-      scheduleSave();
-      resumeFromMenu();
-      break;
-    case 3:
-      restart();
-      resumeFromMenu();
-      break;
-    case 4:
-      KakuroStore::clear();
-      activityManager.replaceActivity(std::make_unique<KakuroGameActivity>(renderer, mappedInput, difficulty, false));
-      break;
-    case 5:
-      flushSave();
-      activityManager.replaceActivity(std::make_unique<KakuroMenuActivity>(renderer, mappedInput));
-      break;
-  }
-}
-
-void KakuroGameActivity::resumeFromMenu() {
-  state = State::Playing;
-  lastTickMs = millis();
-}
-
-void KakuroGameActivity::scheduleSave() { saveDebouncer.schedule(millis()); }
-
-void KakuroGameActivity::flushSave() {
-  if (state != State::Playing && state != State::GameMenu) return;
-  saveDebouncer.clear();
-  KakuroSaveSlot slot;
-  slot.board = board;
-  slot.difficulty = difficulty;
-  slot.variant = variant;
-  slot.elapsedSec = static_cast<uint16_t>((elapsedMs / 1000u) > 0xFFFF ? 0xFFFF : (elapsedMs / 1000u));
-  slot.cursorRow = cursorRow;
-  slot.cursorColumn = cursorColumn;
-  slot.mistakes = mistakes;
-  slot.hintsLeft = hintsLeft;
-  slot.showErrors = showErrors;
-  KakuroStore::save(slot);
-}
-
-const char* KakuroGameActivity::difficultyName(KakuroBoard::Difficulty difficulty) {
-  if (difficulty == KakuroBoard::Difficulty::Medium) return tr(STR_SUDOKU_DIFFICULTY_MEDIUM);
-  if (difficulty == KakuroBoard::Difficulty::Hard) return tr(STR_SUDOKU_DIFFICULTY_HARD);
-  return tr(STR_SUDOKU_DIFFICULTY_EASY);
-}
-
-void KakuroGameActivity::render(RenderLock&&) {
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-  renderer.clearScreen();
-  if (state == State::Playing) {
-    renderPlaying();
-  } else if (state == State::GameMenu) {
-    renderGameMenu();
-  } else {
-    renderWon();
-  }
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
-}
-
-void KakuroGameActivity::renderPlaying() {
-  drawTitleBar();
-  drawGrid();
-  drawPalette();
-  drawFooter();
-}
-
-void KakuroGameActivity::drawTitleBar() {
-  const int width = renderer.getScreenWidth();
-  renderer.fillRect(0, TITLE_HEIGHT - 3, width, 3, true);
-  char title[64];
-  snprintf(title, sizeof(title), "%s · %s", tr(STR_KAKURO_TITLE), difficultyName(difficulty));
-  renderer.drawText(kStatusFont, 12, 13, title, true, EpdFontFamily::BOLD);
-  if (state != State::Won) {
-    char elapsed[8];
-    gameFormatElapsed(elapsedMs, elapsed, sizeof(elapsed));
-    char meta[48];
-    snprintf(meta, sizeof(meta), "%s · %s %u", elapsed, tr(STR_KAKURO_ERRORS), static_cast<unsigned>(mistakes));
-    const int textWidth = renderer.getTextWidth(kMetaFont, meta);
-    const int y = 13 + (renderer.getTextHeight(kStatusFont) - renderer.getTextHeight(kMetaFont)) / 2;
-    renderer.drawText(kMetaFont, width - textWidth - 12, y, meta);
-  }
-}
-
-void KakuroGameActivity::drawGrid() {
-  const int maxWidth = 432;
-  const int availableHeight = GRID_AREA_BOTTOM - TITLE_HEIGHT;
-  int cellSize = maxWidth / board.columns;
-  if (cellSize > availableHeight / board.rows) cellSize = availableHeight / board.rows;
-  if (cellSize > 56) cellSize = 56;
-  const int gridWidth = cellSize * board.columns;
-  const int gridHeight = cellSize * board.rows;
-  const int originX = (renderer.getScreenWidth() - gridWidth) / 2;
-  const int originY = TITLE_HEIGHT + (availableHeight - gridHeight) / 2;
-  const int digitHeight = renderer.getTextHeight(kDigitFont);
-
-  for (uint8_t row = 0; row < board.rows; row++) {
-    for (uint8_t column = 0; column < board.columns; column++) {
-      const int x = originX + column * cellSize;
-      const int y = originY + row * cellSize;
-      const uint8_t cell = KakuroBoard::idx(row, column);
-      if (!board.playable[cell]) {
-        drawClueCell(x, y, cellSize, board.clueRight[cell], board.clueDown[cell]);
-        continue;
-      }
-
-      const bool selected = focus == Focus::Grid && row == cursorRow && column == cursorColumn;
-      if (selected) renderer.fillRect(x, y, cellSize, cellSize, true);
-      renderer.drawRect(x, y, cellSize, cellSize, true);
-      const uint8_t digit = board.user[cell];
-      if (digit != 0) {
-        const char text[2] = {static_cast<char>('0' + digit), 0};
-        const int textWidth = renderer.getTextWidth(kDigitFont, text);
-        renderer.drawText(kDigitFont, x + (cellSize - textWidth) / 2, y + gameCenterY(cellSize, digitHeight), text,
-                          !selected, EpdFontFamily::ITALIC);
-        if (showErrors && board.hasError(row, column)) {
-          renderer.drawLine(x + cellSize - 10, y + cellSize - 9, x + cellSize - 4, y + cellSize - 3, !selected);
-          renderer.drawLine(x + cellSize - 4, y + cellSize - 9, x + cellSize - 10, y + cellSize - 3, !selected);
-        }
-      }
-    }
-  }
-  if (focus == Focus::Palette) {
-    renderer.drawRect(originX + cursorColumn * cellSize + 2, originY + cursorRow * cellSize + 2, cellSize - 4,
-                      cellSize - 4, 2, true);
-  }
-}
-
-void KakuroGameActivity::drawClueCell(int x, int y, int size, uint8_t right, uint8_t down) {
-  if (right == 0 && down == 0) {
-    renderer.fillRect(x, y, size, size, true);
-    return;
-  }
-  renderer.drawRect(x, y, size, size, true);
-  renderer.drawLine(x + 2, y + size - 3, x + size - 3, y + 2, true);
-  char text[4];
-  if (down != 0) {
-    snprintf(text, sizeof(text), "%u", static_cast<unsigned>(down));
-    const int width = renderer.getTextWidth(kClueFont, text);
-    renderer.drawText(kClueFont, x + size - width - 3, y + 2, text);
-  }
-  if (right != 0) {
-    snprintf(text, sizeof(text), "%u", static_cast<unsigned>(right));
-    renderer.drawText(kClueFont, x + 3, y + size - renderer.getTextHeight(kClueFont) - 2, text);
-  }
-}
-
-void KakuroGameActivity::drawPalette() {
-  const int originX = (renderer.getScreenWidth() - PALETTE_WIDTH) / 2;
-  if (focus == Focus::Palette) {
-    renderer.drawRect(originX - 4, PALETTE_Y - 4, PALETTE_WIDTH + 8, PALETTE_HEIGHT + 8, 2, true);
-  }
-  const int textHeight = renderer.getTextHeight(kDigitFont);
-  for (uint8_t index = 0; index < 10; index++) {
-    const int row = index / 5;
-    const int column = index % 5;
-    const int x = originX + column * (PALETTE_CELL_WIDTH + PALETTE_GAP);
-    const int y = PALETTE_Y + row * (PALETTE_CELL_HEIGHT + PALETTE_GAP);
-    const bool selected = focus == Focus::Palette && paletteIndex == index;
-    if (selected) renderer.fillRect(x, y, PALETTE_CELL_WIDTH, PALETTE_CELL_HEIGHT, true);
-    renderer.drawRect(x, y, PALETTE_CELL_WIDTH, PALETTE_CELL_HEIGHT, true);
-    const char text[2] = {index < 9 ? static_cast<char>('1' + index) : 'X', 0};
-    const int textWidth = renderer.getTextWidth(kDigitFont, text);
-    renderer.drawText(kDigitFont, x + (PALETTE_CELL_WIDTH - textWidth) / 2,
-                      y + gameCenterY(PALETTE_CELL_HEIGHT, textHeight), text, !selected);
-  }
-}
-
-void KakuroGameActivity::drawFooter() {
-  const char* back = focus == Focus::Grid ? tr(STR_KAKURO_MENU) : tr(STR_KAKURO_CANCEL);
-  const char* confirm = focus == Focus::Grid ? tr(STR_KAKURO_PICK_NUMBER) : tr(STR_KAKURO_PLACE);
-  const auto labels = mappedInput.mapLabels(back, confirm, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
-}
-
-void KakuroGameActivity::renderGameMenu() {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int width = renderer.getScreenWidth();
-  const int height = renderer.getScreenHeight();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, width, metrics.headerHeight}, tr(STR_GAME_GAME_MENU));
-  const int listY = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int listHeight = height - listY - metrics.buttonHintsHeight - metrics.verticalSpacing;
-  constexpr StrId items[MENU_ITEM_COUNT] = {StrId::STR_GAME_RESUME,         StrId::STR_KAKURO_USE_HINT,
-                                            StrId::STR_KAKURO_CHECK_ERRORS, StrId::STR_KAKURO_RESTART,
-                                            StrId::STR_GAME_NEW_GAME,       StrId::STR_GAME_EXIT};
-  GUI.drawList(renderer, Rect{0, listY, width, listHeight}, MENU_ITEM_COUNT, gameMenuIndex,
-               [&](int index) { return std::string(I18N.get(items[index])); });
-  const auto labels = mappedInput.mapLabels(tr(STR_GAME_RESUME), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
-}
-
-void KakuroGameActivity::renderWon() {
-  drawTitleBar();
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int width = renderer.getScreenWidth();
-  const int availableBottom = renderer.getScreenHeight() - metrics.buttonHintsHeight;
-  char elapsed[8];
-  gameFormatElapsed(elapsedMs, elapsed, sizeof(elapsed));
-  const int difficultyIndex = static_cast<int>(difficulty);
-  const KakuroStats stats = KakuroStore::loadStats();
-  char subtitle[72];
-  snprintf(subtitle, sizeof(subtitle), "%s · %s · %s %u", difficultyName(difficulty), elapsed, tr(STR_KAKURO_ERRORS),
-           static_cast<unsigned>(mistakes));
-  const int blockTop = gameCenteredBlockY(TITLE_HEIGHT, availableBottom, 250);
-  renderer.drawCenteredText(NOTOSANS_16_FONT_ID, blockTop, tr(STR_KAKURO_SOLVED), true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(kStatusFont, blockTop + 44, subtitle);
-  renderer.drawLine(24, blockTop + 98, width - 24, blockTop + 98, true);
-
-  char best[16];
-  const uint16_t bestSeconds = stats.bestTimeSec[difficultyIndex];
-  if (bestSeconds == 0) {
-    snprintf(best, sizeof(best), "--");
-  } else {
-    snprintf(best, sizeof(best), "%02u:%02u", static_cast<unsigned>(bestSeconds / 60),
-             static_cast<unsigned>(bestSeconds % 60));
-  }
-  char completed[16];
-  snprintf(completed, sizeof(completed), "%u", static_cast<unsigned>(stats.completedCount[difficultyIndex]));
-  renderer.drawCenteredText(kStatusFont, blockTop + 122, tr(STR_GAME_TIME));
-  renderer.drawCenteredText(NOTOSANS_16_FONT_ID, blockTop + 150, elapsed);
-  renderer.drawText(kStatusFont, 48, blockTop + 196, tr(STR_GAME_BEST_TIME));
-  renderer.drawText(NOTOSANS_16_FONT_ID, 48, blockTop + 224, best);
-  const int completedWidth = renderer.getTextWidth(kStatusFont, tr(STR_KAKURO_COMPLETED));
-  renderer.drawText(kStatusFont, width - 48 - completedWidth, blockTop + 196, tr(STR_KAKURO_COMPLETED));
-  const int totalWidth = renderer.getTextWidth(NOTOSANS_16_FONT_ID, completed);
-  renderer.drawText(NOTOSANS_16_FONT_ID, width - 48 - totalWidth, blockTop + 224, completed);
-
-  const auto labels = mappedInput.mapLabels(tr(STR_GAME_HOME), tr(STR_GAME_PLAY_AGAIN), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4, /*equalWidths=*/true);
-}
+void KakuroGameActivity::drawPalette(){auto&m=UITheme::getInstance().getMetrics();const int w=renderer.getScreenWidth();auto v=kakuro_ui::layout(w,renderer.getScreenHeight(),board.rows,board.columns,renderer.getLineHeight(small),m.buttonHintsHeight);int left=(w-v.paletteCell*5)/2;for(int i=0;i<10;++i){int x=left+(i%5)*v.paletteCell,y=v.paletteY+(i/5)*46;bool active=palette&&i==paletteIndex;if(active)renderer.fillRect(x+2,y+2,v.paletteCell-4,42,true);renderer.drawRect(x+2,y+2,v.paletteCell-4,42,2,true);char b[2]={i==9?'X':char('1'+i),0};renderer.drawText(UI_12_FONT_ID,x+(v.paletteCell-renderer.getTextWidth(UI_12_FONT_ID,b))/2,y+7,b,!active);}}
+void KakuroGameActivity::renderList(){const auto&m=UITheme::getInstance().getMetrics();int w=renderer.getScreenWidth(),y=m.topPadding+m.headerHeight+m.verticalSpacing;GUI.drawHeader(renderer,Rect{0,m.topPadding,w,m.headerHeight},I18N.get(state==State::Levels?StrId::STR_KAKURO_DIFFICULTY:StrId::STR_GAME_GAME_MENU));constexpr StrId ids[]={StrId::STR_GAME_RESUME,StrId::STR_KAKURO_USE_HINT,StrId::STR_KAKURO_UNDO,StrId::STR_KAKURO_COMBINATIONS,StrId::STR_KAKURO_NEXT,StrId::STR_KAKURO_PREVIOUS,StrId::STR_KAKURO_DIFFICULTY,StrId::STR_KAKURO_RESTART,StrId::STR_KAKURO_HOW_TO,StrId::STR_GAME_HOME};GUI.drawList(renderer,Rect{0,y,w,renderer.getScreenHeight()-y-m.buttonHintsHeight-8},state==State::Levels?3:MenuCount,selected,[&](int i){return std::string(state==State::Levels?difficultyName(static_cast<KakuroBoard::Difficulty>(i)):I18N.get(ids[i]));});buttons(tr(STR_BACK),tr(STR_SELECT),tr(STR_DIR_UP),tr(STR_DIR_DOWN));}
+std::string KakuroGameActivity::helpText()const{return tr(STR_KAKURO_RULES);}
+void KakuroGameActivity::renderText(){const auto&m=UITheme::getInstance().getMetrics();int w=renderer.getScreenWidth(),top=m.topPadding+m.headerHeight+12,lh=renderer.getLineHeight(small);const char*title=I18N.get(state==State::Rules?StrId::STR_KAKURO_HOW_TO:state==State::Combinations?StrId::STR_KAKURO_COMBINATIONS:StrId::STR_KAKURO_RESTART);GUI.drawHeader(renderer,Rect{0,m.topPadding,w,m.headerHeight},title);std::string text=state==State::Rules?helpText():state==State::Combinations?runText(true)+"\n\n"+runText(false):tr(STR_KAKURO_RESTART_QUESTION);auto lines=renderer.wrappedText(small,text.c_str(),w-40,1000);int count=std::max(1,(renderer.getScreenHeight()-m.buttonHintsHeight-top-10)/lh);scroll=std::clamp(scroll,0,std::max(0,int(lines.size())-count));for(int i=scroll;i<int(lines.size())&&i<scroll+count;++i)renderer.drawText(small,20,top+(i-scroll)*lh,lines[i].c_str());buttons(tr(STR_BACK),state==State::ConfirmRestart?tr(STR_SELECT):tr(STR_DIR_DOWN),tr(STR_DIR_UP),tr(STR_DIR_DOWN));}
+void KakuroGameActivity::renderWon(){drawHeader();int y=renderer.getScreenHeight()/2-70;renderer.drawCenteredText(UI_12_FONT_ID,y,tr(STR_KAKURO_SOLVED),true,EpdFontFamily::BOLD);renderer.drawCenteredText(small,y+50,tr(STR_KAKURO_NEXT_PROMPT));buttons(tr(STR_GAME_HOME),tr(STR_KAKURO_NEXT),"","");}

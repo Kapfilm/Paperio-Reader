@@ -602,7 +602,8 @@ void enterDeepSleep(bool fromTimeout = false) {
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME, fromTimeout,
       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
   const bool flipClockSleep = !isQuickResumeSleep && gpio.deviceIsX4Classic() &&
-                              (SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK ||
+                              (SETTINGS.sleepScreen == CrossPointSettings::WORD_CLOCK ||
+                               SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK ||
                                SETTINGS.sleepScreen == CrossPointSettings::CALENDAR_WEATHER_CLOCK);
   APP_STATE.quickSleepHome = isQuickResumeSleep ? activityManager.captureHomeForQuickSleep() : HomeSleepState{};
   const bool calendarSleep = !isQuickResumeSleep &&
@@ -1061,7 +1062,8 @@ void setup() {
 
 #if FREEINK_DEVICE_X4CLASSIC
   if (flipClockTimerWake && !recoveryFirmwareMode &&
-      (SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK ||
+      (SETTINGS.sleepScreen == CrossPointSettings::WORD_CLOCK ||
+                               SETTINGS.sleepScreen == CrossPointSettings::FLIP_CLOCK ||
        SETTINGS.sleepScreen == CrossPointSettings::CALENDAR_WEATHER_CLOCK) &&
       digitalRead(InputManager::POWER_BUTTON_PIN) != LOW) {
     // Redraw only the selected sleep artwork. In particular, avoid boot artwork,
@@ -1404,16 +1406,9 @@ void loop() {
   // Placed after sleep guards so we never queue a render that won't be processed.
   if (gpio.wasUsbStateChanged()) {
     activityManager.requestUpdate();
-  } else if (batteryPercentChanged && SETTINGS.statusBarBattery) {
-    // pollBatteryPercentage() updates the X4 estimate while the reader is idle, but an
-    // e-ink panel only changes when a render is requested. Previously the periodic reader
-    // repaint was driven solely by the optional clock, so with the clock disabled a new
-    // percentage remained in the cache until a button press happened to redraw the page.
-    // Refresh any current screen while the battery indicator is enabled: the home screen
-    // and menus show it too, and otherwise their value would still wait for a key press.
-    // One request per whole percentage (roughly every 40-120 seconds across the X4
-    // charge curve) keeps background charging visible without repainting every
-    // 1.5-second ADC poll.
+  } else if (batteryPercentChanged && SETTINGS.statusBarBattery && !gpio.deviceIsX4()) {
+    // X4 ADC/charging changes must not repaint an idle page every few seconds.
+    // Its battery value is still updated on input, USB changes and clock ticks.
     activityManager.requestUpdate();
   }
 

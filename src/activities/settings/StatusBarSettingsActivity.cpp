@@ -42,12 +42,16 @@ constexpr StatusBarItem enumItem(StrId label, uint8_t CrossPointSettings::* fiel
   return {label, field, static_cast<uint8_t>(N), defaultValue, names, false};
 }
 bool isCenteredItem(const StatusBarItem& item) {
-  return item.field == &CrossPointSettings::statusBarTitle || item.field == &CrossPointSettings::statusBarBookTitle;
+  return item.field == &CrossPointSettings::statusBarTitle ||
+         item.field == &CrossPointSettings::statusBarBookTitle ||
+         item.field == &CrossPointSettings::statusBarSectionTitle;
 }
 
 constexpr StatusBarItem locationItem(StrId label, uint8_t CrossPointSettings::* field,
                                       uint8_t CrossPointSettings::* positionField, bool requiresClock = false) {
-  const bool centered = field == &CrossPointSettings::statusBarTitle || field == &CrossPointSettings::statusBarBookTitle;
+  const bool centered = field == &CrossPointSettings::statusBarTitle ||
+                        field == &CrossPointSettings::statusBarBookTitle ||
+                        field == &CrossPointSettings::statusBarSectionTitle;
   return {label, field, static_cast<uint8_t>(centered ? 3 : 5), 0, centered ? itemPositionNames : nullptr,
           requiresClock, positionField};
 }
@@ -84,6 +88,8 @@ const StatusBarItem statusBarItems[] = {
                  &CrossPointSettings::statusBarBookProgressPercentagePosition),
     locationItem(StrId::STR_EXAMPLE_BOOK, &CrossPointSettings::statusBarBookTitle,
                  &CrossPointSettings::statusBarBookTitlePosition),
+    locationItem(StrId::STR_SECTION_HEADING, &CrossPointSettings::statusBarSectionTitle,
+                 &CrossPointSettings::statusBarSectionTitlePosition),
     locationItem(StrId::STR_CHAPTER, &CrossPointSettings::statusBarTitle,
                  &CrossPointSettings::statusBarTitlePosition),
     locationItem(StrId::STR_BATTERY, &CrossPointSettings::statusBarBattery,
@@ -184,9 +190,13 @@ void drawPreviewStatusItems(const GfxRenderer& renderer, const Rect& rect, const
       if (width <= x2 - x1) renderer.drawText(font, std::clamp(rect.x + (rect.width - width) / 2, x1, x2 - width),
                                             textY, fitted.c_str());
     };
+    const bool heading = SETTINGS.statusBarSectionTitle &&
+                         UITheme::statusBarItemAtTop(SETTINGS.statusBarSectionTitlePosition) == top;
     if (book) label(tr(STR_EXAMPLE_BOOK), y, left, right);
-    if (chapter) label(tr(STR_EXAMPLE_CHAPTER), y + (book ? lineHeight : 0),
+    if (heading) label(tr(STR_SECTION_HEADING), y + (book ? lineHeight : 0),
                        book ? rect.x + 10 : left, book ? rect.x + rect.width - 10 : right);
+    if (chapter) label(tr(STR_EXAMPLE_CHAPTER), y + ((book ? 1 : 0) + (heading ? 1 : 0)) * lineHeight,
+                       (book || heading) ? rect.x + 10 : left, (book || heading) ? rect.x + rect.width - 10 : right);
   }
 }
 

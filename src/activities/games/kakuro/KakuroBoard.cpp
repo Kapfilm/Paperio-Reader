@@ -1,68 +1,9 @@
 #include "KakuroBoard.h"
-
+#include "KakuroData.h"
 #include <cstring>
+#include <algorithm>
 
-namespace {
-
-// These compact 3x3 Kakuro components were generated offline and exhaustively
-// checked against their row/column sums. Every component has exactly one
-// solution. A full puzzle is composed of two, three, or four such components.
-constexpr uint8_t kUniqueBlocks[][9] = {
-    {9, 6, 8, 8, 1, 2, 6, 3, 1}, {2, 1, 6, 1, 3, 4, 4, 7, 9}, {2, 9, 8, 1, 2, 5, 4, 7, 9}, {8, 2, 1, 6, 1, 3, 9, 4, 7},
-    {4, 1, 2, 7, 3, 1, 9, 6, 4}, {9, 6, 8, 7, 5, 9, 4, 2, 1}, {8, 9, 6, 3, 5, 1, 9, 7, 3},
-};
-constexpr uint8_t kBlockCount = sizeof(kUniqueBlocks) / sizeof(kUniqueBlocks[0]);
-constexpr uint8_t kOrigins[4][2] = {{1, 1}, {1, 5}, {5, 1}, {5, 5}};
-
-}  // namespace
-
-bool KakuroBoard::build(Difficulty difficulty, uint8_t variant) {
-  memset(playable, 0, sizeof(playable));
-  memset(solution, 0, sizeof(solution));
-  memset(user, 0, sizeof(user));
-  memset(clueRight, 0, sizeof(clueRight));
-  memset(clueDown, 0, sizeof(clueDown));
-
-  columns = MAX_SIZE;
-  rows = difficulty == Difficulty::Easy ? 4 : MAX_SIZE;
-  const uint8_t components = difficulty == Difficulty::Easy ? 2 : (difficulty == Difficulty::Medium ? 3 : 4);
-
-  for (uint8_t component = 0; component < components; component++) {
-    const uint8_t originRow = kOrigins[component][0];
-    const uint8_t originColumn = kOrigins[component][1];
-    const uint8_t blockIndex = static_cast<uint8_t>((variant * 2 + component) % kBlockCount);
-    for (uint8_t row = 0; row < 3; row++) {
-      for (uint8_t column = 0; column < 3; column++) {
-        const uint8_t boardIndex = idx(originRow + row, originColumn + column);
-        playable[boardIndex] = 1;
-        solution[boardIndex] = kUniqueBlocks[blockIndex][row * 3 + column];
-      }
-    }
-  }
-
-  // Derive all clue cells directly from the stored solution. This prevents a
-  // transcription mismatch between clue data and the verified answer.
-  for (uint8_t row = 0; row < rows; row++) {
-    for (uint8_t column = 0; column < columns; column++) {
-      const uint8_t cell = idx(row, column);
-      if (playable[cell]) continue;
-      if (column + 1 < columns && playable[idx(row, column + 1)]) {
-        uint8_t sum = 0;
-        for (uint8_t c = column + 1; c < columns && playable[idx(row, c)]; c++) sum += solution[idx(row, c)];
-        clueRight[cell] = sum;
-      }
-      if (row + 1 < rows && playable[idx(row + 1, column)]) {
-        uint8_t sum = 0;
-        for (uint8_t r = row + 1; r < rows && playable[idx(r, column)]; r++) sum += solution[idx(r, column)];
-        clueDown[cell] = sum;
-      }
-    }
-  }
-
-  return validateDefinition();
-}
-
-void KakuroBoard::resetUser() { memset(user, 0, sizeof(user)); }
+void KakuroBoard::resetUser() { memset(user, 0, sizeof(user)); memset(hinted, 0, sizeof(hinted)); historyCount = 0; }
 
 bool KakuroBoard::isPlayable(uint8_t row, uint8_t column) const {
   return row < rows && column < columns && playable[idx(row, column)] != 0;
@@ -73,8 +14,14 @@ uint8_t KakuroBoard::value(uint8_t row, uint8_t column) const {
 }
 
 bool KakuroBoard::place(uint8_t row, uint8_t column, uint8_t digit) {
-  if (!isPlayable(row, column) || digit > 9) return false;
-  user[idx(row, column)] = digit;
+  if (!isPlayable(row, column) || digit > 9 || isHinted(row, column)) return false;
+  const auto cell = idx(row, column);
+  if (user[cell] == digit) return false;
+  if (historyCount == history.size()) {
+    std::move(history.begin()+1, history.end(), history.begin()); --historyCount;
+  }
+  history[historyCount++] = {cell, user[cell]};
+  user[cell] = digit;
   return true;
 }
 
@@ -89,9 +36,18 @@ bool KakuroBoard::isSolved() const {
 }
 
 bool KakuroBoard::hasError(uint8_t row, uint8_t column) const {
-  if (!isPlayable(row, column)) return false;
-  const uint8_t cell = idx(row, column);
-  return user[cell] != 0 && user[cell] != solution[cell];
+  if (!isPlayable(row, column) || !value(row, column)) return false;
+  for (const bool across : {true, false}) {
+    const auto run = runFor(row, column, across);
+    int sum = 0; bool full = true; int repeats = 0;
+    for (int i = 0; i < run.count; ++i) {
+      const auto digit = user[run.cells[i]];
+      sum += digit; full &= digit != 0;
+      repeats += digit == value(row, column);
+    }
+    if (repeats > 1 || sum > run.sum || (full && sum != run.sum)) return true;
+  }
+  return false;
 }
 
 bool KakuroBoard::validateDefinition() const {
@@ -159,15 +115,82 @@ uint8_t KakuroBoard::countFilled() const {
   return count;
 }
 
-bool KakuroBoard::writeUserTo(HalFile& file) const { return file.write(user, sizeof(user)) == sizeof(user); }
+bool KakuroBoard::writeUserTo(HalFile& file) const {
+  return file.write(user, sizeof(user)) == sizeof(user) && file.write(hinted, sizeof(hinted)) == sizeof(hinted);
+}
 
 bool KakuroBoard::readUserFrom(HalFile& file) {
-  if (file.read(user, sizeof(user)) != sizeof(user)) return false;
-  for (uint8_t row = 0; row < rows; row++) {
-    for (uint8_t column = 0; column < columns; column++) {
-      const uint8_t cell = idx(row, column);
-      if ((!playable[cell] && user[cell] != 0) || user[cell] > 9) return false;
-    }
+  uint8_t nextUser[MAX_CELLS], nextHints[MAX_CELLS];
+  if (file.read(nextUser, sizeof(nextUser)) != sizeof(nextUser) ||
+      file.read(nextHints, sizeof(nextHints)) != sizeof(nextHints)) return false;
+  for (uint8_t cell = 0; cell < MAX_CELLS; ++cell) {
+    if ((!playable[cell] && (nextUser[cell] || nextHints[cell])) || nextUser[cell] > 9 || nextHints[cell] > 1 ||
+        (nextHints[cell] && nextUser[cell] != solution[cell])) return false;
   }
+  memcpy(user, nextUser, sizeof(user)); memcpy(hinted, nextHints, sizeof(hinted)); historyCount = 0;
   return true;
+}
+
+bool KakuroBoard::build(Difficulty difficulty, uint8_t variant) {
+  if (static_cast<unsigned>(difficulty) > 2 || variant >= PUZZLES_PER_LEVEL) return false;
+  memset(playable, 0, sizeof(playable)); memset(solution, 0, sizeof(solution));
+  memset(clueRight, 0, sizeof(clueRight)); memset(clueDown, 0, sizeof(clueDown)); resetUser();
+  const int level = static_cast<int>(difficulty); rows = columns = 6 + level;
+  const auto* packed = level == 0 ? kakuro_data::bank0[variant] : level == 1 ? kakuro_data::bank1[variant] : kakuro_data::bank2[variant];
+  for (int r = 0; r < rows; ++r) for (int c = 0; c < columns; ++c) {
+    const int linear = r * columns + c;
+    const auto digit = (linear & 1) ? packed[linear / 2] & 15 : packed[linear / 2] >> 4;
+    solution[idx(r,c)] = digit; playable[idx(r,c)] = digit != 0;
+  }
+  for (int r = 0; r < rows; ++r) for (int c = 0; c < columns; ++c) {
+    if (isPlayable(r,c)) continue;
+    for (int x = c + 1; x < columns && isPlayable(r,x); ++x) clueRight[idx(r,c)] += solution[idx(r,x)];
+    for (int y = r + 1; y < rows && isPlayable(y,c); ++y) clueDown[idx(r,c)] += solution[idx(y,c)];
+  }
+  return validateDefinition();
+}
+
+KakuroBoard::Run KakuroBoard::runFor(uint8_t row, uint8_t column, bool across) const {
+  Run out;
+  if (!isPlayable(row, column)) return out;
+  int r = row, c = column;
+  if (across) { while (c > 0 && isPlayable(r, c - 1)) --c; }
+  else { while (r > 0 && isPlayable(r - 1, c)) --r; }
+  while (isPlayable(r,c) && out.count < out.cells.size()) {
+    const auto cell = idx(r,c); out.cells[out.count++] = cell; out.sum += solution[cell];
+    if (across) ++c; else ++r;
+  }
+  return out;
+}
+
+std::vector<std::string> KakuroBoard::combinations(uint8_t length, uint8_t sum) {
+  std::vector<std::string> out;
+  for (unsigned mask = 1; mask < 512; ++mask) {
+    int count = 0, total = 0; std::string digits;
+    for (int digit = 1; digit <= 9; ++digit) if (mask & (1u << (digit - 1))) {
+      ++count; total += digit; digits += char('0' + digit);
+    }
+    if (count == length && total == sum) out.push_back(std::move(digits));
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+bool KakuroBoard::isHinted(uint8_t row, uint8_t column) const {
+  return isPlayable(row,column) && hinted[idx(row,column)] != 0;
+}
+bool KakuroBoard::hint(uint8_t row, uint8_t column) {
+  int cell = isPlayable(row,column) && !isHinted(row,column) && value(row,column) != solution[idx(row,column)]
+      ? idx(row,column) : -1;
+  if (cell < 0) for (int i = 0; i < MAX_CELLS; ++i) if (playable[i] && !hinted[i] && user[i] != solution[i]) { cell = i; break; }
+  if (cell < 0) return false;
+  user[cell] = solution[cell]; hinted[cell] = 1; return true;
+}
+bool KakuroBoard::undo() {
+  while (historyCount) {
+    const auto move = history[--historyCount];
+    if (hinted[move.cell]) continue;
+    user[move.cell] = move.value; return true;
+  }
+  return false;
 }

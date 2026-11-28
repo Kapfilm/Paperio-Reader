@@ -538,7 +538,7 @@ def generate_keys_header(
 
     for code in languages:
         lines.append(f"extern const char STRINGS_{code}_DATA[];")
-        lines.append(f"extern const uint16_t OFFSETS_{code}[];")
+        lines.append(f"extern const uint32_t OFFSETS_{code}[];")
 
     lines.append("}  // namespace i18n_strings")
     lines.append("")
@@ -578,7 +578,7 @@ def generate_keys_header(
     lines.append("// Holds a flat string blob and its offset table for one language")
     lines.append("struct LangStrings {")
     lines.append("  const char* data;")
-    lines.append("  const uint16_t* offsets;")
+    lines.append("  const uint32_t* offsets;")
     lines.append("};")
     lines.append("")
 
@@ -676,7 +676,7 @@ def generate_strings_header(
 
     for code in languages:
         lines.append(f"extern const char STRINGS_{code}_DATA[];")
-        lines.append(f"extern const uint16_t OFFSETS_{code}[];")
+        lines.append(f"extern const uint32_t OFFSETS_{code}[];")
 
     lines.append("")
     lines.append("}  // namespace i18n_strings")
@@ -728,7 +728,7 @@ def generate_strings_cpp(
 
     # Per-language flat string blobs and offset tables.
     # Non-English languages skip strings identical to English; their offset
-    # tables use bit 15 (0x8000) to flag "use English blob at offset & 0x7FFF".
+    # tables use bit 31 (0x80000000) to flag "use English blob at offset & 0x7FFFFFFF".
     lines.append("namespace i18n_strings {")
     lines.append("")
 
@@ -746,10 +746,10 @@ def generate_strings_cpp(
             for s in lang_strings:
                 offsets.append(current_offset)
                 current_offset += len(s.encode("utf-8")) + 1
-            if current_offset > 0x7FFF:
+            if current_offset > 0x7FFFFFFF:
                 raise ValueError(
                     f"Language {code}: blob size ({current_offset} bytes) exceeds "
-                    "15-bit offset limit (32767)"
+                    "31-bit offset limit (2147483647)"
                 )
             en_offsets = list(offsets)
             blob_strings = lang_strings
@@ -759,15 +759,15 @@ def generate_strings_cpp(
             blob_strings = []
             for i, (s, en_s) in enumerate(zip(lang_strings, en_strings)):
                 if s == en_s:
-                    offsets.append(en_offsets[i] | 0x8000)
+                    offsets.append(en_offsets[i] | 0x80000000)
                 else:
                     offsets.append(current_offset)
                     current_offset += len(s.encode("utf-8")) + 1
                     blob_strings.append(s)
-            if current_offset > 0x7FFF:
+            if current_offset > 0x7FFFFFFF:
                 raise ValueError(
                     f"Language {code}: blob size ({current_offset} bytes) exceeds "
-                    "15-bit offset limit (32767)"
+                    "31-bit offset limit (2147483647)"
                 )
 
         # Flat string data blob — all strings concatenated with \0 separators.
@@ -779,8 +779,8 @@ def generate_strings_cpp(
         lines.append(";")
         lines.append("")
 
-        # Offset table — one uint16_t per StrId
-        lines.append(f"const uint16_t OFFSETS_{code}[] = {{")
+        # Offset table — one uint32_t per StrId
+        lines.append(f"const uint32_t OFFSETS_{code}[] = {{")
         chunk_size = 12
         for i in range(0, len(offsets), chunk_size):
             chunk = offsets[i : i + chunk_size]
@@ -857,7 +857,7 @@ def _print_language_table(
     dedup_size = sum(data_sizes)
     n_lang = len(rows)
     n_keys = len(string_keys)
-    offset_table_size = n_lang * n_keys * 2
+    offset_table_size = n_lang * n_keys * 4
     current_total = dedup_size + offset_table_size
     print(
         f"\n  Total: {total}  |  Used in code: {used}  |  Never used: {len(unused_keys)}"

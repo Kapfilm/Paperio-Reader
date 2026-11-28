@@ -2,18 +2,24 @@
 
 #include <I18n.h>
 #include <algorithm>
+#include <cstdio>
 
 #include "activities/games/fifteen/FifteenMenuActivity.h"
+#include "activities/games/pegsolitaire/PegSolitaireActivity.h"
+#include "activities/games/delve/DelveGameActivity.h"
+#include "activities/games/lamplighter/LamplighterActivity.h"
+#include "activities/games/casefiles/CaseFilesActivity.h"
 #include "activities/games/hangman/HangmanMenuActivity.h"
 #include "activities/games/kakuro/KakuroMenuActivity.h"
 #include "activities/games/sokoban/SokobanGameActivity.h"
 #include "activities/games/sudoku/SudokuMenuActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "UiFonts.h"
 #include "images/GameMenuIcons.h"
 
 namespace {
-constexpr int kGameCount = 5;
+constexpr int kGameCount = 9;
 }
 
 void GamesMenuActivity::onEnter() {
@@ -50,6 +56,18 @@ void GamesMenuActivity::loop() {
       case 4:
         activityManager.replaceActivity(std::make_unique<FifteenMenuActivity>(renderer, mappedInput));
         break;
+      case 5:
+        activityManager.replaceActivity(std::make_unique<PegSolitaireActivity>(renderer, mappedInput));
+        break;
+      case 6:
+        activityManager.replaceActivity(std::make_unique<DelveGameActivity>(renderer, mappedInput));
+        break;
+      case 7:
+        activityManager.replaceActivity(std::make_unique<LamplighterActivity>(renderer, mappedInput));
+        break;
+      case 8:
+        activityManager.replaceActivity(std::make_unique<CaseFilesActivity>(renderer, mappedInput));
+        break;
     }
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     activityManager.returnFromChild();
@@ -63,14 +81,25 @@ void GamesMenuActivity::render(RenderLock&&) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int screenWidth = renderer.getScreenWidth();
   const int screenHeight = renderer.getScreenHeight();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, screenWidth, metrics.headerHeight}, tr(STR_GAMES));
   const int listY = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int listH = screenHeight - listY - metrics.buttonHintsHeight - metrics.verticalSpacing;
   constexpr StrId titles[kGameCount] = {StrId::STR_SUDOKU_TITLE, StrId::STR_SOKOBAN_TITLE, StrId::STR_KAKURO_TITLE,
-                                        StrId::STR_HANGMAN_TITLE, StrId::STR_FIFTEEN_TITLE};
+                                        StrId::STR_HANGMAN_TITLE, StrId::STR_FIFTEEN_TITLE,
+                                        StrId::STR_PEG_TITLE, StrId::STR_DELVE_TITLE,
+                                        StrId::STR_LAMP_TITLE, StrId::STR_CASE_TITLE};
+  constexpr StrId descriptions[kGameCount] = {
+      StrId::STR_GAME_SUDOKU_DESCRIPTION, StrId::STR_GAME_SOKOBAN_DESCRIPTION,
+      StrId::STR_GAME_KAKURO_DESCRIPTION, StrId::STR_GAME_HANGMAN_DESCRIPTION,
+      StrId::STR_GAME_FIFTEEN_DESCRIPTION, StrId::STR_GAME_PEG_DESCRIPTION,
+      StrId::STR_GAME_DELVE_DESCRIPTION, StrId::STR_GAME_LAMP_DESCRIPTION,
+      StrId::STR_GAME_CASE_DESCRIPTION};
   constexpr int rowHeight = GAME_ICON_SIZE + 18;
   const int pageItems = std::max(1, listH / rowHeight);
   const int pageStart = (selected / pageItems) * pageItems;
+  char pageLabel[20];
+  snprintf(pageLabel, sizeof(pageLabel), "%d/%d", selected / pageItems + 1,
+           (kGameCount + pageItems - 1) / pageItems);
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, screenWidth, metrics.headerHeight}, tr(STR_GAMES), pageLabel);
   const int side = metrics.contentSidePadding;
   for (int i = pageStart; i < kGameCount && i < pageStart + pageItems; ++i) {
     const int y = listY + (i - pageStart) * rowHeight;
@@ -89,10 +118,17 @@ void GamesMenuActivity::render(RenderLock&&) {
       }
     }
     const int textX = iconX + GAME_ICON_SIZE + 20;
-    const auto title = renderer.truncatedText(UI_12_FONT_ID, I18N.get(titles[i]), screenWidth - textX - side - 12);
-    renderer.drawText(UI_12_FONT_ID, textX,
-                      y + (rowHeight - 4 - renderer.getTextHeight(UI_12_FONT_ID)) / 2,
-                      title.c_str(), !focused);
+    const int textWidth = screenWidth - textX - side - 12;
+    const auto title = renderer.truncatedText(UI_12_FONT_ID, I18N.get(titles[i]), textWidth);
+    renderer.drawText(UI_12_FONT_ID, textX, iconY, title.c_str(), !focused);
+    int descriptionY = iconY + renderer.getTextHeight(UI_12_FONT_ID) + 5;
+    const int lineHeight = renderer.getLineHeight(UI_HINT_FONT_ID);
+    const int maxLines = std::max(0, (iconY + GAME_ICON_SIZE - descriptionY) / lineHeight);
+    const auto description = renderer.wrappedText(UI_HINT_FONT_ID, I18N.get(descriptions[i]), textWidth, maxLines);
+    for (const auto& line : description) {
+      renderer.drawText(UI_HINT_FONT_ID, textX, descriptionY, line.c_str(), !focused);
+      descriptionY += lineHeight;
+    }
   }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));

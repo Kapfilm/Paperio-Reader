@@ -31,6 +31,7 @@ class CrossPointSettings {
     CALENDAR_WEATHER = 10,
     FLIP_CLOCK = 11,
     CALENDAR_WEATHER_CLOCK = 12,
+    WORD_CLOCK = 13,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -257,6 +258,8 @@ class CrossPointSettings {
   // 0 inherits; 1 top/2 bottom retain legacy alignment; 3 top-left, 4 top-right,
   // 5 bottom-left, 6 bottom-right. Titles use centered top/bottom.
   uint8_t statusBarTitlePosition = 0;
+  uint8_t statusBarSectionTitle = 0;
+  uint8_t statusBarSectionTitlePosition = 0;
   uint8_t statusBarBookTitle = 0;
   uint8_t statusBarBookTitlePosition = 0;
   uint8_t statusBarChapterPageCountPosition = 0;

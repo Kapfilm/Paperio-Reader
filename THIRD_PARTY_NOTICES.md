@@ -30,3 +30,13 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+## Peg Solitaire, Delve, Lamplighter, Case Files and Kakuro
+
+The Peg Solitaire, Delve, Lamplighter, Case Files and Kakuro adaptations under `src/activities/games/` are based on
+[Touch Licorice apps](https://github.com/omer-faruq-xteink/touch-licorice-apps)
+by Omer Faruk Inel (2026), MIT licensed. Delve's pixel-art sprites are adapted
+from that project's `apps/delve/src/sprites.lua`. The full license and source
+attribution are included in each game's directory. Paperio supplies native
+C++ game logic, physical-button controls, Russian localization and SD saves.

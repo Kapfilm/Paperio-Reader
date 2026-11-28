@@ -128,3 +128,18 @@ TEST(UiTextSize, InstructionFontRemainsSmallAcrossSizeAndStyleChanges) {
   registerUiFonts(r);
   EXPECT_EQ(r.fonts.at(UI_HINT_FONT_ID).getData(), fixed);
 }
+
+TEST(UiTextSize, NumeroSignExistsInEveryInterfaceSizeAndWeight) {
+ GfxRenderer renderer;registerUiFonts(renderer);
+ for(auto size:{UiTextSize::Normal,UiTextSize::Medium,UiTextSize::Enlarged})for(bool bold:{false,true}){
+  applyUiTextSize(renderer,size,bold);
+  for(int id:{SMALL_FONT_ID,UI_HINT_FONT_ID,STATUS_LARGE_FONT_ID,COMPACT_BUTTON_FONT_ID,UI_10_FONT_ID,UI_12_FONT_ID}){
+   const auto&font=renderer.fonts.at(id);
+   for(auto style:{EpdFontFamily::REGULAR,EpdFontFamily::BOLD}){
+    const auto*g=font.getGlyph(0x2116,style);
+    ASSERT_NE(g,nullptr);EXPECT_NE(g,font.getGlyph(0xfffd,style));
+    EXPECT_GT(g->width,0);EXPECT_GT(g->height,0);EXPECT_GT(g->advanceX,0);
+   }
+  }
+ }
+}

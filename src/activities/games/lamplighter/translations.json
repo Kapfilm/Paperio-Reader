@@ -1,0 +1,106 @@
+{
+  "STR_LAMP_TITLE": {
+    "ru": "Электросеть",
+    "en": "Lamplighter"
+  },
+  "STR_LAMP_EASY": {
+    "ru": "Легко 5×5",
+    "en": "Easy 5×5"
+  },
+  "STR_LAMP_MEDIUM": {
+    "ru": "Средне 7×7",
+    "en": "Medium 7×7"
+  },
+  "STR_LAMP_HARD": {
+    "ru": "Сложно 9×9",
+    "en": "Hard 9×9"
+  },
+  "STR_LAMP_COMPLETED": {
+    "ru": "решено",
+    "en": "solved"
+  },
+  "STR_LAMP_STATUS": {
+    "ru": "Лампы %d/%d · Ходы %lu",
+    "en": "Lamps %d/%d · Moves %lu"
+  },
+  "STR_LAMP_SAVE_ERROR": {
+    "ru": "Не удалось сохранить. Проверьте SD-карту.",
+    "en": "Save failed. Check the SD card."
+  },
+  "STR_LAMP_SOLVED": {
+    "ru": "Все лампы горят! Выбор — следующая задача.",
+    "en": "All lit! Select opens the next puzzle."
+  },
+  "STR_LAMP_LOCK_HELP": {
+    "ru": "Режим закрепления. Выбор закрепляет или освобождает клетку.",
+    "en": "Lock mode. Select locks or unlocks a tile."
+  },
+  "STR_LAMP_TURN_HELP": {
+    "ru": "Выбор поворачивает клетку. Назад открывает меню.",
+    "en": "Select rotates a tile. Back opens the menu."
+  },
+  "STR_LAMP_MENU": {
+    "ru": "Меню",
+    "en": "Menu"
+  },
+  "STR_LAMP_NEXT": {
+    "ru": "Следующая",
+    "en": "Next"
+  },
+  "STR_LAMP_LOCK_SHORT": {
+    "ru": "Закрепить",
+    "en": "Lock"
+  },
+  "STR_LAMP_ROTATE": {
+    "ru": "Поворот",
+    "en": "Rotate"
+  },
+  "STR_LAMP_RESTART_YES": {
+    "ru": "Начать заново",
+    "en": "Start over"
+  },
+  "STR_LAMP_LOCK_MODE": {
+    "ru": "Закрепление",
+    "en": "Lock mode"
+  },
+  "STR_LAMP_ON": {
+    "ru": "Вкл.",
+    "en": "On"
+  },
+  "STR_LAMP_OFF": {
+    "ru": "Выкл.",
+    "en": "Off"
+  },
+  "STR_LAMP_UNDO": {
+    "ru": "Отменить ход",
+    "en": "Undo"
+  },
+  "STR_LAMP_HINT": {
+    "ru": "Подсказка",
+    "en": "Hint"
+  },
+  "STR_LAMP_PREVIOUS": {
+    "ru": "Предыдущая задача",
+    "en": "Previous puzzle"
+  },
+  "STR_LAMP_RESTART": {
+    "ru": "Начать заново…",
+    "en": "Restart…"
+  },
+  "STR_LAMP_LEVEL": {
+    "ru": "Сложность",
+    "en": "Difficulty"
+  },
+  "STR_LAMP_HELP": {
+    "ru": "Как играть",
+    "en": "How to play"
+  },
+  "STR_LAMP_EXIT": {
+    "ru": "Выйти в игры",
+    "en": "Back to games"
+  },
+  "STR_LAMP_HELP_TEXT": {
+    "ru": "Соедините источник (квадрат) со всеми лампами. Поворачивайте клетки кнопкой «Выбор», перемещайте курсор кнопками направлений. Соберите одну сеть без свободных концов и замкнутых петель; провода не должны выходить за край поля. Подключённые провода толще, горящие лампы закрашены. В меню можно закреплять найденные положения, отменять ходы и брать подсказки. Подсказка поворачивает клетку правильно и закрепляет её навсегда до перезапуска задачи. Чтобы освободить обычную закреплённую клетку, включите «Закрепление» и выберите её. Здесь 600 задач: по 200 на полях 5×5, 7×7 и 9×9. Задачу, сложность и пройденные уровни игра сохраняет автоматически.",
+    "en": "Connect the square source to every lamp. Select rotates a tile; direction buttons move the cursor. Make one network with no loose ends, loops, or wires leaving the board. Powered wires are thicker and lit lamps are filled. The menu offers locks, undo and hints. A hint sets one tile correctly and locks it until the puzzle is restarted. To unlock a normal tile, enable Lock mode and select it. There are 600 puzzles: 200 each on 5×5, 7×7 and 9×9 boards. Your puzzle, difficulty and completed puzzles are saved automatically."
+  }
+}

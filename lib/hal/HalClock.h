@@ -92,7 +92,7 @@ bool isApproximate();
 time_t lastSyncTime();
 
 /// Format the current time for display.  Returns "--:--" if the clock was
-/// never synced, prefixes with "~" if approximate.
+/// never synced. The approximation flag is kept internal and is not displayed.
 /// When use24h is false, formats as "2:05pm" / "12:30am".
 /// Output is written to `buf` (must be at least 16 bytes).
 void formatTime(char* buf, size_t bufSize, bool use24h);

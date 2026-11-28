@@ -72,7 +72,6 @@ void KakuroMenuActivity::selectItem() {
   if (item.kind == ItemKind::Continue) {
     activityManager.replaceActivity(std::make_unique<KakuroGameActivity>(renderer, mappedInput, item.difficulty, true));
   } else if (item.kind == ItemKind::NewGame) {
-    KakuroStore::clear();
     activityManager.replaceActivity(
         std::make_unique<KakuroGameActivity>(renderer, mappedInput, item.difficulty, false));
   } else {

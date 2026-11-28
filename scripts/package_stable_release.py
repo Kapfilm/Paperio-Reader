@@ -12,8 +12,8 @@ def main():
     version = os.environ["CROSSPOINT_RELEASE_VERSION"]
     build_dir = Path(os.environ.get("PLATFORMIO_BUILD_DIR", ".pio/build"))
     source = build_dir / "gh_release"
-    output = Path("dist")
-    output.mkdir(exist_ok=True)
+    output = Path(os.environ.get("CROSSPOINT_DIST_DIR", "dist"))
+    output.mkdir(parents=True, exist_ok=True)
     for name in ("firmware.bin", "bootloader.bin", "partitions.bin", "firmware.elf", "firmware.map"):
         shutil.copyfile(source / name, output / name)
     shutil.copyfile(build_dir / "x4c_release/firmware.bin", output / "firmware-x4-classic.bin")
@@ -34,6 +34,12 @@ def main():
         firmware = (output / name).read_bytes()
         if version_marker not in firmware:
             raise SystemExit(f"{name} does not contain the exact release version")
+        classic = "X4 Classic" in devices
+        limit = 0x7e0000 if classic else 0x640000
+        if len(firmware) > limit:
+            raise SystemExit(f"{name} exceeds its application partition")
+        if b"/paperio-x4-display.log" in firmware:
+            raise SystemExit(f"{name} contains diagnostic SD logging")
         applications.append({
             "file": name,
             "bytes": len(firmware),

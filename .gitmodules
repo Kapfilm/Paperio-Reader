@@ -1,4 +1,4 @@
 [submodule "freeink-sdk"]
 	path = freeink-sdk
 	url = https://github.com/Kapfilm/freeink-sdk.git
-	branch = codex/paperio-2.3.2-display
+	branch = codex/paperio-2.3.4-display

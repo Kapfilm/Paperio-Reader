@@ -101,6 +101,8 @@ intervals = [
     ### Cyrillic ###
     # Russian, Ukrainian, Bulgarian, etc.
     (0x0400, 0x04FF),
+    # Numero sign used by Russian interface titles.
+    (0x2116, 0x2116),
     ### Math Symbols (common subset) ###
     # Superscripts and Subscripts
     (0x2070, 0x209F),

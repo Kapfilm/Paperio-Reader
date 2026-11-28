@@ -438,8 +438,9 @@ bool UITheme::statusBarItemAtLeft(const uint8_t position, const bool defaultLeft
 }
 
 bool UITheme::hasStatusBarItemsAtEdge(const bool top, const bool forceStatusItems) {
-  const std::array<status_bar::Item, 6> items{{
+  const std::array<status_bar::Item, 7> items{{
       {SETTINGS.statusBarChapterPageCount != 0, SETTINGS.statusBarChapterPageCountPosition},
+      {SETTINGS.statusBarSectionTitle != 0, SETTINGS.statusBarSectionTitlePosition},
       {SETTINGS.statusBarBookTitle != 0, SETTINGS.statusBarBookTitlePosition},
       {SETTINGS.statusBarBookProgressPercentage != 0, SETTINGS.statusBarBookProgressPercentagePosition},
       {forceStatusItems || SETTINGS.statusBarTitle != CrossPointSettings::HIDE_TITLE, SETTINGS.statusBarTitlePosition},
@@ -461,7 +462,9 @@ int UITheme::getStatusBarItemsHeightForEdge(const bool top, const bool forceStat
                           statusBarItemAtTop(SETTINGS.statusBarTitlePosition) == top;
   const int lineHeight = SETTINGS.statusBarFontSize == 1 ? 23 :
       UITheme::getInstance().getMetrics().statusBarVerticalMargin >= 25 ? 25 : 23;
-  return getStatusBarItemsHeight() + (bookHere && chapterHere ? lineHeight : 0);
+  const bool headingHere = SETTINGS.statusBarSectionTitle && statusBarItemAtTop(SETTINGS.statusBarSectionTitlePosition) == top;
+  const int titleRows = int(bookHere) + int(chapterHere) + int(headingHere);
+  return getStatusBarItemsHeight() + std::max(0, titleRows - 1) * lineHeight;
 }
 
 int UITheme::getStatusBarTopInset() { return 3; }

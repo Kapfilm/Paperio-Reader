@@ -32,4 +32,5 @@ class RenderLock {
   ~RenderLock();
   void unlock();
   static bool peek();
+  static bool isHeldByCurrentTask();
 };

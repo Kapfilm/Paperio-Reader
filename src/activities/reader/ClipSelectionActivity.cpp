@@ -39,8 +39,8 @@ void ClipSelectionActivity::onEnter() {
     return;
   }
   savedSectionPage = section.currentPage;
-  if (singleWordSelection) {
-    // Match CrossPoint's dictionary UX: begin on the middle row, at the word
+  {
+    // Both clipping and dictionary selection begin on the middle row, at the word
     // nearest the horizontal centre, rather than at the page's first word.
     const int centerX = renderer.getScreenWidth() / 2;
     const int centerY = renderer.getScreenHeight() / 2;
@@ -128,7 +128,7 @@ void ClipSelectionActivity::moveCursorByLine(const int direction) {
 
 void ClipSelectionActivity::confirmSelection() {
   if (singleWordSelection) {
-    auto result = ClipTextBuilder::build(words, cursor, cursor, startPage, section.pageCount);
+    auto result = ClipTextBuilder::buildDictionaryWord(words, cursor, startPage, section.pageCount);
     setResult(std::move(result));
     finish();
     return;
@@ -229,7 +229,15 @@ void ClipSelectionActivity::render(RenderLock&&) {
       drawWord(paintedWord, false);
     }
   }
-  if (words[cursor].pageIndex == displayedRelativePage) drawWord(words[cursor], true);
+  int firstWord = cursor;
+  int lastWord = cursor;
+  if (singleWordSelection) {
+    while (firstWord > 0 && words[firstWord].joinsPreviousWord) --firstWord;
+    while (lastWord + 1 < static_cast<int>(words.size()) && words[lastWord + 1].joinsPreviousWord) ++lastWord;
+  }
+  for (int i = firstWord; i <= lastWord; ++i) {
+    if (words[i].pageIndex == displayedRelativePage) drawWord(words[i], true);
+  }
 
   const char* confirm = singleWordSelection ? tr(STR_DICTIONARY) : (selectionStart < 0 ? tr(STR_SELECT) : tr(STR_DONE));
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirm, tr(STR_DIR_LEFT), tr(STR_DIR_RIGHT));

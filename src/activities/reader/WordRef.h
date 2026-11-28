@@ -18,4 +18,5 @@ struct WordRef {
   EpdFontFamily::Style style = EpdFontFamily::REGULAR;
   bool paragraphStart = false;
   bool joinsPreviousWord = false;
+  bool removesPreviousHyphen = false;
 };

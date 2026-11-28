@@ -1,0 +1,4 @@
+add_executable(PegSolitaireTest PegSolitaireTest.cpp)
+target_include_directories(PegSolitaireTest PRIVATE ${REPO_ROOT}/src)
+target_link_libraries(PegSolitaireTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(PegSolitaireTest)

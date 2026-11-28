@@ -43,10 +43,11 @@ void CrossPointSettings::normalizeDependentSettings(CrossPointSettings& settings
   if (settings.statusBarFontSize > 1) settings.statusBarFontSize = 0;
 #if !FREEINK_DEVICE_X4CLASSIC
   // X3/X4 have no sleep-clock modes, including imported settings.
-  if (settings.sleepScreen == FLIP_CLOCK) settings.sleepScreen = LIGHT;
+  if (settings.sleepScreen == FLIP_CLOCK || settings.sleepScreen == WORD_CLOCK) settings.sleepScreen = LIGHT;
   if (settings.sleepScreen == CALENDAR_WEATHER_CLOCK) settings.sleepScreen = CALENDAR_WEATHER;
 #endif
   settings.statusBarPrintedPage = 0;  // Retired printed-page hint.
+  if (settings.statusBarSectionTitle > 1) settings.statusBarSectionTitle = 0;
   if (settings.statusBarBookTitle > 1) settings.statusBarBookTitle = 0;
   // Move a legacy book-title selection to its independent field once.
   if (settings.statusBarTitle == BOOK_TITLE) {
@@ -54,7 +55,7 @@ void CrossPointSettings::normalizeDependentSettings(CrossPointSettings& settings
     settings.statusBarBookTitlePosition = settings.statusBarTitlePosition;
     settings.statusBarTitle = HIDE_TITLE;
   }
-  for (auto* position : {&settings.statusBarTitlePosition, &settings.statusBarBookTitlePosition, &settings.statusBarChapterPageCountPosition,
+  for (auto* position : {&settings.statusBarSectionTitlePosition, &settings.statusBarTitlePosition, &settings.statusBarBookTitlePosition, &settings.statusBarChapterPageCountPosition,
                          &settings.statusBarPrintedPagePosition, &settings.statusBarBookProgressPercentagePosition,
                          &settings.statusBarBatteryPosition, &settings.statusBarClockPosition}) {
     if (*position > 6) *position = 0;

@@ -704,6 +704,8 @@ class EpubReaderActivity final : public Activity {
   // Snapshot of the three status-bar signals that can change while a page is otherwise idle.
   // Compared in shouldSkipPeriodicUpdate() to suppress no-op minute-tick re-renders that on
   // X3 panels accumulate visible speckle via repeated no-diff FAST refreshes.
+  mutable int sectionHeadingTocIndex = -2;
+  mutable std::string cachedSectionHeading;
   mutable int lastStatusBarPage = -1;
   mutable int lastStatusBarBattery = -1;
   mutable int lastStatusBarClockMinute = -1;

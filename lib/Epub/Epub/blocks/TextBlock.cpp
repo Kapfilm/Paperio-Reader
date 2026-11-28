@@ -235,7 +235,7 @@ bool TextBlock::serialize(FsFile& file) const {
   // exactly the on-disk layout (see TextBlock.h), so one write covers all
   // per-word arrays and the text blob.
   serialization::writePod(file, numWords);
-  serialization::writePod(file, static_cast<uint8_t>(sizesPresent ? 1 : 0));
+  serialization::writePod(file, static_cast<uint8_t>((sizesPresent ? 1 : 0) | (continuesOnNextLine_ ? 2 : 0) | (insertedHyphen_ ? 4 : 0)));
   serialization::writePod(file, textBytes);
   if (numWords > 0) {
     const size_t size = arenaSize(numWords, sizesPresent, textBytes);
@@ -287,7 +287,9 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(FsFile& file) {
   }
   block->numWords = wc;
   block->textBytes = textBytes;
-  block->sizesPresent = hasSizes != 0;
+  block->sizesPresent = (hasSizes & 1) != 0;
+  block->continuesOnNextLine_ = (hasSizes & 2) != 0;
+  block->insertedHyphen_ = (hasSizes & 4) != 0;
 
   if (wc > 0) {
     const size_t size = arenaSize(wc, block->sizesPresent, textBytes);

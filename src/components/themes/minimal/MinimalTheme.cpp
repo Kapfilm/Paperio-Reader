@@ -22,7 +22,6 @@
 #include "util/TabBarLayout.h"
 
 namespace {
-constexpr int kCoverCornerRadius = 8;
 constexpr int kButtonCornerRadius = 6;
 constexpr int kProgressBarHeight = 6;
 constexpr int kProgressBlockGap = 8;
@@ -61,21 +60,9 @@ Rect fittedBitmapRect(const Bitmap& bitmap, const Rect& target) {
   return Rect{target.x + (target.width - width) / 2, target.y + (target.height - height) / 2, width, height};
 }
 
-// A rounded border alone leaves the rectangular bitmap visible in its corners.
-// Clear only pixels outside the four quarter circles before drawing the border.
-void clipCoverCorners(const GfxRenderer& renderer, const Rect& rect) {
-  const int radius = std::min({kCoverCornerRadius, rect.width / 2, rect.height / 2});
-  for (int dy = 0; dy < radius; ++dy) {
-    for (int dx = 0; dx < radius; ++dx) {
-      const int cx = radius - dx;
-      const int cy = radius - dy;
-      if (cx * cx + cy * cy <= radius * radius) continue;
-      renderer.drawPixel(rect.x + dx, rect.y + dy, false);
-      renderer.drawPixel(rect.x + rect.width - 1 - dx, rect.y + dy, false);
-      renderer.drawPixel(rect.x + dx, rect.y + rect.height - 1 - dy, false);
-      renderer.drawPixel(rect.x + rect.width - 1 - dx, rect.y + rect.height - 1 - dy, false);
-    }
-  }
+// Mini uses a plain rectangular cover, including its missing-cover placeholder.
+void drawCoverOutline(const GfxRenderer& renderer, const Rect& rect) {
+  renderer.drawRect(rect.x, rect.y, rect.width, rect.height, true);
 }
 
 const char* bookFormatLabel(const RecentBook& book) {
@@ -92,7 +79,7 @@ const char* bookFormatLabel(const RecentBook& book) {
 }
 
 void drawMissingCover(const GfxRenderer& renderer, const Rect& coverRect, const RecentBook* book) {
-  renderer.drawRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, 1, kCoverCornerRadius, true);
+  drawCoverOutline(renderer, coverRect);
   const int dividerY = coverRect.y + coverRect.height / 3;
   renderer.drawLine(coverRect.x, dividerY, coverRect.x + coverRect.width - 1, dividerY);
   renderer.drawIcon(CoverIcon, coverRect.x + (coverRect.width - 32) / 2, coverRect.y + (coverRect.height / 3 - 32) / 2,
@@ -224,12 +211,9 @@ void MinimalTheme::drawRecentBookCover(GfxRenderer& renderer, const Rect rect,
         Bitmap bitmap(file);
         if (bitmap.parseHeaders() == BmpReaderError::Ok) {
           const Rect bitmapRect = fittedBitmapRect(bitmap, coverRect);
-          renderer.fillRoundedRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, kCoverCornerRadius,
-                                   Color::White);
+          renderer.fillRect(coverRect.x, coverRect.y, coverRect.width, coverRect.height, false);
           renderer.drawBitmap(bitmap, bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 0, 0, true);
-          clipCoverCorners(renderer, bitmapRect);
-          renderer.drawRoundedRect(bitmapRect.x, bitmapRect.y, bitmapRect.width, bitmapRect.height, 1,
-                                   kCoverCornerRadius, true);
+          drawCoverOutline(renderer, bitmapRect);
           hasCover = true;
         }
         file.close();

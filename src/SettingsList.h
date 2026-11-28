@@ -124,7 +124,7 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
            StrId::STR_COVER_CUSTOM, StrId::STR_PAGE_OVERLAY, StrId::STR_QUICK_RESUME, StrId::STR_RANDOM_HIGHLIGHT,
            StrId::STR_SLEEP_CALENDAR, StrId::STR_SLEEP_CALENDAR_WEATHER,
 #if FREEINK_DEVICE_X4CLASSIC
-           StrId::STR_CLOCK, StrId::STR_SLEEP_CALENDAR_WEATHER_CLOCK,
+           StrId::STR_CLOCK, StrId::STR_SLEEP_CALENDAR_WEATHER_CLOCK, StrId::STR_WORD_CLOCK,
 #endif
           },
           "sleepScreen", StrId::STR_CAT_DISPLAY)
@@ -492,6 +492,10 @@ inline void visitSettings(const void* context, SettingVisitor visitor) {
         std::string("<") + I18N.get(StrId::STR_BOTTOM), std::string(I18N.get(StrId::STR_BOTTOM)) + ">"};
     return setting;
   };
+  add(SettingInfo::Toggle(StrId::STR_SECTION_HEADING, &CrossPointSettings::statusBarSectionTitle,
+                          "statusBarSectionTitle", StrId::STR_CUSTOMISE_STATUS_BAR));
+  add(statusPositionSetting(StrId::STR_SECTION_HEADING, &CrossPointSettings::statusBarSectionTitlePosition,
+                            "statusBarSectionTitlePosition"));
   add(SettingInfo::Toggle(StrId::STR_EXAMPLE_BOOK, &CrossPointSettings::statusBarBookTitle,
                           "statusBarBookTitle", StrId::STR_CUSTOMISE_STATUS_BAR));
   add(statusPositionSetting(StrId::STR_EXAMPLE_BOOK, &CrossPointSettings::statusBarBookTitlePosition,

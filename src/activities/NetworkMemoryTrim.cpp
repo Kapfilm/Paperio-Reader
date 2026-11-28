@@ -5,8 +5,15 @@
 #include <Logging.h>
 
 #include "SilentRestart.h"
+#include "RenderLock.h"
+#include <optional>
 
 void trimMemoryForNetworkSession(const GfxRenderer& renderer, const char* logTag) {
+  // Some activities already hold the non-recursive render mutex; others (OPDS,
+  // OTA, weather) enter from loop(). Protect the entire cache/buffer transaction.
+  std::optional<RenderLock> lock;
+  if (!RenderLock::isHeldByCurrentTask()) lock.emplace(RenderLock::ExclusiveActivityAccess{});
+
   if (auto* cache = renderer.getFontCacheManager()) {
     cache->clearCache();
   }
@@ -21,6 +28,11 @@ void trimMemoryForNetworkSession(const GfxRenderer& renderer, const char* logTag
 }
 
 void restoreDisplayAfterNetworkSession(const GfxRenderer& renderer) {
+  // Some activities already hold the non-recursive render mutex; others (OPDS,
+  // OTA, weather) enter from loop(). Protect the entire cache/buffer transaction.
+  std::optional<RenderLock> lock;
+  if (!RenderLock::isHeldByCurrentTask()) lock.emplace(RenderLock::ExclusiveActivityAccess{});
+
   if (renderer.hasSecondaryBuffer()) return;
   if (auto* cache = renderer.getFontCacheManager()) cache->clearCache();
   if (renderer.reallocSecondaryBuffer()) {

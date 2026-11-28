@@ -743,6 +743,8 @@ Rect LyraTheme::drawPopup(const GfxRenderer& renderer, const char* message, cons
 }
 
 void LyraTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const {
+  // Every display swaps buffers. Preserve the visible popup before a partial update.
+  renderer.syncWriteBufferFromDisplayed();
   constexpr int barHeight = 4;
 
   // Twice the margin in drawPopup to match text width

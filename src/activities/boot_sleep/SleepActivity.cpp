@@ -37,9 +37,11 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "fontIds.h"
+#include "UiFonts.h"
 #include "images/Logo120.h"
 #include "images/MoonIcon.h"
 #if FREEINK_DEVICE_X4CLASSIC
+#include "util/WordClock.h"
 #include "images/FlipClockDigits.h"
 #include "images/CompactFlipClockDigits.h"
 #endif
@@ -573,6 +575,7 @@ void SleepActivity::onEnter() {
   switch (SETTINGS.sleepScreen) {
 #if FREEINK_DEVICE_X4CLASSIC
     case CrossPointSettings::CALENDAR_WEATHER_CLOCK:
+    case CrossPointSettings::WORD_CLOCK:
     case CrossPointSettings::FLIP_CLOCK:
       return renderFlipClockSleepScreen();
 #endif
@@ -749,7 +752,66 @@ void SleepActivity::renderFlipClockSleepScreen() const {
   ++flipClockFastTicks;
 }
 
+void SleepActivity::drawWordClock(const time_t now) const {
+  renderer.setOrientation(GfxRenderer::Portrait);
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.clearScreen();
+  tm date{};
+  if (!HalClock::isSynced() || now <= 0 || !localtime_r(&now, &date)) {
+    renderer.drawCenteredText(UI_12_FONT_ID, renderer.getScreenHeight() / 2 - 30, tr(STR_CLOCK_NOT_SET));
+    return;
+  }
+  const auto frame = word_clock::at(date.tm_hour, date.tm_min);
+  const int width = renderer.getScreenWidth();
+  const int height = renderer.getScreenHeight();
+  const int cellWidth = (width - 40) / word_clock::kColumns;
+  const int cellHeight = std::min(cellWidth + 10, (height - 150) / word_clock::kRows);
+  const int left = (width - cellWidth * word_clock::kColumns) / 2;
+  const int top = std::max(20, (height - cellHeight * word_clock::kRows - 80) / 2);
+  int activeFont = UI_12_FONT_ID;
+  // Respect the interface font choices without allowing a wide glyph to cross a cell.
+  for (const char* letter : {"Ш", "Щ", "Ы", "Ю"}) {
+    if (renderer.getTextWidth(activeFont, letter, EpdFontFamily::BOLD) > cellWidth - 2) activeFont = UI_10_FONT_ID;
+  }
+  const auto& rows = word_clock::rows();
+  for (int row = 0; row < word_clock::kRows; ++row) {
+    size_t offset = 0;
+    for (int column = 0; column < word_clock::kColumns; ++column) {
+      const size_t start = offset++;
+      while (offset < rows[row].size() && (static_cast<unsigned char>(rows[row][offset]) & 0xC0) == 0x80) ++offset;
+      const auto letter = rows[row].substr(start, offset - start);
+      bool active = false;
+      for (int i = 0; i < frame.spanCount; ++i) {
+        const auto& span = frame.spans[i];
+        if (span.row == row && column >= span.column && column < span.column + span.length) active = true;
+      }
+      const int x = left + column * cellWidth;
+      const int y = top + row * cellHeight;
+      if (active) renderer.fillRect(x, y, cellWidth, cellHeight, true);
+      // Fixed regular 8pt letters stay quiet even when the interface uses a dark font.
+      const int font = active ? activeFont : UI_HINT_FONT_ID;
+      const auto style = active ? EpdFontFamily::BOLD : EpdFontFamily::REGULAR;
+      renderer.drawText(font, x + (cellWidth - renderer.getTextWidth(font, letter.c_str(), style)) / 2,
+                        y + (cellHeight - renderer.getLineHeight(font)) / 2, letter.c_str(), !active, style);
+    }
+  }
+  const int dotsY = top + word_clock::kRows * cellHeight + 22;
+  for (int dot = 0; dot < 4; ++dot) {
+    const int x = width / 2 - 47 + dot * 28;
+    if (dot < frame.minuteDots) renderer.fillRoundedRect(x, dotsY, 10, 10, 5, Color::Black);
+    else renderer.drawRoundedRect(x, dotsY, 10, 10, 1, 5, true);
+  }
+  char caption[48];
+  constexpr const char* weekdays[] = {"ВС", "ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ"};
+  snprintf(caption, sizeof(caption), "%02d.%02d  %s", date.tm_mday, date.tm_mon + 1, weekdays[date.tm_wday]);
+  renderer.drawCenteredText(UI_10_FONT_ID, dotsY + 30, caption);
+}
+
 void SleepActivity::drawFlipClock(const time_t now) const {
+  if (SETTINGS.sleepScreen == CrossPointSettings::WORD_CLOCK) {
+    drawWordClock(now);
+    return;
+  }
   const bool withCalendar = SETTINGS.sleepScreen == CrossPointSettings::CALENDAR_WEATHER_CLOCK;
   renderer.setOrientation(withCalendar ? GfxRenderer::Portrait : GfxRenderer::LandscapeCounterClockwise);
   renderer.setRenderMode(GfxRenderer::BW);

@@ -510,3 +510,91 @@ TEST_F(GuideDotsRender, SingleWordLineGetsNoDot) {
 
   EXPECT_EQ(renderer.fillRectCalls.size(), 0u);
 }
+
+#include "clippings/ClipTextBuilder.h"
+
+TEST(DictionaryWord, SelectEitherFragmentOfRussianHyphenation) {
+  std::vector<WordRef> words(4);
+  words[0].text = "Это";
+  words[1].text = "слова-";
+  words[2].text = "рь";
+  words[2].joinsPreviousWord = true;
+  words[2].removesPreviousHyphen = true;
+  words[3].text = "книги";
+  EXPECT_EQ(ClipTextBuilder::buildDictionaryWord(words, 1, 0, 1).text, "словарь");
+  EXPECT_EQ(ClipTextBuilder::buildDictionaryWord(words, 2, 0, 1).text, "словарь");
+  EXPECT_EQ(ClipTextBuilder::buildDictionaryWord(words, 0, 0, 1).text, "Это");
+}
+
+TEST(DictionaryWord, PreservesOriginalHyphenAndDoesNotJoinUnrelatedLines) {
+  std::vector<WordRef> words(3);
+  words[0].text = "кто-";
+  words[1].text = "то";
+  words[1].joinsPreviousWord = true;
+  words[2].text = "другой";
+  EXPECT_EQ(ClipTextBuilder::buildDictionaryWord(words, 1, 0, 1).text, "кто-то");
+  words[1].joinsPreviousWord = false;
+  EXPECT_EQ(ClipTextBuilder::buildDictionaryWord(words, 1, 0, 1).text, "то");
+}
+
+TEST(DictionaryWord, JoinsMultipleBreaksAndRetainsClippingCoordinates) {
+  std::vector<WordRef> words(3);
+  words[0].text="много-"; words[0].pageWordIndex=10;
+  words[1].text="слож-"; words[1].joinsPreviousWord=true; words[1].removesPreviousHyphen=true;
+  words[2].text="ный"; words[2].joinsPreviousWord=true; words[2].removesPreviousHyphen=true;
+  words[2].pageWordIndex=12;
+  auto result=ClipTextBuilder::buildDictionaryWord(words, 1, 4, 10);
+  EXPECT_EQ(result.text,"многосложный");
+  EXPECT_EQ(result.startPageWordIndex,10); EXPECT_EQ(result.endPageWordIndex,12);
+  EXPECT_EQ(result.sectionPage,4);
+}
+
+TEST(DictionaryHyphenation, LayoutAndCacheKeepInsertedVsOriginalHyphen) {
+  GfxRenderer renderer;
+  for (const auto& word : {"abcdefghijklmno", "abcdef-ghijklmno"}) {
+    ParsedText text(false, true, noIndentStyle());
+    text.addWord(word, EpdFontFamily::REGULAR);
+    const auto result=layout(text,renderer,70);
+    ASSERT_GT(result.lines.size(),1u);
+    bool sawInserted=false;
+    for (const auto& line : result.lines) {
+      FsFile file = HalFile::forReadWrite();
+      ASSERT_TRUE(line->serialize(file)); ASSERT_TRUE(file.seek(0));
+      const auto restored=TextBlock::deserialize(file);
+      ASSERT_NE(restored,nullptr);
+      EXPECT_EQ(restored->continuesOnNextLine(),line->continuesOnNextLine());
+      EXPECT_EQ(restored->endsWithInsertedHyphen(),line->endsWithInsertedHyphen());
+      sawInserted |= line->endsWithInsertedHyphen();
+    }
+    if (std::string(word).find('-')==std::string::npos) EXPECT_TRUE(sawInserted);
+    else {
+      EXPECT_TRUE(result.lines[0]->continuesOnNextLine());
+      EXPECT_FALSE(result.lines[0]->endsWithInsertedHyphen());
+    }
+    EXPECT_FALSE(result.lines.back()->continuesOnNextLine());
+  }
+}
+
+TEST(DictionaryHyphenation, PageBoundaryRetryDoesNotLeaveStaleContinuation) {
+  GfxRenderer renderer;
+  ParsedText text(false, true, noIndentStyle());
+  text.addWord("abc",EpdFontFamily::REGULAR);
+  text.addWord("abcdefghijklmnop",EpdFontFamily::REGULAR);
+  bool retried=false;
+  bool acceptedRetry=false;
+  text.layoutAndExtractLines(renderer,kFontId,100,
+    [&](std::shared_ptr<TextBlock> block,bool hyphenated,bool suppressed) {
+      if (hyphenated && !retried) {
+        retried=true;
+        return ParsedText::LineProcessResult::RetryWithoutHyphenation;
+      }
+      if(suppressed) {
+        acceptedRetry=true;
+        EXPECT_FALSE(block->continuesOnNextLine());
+        EXPECT_FALSE(block->endsWithInsertedHyphen());
+      }
+      return ParsedText::LineProcessResult::Accepted;
+    },true);
+  EXPECT_TRUE(retried);
+  EXPECT_TRUE(acceptedRetry);
+}

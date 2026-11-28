@@ -269,6 +269,7 @@ void HalDisplay::copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer) { einkDisplay
 void HalDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) { einkDisplay.copyGrayscaleMsbBuffers(msbBuffer); }
 
 void HalDisplay::syncRedRamFromFrameBuffer() {
+  HalSpiBus::Lock spiLock;
   einkDisplay.syncRedRamFromFrameBuffer();
   LOG_INF("FBUF", "syncRedRamFromFrameBuffer (hasSecondary=%d redSynced=%d)", einkDisplay.hasSecondaryBuffer() ? 1 : 0,
           einkDisplay.isRedRamSynced() ? 1 : 0);

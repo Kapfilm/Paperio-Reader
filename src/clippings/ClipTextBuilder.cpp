@@ -37,8 +37,8 @@ ClippingResult build(const std::vector<WordRef>& words, const int from, const in
     const std::string word = clean(words[i].text);
     if (word.empty()) continue;
     if (!result.text.empty()) {
-      if (words[i].joinsPreviousWord && result.text.back() == '-') {
-        result.text.pop_back();
+      if (words[i].joinsPreviousWord) {
+        if (words[i].removesPreviousHyphen && result.text.back() == '-') result.text.pop_back();
       } else {
         result.text += words[i].paragraphStart ? '\n' : ' ';
       }
@@ -46,5 +46,14 @@ ClippingResult build(const std::vector<WordRef>& words, const int from, const in
     result.text += word;
   }
   return result;
+}
+ClippingResult buildDictionaryWord(const std::vector<WordRef>& words, const int cursor, const int startPage,
+                                   const int pageCount) {
+  if (cursor < 0 || cursor >= static_cast<int>(words.size())) return {};
+  int from = cursor;
+  int to = cursor;
+  while (from > 0 && words[from].joinsPreviousWord) --from;
+  while (to + 1 < static_cast<int>(words.size()) && words[to + 1].joinsPreviousWord) ++to;
+  return build(words, from, to, startPage, pageCount);
 }
 }  // namespace ClipTextBuilder

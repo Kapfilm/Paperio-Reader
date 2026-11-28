@@ -1,0 +1,538 @@
+{
+  "STR_DELVE_TITLE": {
+    "ru": "Delve: Подземелье",
+    "en": "Delve: Dungeon"
+  },
+  "STR_DELVE_MENU": {
+    "ru": "Меню",
+    "en": "Menu"
+  },
+  "STR_DELVE_DAILY": {
+    "ru": "Подземелье дня",
+    "en": "Daily dungeon"
+  },
+  "STR_DELVE_HELP": {
+    "ru": "Как играть",
+    "en": "How to play"
+  },
+  "STR_DELVE_NEXT": {
+    "ru": "Далее",
+    "en": "Next"
+  },
+  "STR_DELVE_PAGE": {
+    "ru": "Страница %d/%d",
+    "en": "Page %d/%d"
+  },
+  "STR_DELVE_BAG": {
+    "ru": "Рюкзак",
+    "en": "Bag"
+  },
+  "STR_DELVE_WAIT": {
+    "ru": "Ждать один ход",
+    "en": "Wait one turn"
+  },
+  "STR_DELVE_REST": {
+    "ru": "Отдохнуть",
+    "en": "Rest"
+  },
+  "STR_DELVE_DESCEND": {
+    "ru": "Спуститься",
+    "en": "Descend"
+  },
+  "STR_DELVE_INSPECT": {
+    "ru": "Осмотреть врагов",
+    "en": "Inspect enemies"
+  },
+  "STR_DELVE_NW": {
+    "ru": "Шаг вверх-влево",
+    "en": "Step up-left"
+  },
+  "STR_DELVE_NE": {
+    "ru": "Шаг вверх-вправо",
+    "en": "Step up-right"
+  },
+  "STR_DELVE_SW": {
+    "ru": "Шаг вниз-влево",
+    "en": "Step down-left"
+  },
+  "STR_DELVE_SE": {
+    "ru": "Шаг вниз-вправо",
+    "en": "Step down-right"
+  },
+  "STR_DELVE_TITLE_MENU": {
+    "ru": "Главное меню игры",
+    "en": "Game title"
+  },
+  "STR_DELVE_NEW_CONFIRM": {
+    "ru": "Начать заново?",
+    "en": "Start again?"
+  },
+  "STR_DELVE_LOSE_RUN": {
+    "ru": "Текущее путешествие будет потеряно.",
+    "en": "The current expedition will be lost."
+  },
+  "STR_DELVE_STATS": {
+    "ru": "Походы: %d · Победы: %d · Глубина: %d",
+    "en": "Runs: %d · Wins: %d · Depth: %d"
+  },
+  "STR_DELVE_STATUS": {
+    "ru": "Этаж %d/10 · Уровень %d · Золото %d",
+    "en": "Depth %d/10 · Level %d · Gold %d"
+  },
+  "STR_DELVE_HP_TORCH": {
+    "ru": "Жизнь %d/%d · Факел %d",
+    "en": "HP %d/%d · Torch %d"
+  },
+  "STR_DELVE_EQUIPMENT": {
+    "ru": "Урон %d–%d · Защита %d.",
+    "en": "Damage %d–%d · Defence %d."
+  },
+  "STR_DELVE_DROP_HINT": {
+    "ru": "Выберите предмет: применить или выбросить.",
+    "en": "Select an item to use or drop it."
+  },
+  "STR_DELVE_EMPTY_BAG": {
+    "ru": "Рюкзак пуст",
+    "en": "The bag is empty"
+  },
+  "STR_DELVE_NO_ENEMIES": {
+    "ru": "Врагов поблизости не видно",
+    "en": "No enemies in sight"
+  },
+  "STR_DELVE_ENEMY_INFO": {
+    "ru": "Жизнь %d/%d · Урон %d–%d.",
+    "en": "HP %d/%d · Damage %d–%d."
+  },
+  "STR_DELVE_WON": {
+    "ru": "Амулет найден!",
+    "en": "Amulet found!"
+  },
+  "STR_DELVE_LOST": {
+    "ru": "Путешествие окончено",
+    "en": "The expedition is over"
+  },
+  "STR_DELVE_END_STATS": {
+    "ru": "Этаж: %d · Ходы: %d · Золото: %d · Побеждено: %d",
+    "en": "Depth: %d · Turns: %d · Gold: %d · Defeated: %d"
+  },
+  "STR_DELVE_SAVE_ERROR": {
+    "ru": "Не удалось сохранить на SD. Проверьте карту.",
+    "en": "Could not save to SD. Check the card."
+  },
+  "STR_DELVE_HELP_1": {
+    "ru": "Найдите Амулет на десятом этаже. Направления двигают героя; шаг на врага — удар, на дверь — открыть. После каждого действия ходят монстры. Столкновение со стеной ход не тратит. «Назад» открывает меню, «Выбор» — рюкзак.",
+    "en": "Find the Amulet on depth ten. Directions move the hero; step into an enemy to attack or a door to open it. Monsters act after each action. Bumping a wall costs no turn. Back opens the menu; Select opens the bag."
+  },
+  "STR_DELVE_HELP_2": {
+    "ru": "Факел теряет единицу за ход. Ниже 100 свет слабеет; при нуле видно лишь рядом, здоровье не восстанавливается. Новые факелы дают 200 единиц. Отдых лечит до 40 ходов, но прекращается при виде врага. Меню не тратит ходы. На лестнице выберите «Спуститься».",
+    "en": "The torch burns one point per turn. Below 100 its light shrinks. At zero, sight is limited and health does not recover. Fresh torches add 200. Rest lasts up to 40 turns and stops when an enemy appears. Menus cost no turns. Choose Descend while on stairs."
+  },
+  "STR_DELVE_HELP_3": {
+    "ru": "Предметы подбираются шагом. Выберите предмет в рюкзаке, затем «Применить» или «Выбросить». Применение пьёт зелье, читает свиток или надевает снаряжение. Свойства неизвестных зелий и свитков открываются после применения. В рюкзаке 12 мест. Золото и факелы не занимают место.",
+    "en": "Walk onto items to collect them. Select an item in the bag, then Use or Drop. Use drinks, reads or equips. Unknown potions and scrolls are identified when used. The bag holds 12 items. Gold and torches take no space."
+  },
+  "STR_DELVE_HELP_4": {
+    "ru": "Смерть завершает поход. Игра сохраняется каждые 10 ходов, при спуске, открытии меню и выходе; доступны «Продолжить» и новый поход. «Подземелье дня» использует дату ридера: сначала настройте часы. Осмотр врагов показывает их силу и повадки. Delve — адаптация игры Омера Фарука Инела (MIT).",
+    "en": "Death ends the run. Progress saves every ten turns, on descent, opening the menu and exit. Continue resumes it. Daily dungeon uses the reader date: set the clock first. Inspect enemies to learn their strength and habits. Adapted from Delve by Omer Faruk Inel (MIT)."
+  },
+  "STR_DELVE_RAT": {
+    "ru": "Крыса",
+    "en": "Rat"
+  },
+  "STR_DELVE_BAT": {
+    "ru": "Летучая мышь",
+    "en": "Bat"
+  },
+  "STR_DELVE_SNAKE": {
+    "ru": "Змея",
+    "en": "Snake"
+  },
+  "STR_DELVE_GOBLIN": {
+    "ru": "Гоблин",
+    "en": "Goblin"
+  },
+  "STR_DELVE_SKELETON": {
+    "ru": "Скелет",
+    "en": "Skeleton"
+  },
+  "STR_DELVE_ORC": {
+    "ru": "Орк",
+    "en": "Orc"
+  },
+  "STR_DELVE_TROLL": {
+    "ru": "Тролль",
+    "en": "Troll"
+  },
+  "STR_DELVE_WRAITH": {
+    "ru": "Призрак",
+    "en": "Wraith"
+  },
+  "STR_DELVE_DRAGON": {
+    "ru": "Дракон",
+    "en": "Dragon"
+  },
+  "STR_DELVE_NOTE_RAT": {
+    "ru": "Быстро теряет след, раненая убегает.",
+    "en": "Loses the trail quickly; flees when hurt."
+  },
+  "STR_DELVE_NOTE_BAT": {
+    "ru": "Двигается беспорядочно, быстро теряет след.",
+    "en": "Moves erratically; loses interest quickly."
+  },
+  "STR_DELVE_NOTE_SNAKE": {
+    "ru": "Может не заметить героя; преследует недолго.",
+    "en": "May ignore you; follows for a short while."
+  },
+  "STR_DELVE_NOTE_GOBLIN": {
+    "ru": "Крадёт золото и убегает. Отступает при ранении.",
+    "en": "Steals gold and flees; retreats when hurt."
+  },
+  "STR_DELVE_NOTE_SKELETON": {
+    "ru": "Долго преследует даже за пределами видимости.",
+    "en": "Follows the trail for a long time."
+  },
+  "STR_DELVE_NOTE_ORC": {
+    "ru": "Сильный противник с хорошей защитой.",
+    "en": "Strong attacker with good defence."
+  },
+  "STR_DELVE_NOTE_TROLL": {
+    "ru": "Каждый ход восстанавливает здоровье.",
+    "en": "Regenerates health each turn."
+  },
+  "STR_DELVE_NOTE_WRAITH": {
+    "ru": "Гасит факел ударами и долго преследует.",
+    "en": "Its attacks drain the torch; very persistent."
+  },
+  "STR_DELVE_NOTE_DRAGON": {
+    "ru": "Охраняет Амулет на десятом этаже.",
+    "en": "Guards the Amulet on depth ten."
+  },
+  "STR_DELVE_P_HEAL": {
+    "ru": "Зелье лечения",
+    "en": "Healing potion"
+  },
+  "STR_DELVE_P_EXTRA": {
+    "ru": "Зелье сильного лечения",
+    "en": "Extra healing potion"
+  },
+  "STR_DELVE_P_STRENGTH": {
+    "ru": "Зелье силы",
+    "en": "Strength potion"
+  },
+  "STR_DELVE_P_LIFE": {
+    "ru": "Зелье жизни",
+    "en": "Life potion"
+  },
+  "STR_DELVE_P_POISON": {
+    "ru": "Зелье яда",
+    "en": "Poison potion"
+  },
+  "STR_DELVE_S_TELEPORT": {
+    "ru": "Свиток телепортации",
+    "en": "Teleport scroll"
+  },
+  "STR_DELVE_S_WEAPON": {
+    "ru": "Свиток зачарования оружия",
+    "en": "Enchant weapon scroll"
+  },
+  "STR_DELVE_S_ARMOUR": {
+    "ru": "Свиток зачарования брони",
+    "en": "Enchant armour scroll"
+  },
+  "STR_DELVE_S_LIGHT": {
+    "ru": "Свиток света",
+    "en": "Light scroll"
+  },
+  "STR_DELVE_S_MAP": {
+    "ru": "Свиток карты",
+    "en": "Map scroll"
+  },
+  "STR_DELVE_S_SLEEP": {
+    "ru": "Свиток сна",
+    "en": "Sleep scroll"
+  },
+  "STR_DELVE_RED": {
+    "ru": "красное",
+    "en": "red"
+  },
+  "STR_DELVE_BLUE": {
+    "ru": "синее",
+    "en": "blue"
+  },
+  "STR_DELVE_GREEN": {
+    "ru": "зелёное",
+    "en": "green"
+  },
+  "STR_DELVE_YELLOW": {
+    "ru": "жёлтое",
+    "en": "yellow"
+  },
+  "STR_DELVE_MURKY": {
+    "ru": "мутное",
+    "en": "murky"
+  },
+  "STR_DELVE_UNKNOWN_POTION": {
+    "ru": "Неизвестное зелье:",
+    "en": "Unknown potion:"
+  },
+  "STR_DELVE_UNKNOWN_SCROLL": {
+    "ru": "Неизвестный свиток",
+    "en": "Unknown scroll"
+  },
+  "STR_DELVE_DAGGER": {
+    "ru": "Кинжал",
+    "en": "Dagger"
+  },
+  "STR_DELVE_SWORD": {
+    "ru": "Короткий меч",
+    "en": "Short sword"
+  },
+  "STR_DELVE_MACE": {
+    "ru": "Булава",
+    "en": "Mace"
+  },
+  "STR_DELVE_AXE": {
+    "ru": "Топор",
+    "en": "Axe"
+  },
+  "STR_DELVE_GREATSWORD": {
+    "ru": "Большой меч",
+    "en": "Great sword"
+  },
+  "STR_DELVE_LEATHER": {
+    "ru": "Кожаная броня",
+    "en": "Leather armour"
+  },
+  "STR_DELVE_STUDDED": {
+    "ru": "Усиленная кожа",
+    "en": "Studded leather"
+  },
+  "STR_DELVE_CHAIN": {
+    "ru": "Кольчуга",
+    "en": "Chain mail"
+  },
+  "STR_DELVE_SPLINT": {
+    "ru": "Пластинчатая броня",
+    "en": "Splint mail"
+  },
+  "STR_DELVE_PLATE": {
+    "ru": "Латы",
+    "en": "Plate armour"
+  },
+  "STR_DELVE_TORCH": {
+    "ru": "Факел",
+    "en": "Torch"
+  },
+  "STR_DELVE_GOLD": {
+    "ru": "Золото",
+    "en": "Gold"
+  },
+  "STR_DELVE_AMULET": {
+    "ru": "Амулет",
+    "en": "Amulet"
+  },
+  "STR_DELVE_MSG_ENTER": {
+    "ru": "Вы вошли в подземелье. Найдите лестницу.",
+    "en": "You enter the dungeon. Find the stairs."
+  },
+  "STR_DELVE_MSG_WELCOME": {
+    "ru": "Путешествие продолжается.",
+    "en": "Your expedition continues."
+  },
+  "STR_DELVE_MSG_BLOCKED": {
+    "ru": "Сюда пройти нельзя.",
+    "en": "You cannot go there."
+  },
+  "STR_DELVE_MSG_DOOR": {
+    "ru": "Дверь открыта.",
+    "en": "The door opens."
+  },
+  "STR_DELVE_MSG_STAIRS": {
+    "ru": "Лестница вниз. Спуск — через меню.",
+    "en": "Stairs down. Descend from the menu."
+  },
+  "STR_DELVE_MSG_DESCEND": {
+    "ru": "Вы спустились на этаж %d.",
+    "en": "You descend to depth %d."
+  },
+  "STR_DELVE_MSG_LAST": {
+    "ru": "Десятый этаж. Здесь находится Амулет.",
+    "en": "Depth ten. The Amulet lies here."
+  },
+  "STR_DELVE_MSG_MISS": {
+    "ru": "Вы промахнулись.",
+    "en": "You miss."
+  },
+  "STR_DELVE_MSG_HIT": {
+    "ru": "Вы наносите %d урона.",
+    "en": "You deal %d damage."
+  },
+  "STR_DELVE_MSG_KILLED": {
+    "ru": "противник повержен.",
+    "en": "defeated."
+  },
+  "STR_DELVE_MSG_ENEMY_MISS": {
+    "ru": "Противник промахнулся.",
+    "en": "The enemy misses."
+  },
+  "STR_DELVE_MSG_ENEMY_HIT": {
+    "ru": "Противник наносит %d урона.",
+    "en": "The enemy deals %d damage."
+  },
+  "STR_DELVE_MSG_STOLEN": {
+    "ru": "Гоблин унёс %d золота.",
+    "en": "The goblin stole %d gold."
+  },
+  "STR_DELVE_MSG_DRAIN": {
+    "ru": "Призрак ослабляет пламя факела.",
+    "en": "The wraith drains your torch."
+  },
+  "STR_DELVE_MSG_LOW": {
+    "ru": "Факел догорает.",
+    "en": "Your torch burns low."
+  },
+  "STR_DELVE_MSG_DARK": {
+    "ru": "Факел погас.",
+    "en": "Your torch goes out."
+  },
+  "STR_DELVE_MSG_GOLD": {
+    "ru": "Найдено золото: %d.",
+    "en": "Gold found: %d."
+  },
+  "STR_DELVE_MSG_TORCH": {
+    "ru": "Новый факел: +200 света.",
+    "en": "Fresh torch: +200 light."
+  },
+  "STR_DELVE_MSG_PICKED": {
+    "ru": "Подобрано:",
+    "en": "Picked up:"
+  },
+  "STR_DELVE_MSG_FULL": {
+    "ru": "Рюкзак полон. Освободите место.",
+    "en": "The bag is full. Drop an item."
+  },
+  "STR_DELVE_MSG_VICTORY": {
+    "ru": "Амулет ваш. Победа!",
+    "en": "The Amulet is yours. Victory!"
+  },
+  "STR_DELVE_MSG_DEAD": {
+    "ru": "Герой погиб.",
+    "en": "The hero has fallen."
+  },
+  "STR_DELVE_MSG_LEVEL": {
+    "ru": "Ваш уровень повышен до %d.",
+    "en": "You reach level %d."
+  },
+  "STR_DELVE_MSG_HEAL": {
+    "ru": "Зелье лечения: здоровье восстановлено.",
+    "en": "Healing potion: health restored."
+  },
+  "STR_DELVE_MSG_EXTRA": {
+    "ru": "Сильное лечение: жизнь полностью восстановлена.",
+    "en": "Extra healing: health fully restored."
+  },
+  "STR_DELVE_MSG_STRONG": {
+    "ru": "Зелье силы: удары стали сильнее.",
+    "en": "Strength potion: your attacks grow stronger."
+  },
+  "STR_DELVE_MSG_LIFE": {
+    "ru": "Зелье жизни: запас здоровья увеличен.",
+    "en": "Life potion: your maximum health increases."
+  },
+  "STR_DELVE_MSG_POISON": {
+    "ru": "Это яд! Вы теряете здоровье.",
+    "en": "Poison! You lose health."
+  },
+  "STR_DELVE_MSG_TELEPORT": {
+    "ru": "Телепортация перенесла вас в другое место.",
+    "en": "Teleportation takes you somewhere else."
+  },
+  "STR_DELVE_MSG_WEAPON": {
+    "ru": "Оружие зачаровано: урон увеличен.",
+    "en": "Weapon enchanted: damage increases."
+  },
+  "STR_DELVE_MSG_ARMOUR": {
+    "ru": "Броня зачарована: защита увеличена.",
+    "en": "Armour enchanted: defence increases."
+  },
+  "STR_DELVE_MSG_LIGHT": {
+    "ru": "Свиток света усилил факел.",
+    "en": "The light scroll strengthens the torch."
+  },
+  "STR_DELVE_MSG_MAP": {
+    "ru": "Карта подземелья открыта.",
+    "en": "The dungeon map is revealed."
+  },
+  "STR_DELVE_MSG_SLEEP": {
+    "ru": "Видимые враги погрузились в сон.",
+    "en": "Visible enemies fall asleep."
+  },
+  "STR_DELVE_MSG_EQUIP": {
+    "ru": "Снаряжение заменено. Старое — в рюкзаке.",
+    "en": "Equipment changed; the old piece is in the bag."
+  },
+  "STR_DELVE_MSG_DROP": {
+    "ru": "Предмет оставлен на земле.",
+    "en": "The item is left on the floor."
+  },
+  "STR_DELVE_MSG_NODROP": {
+    "ru": "Здесь нельзя оставить предмет.",
+    "en": "You cannot drop an item here."
+  },
+  "STR_DELVE_MSG_REST": {
+    "ru": "Отдых: прошло ходов %d.",
+    "en": "Rested for %d turns."
+  },
+  "STR_DELVE_MSG_UNSAFE": {
+    "ru": "Нельзя отдыхать, пока рядом виден враг.",
+    "en": "You cannot rest with an enemy in sight."
+  },
+  "STR_DELVE_MSG_NOSTAIRS": {
+    "ru": "Здесь нет лестницы вниз.",
+    "en": "There are no stairs here."
+  },
+  "STR_DELVE_MSG_GIVEUP": {
+    "ru": "Путешествие прервано.",
+    "en": "The expedition was abandoned."
+  },
+  "STR_DELVE_USE": {
+    "ru": "Применить",
+    "en": "Use"
+  },
+  "STR_DELVE_DROP": {
+    "ru": "Выбросить",
+    "en": "Drop"
+  },
+  "STR_DELVE_HP_VALUE": {
+    "ru": "Жизнь %d/%d",
+    "en": "HP %d/%d"
+  },
+  "STR_DELVE_TORCH_VALUE": {
+    "ru": "Факел %d",
+    "en": "Torch %d"
+  },
+  "STR_DELVE_SETTINGS": {
+    "ru": "Настройки игры",
+    "en": "Game settings"
+  },
+  "STR_DELVE_SCALE": {
+    "ru": "Масштаб",
+    "en": "View size"
+  },
+  "STR_DELVE_NORMAL": {
+    "ru": "Обычный",
+    "en": "Normal"
+  },
+  "STR_DELVE_LARGE": {
+    "ru": "Крупный",
+    "en": "Large"
+  },
+  "STR_DELVE_SCALE_HELP": {
+    "ru": "Выбор переключает масштаб поля и верхних показателей. Настройка сохраняется; поход продолжается с того же места.",
+    "en": "Select changes tile and status size. The choice is saved; your run stays in place."
+  },
+  "STR_DELVE_SCALE_SAVE_ERROR": {
+    "ru": "Не удалось сохранить масштаб. Текущий размер действует до выхода из игры.",
+    "en": "Could not save view size. This choice applies until you leave the game."
+  }
+}

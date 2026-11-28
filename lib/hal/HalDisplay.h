@@ -58,6 +58,8 @@ class HalDisplay {
   RefreshMode getLastRefreshMode() const;
   // Diagnostics: last X4 displayMode byte (0x0C fast / 0x1C OTP-flash / 0xD4 half / 0x34 full).
   uint8_t getLastDisplayModeByte() const;
+  uint8_t getLastActivationByte() const { return einkDisplay.getLastActivationByte(); }
+  uint32_t getActivationCounter() const { return einkDisplay.getActivationCounter(); }
 
   // Request extra X3 ghost-clearing on the next display refresh.
   // No-op on non-X3 panels. Consumed by the next displayBuffer/refreshDisplay call.

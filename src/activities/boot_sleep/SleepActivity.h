@@ -26,6 +26,7 @@ class SleepActivity final : public Activity {
   void renderCalendarSleepScreen() const;
   void renderFlipClockSleepScreen() const;
   void drawFlipClock(time_t epoch) const;
+  void drawWordClock(time_t epoch) const;
   void drawCalendar(time_t epoch, bool withClock) const;
   void renderCalendarWeather(time_t now, int calendarBottom) const;
   bool renderQuoteSleepScreen() const;

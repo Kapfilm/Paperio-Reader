@@ -448,17 +448,19 @@ void SudokuGameActivity::drawTitleBar() {
 
   char left[64];
   snprintf(left, sizeof(left), "%s · %s", tr(STR_SUDOKU_TITLE), difficultyName(difficulty));
-  renderer.drawText(kStatusFont, 12, y, left, true, EpdFontFamily::BOLD);
-
+  int titleWidth = w - 24;
   if (state != State::Generating) {
     char timeStr[8];
     gameFormatElapsed(elapsedMs, timeStr, sizeof(timeStr));
     char right[48];
     snprintf(right, sizeof(right), "%s · %s %u/3", timeStr, tr(STR_SUDOKU_ERRORS), static_cast<unsigned>(mistakes));
     const int rw = renderer.getTextWidth(kMetaFont, right);
+    titleWidth = std::max(0, w - 36 - rw);
     const int metaY = y + (renderer.getTextHeight(kStatusFont) - renderer.getTextHeight(kMetaFont)) / 2;
     renderer.drawText(kMetaFont, w - 12 - rw, metaY, right);
   }
+  const auto fittedTitle = renderer.truncatedText(kStatusFont, left, titleWidth, EpdFontFamily::BOLD);
+  renderer.drawText(kStatusFont, 12, y, fittedTitle.c_str(), true, EpdFontFamily::BOLD);
 }
 
 void SudokuGameActivity::drawGrid(int x0, int y0) {
@@ -537,15 +539,19 @@ void SudokuGameActivity::drawGrid(int x0, int y0) {
 
 void SudokuGameActivity::drawNotes(int cellX, int cellY, int cellSize, uint16_t notesBitmap) {
   const int sub = cellSize / 3;
-  const int textH = renderer.getTextHeight(kNotesFont);
+  // Each notes slot is only 16px tall on the 48px grid. Noto 12 has a
+  // 27px ascender, so scale candidates to their own slot instead of overlapping.
+  const float scale = std::min(1.0f, static_cast<float>(sub - 2) / renderer.getTextHeight(kNotesFont));
+  const int textH = static_cast<int>(renderer.getTextHeight(kNotesFont) * scale + 0.5f);
   for (int d = 1; d <= 9; d++) {
     if ((notesBitmap & (1u << d)) == 0) continue;
     const int k = d - 1;
     const int sx = cellX + (k % 3) * sub;
     const int sy = cellY + (k / 3) * sub;
     const char buf[2] = {static_cast<char>('0' + d), 0};
-    const int tw = renderer.getTextWidth(kNotesFont, buf);
-    renderer.drawText(kNotesFont, sx + (sub - tw) / 2, sy + gameCenterY(sub, textH), buf, true);
+    const int tw = renderer.getTextWidthScaled(kNotesFont, buf, EpdFontFamily::REGULAR, scale);
+    renderer.drawTextScaled(kNotesFont, sx + (sub - tw) / 2, sy + gameCenterY(sub, textH), buf, true,
+                            EpdFontFamily::REGULAR, scale);
   }
 }
 

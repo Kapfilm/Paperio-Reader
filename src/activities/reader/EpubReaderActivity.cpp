@@ -1,3 +1,5 @@
+#include "util/SectionHeading.h"
+#include "ReaderBuildBuffer.h"
 #ifndef DEBUG_MEMORY_CONSUMPTION
 #define DEBUG_MEMORY_CONSUMPTION 0
 #endif
@@ -83,7 +85,7 @@ namespace {
 constexpr uint8_t PROGRESS_TEXT_ANCHOR_MARKER = 0xA1;
 constexpr size_t PROGRESS_BASE_SIZE = 11;
 
-std::array<uint8_t, 19> readerStatusBarSnapshot() {
+std::array<uint8_t, 21> readerStatusBarSnapshot() {
   return {SETTINGS.statusBarFontSize, SETTINGS.statusBarItemsPosition,
           SETTINGS.statusBarChapterPageCount, SETTINGS.statusBarChapterPageCountPosition,
           SETTINGS.statusBarBookProgressPercentage, SETTINGS.statusBarBookProgressPercentagePosition,
@@ -91,6 +93,7 @@ std::array<uint8_t, 19> readerStatusBarSnapshot() {
           SETTINGS.statusBarBattery, SETTINGS.statusBarBatteryPosition,
           SETTINGS.statusBarClock, SETTINGS.statusBarClockPosition,
           SETTINGS.statusBarBookTitle, SETTINGS.statusBarBookTitlePosition,
+          SETTINGS.statusBarSectionTitle, SETTINGS.statusBarSectionTitlePosition,
           SETTINGS.statusBarUpperProgressBar, SETTINGS.statusBarUpperProgressBarThickness,
           SETTINGS.statusBarLowerProgressBar, SETTINGS.statusBarLowerProgressBarThickness,
           SETTINGS.useClock};
@@ -877,7 +880,7 @@ void EpubReaderActivity::loop() {
 
     if (ev.button == MappedInputManager::Button::Back) {
       if (ev.type == ButtonEventManager::PressType::Long) {
-        ReaderUtils::enforceExitFullRefresh(renderer);
+        if (!gpio.deviceIsX4()) ReaderUtils::enforceExitFullRefresh(renderer);
         if (tryAutoPushOnClose()) return;
         onGoHome();
         return;
@@ -887,7 +890,7 @@ void EpubReaderActivity::loop() {
           restoreSavedPosition();
           return;
         }
-        ReaderUtils::enforceExitFullRefresh(renderer);
+        if (!gpio.deviceIsX4()) ReaderUtils::enforceExitFullRefresh(renderer);
         if (tryAutoPushOnClose()) return;
         finish();
         return;
@@ -1146,9 +1149,12 @@ void EpubReaderActivity::startActivityForResult(std::unique_ptr<Activity>&& acti
     // parse fits between two turns, so letting it burn that budget would mean two visits to the
     // reader menu permanently demote the next section to a blocking Background-C build with its
     // popup. Restore the count so B resumes with exactly the budget it had.
+    pendingGrayscale_ = {};  // Never apply an old page's deferred AA after the child closes.
     const uint8_t preemptionsBeforeOverlay = backgroundPreemptCount_;
     endBackgroundBorrow();
     backgroundPreemptCount_ = preemptionsBeforeOverlay;
+    // The child overlays the page the user sees, not Background-A's next page.
+    restoreCurrentPageToBufferIfPreRendered();
   }
   Activity::startActivityForResult(std::move(activity), std::move(resultHandler));
 }
@@ -1165,11 +1171,12 @@ void EpubReaderActivity::resetBackgroundBuild() {
 }
 
 bool EpubReaderActivity::beginBackgroundBorrow() {
+  if (!reader_build::allowBackgroundBorrow(gpio.deviceIsX4())) return false;
   if (backgroundBorrowActive_ || secondaryBorrowed_ || !backgroundSection_) {
     return false;  // already lent (to B or to C) — never two arenas over one region
   }
   size_t borrowedSize = 0;
-  uint8_t* borrowed = renderer.borrowSecondaryBuffer(&borrowedSize);
+  uint8_t* borrowed = reader_build::borrowBackgroundBuffer(renderer, &borrowedSize);
   if (!borrowed) {
     return false;  // no secondary buffer to lend (X3 baseline, or already released for a C build)
   }
@@ -1182,18 +1189,9 @@ bool EpubReaderActivity::beginBackgroundBorrow() {
   backgroundSection_->setExternalBuildScratch(buildScratch_.get());
   secondaryBorrowed_ = true;
   backgroundBorrowActive_ = true;
-  // Mark AA unavailable while the block is away (renderContents gates on this as well as on
-  // hasSecondaryBuffer). Unlike the Background-C borrow this deliberately does NOT seed RED RAM
-  // or opt in to single-buffer fast differential:
-  //  - No refresh can happen during B's borrow. Every render calls recoverSecondaryBufferIfNeeded()
-  //    first, which hands the block back before the pass draws — so the single-buffer display
-  //    path would never be exercised, and if one ever did slip through, an un-opted-in FAST
-  //    downgrades to HALF (slow, correct) instead of ghosting against a bogus baseline.
-  //  - syncRedRamFromFrameBuffer() would be actively wrong here. C borrows right after drawing
-  //    its popup, so frameBuffer is what's on screen. B borrows during quiet reading, when a
-  //    completed Background-A pre-render usually leaves the NEXT page in frameBuffer — seeding
-  //    RED RAM from that makes the next page turn diff against the frame it is about to draw
-  //    and leaves the page visibly unchanged.
+  // The displayed X4 frame was seeded into RED before lending its host copy.
+  // Returning the buffer can therefore safely use the controller baseline for
+  // the next FAST refresh, even if write contains a next-page pre-render.
   secondaryBufferDegraded_ = true;
   LOG_INF("ERS", "Background-B: borrowed secondary buffer for spine %d build (%u bytes, free=%lu contig=%lu)",
           backgroundBuildSpineIndex_, static_cast<uint32_t>(borrowedSize),
@@ -1456,7 +1454,8 @@ void EpubReaderActivity::stepBackgroundSectionBuild() {
         // Deliberately NOT taken for the Probe/WaitHeap ticks, which idle for minutes at a time
         // and would otherwise toggle the CPU clock on every loop iteration for no work.
         HalPowerManager::Lock powerLock;
-        step = backgroundSection_->stepSectionBuild(makeSectionBuildParams(), BG_BUILD_BUDGET_MS);
+        step = backgroundSection_->stepSectionBuild(makeSectionBuildParams(),
+              reader_build::backgroundSliceBudget(gpio.deviceIsX4()));
       }
       checkHeapIntegrity("after_b_slice");
       if (step == Section::BuildStep::More) {
@@ -3559,9 +3558,9 @@ bool EpubReaderActivity::buildSection(const RenderLayout& layout) {
         // fall into releaseSecondaryBuffer() on a buffer the display no longer owns. Just keep
         // the single-buffer display flags asserted and let the adopted build carry on.
         if (secondaryBorrowed_) {
-          // With no popup, the remaining write buffer may contain a pre-render.
-          if (showIndexingPopup && !renderer.isX3()) renderer.syncRedRamFromFrameBuffer();
-          renderer.setSingleBufferFastDiff(showIndexingPopup);
+          // The baseline was established before lending the buffer (B or C).
+          // Never reseed from write while lent: it can contain a pre-render.
+          reader_build::resumeBorrowedBuild(renderer);
           secondaryBufferDegraded_ = true;
           LOG_INF("ERS", "Background-C: building spine %d incrementally, secondary buffer already BORROWED (free=%lu)",
                   currentSpineIndex, static_cast<unsigned long>(freeBefore));
@@ -4713,11 +4712,22 @@ void EpubReaderActivity::renderStatusBar() const {
     title = epub->getTitle();
   }
 
+  std::string sectionHeading;
+  if (SETTINGS.statusBarSectionTitle) {
+    const int tocIndex = section->getTocIndexForPage(section->currentPage);
+    if (sectionHeadingTocIndex != tocIndex) {
+      sectionHeadingTocIndex = tocIndex;
+      cachedSectionHeading = status_bar::sectionHeading(tocIndex, epub->getTocItemsCount(),
+          [this](int index) { return epub->getTocItem(index); }, epub->getTitle());
+    }
+    sectionHeading = cachedSectionHeading;
+  }
+
   const bool isStarred =
       section && bookmarkStore.has(static_cast<uint16_t>(currentSpineIndex),
                                    static_cast<uint16_t>(section->currentPage), annotationAnchor(), isFullNoteView());
   GUI.drawStatusBar(renderer, bookProgress, currentPage, displayPageCount, title, 0, isStarred, {},
-                    /*fillMargin=*/true, /*pageCountApproximate=*/building, epub->getTitle());
+                    /*fillMargin=*/true, /*pageCountApproximate=*/building, epub->getTitle(), sectionHeading);
 
 #if DEBUG_BACKGROUND_WORK
   renderBackgroundDebugOverlay();
@@ -4796,6 +4806,8 @@ bool EpubReaderActivity::shouldSkipPeriodicUpdate() const {
 }
 
 void EpubReaderActivity::resetNoteRenderState() {
+  // Note navigation uses the normal page-refresh cadence. Baseline ownership
+  // is maintained by the display layer; do not flash on every note round-trip.
   currentPageFootnotes.clear();
   pendingPreRender = false;
   usePreRenderedBuffer = false;
@@ -5368,6 +5380,8 @@ void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlig
       const int contentTop = layout.marginTop + getImageOnlyPageYOffset(*page, viewportHeight);
       const size_t pageWordLimit = words.size() + MAX_SELECTABLE_WORDS_PER_PAGE;
       uint16_t pageWordIndex = 0;
+      bool previousLineContinues = false;
+      bool previousInsertedHyphen = false;
 
       for (const auto& element : page->elements) {
         if (element->getTag() != TAG_PageLine) continue;
@@ -5421,13 +5435,15 @@ void EpubReaderActivity::startClipSelection(const ClippingHighlightStyle highlig
           word.text = text;
           word.style = style;
           if (!words.empty() && words.back().pageIndex == relativePage && word.y != words.back().y) {
-            const std::string& previousText = words.back().text;
-            word.joinsPreviousWord = !previousText.empty() && previousText.back() == '-';
+            word.joinsPreviousWord = i == 0 && previousLineContinues;
+            word.removesPreviousHyphen = word.joinsPreviousWord && previousInsertedHyphen;
             const int indentThreshold = renderer.getLineHeight(readerFontId) / 2;
             word.paragraphStart = word.x > words.back().x + indentThreshold;
           }
           words.push_back(std::move(word));
         }
+        previousLineContinues = block.continuesOnNextLine();
+        previousInsertedHyphen = block.endsWithInsertedHyphen();
       }
     }
     section->currentPage = startPage;

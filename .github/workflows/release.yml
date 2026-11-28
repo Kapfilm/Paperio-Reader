@@ -62,6 +62,13 @@ jobs:
       - name: Generate translations
         run: python scripts/gen_i18n.py --strip-unused
 
+      - name: Test display drivers
+        run: |
+          set -o pipefail
+          python freeink-sdk/libs/display/FreeInkDisplay/test/host/run_pro.py 2>&1 | tee display-driver-tests.log
+          python freeink-sdk/libs/display/FreeInkDisplay/test/host/run_uc8279.py 2>&1 | tee -a display-driver-tests.log
+          python freeink-sdk/libs/display/FreeInkDisplay/test/host/run_uc8253_power.py 2>&1 | tee -a display-driver-tests.log
+
       - name: Build Paperio Reader
         run: |
           set -o pipefail
@@ -100,6 +107,7 @@ jobs:
             firmware-build.log
             host-tests.log
             recent-books-ui.log
+            display-driver-tests.log
 
       # Published releases are never overwritten. OTA sees only verified assets.
       - name: Upload, verify, and publish stable OTA release

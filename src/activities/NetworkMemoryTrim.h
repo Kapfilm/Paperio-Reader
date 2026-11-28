@@ -29,10 +29,13 @@ class GfxRenderer;
 //
 // Shut down Wi-Fi and release session data before restoring the buffer.
 //
+// Serialises font-cache and framebuffer ownership with rendering, including
+// callers that already hold the non-recursive render lock.
 // Idempotent: safe to call again before TLS to drop font cache that status
 // screens repopulated since the first call.
 void trimMemoryForNetworkSession(const GfxRenderer& renderer, const char* logTag);
 
-// Call under the render lock. A restart is the fallback if the heap cannot
+// Acquires the render lock when the caller does not already hold it.
+// A restart is the fallback if the heap cannot
 // provide a secondary buffer after network cleanup.
 void restoreDisplayAfterNetworkSession(const GfxRenderer& renderer);

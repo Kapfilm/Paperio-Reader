@@ -1,3 +1,5 @@
+#include <optional>
+#include "OpdsPendingSearch.h"
 #include "OpdsBookBrowserActivity.h"
 
 #include <ArduinoJson.h>
@@ -250,10 +252,8 @@ void OpdsBookBrowserActivity::onEnter() {
         cacheFile.close();
         state = BrowserState::BROWSING;
         requestUpdate();
-        if (!initialQuery_.empty() && !searchTemplate.empty()) {
-          performSearch(std::move(initialQuery_));
-          initialQuery_.clear();
-        }
+        opds::runPendingSearch(initialQuery_, !searchTemplate.empty(),
+                               [this](const std::string& query) { performSearch(query); });
         return;  // WiFi connects lazily on first navigation
       }
       cacheFile.close();
@@ -643,11 +643,14 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     memoryTrimmed = true;
   }
 
-  entryOffsets.clear();
-  // Reserve up front so the per-entry push_back loop doesn't repeatedly realloc
-  // (2x grow + copy) and fragment the heap mid-fetch. One page-ish worth covers
-  // the common case; larger feeds grow once or twice up to MAX_FEED_ENTRIES.
-  entryOffsets.reserve(INITIAL_FEED_RESERVE);
+  {
+    std::optional<RenderLock> lock;
+    if (!RenderLock::isHeldByCurrentTask()) lock.emplace(RenderLock::ExclusiveActivityAccess{});
+    state = BrowserState::LOADING;
+    // Finish any old list render before discarding its offset index.
+    entryOffsets.clear();
+    entryOffsets.reserve(INITIAL_FEED_RESERVE);
+  }
   bool feedCapped = false;
 
   // Root feed: path is empty (first open or back-to-root navigation).
@@ -711,9 +714,6 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
   searchTemplate = parser.getSearchTemplate();
   if (searchTemplate.empty() && !parser.getOsdUrl().empty()) {
     fetchOsdTemplate(UrlUtils::buildUrl(url, parser.getOsdUrl()));
-  } else if (!initialQuery_.empty() && !searchTemplate.empty()) {
-    performSearch(std::move(initialQuery_));
-    initialQuery_.clear();
   }
 
   if (isRootFeed) {
@@ -736,10 +736,23 @@ void OpdsBookBrowserActivity::fetchFeed(const std::string& path) {
     writeEntryToCache(cacheFile, nextEntry);
   }
 
-  selectorIndex = 0;
-  state = entryOffsets.empty() ? BrowserState::ERROR : BrowserState::BROWSING;
-  if (entryOffsets.empty()) errorMessage = tr(STR_NO_ENTRIES);
-  requestUpdate();
+  // The renderer opens this file independently. Publish the catalog only after
+  // its buffered rows are committed, so the first frame cannot read half a row.
+  cacheFile.flush();
+  const bool cacheReady = cacheFile.close();
+  // A search may fetch recursively into the same cache path. The old writer
+  // must be closed and the pending query consumed before entering that fetch.
+  if (cacheReady && opds::runPendingSearch(initialQuery_, !searchTemplate.empty(),
+        [this](const std::string& query) { performSearch(query); })) return;
+  {
+    std::optional<RenderLock> lock;
+    if (!RenderLock::isHeldByCurrentTask()) lock.emplace(RenderLock::ExclusiveActivityAccess{});
+    selectorIndex = 0;
+    state = !cacheReady || entryOffsets.empty() ? BrowserState::ERROR : BrowserState::BROWSING;
+    if (!cacheReady) errorMessage = tr(STR_FETCH_FEED_FAILED);
+    else if (entryOffsets.empty()) errorMessage = tr(STR_NO_ENTRIES);
+    requestUpdate();
+  }
 }
 
 void OpdsBookBrowserActivity::navigateToEntry(const OpdsEntry& entry) {
@@ -962,10 +975,7 @@ void OpdsBookBrowserActivity::fetchOsdTemplate(const std::string& osdUrl) {
 
   if (!osdState.templateUrl.empty()) {
     searchTemplate = UrlUtils::buildUrl(osdUrl, osdState.templateUrl);
-    if (!initialQuery_.empty()) {
-      performSearch(std::move(initialQuery_));
-      initialQuery_.clear();
-    }
+
   }
 }
 

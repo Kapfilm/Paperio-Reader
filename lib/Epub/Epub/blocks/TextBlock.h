@@ -79,6 +79,8 @@ class TextBlock final : public Block {
   uint16_t numWords = 0;
   uint16_t textBytes = 0;  // total size of the text region, including one NUL per word
   bool sizesPresent = false;
+  bool continuesOnNextLine_ = false;
+  bool insertedHyphen_ = false;
   bool isValid = true;
   // The ONLY allocation: makeUniqueNoThrow, so OOM yields an invalid block
   // instead of abort() (bare new is not nothrow with -fno-exceptions).
@@ -137,6 +139,12 @@ class TextBlock final : public Block {
   }
   int16_t wordXpos(const uint16_t i) const { return xposArr[i]; }
   EpdFontFamily::Style wordStyle(const uint16_t i) const { return static_cast<EpdFontFamily::Style>(stylesArr[i]); }
+  void setLineContinuation(bool continues, bool insertedHyphen) {
+    continuesOnNextLine_ = continues;
+    insertedHyphen_ = continues && insertedHyphen;
+  }
+  bool continuesOnNextLine() const { return continuesOnNextLine_; }
+  bool endsWithInsertedHyphen() const { return insertedHyphen_; }
   bool hasWordSizes() const { return sizesPresent; }
   uint8_t wordSizePct(const uint16_t i) const { return sizesPresent ? sizesArr[i] : 100; }
   // Diagnostic/test helper: materializes the per-word size vector (empty when uniform).

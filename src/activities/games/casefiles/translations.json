@@ -1,0 +1,2394 @@
+{
+  "STR_CASE_TITLE": {
+    "ru": "Дело №",
+    "en": "Case Files"
+  },
+  "STR_CASE_CLUES": {
+    "ru": "Улики",
+    "en": "Clues"
+  },
+  "STR_CASE_TABLES": {
+    "ru": "Таблица",
+    "en": "Grid"
+  },
+  "STR_CASE_UNDO": {
+    "ru": "Отменить ход",
+    "en": "Undo"
+  },
+  "STR_CASE_CHECK": {
+    "ru": "Проверить",
+    "en": "Check"
+  },
+  "STR_CASE_HINT": {
+    "ru": "Подсказка",
+    "en": "Hint"
+  },
+  "STR_CASE_NEXT": {
+    "ru": "Следующее дело",
+    "en": "Next case"
+  },
+  "STR_CASE_PREVIOUS": {
+    "ru": "Предыдущее дело",
+    "en": "Previous case"
+  },
+  "STR_CASE_LEVEL": {
+    "ru": "Сложность",
+    "en": "Difficulty"
+  },
+  "STR_CASE_RESTART": {
+    "ru": "Начать заново",
+    "en": "Restart"
+  },
+  "STR_CASE_RULES": {
+    "ru": "Как играть",
+    "en": "How to play"
+  },
+  "STR_CASE_MENU": {
+    "ru": "Меню",
+    "en": "Menu"
+  },
+  "STR_CASE_EASY": {
+    "ru": "Легко",
+    "en": "Easy"
+  },
+  "STR_CASE_MEDIUM": {
+    "ru": "Средне",
+    "en": "Medium"
+  },
+  "STR_CASE_HARD": {
+    "ru": "Сложно",
+    "en": "Hard"
+  },
+  "STR_CASE_MARK": {
+    "ru": "Отметить",
+    "en": "Mark"
+  },
+  "STR_CASE_PREV": {
+    "ru": "Пред.",
+    "en": "Prev"
+  },
+  "STR_CASE_NEXT_SHORT": {
+    "ru": "След.",
+    "en": "Next"
+  },
+  "STR_CASE_SOLVED": {
+    "ru": "Дело закрыто! Выберите следующее дело в меню.",
+    "en": "Case closed! Choose the next case in the menu."
+  },
+  "STR_CASE_SAVE_ERROR": {
+    "ru": "Не удалось сохранить игру. Проверьте SD-карту.",
+    "en": "Could not save. Check the SD card."
+  },
+  "STR_CASE_CHECK_OK": {
+    "ru": "Ошибок в отметках нет.",
+    "en": "No mistakes in your marks."
+  },
+  "STR_CASE_CHECK_BAD": {
+    "ru": "Неверных отметок: %d",
+    "en": "Wrong marks: %d"
+  },
+  "STR_CASE_HINT_MSG": {
+    "ru": "Подсказка изменила отметку. Подчёркнутую галочку менять нельзя.",
+    "en": "Hint changed a mark. An underlined tick is protected."
+  },
+  "STR_CASE_HINT_LOCKED": {
+    "ru": "Эта галочка поставлена подсказкой.",
+    "en": "This tick came from a hint."
+  },
+  "STR_CASE_CONFLICT": {
+    "ru": "В строке или столбце несколько галочек.",
+    "en": "More than one tick in a row or column."
+  },
+  "STR_CASE_RESET_QUESTION": {
+    "ru": "Стереть отметки текущего дела?",
+    "en": "Clear the marks of this case?"
+  },
+  "STR_CASE_STRIKE": {
+    "ru": "Зачеркнуть",
+    "en": "Cross out"
+  },
+  "STR_CASE_RESTORE": {
+    "ru": "Вернуть",
+    "en": "Restore"
+  },
+  "STR_CASE_NAME": {
+    "ru": "Имя",
+    "en": "Name"
+  },
+  "STR_CASE_TRUE": {
+    "ru": "соответствуют одному человеку.",
+    "en": "belong to the same person."
+  },
+  "STR_CASE_FALSE": {
+    "ru": "относятся к разным людям.",
+    "en": "belong to different people."
+  },
+  "STR_CASE_XOR": {
+    "ru": "соответствует ровно одному из вариантов:",
+    "en": "matches exactly one of:"
+  },
+  "STR_CASE_OR": {
+    "ru": "либо",
+    "en": "or"
+  },
+  "STR_CASE_PAIR": {
+    "ru": "Один из пары",
+    "en": "One of the pair"
+  },
+  "STR_CASE_PAIR_OTHER": {
+    "ru": "соответствует",
+    "en": "matches"
+  },
+  "STR_CASE_PAIR_END": {
+    "ru": "а другой —",
+    "en": "and the other matches"
+  },
+  "STR_CASE_LESS": {
+    "ru": "раньше идёт",
+    "en": "earlier comes"
+  },
+  "STR_CASE_THAN": {
+    "ru": "по сравнению с",
+    "en": "compared with"
+  },
+  "STR_CASE_DIFFERENCE": {
+    "ru": "позже на %d позиций идёт",
+    "en": "later by %d positions comes"
+  },
+  "STR_CASE_CATEGORY": {
+    "ru": "В исходном порядке категории",
+    "en": "In the original order of category"
+  },
+  "STR_CASE_GOAL": {
+    "ru": "Выясните, какие сведения относятся к каждому человеку. Читайте улики и ставьте галочки в таблицах с именами.",
+    "en": "Find each person’s item in every category. Each item is used once."
+  },
+  "STR_CASE_RULES_TEXT": {
+    "ru": "Общий экран содержит улики, вкладки и таблицу. Удерживайте «Выбор» около секунды, чтобы переключать активную область: улики → вкладки → таблица. В таблице направления двигают курсор, короткий «Выбор» меняет отметку. В уликах Вверх/Вниз выбирают улику, Влево/Вправо листают страницы, короткий «Выбор» зачёркивает её. Удерживайте Вправо в области улик, чтобы открыть все улики по порядку. В окне Вверх/Вниз прокручивают текст, Влево/Вправо листают страницы, Выбор открывает следующую страницу. Назад закрывает окно. На вкладках направления выбирают карточку, и поле сразу показывает соответствующую таблицу. «Выбор» переводит курсор на поле. Назад на общем экране открывает меню. В каждом деле есть несколько людей. У каждого — свой вариант в каждой категории: например, свой этаж и время приезда. Прочитайте улики в меню и определите все соответствия. Кнопки направлений перемещают курсор, Выбор меняет отметку: пусто → крестик → галочка → пусто. Галочка означает «да, подходит», крестик — «нет, не подходит». Точки рядом с галочкой лишь показывают исключённые варианты. Переключайте таблицы через меню. Использованную улику можно зачеркнуть; повторное нажатие вернёт её. Условие «ровно одно из двух» означает, что верна только одна из двух фраз, а вторая неверна. В парной улике речь о двух разных людях: один подходит к первому описанию, другой — ко второму, но пока неизвестно кто. Подсказка сначала убирает ошибочную отметку, а затем ставит правильную галочку. Проверка сообщает число ошибок. Дело решено, когда в таблицах с именами у каждого человека найдены все верные варианты. Сравнения по времени учитывают ночь: в музее 00:00 идёт после 23:00. Разница в часах, этажах, днях и местах считается по всей шкале, даже если промежуточного значения нет в этом деле.",
+    "en": "Hold Select to cycle focus: clues, tabs, grid. Arrows move within the focused area. Select marks a cell, crosses out a clue, or moves focus to the grid. Selecting a tab immediately changes the displayed grid. In clues, Left/Right change pages; hold Right for the complete clue list. Up/Down scroll lines, Left/Right turn pages, Select advances a page. Back closes the popup or opens the game menu. Read the clues and match people with their items. Directions move the cursor. Select cycles blank → cross → tick → blank. A cross means a mismatch; a tick means a match. Dots exclude other cells in a tick’s row and column but are not your marks. The menu switches grids, opens clues, undoes moves, checks mistakes and gives hints. Either/or means exactly one option. A pair clue assigns two different people to the other two in an unknown order. Comparisons use the original category order, including times across midnight. Solve every name grid to close the case. Museum rounds are ordered 21:00 → 22:00 → 23:00 → 00:00 → 01:00 → 02:00. Differences count the full original category, including values not selected for this case."
+  },
+  "STR_CASE_CLUE_COUNT": {
+    "ru": "Улика %d/%d",
+    "en": "Clue %d/%d"
+  },
+  "STR_CASE_PROGRESS": {
+    "ru": "Закрыто: %d/200",
+    "en": "Closed: %d/200"
+  },
+  "STR_CASE_T0_TITLE": {
+    "ru": "Отель у моря",
+    "en": "The Seaview Hotel"
+  },
+  "STR_CASE_T0_STORY": {
+    "ru": "Гости отеля потеряли вещи. Восстановите сведения о каждом.",
+    "en": "Hotel guests have lost their belongings. Reconstruct their details."
+  },
+  "STR_CASE_T0_N0": {
+    "ru": "Ада",
+    "en": "Ada"
+  },
+  "STR_CASE_T0_N1": {
+    "ru": "Бруно",
+    "en": "Bruno"
+  },
+  "STR_CASE_T0_N2": {
+    "ru": "Клара",
+    "en": "Clara"
+  },
+  "STR_CASE_T0_N3": {
+    "ru": "Дениз",
+    "en": "Deniz"
+  },
+  "STR_CASE_T0_N4": {
+    "ru": "Элиф",
+    "en": "Elif"
+  },
+  "STR_CASE_T0_N5": {
+    "ru": "Фарид",
+    "en": "Farid"
+  },
+  "STR_CASE_T0_G0": {
+    "ru": "Этаж",
+    "en": "Floor"
+  },
+  "STR_CASE_T0_G0_I0": {
+    "ru": "1",
+    "en": "1"
+  },
+  "STR_CASE_T0_G0_I1": {
+    "ru": "2",
+    "en": "2"
+  },
+  "STR_CASE_T0_G0_I2": {
+    "ru": "3",
+    "en": "3"
+  },
+  "STR_CASE_T0_G0_I3": {
+    "ru": "4",
+    "en": "4"
+  },
+  "STR_CASE_T0_G0_I4": {
+    "ru": "5",
+    "en": "5"
+  },
+  "STR_CASE_T0_G0_I5": {
+    "ru": "6",
+    "en": "6"
+  },
+  "STR_CASE_T0_G1": {
+    "ru": "Приезд",
+    "en": "Arrival"
+  },
+  "STR_CASE_T0_G1_I0": {
+    "ru": "18:00",
+    "en": "18:00"
+  },
+  "STR_CASE_T0_G1_I1": {
+    "ru": "19:00",
+    "en": "19:00"
+  },
+  "STR_CASE_T0_G1_I2": {
+    "ru": "20:00",
+    "en": "20:00"
+  },
+  "STR_CASE_T0_G1_I3": {
+    "ru": "21:00",
+    "en": "21:00"
+  },
+  "STR_CASE_T0_G1_I4": {
+    "ru": "22:00",
+    "en": "22:00"
+  },
+  "STR_CASE_T0_G1_I5": {
+    "ru": "23:00",
+    "en": "23:00"
+  },
+  "STR_CASE_T0_G2": {
+    "ru": "Потерянная вещь",
+    "en": "Lost"
+  },
+  "STR_CASE_T0_G2_I0": {
+    "ru": "шарф",
+    "en": "scarf"
+  },
+  "STR_CASE_T0_G2_I1": {
+    "ru": "часы",
+    "en": "watch"
+  },
+  "STR_CASE_T0_G2_I2": {
+    "ru": "кольцо",
+    "en": "ring"
+  },
+  "STR_CASE_T0_G2_I3": {
+    "ru": "перчатка",
+    "en": "glove"
+  },
+  "STR_CASE_T0_G2_I4": {
+    "ru": "ключ",
+    "en": "key"
+  },
+  "STR_CASE_T0_G2_I5": {
+    "ru": "шляпа",
+    "en": "hat"
+  },
+  "STR_CASE_T1_TITLE": {
+    "ru": "Ночной поезд",
+    "en": "The Night Train"
+  },
+  "STR_CASE_T1_STORY": {
+    "ru": "Проводник потерял список пассажиров. Помогите его восстановить.",
+    "en": "The conductor has lost the passenger list. Help reconstruct it."
+  },
+  "STR_CASE_T1_N0": {
+    "ru": "Антон",
+    "en": "Anton"
+  },
+  "STR_CASE_T1_N1": {
+    "ru": "Беа",
+    "en": "Bea"
+  },
+  "STR_CASE_T1_N2": {
+    "ru": "Джем",
+    "en": "Cem"
+  },
+  "STR_CASE_T1_N3": {
+    "ru": "Дора",
+    "en": "Dora"
+  },
+  "STR_CASE_T1_N4": {
+    "ru": "Эмиль",
+    "en": "Emil"
+  },
+  "STR_CASE_T1_N5": {
+    "ru": "Фэй",
+    "en": "Fay"
+  },
+  "STR_CASE_T1_G0": {
+    "ru": "Вагон",
+    "en": "Car"
+  },
+  "STR_CASE_T1_G0_I0": {
+    "ru": "1",
+    "en": "1"
+  },
+  "STR_CASE_T1_G0_I1": {
+    "ru": "2",
+    "en": "2"
+  },
+  "STR_CASE_T1_G0_I2": {
+    "ru": "3",
+    "en": "3"
+  },
+  "STR_CASE_T1_G0_I3": {
+    "ru": "4",
+    "en": "4"
+  },
+  "STR_CASE_T1_G0_I4": {
+    "ru": "5",
+    "en": "5"
+  },
+  "STR_CASE_T1_G0_I5": {
+    "ru": "6",
+    "en": "6"
+  },
+  "STR_CASE_T1_G1": {
+    "ru": "Город",
+    "en": "City"
+  },
+  "STR_CASE_T1_G1_I0": {
+    "ru": "Грац",
+    "en": "Graz"
+  },
+  "STR_CASE_T1_G1_I1": {
+    "ru": "София",
+    "en": "Sofia"
+  },
+  "STR_CASE_T1_G1_I2": {
+    "ru": "Сплит",
+    "en": "Split"
+  },
+  "STR_CASE_T1_G1_I3": {
+    "ru": "Брно",
+    "en": "Brno"
+  },
+  "STR_CASE_T1_G1_I4": {
+    "ru": "Лион",
+    "en": "Lyon"
+  },
+  "STR_CASE_T1_G1_I5": {
+    "ru": "Турин",
+    "en": "Turin"
+  },
+  "STR_CASE_T1_G2": {
+    "ru": "Напиток",
+    "en": "Drink"
+  },
+  "STR_CASE_T1_G2_I0": {
+    "ru": "чай",
+    "en": "tea"
+  },
+  "STR_CASE_T1_G2_I1": {
+    "ru": "газировка",
+    "en": "soda"
+  },
+  "STR_CASE_T1_G2_I2": {
+    "ru": "какао",
+    "en": "cocoa"
+  },
+  "STR_CASE_T1_G2_I3": {
+    "ru": "сок",
+    "en": "juice"
+  },
+  "STR_CASE_T1_G2_I4": {
+    "ru": "вода",
+    "en": "water"
+  },
+  "STR_CASE_T1_G2_I5": {
+    "ru": "молоко",
+    "en": "milk"
+  },
+  "STR_CASE_T2_TITLE": {
+    "ru": "Конкурс выпечки",
+    "en": "The Village Bake-off"
+  },
+  "STR_CASE_T2_STORY": {
+    "ru": "Судьи перепутали записи о пекарях. Разберитесь в результатах.",
+    "en": "The judges mixed up their notes. Reconstruct the results."
+  },
+  "STR_CASE_T2_N0": {
+    "ru": "Альба",
+    "en": "Alba"
+  },
+  "STR_CASE_T2_N1": {
+    "ru": "Бен",
+    "en": "Ben"
+  },
+  "STR_CASE_T2_N2": {
+    "ru": "Кора",
+    "en": "Cora"
+  },
+  "STR_CASE_T2_N3": {
+    "ru": "Дилек",
+    "en": "Dilek"
+  },
+  "STR_CASE_T2_N4": {
+    "ru": "Эзра",
+    "en": "Ezra"
+  },
+  "STR_CASE_T2_N5": {
+    "ru": "Флора",
+    "en": "Flora"
+  },
+  "STR_CASE_T2_G0": {
+    "ru": "Место",
+    "en": "Place"
+  },
+  "STR_CASE_T2_G0_I0": {
+    "ru": "1",
+    "en": "1"
+  },
+  "STR_CASE_T2_G0_I1": {
+    "ru": "2",
+    "en": "2"
+  },
+  "STR_CASE_T2_G0_I2": {
+    "ru": "3",
+    "en": "3"
+  },
+  "STR_CASE_T2_G0_I3": {
+    "ru": "4",
+    "en": "4"
+  },
+  "STR_CASE_T2_G0_I4": {
+    "ru": "5",
+    "en": "5"
+  },
+  "STR_CASE_T2_G0_I5": {
+    "ru": "6",
+    "en": "6"
+  },
+  "STR_CASE_T2_G1": {
+    "ru": "Пирог",
+    "en": "Cake"
+  },
+  "STR_CASE_T2_G1_I0": {
+    "ru": "лимон",
+    "en": "lemon"
+  },
+  "STR_CASE_T2_G1_I1": {
+    "ru": "слива",
+    "en": "plum"
+  },
+  "STR_CASE_T2_G1_I2": {
+    "ru": "инжир",
+    "en": "fig"
+  },
+  "STR_CASE_T2_G1_I3": {
+    "ru": "яблоко",
+    "en": "apple"
+  },
+  "STR_CASE_T2_G1_I4": {
+    "ru": "груша",
+    "en": "pear"
+  },
+  "STR_CASE_T2_G1_I5": {
+    "ru": "мёд",
+    "en": "honey"
+  },
+  "STR_CASE_T2_G2": {
+    "ru": "Деревня",
+    "en": "Village"
+  },
+  "STR_CASE_T2_G2_I0": {
+    "ru": "Эшби",
+    "en": "Ashby"
+  },
+  "STR_CASE_T2_G2_I1": {
+    "ru": "Брук",
+    "en": "Brook"
+  },
+  "STR_CASE_T2_G2_I2": {
+    "ru": "Элмби",
+    "en": "Elmby"
+  },
+  "STR_CASE_T2_G2_I3": {
+    "ru": "Фенли",
+    "en": "Fenly"
+  },
+  "STR_CASE_T2_G2_I4": {
+    "ru": "Окстон",
+    "en": "Oxton"
+  },
+  "STR_CASE_T2_G2_I5": {
+    "ru": "Уик",
+    "en": "Wick"
+  },
+  "STR_CASE_T3_TITLE": {
+    "ru": "Старая библиотека",
+    "en": "The Old Library"
+  },
+  "STR_CASE_T3_STORY": {
+    "ru": "Библиотекарь восстанавливает посещения за прошлую неделю.",
+    "en": "The librarian reconstructs last week’s visits."
+  },
+  "STR_CASE_T3_N0": {
+    "ru": "Арда",
+    "en": "Arda"
+  },
+  "STR_CASE_T3_N1": {
+    "ru": "Белла",
+    "en": "Bella"
+  },
+  "STR_CASE_T3_N2": {
+    "ru": "Джан",
+    "en": "Can"
+  },
+  "STR_CASE_T3_N3": {
+    "ru": "Дана",
+    "en": "Dana"
+  },
+  "STR_CASE_T3_N4": {
+    "ru": "Ева",
+    "en": "Eva"
+  },
+  "STR_CASE_T3_N5": {
+    "ru": "Финн",
+    "en": "Finn"
+  },
+  "STR_CASE_T3_G0": {
+    "ru": "День",
+    "en": "Day"
+  },
+  "STR_CASE_T3_G0_I0": {
+    "ru": "Пн",
+    "en": "Mon"
+  },
+  "STR_CASE_T3_G0_I1": {
+    "ru": "Вт",
+    "en": "Tue"
+  },
+  "STR_CASE_T3_G0_I2": {
+    "ru": "Ср",
+    "en": "Wed"
+  },
+  "STR_CASE_T3_G0_I3": {
+    "ru": "Чт",
+    "en": "Thu"
+  },
+  "STR_CASE_T3_G0_I4": {
+    "ru": "Пт",
+    "en": "Fri"
+  },
+  "STR_CASE_T3_G0_I5": {
+    "ru": "Сб",
+    "en": "Sat"
+  },
+  "STR_CASE_T3_G1": {
+    "ru": "Взятая книга",
+    "en": "Book"
+  },
+  "STR_CASE_T3_G1_I0": {
+    "ru": "атлас",
+    "en": "atlas"
+  },
+  "STR_CASE_T3_G1_I1": {
+    "ru": "дневник",
+    "en": "diary"
+  },
+  "STR_CASE_T3_G1_I2": {
+    "ru": "стихи",
+    "en": "poems"
+  },
+  "STR_CASE_T3_G1_I3": {
+    "ru": "роман",
+    "en": "novel"
+  },
+  "STR_CASE_T3_G1_I4": {
+    "ru": "пьеса",
+    "en": "play"
+  },
+  "STR_CASE_T3_G1_I5": {
+    "ru": "сказки",
+    "en": "tales"
+  },
+  "STR_CASE_T3_G2": {
+    "ru": "Стол",
+    "en": "Desk"
+  },
+  "STR_CASE_T3_G2_I0": {
+    "ru": "1",
+    "en": "1"
+  },
+  "STR_CASE_T3_G2_I1": {
+    "ru": "2",
+    "en": "2"
+  },
+  "STR_CASE_T3_G2_I2": {
+    "ru": "3",
+    "en": "3"
+  },
+  "STR_CASE_T3_G2_I3": {
+    "ru": "4",
+    "en": "4"
+  },
+  "STR_CASE_T3_G2_I4": {
+    "ru": "5",
+    "en": "5"
+  },
+  "STR_CASE_T3_G2_I5": {
+    "ru": "6",
+    "en": "6"
+  },
+  "STR_CASE_T4_TITLE": {
+    "ru": "Утро в гавани",
+    "en": "Harbour Morning"
+  },
+  "STR_CASE_T4_STORY": {
+    "ru": "Начальник гавани записывает утренний улов моряков.",
+    "en": "The harbour master records the morning catch."
+  },
+  "STR_CASE_T4_N0": {
+    "ru": "Арас",
+    "en": "Aras"
+  },
+  "STR_CASE_T4_N1": {
+    "ru": "Бо",
+    "en": "Bo"
+  },
+  "STR_CASE_T4_N2": {
+    "ru": "Клео",
+    "en": "Cleo"
+  },
+  "STR_CASE_T4_N3": {
+    "ru": "Дуру",
+    "en": "Duru"
+  },
+  "STR_CASE_T4_N4": {
+    "ru": "Эсме",
+    "en": "Esme"
+  },
+  "STR_CASE_T4_N5": {
+    "ru": "Фен",
+    "en": "Fen"
+  },
+  "STR_CASE_T4_G0": {
+    "ru": "Лодка",
+    "en": "Boat"
+  },
+  "STR_CASE_T4_G0_I0": {
+    "ru": "Чайка",
+    "en": "Gull"
+  },
+  "STR_CASE_T4_G0_I1": {
+    "ru": "Стриж",
+    "en": "Swift"
+  },
+  "STR_CASE_T4_G0_I2": {
+    "ru": "Жемчуг",
+    "en": "Pearl"
+  },
+  "STR_CASE_T4_G0_I3": {
+    "ru": "Выдра",
+    "en": "Otter"
+  },
+  "STR_CASE_T4_G0_I4": {
+    "ru": "Комета",
+    "en": "Comet"
+  },
+  "STR_CASE_T4_G0_I5": {
+    "ru": "Крапивник",
+    "en": "Wren"
+  },
+  "STR_CASE_T4_G1": {
+    "ru": "Улов",
+    "en": "Catch"
+  },
+  "STR_CASE_T4_G1_I0": {
+    "ru": "треска",
+    "en": "cod"
+  },
+  "STR_CASE_T4_G1_I1": {
+    "ru": "краб",
+    "en": "crab"
+  },
+  "STR_CASE_T4_G1_I2": {
+    "ru": "кальмар",
+    "en": "squid"
+  },
+  "STR_CASE_T4_G1_I3": {
+    "ru": "угорь",
+    "en": "eel"
+  },
+  "STR_CASE_T4_G1_I4": {
+    "ru": "хек",
+    "en": "hake"
+  },
+  "STR_CASE_T4_G1_I5": {
+    "ru": "тунец",
+    "en": "tuna"
+  },
+  "STR_CASE_T4_G2": {
+    "ru": "Возврат",
+    "en": "Return"
+  },
+  "STR_CASE_T4_G2_I0": {
+    "ru": "05:00",
+    "en": "05:00"
+  },
+  "STR_CASE_T4_G2_I1": {
+    "ru": "06:00",
+    "en": "06:00"
+  },
+  "STR_CASE_T4_G2_I2": {
+    "ru": "07:00",
+    "en": "07:00"
+  },
+  "STR_CASE_T4_G2_I3": {
+    "ru": "08:00",
+    "en": "08:00"
+  },
+  "STR_CASE_T4_G2_I4": {
+    "ru": "09:00",
+    "en": "09:00"
+  },
+  "STR_CASE_T4_G2_I5": {
+    "ru": "10:00",
+    "en": "10:00"
+  },
+  "STR_CASE_T5_TITLE": {
+    "ru": "Ночь в музее",
+    "en": "Museum Night"
+  },
+  "STR_CASE_T5_STORY": {
+    "ru": "В музее что-то произошло. Сопоставьте запутанные отчёты охраны.",
+    "en": "Something happened at the museum. Untangle the guards’ reports."
+  },
+  "STR_CASE_T5_N0": {
+    "ru": "Асли",
+    "en": "Asli"
+  },
+  "STR_CASE_T5_N1": {
+    "ru": "Борис",
+    "en": "Boris"
+  },
+  "STR_CASE_T5_N2": {
+    "ru": "Джерен",
+    "en": "Ceren"
+  },
+  "STR_CASE_T5_N3": {
+    "ru": "Дарио",
+    "en": "Dario"
+  },
+  "STR_CASE_T5_N4": {
+    "ru": "Эда",
+    "en": "Eda"
+  },
+  "STR_CASE_T5_N5": {
+    "ru": "Феликс",
+    "en": "Felix"
+  },
+  "STR_CASE_T5_G0": {
+    "ru": "Зал",
+    "en": "Hall"
+  },
+  "STR_CASE_T5_G0_I0": {
+    "ru": "Египет",
+    "en": "Egypt"
+  },
+  "STR_CASE_T5_G0_I1": {
+    "ru": "Рим",
+    "en": "Rome"
+  },
+  "STR_CASE_T5_G0_I2": {
+    "ru": "Нубия",
+    "en": "Nubia"
+  },
+  "STR_CASE_T5_G0_I3": {
+    "ru": "Китай",
+    "en": "China"
+  },
+  "STR_CASE_T5_G0_I4": {
+    "ru": "Майя",
+    "en": "Maya"
+  },
+  "STR_CASE_T5_G0_I5": {
+    "ru": "Инки",
+    "en": "Inca"
+  },
+  "STR_CASE_T5_G1": {
+    "ru": "Обход",
+    "en": "Round"
+  },
+  "STR_CASE_T5_G1_I0": {
+    "ru": "21:00",
+    "en": "21:00"
+  },
+  "STR_CASE_T5_G1_I1": {
+    "ru": "22:00",
+    "en": "22:00"
+  },
+  "STR_CASE_T5_G1_I2": {
+    "ru": "23:00",
+    "en": "23:00"
+  },
+  "STR_CASE_T5_G1_I3": {
+    "ru": "00:00",
+    "en": "00:00"
+  },
+  "STR_CASE_T5_G1_I4": {
+    "ru": "01:00",
+    "en": "01:00"
+  },
+  "STR_CASE_T5_G1_I5": {
+    "ru": "02:00",
+    "en": "02:00"
+  },
+  "STR_CASE_T5_G2": {
+    "ru": "Что заметил",
+    "en": "Noticed"
+  },
+  "STR_CASE_T5_G2_I0": {
+    "ru": "шум",
+    "en": "noise"
+  },
+  "STR_CASE_T5_G2_I1": {
+    "ru": "свет",
+    "en": "light"
+  },
+  "STR_CASE_T5_G2_I2": {
+    "ru": "сквозняк",
+    "en": "draft"
+  },
+  "STR_CASE_T5_G2_I3": {
+    "ru": "шаги",
+    "en": "step"
+  },
+  "STR_CASE_T5_G2_I4": {
+    "ru": "эхо",
+    "en": "echo"
+  },
+  "STR_CASE_T5_G2_I5": {
+    "ru": "запах",
+    "en": "smell"
+  },
+  "STR_CASE_T0_G0_NAT_I0_PERSON": {
+    "ru": "Гость с 1-го этажа",
+    "en": "the guest on floor 1"
+  },
+  "STR_CASE_T0_G0_NAT_I0_PRED": {
+    "ru": "живёт на 1-м этаже",
+    "en": "stayed on floor 1"
+  },
+  "STR_CASE_T0_G0_NAT_I0_NEG": {
+    "ru": "живёт не на 1-м этаже",
+    "en": "did not stay on floor 1"
+  },
+  "STR_CASE_T0_G0_NAT_I1_PERSON": {
+    "ru": "Гость с 2-го этажа",
+    "en": "the guest on floor 2"
+  },
+  "STR_CASE_T0_G0_NAT_I1_PRED": {
+    "ru": "живёт на 2-м этаже",
+    "en": "stayed on floor 2"
+  },
+  "STR_CASE_T0_G0_NAT_I1_NEG": {
+    "ru": "живёт не на 2-м этаже",
+    "en": "did not stay on floor 2"
+  },
+  "STR_CASE_T0_G0_NAT_I2_PERSON": {
+    "ru": "Гость с 3-го этажа",
+    "en": "the guest on floor 3"
+  },
+  "STR_CASE_T0_G0_NAT_I2_PRED": {
+    "ru": "живёт на 3-м этаже",
+    "en": "stayed on floor 3"
+  },
+  "STR_CASE_T0_G0_NAT_I2_NEG": {
+    "ru": "живёт не на 3-м этаже",
+    "en": "did not stay on floor 3"
+  },
+  "STR_CASE_T0_G0_NAT_I3_PERSON": {
+    "ru": "Гость с 4-го этажа",
+    "en": "the guest on floor 4"
+  },
+  "STR_CASE_T0_G0_NAT_I3_PRED": {
+    "ru": "живёт на 4-м этаже",
+    "en": "stayed on floor 4"
+  },
+  "STR_CASE_T0_G0_NAT_I3_NEG": {
+    "ru": "живёт не на 4-м этаже",
+    "en": "did not stay on floor 4"
+  },
+  "STR_CASE_T0_G0_NAT_I4_PERSON": {
+    "ru": "Гость с 5-го этажа",
+    "en": "the guest on floor 5"
+  },
+  "STR_CASE_T0_G0_NAT_I4_PRED": {
+    "ru": "живёт на 5-м этаже",
+    "en": "stayed on floor 5"
+  },
+  "STR_CASE_T0_G0_NAT_I4_NEG": {
+    "ru": "живёт не на 5-м этаже",
+    "en": "did not stay on floor 5"
+  },
+  "STR_CASE_T0_G0_NAT_I5_PERSON": {
+    "ru": "Гость с 6-го этажа",
+    "en": "the guest on floor 6"
+  },
+  "STR_CASE_T0_G0_NAT_I5_PRED": {
+    "ru": "живёт на 6-м этаже",
+    "en": "stayed on floor 6"
+  },
+  "STR_CASE_T0_G0_NAT_I5_NEG": {
+    "ru": "живёт не на 6-м этаже",
+    "en": "did not stay on floor 6"
+  },
+  "STR_CASE_T0_G0_LESS_NAT": {
+    "ru": "живёт ниже, чем",
+    "en": "stayed on a lower floor than"
+  },
+  "STR_CASE_T0_G0_AFTER_NAT": {
+    "ru": "живёт на %s выше, чем",
+    "en": "stayed %s above"
+  },
+  "STR_CASE_T0_G0_UNIT0": {
+    "ru": "этаж",
+    "en": "floor"
+  },
+  "STR_CASE_T0_G0_UNIT1": {
+    "ru": "этажа",
+    "en": "floors"
+  },
+  "STR_CASE_T0_G0_UNIT2": {
+    "ru": "этажей",
+    "en": "floors"
+  },
+  "STR_CASE_T0_G1_NAT_I0_PERSON": {
+    "ru": "Гость, приехавший в 18:00,",
+    "en": "the guest who arrived at 18:00"
+  },
+  "STR_CASE_T0_G1_NAT_I0_PRED": {
+    "ru": "приезжает в 18:00",
+    "en": "arrived at 18:00"
+  },
+  "STR_CASE_T0_G1_NAT_I0_NEG": {
+    "ru": "приезжает не в 18:00",
+    "en": "did not arrive at 18:00"
+  },
+  "STR_CASE_T0_G1_NAT_I1_PERSON": {
+    "ru": "Гость, приехавший в 19:00,",
+    "en": "the guest who arrived at 19:00"
+  },
+  "STR_CASE_T0_G1_NAT_I1_PRED": {
+    "ru": "приезжает в 19:00",
+    "en": "arrived at 19:00"
+  },
+  "STR_CASE_T0_G1_NAT_I1_NEG": {
+    "ru": "приезжает не в 19:00",
+    "en": "did not arrive at 19:00"
+  },
+  "STR_CASE_T0_G1_NAT_I2_PERSON": {
+    "ru": "Гость, приехавший в 20:00,",
+    "en": "the guest who arrived at 20:00"
+  },
+  "STR_CASE_T0_G1_NAT_I2_PRED": {
+    "ru": "приезжает в 20:00",
+    "en": "arrived at 20:00"
+  },
+  "STR_CASE_T0_G1_NAT_I2_NEG": {
+    "ru": "приезжает не в 20:00",
+    "en": "did not arrive at 20:00"
+  },
+  "STR_CASE_T0_G1_NAT_I3_PERSON": {
+    "ru": "Гость, приехавший в 21:00,",
+    "en": "the guest who arrived at 21:00"
+  },
+  "STR_CASE_T0_G1_NAT_I3_PRED": {
+    "ru": "приезжает в 21:00",
+    "en": "arrived at 21:00"
+  },
+  "STR_CASE_T0_G1_NAT_I3_NEG": {
+    "ru": "приезжает не в 21:00",
+    "en": "did not arrive at 21:00"
+  },
+  "STR_CASE_T0_G1_NAT_I4_PERSON": {
+    "ru": "Гость, приехавший в 22:00,",
+    "en": "the guest who arrived at 22:00"
+  },
+  "STR_CASE_T0_G1_NAT_I4_PRED": {
+    "ru": "приезжает в 22:00",
+    "en": "arrived at 22:00"
+  },
+  "STR_CASE_T0_G1_NAT_I4_NEG": {
+    "ru": "приезжает не в 22:00",
+    "en": "did not arrive at 22:00"
+  },
+  "STR_CASE_T0_G1_NAT_I5_PERSON": {
+    "ru": "Гость, приехавший в 23:00,",
+    "en": "the guest who arrived at 23:00"
+  },
+  "STR_CASE_T0_G1_NAT_I5_PRED": {
+    "ru": "приезжает в 23:00",
+    "en": "arrived at 23:00"
+  },
+  "STR_CASE_T0_G1_NAT_I5_NEG": {
+    "ru": "приезжает не в 23:00",
+    "en": "did not arrive at 23:00"
+  },
+  "STR_CASE_T0_G1_LESS_NAT": {
+    "ru": "приезжает раньше, чем",
+    "en": "arrived earlier than"
+  },
+  "STR_CASE_T0_G1_AFTER_NAT": {
+    "ru": "приезжает на %s позже, чем",
+    "en": "arrived %s after"
+  },
+  "STR_CASE_T0_G1_UNIT0": {
+    "ru": "час",
+    "en": "hour"
+  },
+  "STR_CASE_T0_G1_UNIT1": {
+    "ru": "часа",
+    "en": "hours"
+  },
+  "STR_CASE_T0_G1_UNIT2": {
+    "ru": "часов",
+    "en": "hours"
+  },
+  "STR_CASE_T0_G2_NAT_I0_PERSON": {
+    "ru": "Гость, потерявший шарф,",
+    "en": "the guest who lost the scarf"
+  },
+  "STR_CASE_T0_G2_NAT_I0_PRED": {
+    "ru": "теряет шарф",
+    "en": "lost the scarf"
+  },
+  "STR_CASE_T0_G2_NAT_I0_NEG": {
+    "ru": "не теряет шарф",
+    "en": "did not lose the scarf"
+  },
+  "STR_CASE_T0_G2_NAT_I1_PERSON": {
+    "ru": "Гость, потерявший часы,",
+    "en": "the guest who lost the watch"
+  },
+  "STR_CASE_T0_G2_NAT_I1_PRED": {
+    "ru": "теряет часы",
+    "en": "lost the watch"
+  },
+  "STR_CASE_T0_G2_NAT_I1_NEG": {
+    "ru": "не теряет часы",
+    "en": "did not lose the watch"
+  },
+  "STR_CASE_T0_G2_NAT_I2_PERSON": {
+    "ru": "Гость, потерявший кольцо,",
+    "en": "the guest who lost the ring"
+  },
+  "STR_CASE_T0_G2_NAT_I2_PRED": {
+    "ru": "теряет кольцо",
+    "en": "lost the ring"
+  },
+  "STR_CASE_T0_G2_NAT_I2_NEG": {
+    "ru": "не теряет кольцо",
+    "en": "did not lose the ring"
+  },
+  "STR_CASE_T0_G2_NAT_I3_PERSON": {
+    "ru": "Гость, потерявший перчатку,",
+    "en": "the guest who lost the glove"
+  },
+  "STR_CASE_T0_G2_NAT_I3_PRED": {
+    "ru": "теряет перчатку",
+    "en": "lost the glove"
+  },
+  "STR_CASE_T0_G2_NAT_I3_NEG": {
+    "ru": "не теряет перчатку",
+    "en": "did not lose the glove"
+  },
+  "STR_CASE_T0_G2_NAT_I4_PERSON": {
+    "ru": "Гость, потерявший ключ,",
+    "en": "the guest who lost the key"
+  },
+  "STR_CASE_T0_G2_NAT_I4_PRED": {
+    "ru": "теряет ключ",
+    "en": "lost the key"
+  },
+  "STR_CASE_T0_G2_NAT_I4_NEG": {
+    "ru": "не теряет ключ",
+    "en": "did not lose the key"
+  },
+  "STR_CASE_T0_G2_NAT_I5_PERSON": {
+    "ru": "Гость, потерявший шляпу,",
+    "en": "the guest who lost the hat"
+  },
+  "STR_CASE_T0_G2_NAT_I5_PRED": {
+    "ru": "теряет шляпу",
+    "en": "lost the hat"
+  },
+  "STR_CASE_T0_G2_NAT_I5_NEG": {
+    "ru": "не теряет шляпу",
+    "en": "did not lose the hat"
+  },
+  "STR_CASE_T1_G0_NAT_I0_PERSON": {
+    "ru": "Пассажир из вагона №1",
+    "en": "the passenger in car 1"
+  },
+  "STR_CASE_T1_G0_NAT_I0_PRED": {
+    "ru": "едет в вагоне №1",
+    "en": "rode in car 1"
+  },
+  "STR_CASE_T1_G0_NAT_I0_NEG": {
+    "ru": "едет не в вагоне №1",
+    "en": "did not ride in car 1"
+  },
+  "STR_CASE_T1_G0_NAT_I1_PERSON": {
+    "ru": "Пассажир из вагона №2",
+    "en": "the passenger in car 2"
+  },
+  "STR_CASE_T1_G0_NAT_I1_PRED": {
+    "ru": "едет в вагоне №2",
+    "en": "rode in car 2"
+  },
+  "STR_CASE_T1_G0_NAT_I1_NEG": {
+    "ru": "едет не в вагоне №2",
+    "en": "did not ride in car 2"
+  },
+  "STR_CASE_T1_G0_NAT_I2_PERSON": {
+    "ru": "Пассажир из вагона №3",
+    "en": "the passenger in car 3"
+  },
+  "STR_CASE_T1_G0_NAT_I2_PRED": {
+    "ru": "едет в вагоне №3",
+    "en": "rode in car 3"
+  },
+  "STR_CASE_T1_G0_NAT_I2_NEG": {
+    "ru": "едет не в вагоне №3",
+    "en": "did not ride in car 3"
+  },
+  "STR_CASE_T1_G0_NAT_I3_PERSON": {
+    "ru": "Пассажир из вагона №4",
+    "en": "the passenger in car 4"
+  },
+  "STR_CASE_T1_G0_NAT_I3_PRED": {
+    "ru": "едет в вагоне №4",
+    "en": "rode in car 4"
+  },
+  "STR_CASE_T1_G0_NAT_I3_NEG": {
+    "ru": "едет не в вагоне №4",
+    "en": "did not ride in car 4"
+  },
+  "STR_CASE_T1_G0_NAT_I4_PERSON": {
+    "ru": "Пассажир из вагона №5",
+    "en": "the passenger in car 5"
+  },
+  "STR_CASE_T1_G0_NAT_I4_PRED": {
+    "ru": "едет в вагоне №5",
+    "en": "rode in car 5"
+  },
+  "STR_CASE_T1_G0_NAT_I4_NEG": {
+    "ru": "едет не в вагоне №5",
+    "en": "did not ride in car 5"
+  },
+  "STR_CASE_T1_G0_NAT_I5_PERSON": {
+    "ru": "Пассажир из вагона №6",
+    "en": "the passenger in car 6"
+  },
+  "STR_CASE_T1_G0_NAT_I5_PRED": {
+    "ru": "едет в вагоне №6",
+    "en": "rode in car 6"
+  },
+  "STR_CASE_T1_G0_NAT_I5_NEG": {
+    "ru": "едет не в вагоне №6",
+    "en": "did not ride in car 6"
+  },
+  "STR_CASE_T1_G0_LESS_NAT": {
+    "ru": "едет ближе к началу поезда, чем",
+    "en": "rode further forward than"
+  },
+  "STR_CASE_T1_G0_AFTER_NAT": {
+    "ru": "едет на %s ближе к хвосту поезда, чем",
+    "en": "rode %s further back than"
+  },
+  "STR_CASE_T1_G0_UNIT0": {
+    "ru": "вагон",
+    "en": "car"
+  },
+  "STR_CASE_T1_G0_UNIT1": {
+    "ru": "вагона",
+    "en": "cars"
+  },
+  "STR_CASE_T1_G0_UNIT2": {
+    "ru": "вагонов",
+    "en": "cars"
+  },
+  "STR_CASE_T1_G1_NAT_I0_PERSON": {
+    "ru": "Пассажир, направляющийся в Грац,",
+    "en": "the passenger going to Graz"
+  },
+  "STR_CASE_T1_G1_NAT_I0_PRED": {
+    "ru": "едет в Грац",
+    "en": "was going to Graz"
+  },
+  "STR_CASE_T1_G1_NAT_I0_NEG": {
+    "ru": "едет не в Грац",
+    "en": "was not going to Graz"
+  },
+  "STR_CASE_T1_G1_NAT_I1_PERSON": {
+    "ru": "Пассажир, направляющийся в Софию,",
+    "en": "the passenger going to Sofia"
+  },
+  "STR_CASE_T1_G1_NAT_I1_PRED": {
+    "ru": "едет в Софию",
+    "en": "was going to Sofia"
+  },
+  "STR_CASE_T1_G1_NAT_I1_NEG": {
+    "ru": "едет не в Софию",
+    "en": "was not going to Sofia"
+  },
+  "STR_CASE_T1_G1_NAT_I2_PERSON": {
+    "ru": "Пассажир, направляющийся в Сплит,",
+    "en": "the passenger going to Split"
+  },
+  "STR_CASE_T1_G1_NAT_I2_PRED": {
+    "ru": "едет в Сплит",
+    "en": "was going to Split"
+  },
+  "STR_CASE_T1_G1_NAT_I2_NEG": {
+    "ru": "едет не в Сплит",
+    "en": "was not going to Split"
+  },
+  "STR_CASE_T1_G1_NAT_I3_PERSON": {
+    "ru": "Пассажир, направляющийся в Брно,",
+    "en": "the passenger going to Brno"
+  },
+  "STR_CASE_T1_G1_NAT_I3_PRED": {
+    "ru": "едет в Брно",
+    "en": "was going to Brno"
+  },
+  "STR_CASE_T1_G1_NAT_I3_NEG": {
+    "ru": "едет не в Брно",
+    "en": "was not going to Brno"
+  },
+  "STR_CASE_T1_G1_NAT_I4_PERSON": {
+    "ru": "Пассажир, направляющийся в Лион,",
+    "en": "the passenger going to Lyon"
+  },
+  "STR_CASE_T1_G1_NAT_I4_PRED": {
+    "ru": "едет в Лион",
+    "en": "was going to Lyon"
+  },
+  "STR_CASE_T1_G1_NAT_I4_NEG": {
+    "ru": "едет не в Лион",
+    "en": "was not going to Lyon"
+  },
+  "STR_CASE_T1_G1_NAT_I5_PERSON": {
+    "ru": "Пассажир, направляющийся в Турин,",
+    "en": "the passenger going to Turin"
+  },
+  "STR_CASE_T1_G1_NAT_I5_PRED": {
+    "ru": "едет в Турин",
+    "en": "was going to Turin"
+  },
+  "STR_CASE_T1_G1_NAT_I5_NEG": {
+    "ru": "едет не в Турин",
+    "en": "was not going to Turin"
+  },
+  "STR_CASE_T1_G2_NAT_I0_PERSON": {
+    "ru": "Пассажир, заказавший чай,",
+    "en": "the passenger who ordered tea"
+  },
+  "STR_CASE_T1_G2_NAT_I0_PRED": {
+    "ru": "заказывает чай",
+    "en": "ordered tea"
+  },
+  "STR_CASE_T1_G2_NAT_I0_NEG": {
+    "ru": "не заказывает чай",
+    "en": "did not order tea"
+  },
+  "STR_CASE_T1_G2_NAT_I1_PERSON": {
+    "ru": "Пассажир, заказавший газировку,",
+    "en": "the passenger who ordered soda"
+  },
+  "STR_CASE_T1_G2_NAT_I1_PRED": {
+    "ru": "заказывает газировку",
+    "en": "ordered soda"
+  },
+  "STR_CASE_T1_G2_NAT_I1_NEG": {
+    "ru": "не заказывает газировку",
+    "en": "did not order soda"
+  },
+  "STR_CASE_T1_G2_NAT_I2_PERSON": {
+    "ru": "Пассажир, заказавший какао,",
+    "en": "the passenger who ordered cocoa"
+  },
+  "STR_CASE_T1_G2_NAT_I2_PRED": {
+    "ru": "заказывает какао",
+    "en": "ordered cocoa"
+  },
+  "STR_CASE_T1_G2_NAT_I2_NEG": {
+    "ru": "не заказывает какао",
+    "en": "did not order cocoa"
+  },
+  "STR_CASE_T1_G2_NAT_I3_PERSON": {
+    "ru": "Пассажир, заказавший сок,",
+    "en": "the passenger who ordered juice"
+  },
+  "STR_CASE_T1_G2_NAT_I3_PRED": {
+    "ru": "заказывает сок",
+    "en": "ordered juice"
+  },
+  "STR_CASE_T1_G2_NAT_I3_NEG": {
+    "ru": "не заказывает сок",
+    "en": "did not order juice"
+  },
+  "STR_CASE_T1_G2_NAT_I4_PERSON": {
+    "ru": "Пассажир, заказавший воду,",
+    "en": "the passenger who ordered water"
+  },
+  "STR_CASE_T1_G2_NAT_I4_PRED": {
+    "ru": "заказывает воду",
+    "en": "ordered water"
+  },
+  "STR_CASE_T1_G2_NAT_I4_NEG": {
+    "ru": "не заказывает воду",
+    "en": "did not order water"
+  },
+  "STR_CASE_T1_G2_NAT_I5_PERSON": {
+    "ru": "Пассажир, заказавший молоко,",
+    "en": "the passenger who ordered milk"
+  },
+  "STR_CASE_T1_G2_NAT_I5_PRED": {
+    "ru": "заказывает молоко",
+    "en": "ordered milk"
+  },
+  "STR_CASE_T1_G2_NAT_I5_NEG": {
+    "ru": "не заказывает молоко",
+    "en": "did not order milk"
+  },
+  "STR_CASE_T2_G0_NAT_I0_PERSON": {
+    "ru": "Участник, занявший 1-е место,",
+    "en": "the baker in place 1"
+  },
+  "STR_CASE_T2_G0_NAT_I0_PRED": {
+    "ru": "занимает 1-е место",
+    "en": "came in place 1"
+  },
+  "STR_CASE_T2_G0_NAT_I0_NEG": {
+    "ru": "занимает не 1-е место",
+    "en": "did not come in place 1"
+  },
+  "STR_CASE_T2_G0_NAT_I1_PERSON": {
+    "ru": "Участник, занявший 2-е место,",
+    "en": "the baker in place 2"
+  },
+  "STR_CASE_T2_G0_NAT_I1_PRED": {
+    "ru": "занимает 2-е место",
+    "en": "came in place 2"
+  },
+  "STR_CASE_T2_G0_NAT_I1_NEG": {
+    "ru": "занимает не 2-е место",
+    "en": "did not come in place 2"
+  },
+  "STR_CASE_T2_G0_NAT_I2_PERSON": {
+    "ru": "Участник, занявший 3-е место,",
+    "en": "the baker in place 3"
+  },
+  "STR_CASE_T2_G0_NAT_I2_PRED": {
+    "ru": "занимает 3-е место",
+    "en": "came in place 3"
+  },
+  "STR_CASE_T2_G0_NAT_I2_NEG": {
+    "ru": "занимает не 3-е место",
+    "en": "did not come in place 3"
+  },
+  "STR_CASE_T2_G0_NAT_I3_PERSON": {
+    "ru": "Участник, занявший 4-е место,",
+    "en": "the baker in place 4"
+  },
+  "STR_CASE_T2_G0_NAT_I3_PRED": {
+    "ru": "занимает 4-е место",
+    "en": "came in place 4"
+  },
+  "STR_CASE_T2_G0_NAT_I3_NEG": {
+    "ru": "занимает не 4-е место",
+    "en": "did not come in place 4"
+  },
+  "STR_CASE_T2_G0_NAT_I4_PERSON": {
+    "ru": "Участник, занявший 5-е место,",
+    "en": "the baker in place 5"
+  },
+  "STR_CASE_T2_G0_NAT_I4_PRED": {
+    "ru": "занимает 5-е место",
+    "en": "came in place 5"
+  },
+  "STR_CASE_T2_G0_NAT_I4_NEG": {
+    "ru": "занимает не 5-е место",
+    "en": "did not come in place 5"
+  },
+  "STR_CASE_T2_G0_NAT_I5_PERSON": {
+    "ru": "Участник, занявший 6-е место,",
+    "en": "the baker in place 6"
+  },
+  "STR_CASE_T2_G0_NAT_I5_PRED": {
+    "ru": "занимает 6-е место",
+    "en": "came in place 6"
+  },
+  "STR_CASE_T2_G0_NAT_I5_NEG": {
+    "ru": "занимает не 6-е место",
+    "en": "did not come in place 6"
+  },
+  "STR_CASE_T2_G0_LESS_NAT": {
+    "ru": "занимает более высокое место, чем",
+    "en": "finished ahead of"
+  },
+  "STR_CASE_T2_G0_AFTER_NAT": {
+    "ru": "занимает место на %s ниже, чем",
+    "en": "finished %s behind"
+  },
+  "STR_CASE_T2_G0_UNIT0": {
+    "ru": "место",
+    "en": "place"
+  },
+  "STR_CASE_T2_G0_UNIT1": {
+    "ru": "места",
+    "en": "places"
+  },
+  "STR_CASE_T2_G0_UNIT2": {
+    "ru": "мест",
+    "en": "places"
+  },
+  "STR_CASE_T2_G1_NAT_I0_PERSON": {
+    "ru": "Участник, испёкший лимонный пирог,",
+    "en": "the baker of the lemon cake"
+  },
+  "STR_CASE_T2_G1_NAT_I0_PRED": {
+    "ru": "печёт лимонный пирог",
+    "en": "baked the lemon cake"
+  },
+  "STR_CASE_T2_G1_NAT_I0_NEG": {
+    "ru": "печёт не лимонный пирог",
+    "en": "did not bake the lemon cake"
+  },
+  "STR_CASE_T2_G1_NAT_I1_PERSON": {
+    "ru": "Участник, испёкший сливовый пирог,",
+    "en": "the baker of the plum cake"
+  },
+  "STR_CASE_T2_G1_NAT_I1_PRED": {
+    "ru": "печёт сливовый пирог",
+    "en": "baked the plum cake"
+  },
+  "STR_CASE_T2_G1_NAT_I1_NEG": {
+    "ru": "печёт не сливовый пирог",
+    "en": "did not bake the plum cake"
+  },
+  "STR_CASE_T2_G1_NAT_I2_PERSON": {
+    "ru": "Участник, испёкший инжирный пирог,",
+    "en": "the baker of the fig cake"
+  },
+  "STR_CASE_T2_G1_NAT_I2_PRED": {
+    "ru": "печёт инжирный пирог",
+    "en": "baked the fig cake"
+  },
+  "STR_CASE_T2_G1_NAT_I2_NEG": {
+    "ru": "печёт не инжирный пирог",
+    "en": "did not bake the fig cake"
+  },
+  "STR_CASE_T2_G1_NAT_I3_PERSON": {
+    "ru": "Участник, испёкший яблочный пирог,",
+    "en": "the baker of the apple cake"
+  },
+  "STR_CASE_T2_G1_NAT_I3_PRED": {
+    "ru": "печёт яблочный пирог",
+    "en": "baked the apple cake"
+  },
+  "STR_CASE_T2_G1_NAT_I3_NEG": {
+    "ru": "печёт не яблочный пирог",
+    "en": "did not bake the apple cake"
+  },
+  "STR_CASE_T2_G1_NAT_I4_PERSON": {
+    "ru": "Участник, испёкший грушевый пирог,",
+    "en": "the baker of the pear cake"
+  },
+  "STR_CASE_T2_G1_NAT_I4_PRED": {
+    "ru": "печёт грушевый пирог",
+    "en": "baked the pear cake"
+  },
+  "STR_CASE_T2_G1_NAT_I4_NEG": {
+    "ru": "печёт не грушевый пирог",
+    "en": "did not bake the pear cake"
+  },
+  "STR_CASE_T2_G1_NAT_I5_PERSON": {
+    "ru": "Участник, испёкший медовый пирог,",
+    "en": "the baker of the honey cake"
+  },
+  "STR_CASE_T2_G1_NAT_I5_PRED": {
+    "ru": "печёт медовый пирог",
+    "en": "baked the honey cake"
+  },
+  "STR_CASE_T2_G1_NAT_I5_NEG": {
+    "ru": "печёт не медовый пирог",
+    "en": "did not bake the honey cake"
+  },
+  "STR_CASE_T2_G2_NAT_I0_PERSON": {
+    "ru": "Участник из деревни Эшби",
+    "en": "the baker from Ashby"
+  },
+  "STR_CASE_T2_G2_NAT_I0_PRED": {
+    "ru": "живёт в деревне Эшби",
+    "en": "lives in Ashby"
+  },
+  "STR_CASE_T2_G2_NAT_I0_NEG": {
+    "ru": "живёт не в деревне Эшби",
+    "en": "does not live in Ashby"
+  },
+  "STR_CASE_T2_G2_NAT_I1_PERSON": {
+    "ru": "Участник из деревни Брук",
+    "en": "the baker from Brook"
+  },
+  "STR_CASE_T2_G2_NAT_I1_PRED": {
+    "ru": "живёт в деревне Брук",
+    "en": "lives in Brook"
+  },
+  "STR_CASE_T2_G2_NAT_I1_NEG": {
+    "ru": "живёт не в деревне Брук",
+    "en": "does not live in Brook"
+  },
+  "STR_CASE_T2_G2_NAT_I2_PERSON": {
+    "ru": "Участник из деревни Элмби",
+    "en": "the baker from Elmby"
+  },
+  "STR_CASE_T2_G2_NAT_I2_PRED": {
+    "ru": "живёт в деревне Элмби",
+    "en": "lives in Elmby"
+  },
+  "STR_CASE_T2_G2_NAT_I2_NEG": {
+    "ru": "живёт не в деревне Элмби",
+    "en": "does not live in Elmby"
+  },
+  "STR_CASE_T2_G2_NAT_I3_PERSON": {
+    "ru": "Участник из деревни Фенли",
+    "en": "the baker from Fenly"
+  },
+  "STR_CASE_T2_G2_NAT_I3_PRED": {
+    "ru": "живёт в деревне Фенли",
+    "en": "lives in Fenly"
+  },
+  "STR_CASE_T2_G2_NAT_I3_NEG": {
+    "ru": "живёт не в деревне Фенли",
+    "en": "does not live in Fenly"
+  },
+  "STR_CASE_T2_G2_NAT_I4_PERSON": {
+    "ru": "Участник из деревни Окстон",
+    "en": "the baker from Oxton"
+  },
+  "STR_CASE_T2_G2_NAT_I4_PRED": {
+    "ru": "живёт в деревне Окстон",
+    "en": "lives in Oxton"
+  },
+  "STR_CASE_T2_G2_NAT_I4_NEG": {
+    "ru": "живёт не в деревне Окстон",
+    "en": "does not live in Oxton"
+  },
+  "STR_CASE_T2_G2_NAT_I5_PERSON": {
+    "ru": "Участник из деревни Уик",
+    "en": "the baker from Wick"
+  },
+  "STR_CASE_T2_G2_NAT_I5_PRED": {
+    "ru": "живёт в деревне Уик",
+    "en": "lives in Wick"
+  },
+  "STR_CASE_T2_G2_NAT_I5_NEG": {
+    "ru": "живёт не в деревне Уик",
+    "en": "does not live in Wick"
+  },
+  "STR_CASE_T3_G0_NAT_I0_PERSON": {
+    "ru": "Читатель, пришедший в понедельник,",
+    "en": "the reader who came on Monday"
+  },
+  "STR_CASE_T3_G0_NAT_I0_PRED": {
+    "ru": "приходит в понедельник",
+    "en": "came on Monday"
+  },
+  "STR_CASE_T3_G0_NAT_I0_NEG": {
+    "ru": "приходит не в понедельник",
+    "en": "did not come on Monday"
+  },
+  "STR_CASE_T3_G0_NAT_I1_PERSON": {
+    "ru": "Читатель, пришедший во вторник,",
+    "en": "the reader who came on Tuesday"
+  },
+  "STR_CASE_T3_G0_NAT_I1_PRED": {
+    "ru": "приходит во вторник",
+    "en": "came on Tuesday"
+  },
+  "STR_CASE_T3_G0_NAT_I1_NEG": {
+    "ru": "приходит не во вторник",
+    "en": "did not come on Tuesday"
+  },
+  "STR_CASE_T3_G0_NAT_I2_PERSON": {
+    "ru": "Читатель, пришедший в среду,",
+    "en": "the reader who came on Wednesday"
+  },
+  "STR_CASE_T3_G0_NAT_I2_PRED": {
+    "ru": "приходит в среду",
+    "en": "came on Wednesday"
+  },
+  "STR_CASE_T3_G0_NAT_I2_NEG": {
+    "ru": "приходит не в среду",
+    "en": "did not come on Wednesday"
+  },
+  "STR_CASE_T3_G0_NAT_I3_PERSON": {
+    "ru": "Читатель, пришедший в четверг,",
+    "en": "the reader who came on Thursday"
+  },
+  "STR_CASE_T3_G0_NAT_I3_PRED": {
+    "ru": "приходит в четверг",
+    "en": "came on Thursday"
+  },
+  "STR_CASE_T3_G0_NAT_I3_NEG": {
+    "ru": "приходит не в четверг",
+    "en": "did not come on Thursday"
+  },
+  "STR_CASE_T3_G0_NAT_I4_PERSON": {
+    "ru": "Читатель, пришедший в пятницу,",
+    "en": "the reader who came on Friday"
+  },
+  "STR_CASE_T3_G0_NAT_I4_PRED": {
+    "ru": "приходит в пятницу",
+    "en": "came on Friday"
+  },
+  "STR_CASE_T3_G0_NAT_I4_NEG": {
+    "ru": "приходит не в пятницу",
+    "en": "did not come on Friday"
+  },
+  "STR_CASE_T3_G0_NAT_I5_PERSON": {
+    "ru": "Читатель, пришедший в субботу,",
+    "en": "the reader who came on Saturday"
+  },
+  "STR_CASE_T3_G0_NAT_I5_PRED": {
+    "ru": "приходит в субботу",
+    "en": "came on Saturday"
+  },
+  "STR_CASE_T3_G0_NAT_I5_NEG": {
+    "ru": "приходит не в субботу",
+    "en": "did not come on Saturday"
+  },
+  "STR_CASE_T3_G0_LESS_NAT": {
+    "ru": "приходит раньше на неделе, чем",
+    "en": "came earlier in the week than"
+  },
+  "STR_CASE_T3_G0_AFTER_NAT": {
+    "ru": "приходит на %s позже, чем",
+    "en": "came %s after"
+  },
+  "STR_CASE_T3_G0_UNIT0": {
+    "ru": "день",
+    "en": "day"
+  },
+  "STR_CASE_T3_G0_UNIT1": {
+    "ru": "дня",
+    "en": "days"
+  },
+  "STR_CASE_T3_G0_UNIT2": {
+    "ru": "дней",
+    "en": "days"
+  },
+  "STR_CASE_T3_G1_NAT_I0_PERSON": {
+    "ru": "Читатель, взявший атлас,",
+    "en": "the reader who borrowed the atlas"
+  },
+  "STR_CASE_T3_G1_NAT_I0_PRED": {
+    "ru": "берёт атлас",
+    "en": "borrowed the atlas"
+  },
+  "STR_CASE_T3_G1_NAT_I0_NEG": {
+    "ru": "не берёт атлас",
+    "en": "did not borrow the atlas"
+  },
+  "STR_CASE_T3_G1_NAT_I1_PERSON": {
+    "ru": "Читатель, взявший дневник,",
+    "en": "the reader who borrowed the diary"
+  },
+  "STR_CASE_T3_G1_NAT_I1_PRED": {
+    "ru": "берёт дневник",
+    "en": "borrowed the diary"
+  },
+  "STR_CASE_T3_G1_NAT_I1_NEG": {
+    "ru": "не берёт дневник",
+    "en": "did not borrow the diary"
+  },
+  "STR_CASE_T3_G1_NAT_I2_PERSON": {
+    "ru": "Читатель, взявший сборник стихов,",
+    "en": "the reader who borrowed the poems"
+  },
+  "STR_CASE_T3_G1_NAT_I2_PRED": {
+    "ru": "берёт сборник стихов",
+    "en": "borrowed the poems"
+  },
+  "STR_CASE_T3_G1_NAT_I2_NEG": {
+    "ru": "не берёт сборник стихов",
+    "en": "did not borrow the poems"
+  },
+  "STR_CASE_T3_G1_NAT_I3_PERSON": {
+    "ru": "Читатель, взявший роман,",
+    "en": "the reader who borrowed the novel"
+  },
+  "STR_CASE_T3_G1_NAT_I3_PRED": {
+    "ru": "берёт роман",
+    "en": "borrowed the novel"
+  },
+  "STR_CASE_T3_G1_NAT_I3_NEG": {
+    "ru": "не берёт роман",
+    "en": "did not borrow the novel"
+  },
+  "STR_CASE_T3_G1_NAT_I4_PERSON": {
+    "ru": "Читатель, взявший пьесу,",
+    "en": "the reader who borrowed the play"
+  },
+  "STR_CASE_T3_G1_NAT_I4_PRED": {
+    "ru": "берёт пьесу",
+    "en": "borrowed the play"
+  },
+  "STR_CASE_T3_G1_NAT_I4_NEG": {
+    "ru": "не берёт пьесу",
+    "en": "did not borrow the play"
+  },
+  "STR_CASE_T3_G1_NAT_I5_PERSON": {
+    "ru": "Читатель, взявший сборник сказок,",
+    "en": "the reader who borrowed the tales"
+  },
+  "STR_CASE_T3_G1_NAT_I5_PRED": {
+    "ru": "берёт сборник сказок",
+    "en": "borrowed the tales"
+  },
+  "STR_CASE_T3_G1_NAT_I5_NEG": {
+    "ru": "не берёт сборник сказок",
+    "en": "did not borrow the tales"
+  },
+  "STR_CASE_T3_G2_NAT_I0_PERSON": {
+    "ru": "Читатель за столом №1",
+    "en": "the reader at desk 1"
+  },
+  "STR_CASE_T3_G2_NAT_I0_PRED": {
+    "ru": "сидит за столом №1",
+    "en": "sat at desk 1"
+  },
+  "STR_CASE_T3_G2_NAT_I0_NEG": {
+    "ru": "сидит не за столом №1",
+    "en": "did not sit at desk 1"
+  },
+  "STR_CASE_T3_G2_NAT_I1_PERSON": {
+    "ru": "Читатель за столом №2",
+    "en": "the reader at desk 2"
+  },
+  "STR_CASE_T3_G2_NAT_I1_PRED": {
+    "ru": "сидит за столом №2",
+    "en": "sat at desk 2"
+  },
+  "STR_CASE_T3_G2_NAT_I1_NEG": {
+    "ru": "сидит не за столом №2",
+    "en": "did not sit at desk 2"
+  },
+  "STR_CASE_T3_G2_NAT_I2_PERSON": {
+    "ru": "Читатель за столом №3",
+    "en": "the reader at desk 3"
+  },
+  "STR_CASE_T3_G2_NAT_I2_PRED": {
+    "ru": "сидит за столом №3",
+    "en": "sat at desk 3"
+  },
+  "STR_CASE_T3_G2_NAT_I2_NEG": {
+    "ru": "сидит не за столом №3",
+    "en": "did not sit at desk 3"
+  },
+  "STR_CASE_T3_G2_NAT_I3_PERSON": {
+    "ru": "Читатель за столом №4",
+    "en": "the reader at desk 4"
+  },
+  "STR_CASE_T3_G2_NAT_I3_PRED": {
+    "ru": "сидит за столом №4",
+    "en": "sat at desk 4"
+  },
+  "STR_CASE_T3_G2_NAT_I3_NEG": {
+    "ru": "сидит не за столом №4",
+    "en": "did not sit at desk 4"
+  },
+  "STR_CASE_T3_G2_NAT_I4_PERSON": {
+    "ru": "Читатель за столом №5",
+    "en": "the reader at desk 5"
+  },
+  "STR_CASE_T3_G2_NAT_I4_PRED": {
+    "ru": "сидит за столом №5",
+    "en": "sat at desk 5"
+  },
+  "STR_CASE_T3_G2_NAT_I4_NEG": {
+    "ru": "сидит не за столом №5",
+    "en": "did not sit at desk 5"
+  },
+  "STR_CASE_T3_G2_NAT_I5_PERSON": {
+    "ru": "Читатель за столом №6",
+    "en": "the reader at desk 6"
+  },
+  "STR_CASE_T3_G2_NAT_I5_PRED": {
+    "ru": "сидит за столом №6",
+    "en": "sat at desk 6"
+  },
+  "STR_CASE_T3_G2_NAT_I5_NEG": {
+    "ru": "сидит не за столом №6",
+    "en": "did not sit at desk 6"
+  },
+  "STR_CASE_T3_G2_LESS_NAT": {
+    "ru": "сидит ближе к двери, чем",
+    "en": "sat nearer the door than"
+  },
+  "STR_CASE_T3_G2_AFTER_NAT": {
+    "ru": "сидит на %s дальше от двери, чем",
+    "en": "sat %s further from the door than"
+  },
+  "STR_CASE_T3_G2_UNIT0": {
+    "ru": "стол",
+    "en": "desk"
+  },
+  "STR_CASE_T3_G2_UNIT1": {
+    "ru": "стола",
+    "en": "desks"
+  },
+  "STR_CASE_T3_G2_UNIT2": {
+    "ru": "столов",
+    "en": "desks"
+  },
+  "STR_CASE_T4_G0_NAT_I0_PERSON": {
+    "ru": "Моряк с лодки «Чайка»",
+    "en": "the sailor of the Gull"
+  },
+  "STR_CASE_T4_G0_NAT_I0_PRED": {
+    "ru": "плывёт на лодке «Чайка»",
+    "en": "sailed the Gull"
+  },
+  "STR_CASE_T4_G0_NAT_I0_NEG": {
+    "ru": "плывёт не на лодке «Чайка»",
+    "en": "did not sail the Gull"
+  },
+  "STR_CASE_T4_G0_NAT_I1_PERSON": {
+    "ru": "Моряк с лодки «Стриж»",
+    "en": "the sailor of the Swift"
+  },
+  "STR_CASE_T4_G0_NAT_I1_PRED": {
+    "ru": "плывёт на лодке «Стриж»",
+    "en": "sailed the Swift"
+  },
+  "STR_CASE_T4_G0_NAT_I1_NEG": {
+    "ru": "плывёт не на лодке «Стриж»",
+    "en": "did not sail the Swift"
+  },
+  "STR_CASE_T4_G0_NAT_I2_PERSON": {
+    "ru": "Моряк с лодки «Жемчуг»",
+    "en": "the sailor of the Pearl"
+  },
+  "STR_CASE_T4_G0_NAT_I2_PRED": {
+    "ru": "плывёт на лодке «Жемчуг»",
+    "en": "sailed the Pearl"
+  },
+  "STR_CASE_T4_G0_NAT_I2_NEG": {
+    "ru": "плывёт не на лодке «Жемчуг»",
+    "en": "did not sail the Pearl"
+  },
+  "STR_CASE_T4_G0_NAT_I3_PERSON": {
+    "ru": "Моряк с лодки «Выдра»",
+    "en": "the sailor of the Otter"
+  },
+  "STR_CASE_T4_G0_NAT_I3_PRED": {
+    "ru": "плывёт на лодке «Выдра»",
+    "en": "sailed the Otter"
+  },
+  "STR_CASE_T4_G0_NAT_I3_NEG": {
+    "ru": "плывёт не на лодке «Выдра»",
+    "en": "did not sail the Otter"
+  },
+  "STR_CASE_T4_G0_NAT_I4_PERSON": {
+    "ru": "Моряк с лодки «Комета»",
+    "en": "the sailor of the Comet"
+  },
+  "STR_CASE_T4_G0_NAT_I4_PRED": {
+    "ru": "плывёт на лодке «Комета»",
+    "en": "sailed the Comet"
+  },
+  "STR_CASE_T4_G0_NAT_I4_NEG": {
+    "ru": "плывёт не на лодке «Комета»",
+    "en": "did not sail the Comet"
+  },
+  "STR_CASE_T4_G0_NAT_I5_PERSON": {
+    "ru": "Моряк с лодки «Крапивник»",
+    "en": "the sailor of the Wren"
+  },
+  "STR_CASE_T4_G0_NAT_I5_PRED": {
+    "ru": "плывёт на лодке «Крапивник»",
+    "en": "sailed the Wren"
+  },
+  "STR_CASE_T4_G0_NAT_I5_NEG": {
+    "ru": "плывёт не на лодке «Крапивник»",
+    "en": "did not sail the Wren"
+  },
+  "STR_CASE_T4_G1_NAT_I0_PERSON": {
+    "ru": "Моряк, поймавший треску,",
+    "en": "the sailor who caught cod"
+  },
+  "STR_CASE_T4_G1_NAT_I0_PRED": {
+    "ru": "ловит треску",
+    "en": "caught cod"
+  },
+  "STR_CASE_T4_G1_NAT_I0_NEG": {
+    "ru": "не ловит треску",
+    "en": "did not catch cod"
+  },
+  "STR_CASE_T4_G1_NAT_I1_PERSON": {
+    "ru": "Моряк, поймавший краба,",
+    "en": "the sailor who caught crab"
+  },
+  "STR_CASE_T4_G1_NAT_I1_PRED": {
+    "ru": "ловит краба",
+    "en": "caught crab"
+  },
+  "STR_CASE_T4_G1_NAT_I1_NEG": {
+    "ru": "не ловит краба",
+    "en": "did not catch crab"
+  },
+  "STR_CASE_T4_G1_NAT_I2_PERSON": {
+    "ru": "Моряк, поймавший кальмара,",
+    "en": "the sailor who caught squid"
+  },
+  "STR_CASE_T4_G1_NAT_I2_PRED": {
+    "ru": "ловит кальмара",
+    "en": "caught squid"
+  },
+  "STR_CASE_T4_G1_NAT_I2_NEG": {
+    "ru": "не ловит кальмара",
+    "en": "did not catch squid"
+  },
+  "STR_CASE_T4_G1_NAT_I3_PERSON": {
+    "ru": "Моряк, поймавший угря,",
+    "en": "the sailor who caught eel"
+  },
+  "STR_CASE_T4_G1_NAT_I3_PRED": {
+    "ru": "ловит угря",
+    "en": "caught eel"
+  },
+  "STR_CASE_T4_G1_NAT_I3_NEG": {
+    "ru": "не ловит угря",
+    "en": "did not catch eel"
+  },
+  "STR_CASE_T4_G1_NAT_I4_PERSON": {
+    "ru": "Моряк, поймавший хека,",
+    "en": "the sailor who caught hake"
+  },
+  "STR_CASE_T4_G1_NAT_I4_PRED": {
+    "ru": "ловит хека",
+    "en": "caught hake"
+  },
+  "STR_CASE_T4_G1_NAT_I4_NEG": {
+    "ru": "не ловит хека",
+    "en": "did not catch hake"
+  },
+  "STR_CASE_T4_G1_NAT_I5_PERSON": {
+    "ru": "Моряк, поймавший тунца,",
+    "en": "the sailor who caught tuna"
+  },
+  "STR_CASE_T4_G1_NAT_I5_PRED": {
+    "ru": "ловит тунца",
+    "en": "caught tuna"
+  },
+  "STR_CASE_T4_G1_NAT_I5_NEG": {
+    "ru": "не ловит тунца",
+    "en": "did not catch tuna"
+  },
+  "STR_CASE_T4_G2_NAT_I0_PERSON": {
+    "ru": "Моряк, вернувшийся в 05:00,",
+    "en": "the sailor back at 05:00"
+  },
+  "STR_CASE_T4_G2_NAT_I0_PRED": {
+    "ru": "возвращается в 05:00",
+    "en": "came back at 05:00"
+  },
+  "STR_CASE_T4_G2_NAT_I0_NEG": {
+    "ru": "возвращается не в 05:00",
+    "en": "did not come back at 05:00"
+  },
+  "STR_CASE_T4_G2_NAT_I1_PERSON": {
+    "ru": "Моряк, вернувшийся в 06:00,",
+    "en": "the sailor back at 06:00"
+  },
+  "STR_CASE_T4_G2_NAT_I1_PRED": {
+    "ru": "возвращается в 06:00",
+    "en": "came back at 06:00"
+  },
+  "STR_CASE_T4_G2_NAT_I1_NEG": {
+    "ru": "возвращается не в 06:00",
+    "en": "did not come back at 06:00"
+  },
+  "STR_CASE_T4_G2_NAT_I2_PERSON": {
+    "ru": "Моряк, вернувшийся в 07:00,",
+    "en": "the sailor back at 07:00"
+  },
+  "STR_CASE_T4_G2_NAT_I2_PRED": {
+    "ru": "возвращается в 07:00",
+    "en": "came back at 07:00"
+  },
+  "STR_CASE_T4_G2_NAT_I2_NEG": {
+    "ru": "возвращается не в 07:00",
+    "en": "did not come back at 07:00"
+  },
+  "STR_CASE_T4_G2_NAT_I3_PERSON": {
+    "ru": "Моряк, вернувшийся в 08:00,",
+    "en": "the sailor back at 08:00"
+  },
+  "STR_CASE_T4_G2_NAT_I3_PRED": {
+    "ru": "возвращается в 08:00",
+    "en": "came back at 08:00"
+  },
+  "STR_CASE_T4_G2_NAT_I3_NEG": {
+    "ru": "возвращается не в 08:00",
+    "en": "did not come back at 08:00"
+  },
+  "STR_CASE_T4_G2_NAT_I4_PERSON": {
+    "ru": "Моряк, вернувшийся в 09:00,",
+    "en": "the sailor back at 09:00"
+  },
+  "STR_CASE_T4_G2_NAT_I4_PRED": {
+    "ru": "возвращается в 09:00",
+    "en": "came back at 09:00"
+  },
+  "STR_CASE_T4_G2_NAT_I4_NEG": {
+    "ru": "возвращается не в 09:00",
+    "en": "did not come back at 09:00"
+  },
+  "STR_CASE_T4_G2_NAT_I5_PERSON": {
+    "ru": "Моряк, вернувшийся в 10:00,",
+    "en": "the sailor back at 10:00"
+  },
+  "STR_CASE_T4_G2_NAT_I5_PRED": {
+    "ru": "возвращается в 10:00",
+    "en": "came back at 10:00"
+  },
+  "STR_CASE_T4_G2_NAT_I5_NEG": {
+    "ru": "возвращается не в 10:00",
+    "en": "did not come back at 10:00"
+  },
+  "STR_CASE_T4_G2_LESS_NAT": {
+    "ru": "возвращается раньше, чем",
+    "en": "came back earlier than"
+  },
+  "STR_CASE_T4_G2_AFTER_NAT": {
+    "ru": "возвращается на %s позже, чем",
+    "en": "came back %s after"
+  },
+  "STR_CASE_T4_G2_UNIT0": {
+    "ru": "час",
+    "en": "hour"
+  },
+  "STR_CASE_T4_G2_UNIT1": {
+    "ru": "часа",
+    "en": "hours"
+  },
+  "STR_CASE_T4_G2_UNIT2": {
+    "ru": "часов",
+    "en": "hours"
+  },
+  "STR_CASE_T5_G0_NAT_I0_PERSON": {
+    "ru": "Смотритель зала Древнего Египта",
+    "en": "the guard of the Egypt hall"
+  },
+  "STR_CASE_T5_G0_NAT_I0_PRED": {
+    "ru": "охраняет зал Древнего Египта",
+    "en": "watched the Egypt hall"
+  },
+  "STR_CASE_T5_G0_NAT_I0_NEG": {
+    "ru": "охраняет не зал Древнего Египта",
+    "en": "did not watch the Egypt hall"
+  },
+  "STR_CASE_T5_G0_NAT_I1_PERSON": {
+    "ru": "Смотритель зала Древнего Рима",
+    "en": "the guard of the Rome hall"
+  },
+  "STR_CASE_T5_G0_NAT_I1_PRED": {
+    "ru": "охраняет зал Древнего Рима",
+    "en": "watched the Rome hall"
+  },
+  "STR_CASE_T5_G0_NAT_I1_NEG": {
+    "ru": "охраняет не зал Древнего Рима",
+    "en": "did not watch the Rome hall"
+  },
+  "STR_CASE_T5_G0_NAT_I2_PERSON": {
+    "ru": "Смотритель зала Нубии",
+    "en": "the guard of the Nubia hall"
+  },
+  "STR_CASE_T5_G0_NAT_I2_PRED": {
+    "ru": "охраняет зал Нубии",
+    "en": "watched the Nubia hall"
+  },
+  "STR_CASE_T5_G0_NAT_I2_NEG": {
+    "ru": "охраняет не зал Нубии",
+    "en": "did not watch the Nubia hall"
+  },
+  "STR_CASE_T5_G0_NAT_I3_PERSON": {
+    "ru": "Смотритель зала Китая",
+    "en": "the guard of the China hall"
+  },
+  "STR_CASE_T5_G0_NAT_I3_PRED": {
+    "ru": "охраняет зал Китая",
+    "en": "watched the China hall"
+  },
+  "STR_CASE_T5_G0_NAT_I3_NEG": {
+    "ru": "охраняет не зал Китая",
+    "en": "did not watch the China hall"
+  },
+  "STR_CASE_T5_G0_NAT_I4_PERSON": {
+    "ru": "Смотритель зала Майя",
+    "en": "the guard of the Maya hall"
+  },
+  "STR_CASE_T5_G0_NAT_I4_PRED": {
+    "ru": "охраняет зал Майя",
+    "en": "watched the Maya hall"
+  },
+  "STR_CASE_T5_G0_NAT_I4_NEG": {
+    "ru": "охраняет не зал Майя",
+    "en": "did not watch the Maya hall"
+  },
+  "STR_CASE_T5_G0_NAT_I5_PERSON": {
+    "ru": "Смотритель зала Инков",
+    "en": "the guard of the Inca hall"
+  },
+  "STR_CASE_T5_G0_NAT_I5_PRED": {
+    "ru": "охраняет зал Инков",
+    "en": "watched the Inca hall"
+  },
+  "STR_CASE_T5_G0_NAT_I5_NEG": {
+    "ru": "охраняет не зал Инков",
+    "en": "did not watch the Inca hall"
+  },
+  "STR_CASE_T5_G1_NAT_I0_PERSON": {
+    "ru": "Смотритель, вышедший на обход в 21:00,",
+    "en": "the guard on the 21:00 round"
+  },
+  "STR_CASE_T5_G1_NAT_I0_PRED": {
+    "ru": "выходит на обход в 21:00",
+    "en": "made a round at 21:00"
+  },
+  "STR_CASE_T5_G1_NAT_I0_NEG": {
+    "ru": "выходит на обход не в 21:00",
+    "en": "did not make a round at 21:00"
+  },
+  "STR_CASE_T5_G1_NAT_I1_PERSON": {
+    "ru": "Смотритель, вышедший на обход в 22:00,",
+    "en": "the guard on the 22:00 round"
+  },
+  "STR_CASE_T5_G1_NAT_I1_PRED": {
+    "ru": "выходит на обход в 22:00",
+    "en": "made a round at 22:00"
+  },
+  "STR_CASE_T5_G1_NAT_I1_NEG": {
+    "ru": "выходит на обход не в 22:00",
+    "en": "did not make a round at 22:00"
+  },
+  "STR_CASE_T5_G1_NAT_I2_PERSON": {
+    "ru": "Смотритель, вышедший на обход в 23:00,",
+    "en": "the guard on the 23:00 round"
+  },
+  "STR_CASE_T5_G1_NAT_I2_PRED": {
+    "ru": "выходит на обход в 23:00",
+    "en": "made a round at 23:00"
+  },
+  "STR_CASE_T5_G1_NAT_I2_NEG": {
+    "ru": "выходит на обход не в 23:00",
+    "en": "did not make a round at 23:00"
+  },
+  "STR_CASE_T5_G1_NAT_I3_PERSON": {
+    "ru": "Смотритель, вышедший на обход в 00:00,",
+    "en": "the guard on the 00:00 round"
+  },
+  "STR_CASE_T5_G1_NAT_I3_PRED": {
+    "ru": "выходит на обход в 00:00",
+    "en": "made a round at 00:00"
+  },
+  "STR_CASE_T5_G1_NAT_I3_NEG": {
+    "ru": "выходит на обход не в 00:00",
+    "en": "did not make a round at 00:00"
+  },
+  "STR_CASE_T5_G1_NAT_I4_PERSON": {
+    "ru": "Смотритель, вышедший на обход в 01:00,",
+    "en": "the guard on the 01:00 round"
+  },
+  "STR_CASE_T5_G1_NAT_I4_PRED": {
+    "ru": "выходит на обход в 01:00",
+    "en": "made a round at 01:00"
+  },
+  "STR_CASE_T5_G1_NAT_I4_NEG": {
+    "ru": "выходит на обход не в 01:00",
+    "en": "did not make a round at 01:00"
+  },
+  "STR_CASE_T5_G1_NAT_I5_PERSON": {
+    "ru": "Смотритель, вышедший на обход в 02:00,",
+    "en": "the guard on the 02:00 round"
+  },
+  "STR_CASE_T5_G1_NAT_I5_PRED": {
+    "ru": "выходит на обход в 02:00",
+    "en": "made a round at 02:00"
+  },
+  "STR_CASE_T5_G1_NAT_I5_NEG": {
+    "ru": "выходит на обход не в 02:00",
+    "en": "did not make a round at 02:00"
+  },
+  "STR_CASE_T5_G1_LESS_NAT": {
+    "ru": "выходит на обход раньше, чем",
+    "en": "made a round earlier than"
+  },
+  "STR_CASE_T5_G1_AFTER_NAT": {
+    "ru": "выходит на обход на %s позже, чем",
+    "en": "made a round %s after"
+  },
+  "STR_CASE_T5_G1_UNIT0": {
+    "ru": "час",
+    "en": "hour"
+  },
+  "STR_CASE_T5_G1_UNIT1": {
+    "ru": "часа",
+    "en": "hours"
+  },
+  "STR_CASE_T5_G1_UNIT2": {
+    "ru": "часов",
+    "en": "hours"
+  },
+  "STR_CASE_T5_G2_NAT_I0_PERSON": {
+    "ru": "Смотритель, заметивший шум,",
+    "en": "the guard who noticed a noise"
+  },
+  "STR_CASE_T5_G2_NAT_I0_PRED": {
+    "ru": "замечает шум",
+    "en": "noticed a noise"
+  },
+  "STR_CASE_T5_G2_NAT_I0_NEG": {
+    "ru": "не замечает шум",
+    "en": "did not notice a noise"
+  },
+  "STR_CASE_T5_G2_NAT_I1_PERSON": {
+    "ru": "Смотритель, заметивший свет,",
+    "en": "the guard who noticed a light"
+  },
+  "STR_CASE_T5_G2_NAT_I1_PRED": {
+    "ru": "замечает свет",
+    "en": "noticed a light"
+  },
+  "STR_CASE_T5_G2_NAT_I1_NEG": {
+    "ru": "не замечает свет",
+    "en": "did not notice a light"
+  },
+  "STR_CASE_T5_G2_NAT_I2_PERSON": {
+    "ru": "Смотритель, заметивший сквозняк,",
+    "en": "the guard who noticed a draft"
+  },
+  "STR_CASE_T5_G2_NAT_I2_PRED": {
+    "ru": "замечает сквозняк",
+    "en": "noticed a draft"
+  },
+  "STR_CASE_T5_G2_NAT_I2_NEG": {
+    "ru": "не замечает сквозняк",
+    "en": "did not notice a draft"
+  },
+  "STR_CASE_T5_G2_NAT_I3_PERSON": {
+    "ru": "Смотритель, заметивший шаги,",
+    "en": "the guard who noticed a footstep"
+  },
+  "STR_CASE_T5_G2_NAT_I3_PRED": {
+    "ru": "замечает шаги",
+    "en": "noticed a footstep"
+  },
+  "STR_CASE_T5_G2_NAT_I3_NEG": {
+    "ru": "не замечает шаги",
+    "en": "did not notice a footstep"
+  },
+  "STR_CASE_T5_G2_NAT_I4_PERSON": {
+    "ru": "Смотритель, заметивший эхо,",
+    "en": "the guard who noticed an echo"
+  },
+  "STR_CASE_T5_G2_NAT_I4_PRED": {
+    "ru": "замечает эхо",
+    "en": "noticed an echo"
+  },
+  "STR_CASE_T5_G2_NAT_I4_NEG": {
+    "ru": "не замечает эхо",
+    "en": "did not notice an echo"
+  },
+  "STR_CASE_T5_G2_NAT_I5_PERSON": {
+    "ru": "Смотритель, заметивший запах,",
+    "en": "the guard who noticed a smell"
+  },
+  "STR_CASE_T5_G2_NAT_I5_PRED": {
+    "ru": "замечает запах",
+    "en": "noticed a smell"
+  },
+  "STR_CASE_T5_G2_NAT_I5_NEG": {
+    "ru": "не замечает запах",
+    "en": "did not notice a smell"
+  },
+  "STR_CASE_NAT_UNUSED": {
+    "ru": "",
+    "en": ""
+  },
+  "STR_CASE_NAT_NAME_PRED": {
+    "ru": "— это %s",
+    "en": "is %s"
+  },
+  "STR_CASE_NAT_NAME_NEG": {
+    "ru": "— это не %s",
+    "en": "is not %s"
+  },
+  "STR_CASE_NAT_XOR": {
+    "ru": "Верно ровно одно из двух: %s; либо %s.",
+    "en": "Exactly one of these is true: %s; or %s."
+  },
+  "STR_CASE_NAT_PAIR": {
+    "ru": "Есть два разных человека: %s и %s. Один %s, а другой %s.",
+    "en": "There are two different people: %s and %s. One %s, and the other %s."
+  },
+  "STR_CASE_BOARD_GOAL": {
+    "ru": "Найдите для каждого: ",
+    "en": "Find for each person: "
+  },
+  "STR_CASE_BOARD_CLUES": {
+    "ru": "Улики %d/%d",
+    "en": "Clues %d/%d"
+  },
+  "STR_CASE_BOARD_TABLES": {
+    "ru": "Таблица %d/%d",
+    "en": "Grid %d/%d"
+  },
+  "STR_CASE_BOARD_HOLD": {
+    "ru": "Удерж. Выбор: область · →: улика",
+    "en": "Hold Select: focus · →: clue"
+  },
+  "STR_CASE_BOARD_FIELD": {
+    "ru": "Поле",
+    "en": "Board"
+  },
+  "STR_CASE_NUMBER_TITLE": {
+    "ru": "Дело №%d",
+    "en": "Case %d"
+  },
+  "STR_CASE_HOLD_CONFIRM": {
+    "ru": "Удерж. Выбор: сменить область",
+    "en": "Hold Select: change area"
+  },
+  "STR_CASE_HOLD_ALL_CLUES": {
+    "ru": "Удерж. →: улики",
+    "en": "Hold →: clues"
+  },
+  "STR_CASE_POPUP_SCROLL": {
+    "ru": "↑/↓: строка · ←/→: страница",
+    "en": "↑/↓: line · ←/→: page"
+  },
+  "STR_CASE_VICTORY_MESSAGE": {
+    "ru": "Дело успешно раскрыто! Все соответствия найдены.",
+    "en": "Case solved! All matches found."
+  },
+  "STR_CASE_VICTORY_MENU": {
+    "ru": "Вернуться в меню",
+    "en": "Return to menu"
+  }
+}

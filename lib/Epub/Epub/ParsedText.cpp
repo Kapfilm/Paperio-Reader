@@ -330,7 +330,8 @@ void ParsedText::layoutAndExtractLines(
   for (size_t i = 0; i < lineCount; ++i) {
     const bool lineEndedWithHyphenation = i < lineEndsWithHyphenatedWord.size() ? lineEndsWithHyphenatedWord[i] : false;
     const auto result = extractLine(i, pageWidth, wordWidths, wordContinues, lineBreakIndices, processLine, renderer,
-                                    fontId, lineEndedWithHyphenation, false, firstLineIndent, blockStartY, lineHeight);
+                                    fontId, lineEndedWithHyphenation, false, firstLineIndent, blockStartY, lineHeight,
+                                    i < splitInsertedHyphen.size() && splitInsertedHyphen[i]);
 
     if (result == LineProcessResult::RetryWithoutHyphenation && lineEndedWithHyphenation) {
       const size_t lineStart = i > 0 ? lineBreakIndices[i - 1] : 0;
@@ -1061,7 +1062,8 @@ ParsedText::LineProcessResult ParsedText::extractLine(
     const std::vector<bool>& continuesVec, const std::vector<size_t>& lineBreakIndices,
     const std::function<LineProcessResult(std::shared_ptr<TextBlock>, bool, bool)>& processLine,
     const GfxRenderer& renderer, const int fontId, const bool lineEndsWithHyphenatedWord,
-    const bool suppressHyphenationRetry, const int firstLineIndent, const int16_t blockStartY, const int lineHeight) {
+    const bool suppressHyphenationRetry, const int firstLineIndent, const int16_t blockStartY, const int lineHeight,
+    const bool insertedHyphen) {
   const size_t lineBreak = lineBreakIndices[breakIndex];
   const size_t lastBreakAt = breakIndex > 0 ? lineBreakIndices[breakIndex - 1] : 0;
   const size_t lineWordCount = lineBreak - lastBreakAt;
@@ -1190,5 +1192,6 @@ ParsedText::LineProcessResult ParsedText::extractLine(
     LOG_ERR("PTX", "Dropping line: TextBlock arena allocation failed");
     return LineProcessResult::Accepted;
   }
+  block->setLineContinuation(lineEndsWithHyphenatedWord, insertedHyphen);
   return processLine(std::move(block), lineEndsWithHyphenatedWord, suppressHyphenationRetry);
 }

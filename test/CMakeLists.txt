@@ -126,3 +126,17 @@ add_subdirectory(hal_file_lifecycle)
 add_subdirectory(panic_snapshot)
 
 add_subdirectory(status_bar_layout)
+
+add_subdirectory(peg_solitaire)
+add_subdirectory(delve)
+add_subdirectory(i18n_offsets)
+
+add_subdirectory(lamplighter)
+
+add_subdirectory(casefiles)
+
+add_subdirectory(word_clock)
+
+add_subdirectory(kakuro)
+
+add_subdirectory(opds_flow)

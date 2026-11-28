@@ -891,6 +891,8 @@ Rect BaseTheme::drawPopup(const GfxRenderer& renderer, const char* message, cons
 }
 
 void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const {
+  // Every display swaps buffers. Preserve the visible popup before a partial update.
+  renderer.syncWriteBufferFromDisplayed();
   constexpr int barHeight = 4;
   const int barWidth = layout.width - 30;  // twice the margin in drawPopup to match text width
   const int barX = layout.x + (layout.width - barWidth) / 2;
@@ -906,7 +908,8 @@ void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layou
 void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
                               const int pageCount, std::string title, const int paddingBottom, const bool isStarred,
                               const std::string& printedPageLabel, const bool fillMargin,
-                              const bool pageCountApproximate, const std::string& bookTitle) const {
+                              const bool pageCountApproximate, const std::string& bookTitle,
+                              const std::string& sectionTitle) const {
   // While a section is still being laid out the total page count is a byte-based estimate, shown
   // with a leading "~" so the reader knows it will firm up as the chapter finishes building.
   const char* pageCountPrefix = pageCountApproximate ? "~" : "";
@@ -988,7 +991,9 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     const bool showTitle = !title.empty() && onEdge(SETTINGS.statusBarTitlePosition, top);
     const bool showBookTitle = SETTINGS.statusBarBookTitle && !bookTitle.empty() &&
                                onEdge(SETTINGS.statusBarBookTitlePosition, top);
-    if (!showBattery && !showClock && !showCounter && !showPercent && !showTitle && !showBookTitle) continue;
+    const bool showSectionTitle = SETTINGS.statusBarSectionTitle && !sectionTitle.empty() &&
+                                  onEdge(SETTINGS.statusBarSectionTitlePosition, top);
+    if (!showSectionTitle && !showBattery && !showClock && !showCounter && !showPercent && !showTitle && !showBookTitle) continue;
 
     const int adjacentProgressHeight =
         top ? UITheme::getProgressBarHeight(SETTINGS.statusBarUpperProgressBar,
@@ -1079,13 +1084,16 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
       const int x = std::clamp((screenWidth - width) / 2, left, right - width);
       renderer.drawText(fontId, x, y, fitted.c_str());
     };
-    if (showBookTitle) drawCentredTitle(bookTitle, textY, centreLeft, centreRight);
+    int titleRow = 0;
+    const auto drawTitleRow = [&](const std::string& value) {
+      drawCentredTitle(value, textY + titleRow * lineHeight,
+                       titleRow ? rowLeft : centreLeft, titleRow ? rowRight : centreRight);
+      ++titleRow;
+    };
+    if (showBookTitle) drawTitleRow(bookTitle);
+    if (showSectionTitle) drawTitleRow(sectionTitle);
     if (showTitle) {
-      // The two independently enabled titles get separate lines only when
-      // assigned to the same edge. The extra line may use the full row width.
-      const bool secondLine = showBookTitle;
-      drawCentredTitle(title, textY + (secondLine ? lineHeight : 0),
-                        secondLine ? rowLeft : centreLeft, secondLine ? rowRight : centreRight);
+      drawTitleRow(title);
     }
   }
 

@@ -35,7 +35,7 @@
 #include "parsers/PreviewBlockLocator.h"
 
 namespace {
-constexpr uint8_t SECTION_FILE_VERSION = 73;  // compact EPUB/FB2 heading sizes; rebuild cached page layout
+constexpr uint8_t SECTION_FILE_VERSION = 74;  // persist inserted-vs-original line-break hyphens for dictionary lookup
                                               // v71: image boxes honour `auto` and keep the source aspect ratio
                                               // v70: retain up to 32 footnote/cross-reference links per rendered page
                                               // v69: near-body font-size normalization

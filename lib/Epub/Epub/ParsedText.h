@@ -82,7 +82,7 @@ class ParsedText {
       const std::vector<size_t>& lineBreakIndices,
       const std::function<LineProcessResult(std::shared_ptr<TextBlock>, bool, bool)>& processLine,
       const GfxRenderer& renderer, int fontId, bool lineEndsWithHyphenatedWord, bool suppressHyphenationRetry,
-      int firstLineIndent, int16_t blockStartY = 0, int lineHeight = 0);
+      int firstLineIndent, int16_t blockStartY = 0, int lineHeight = 0, bool insertedHyphen = false);
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer,
                                             int fontId);  // uses blockStyle.fontSizeMultiplier internally
 
